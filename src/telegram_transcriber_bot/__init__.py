@@ -1,0 +1,2 @@
+"""Telegram transcriber bot package."""
+
