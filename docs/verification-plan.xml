@@ -231,7 +231,8 @@
         <file>apps/api/internal/storage/*_test.go</file>
       </test-files>
       <module-checks>
-        <check-1>go test ./... -run ApiStorage</check-1>
+        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiStorage</check-1>
+        <check-2>cd apps/api &amp;&amp; go test ./internal/storage -run ApiStorageMigration</check-2>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Source rows, jobs, artifacts, events, and webhook deliveries persist with correct lineage and constraints.</scenario-1>
@@ -244,7 +245,7 @@
       <required-trace-assertions>
         <assertion-1>Successful artifact uploads must create DB rows only after object persistence succeeds.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run migration application and rollback smoke checks.</wave-follow-up>
+      <wave-follow-up>Run migration application and rollback smoke checks against a real PostgreSQL service.</wave-follow-up>
       <phase-follow-up>Validate presigned artifact URLs against a real MinIO container.</phase-follow-up>
     </V-M-API-STORAGE>
 

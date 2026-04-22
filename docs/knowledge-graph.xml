@@ -45,7 +45,7 @@
       </annotations>
     </M-API-JOBS>
 
-    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="planned">
+    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="implemented">
       <purpose>Persist source metadata, jobs, artifacts, events, and webhook-delivery records while generating presigned artifact links.</purpose>
       <path>apps/api/internal/storage</path>
       <depends>M-CONTRACTS</depends>

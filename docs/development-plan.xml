@@ -971,7 +971,7 @@
       </notes>
     </M-CONTRACTS>
 
-    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" LAYER="0" ORDER="2" STATUS="planned">
+    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" LAYER="0" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Own PostgreSQL persistence, MinIO access, presigned URL resolution, and durable webhook-delivery records.</purpose>
         <scope>SQL persistence, MinIO object IO, presigned URL generation, source and artifact lifecycle checks, and durable delivery bookkeeping.</scope>
@@ -989,6 +989,7 @@
         </errors>
       </contract>
       <interface>
+        <export-persistSource PURPOSE="Write source metadata and MinIO object references." />
         <export-persistJob PURPOSE="Create and transition jobs with versioned state." />
         <export-resolveArtifact PURPOSE="Return artifact metadata plus a fresh presigned URL." />
       </interface>
@@ -1633,7 +1634,7 @@
 
     <Phase-2 name="Control Plane Foundation" status="pending">
       <goal>Build the minimum Go control plane that can persist jobs, enqueue work, and expose contract-compliant HTTP routes.</goal>
-      <step-1 module="M-API-STORAGE" status="pending" verification="V-M-API-STORAGE">Add PostgreSQL migrations and MinIO integration.</step-1>
+      <step-1 module="M-API-STORAGE" status="done" verification="V-M-API-STORAGE">Add PostgreSQL migrations and MinIO integration.</step-1>
       <step-2 module="M-API-QUEUE" status="pending" verification="V-M-API-QUEUE">Add asynq task publishing and retry policy wiring.</step-2>
       <step-3 module="M-API-JOBS" status="pending" verification="V-M-API-JOBS">Implement job creation, child reuse, cancel, retry, and lineage rules.</step-3>
       <step-4 module="M-API-EVENTS" status="pending" verification="V-M-API-EVENTS">Implement job events, WebSocket fanout, and persisted webhook delivery scheduling.</step-4>
