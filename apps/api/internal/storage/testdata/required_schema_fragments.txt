@@ -1,0 +1,18 @@
+# required phase-2 storage schema fragments
+CREATE TABLE job_submissions
+CREATE TABLE sources
+CREATE TABLE source_sets
+CREATE TABLE source_set_items
+CREATE TABLE jobs
+CREATE TABLE job_artifacts
+CREATE TABLE job_events
+CREATE TABLE webhook_deliveries
+source_kind = 'youtube_url'
+source_kind IN ('uploaded_file', 'telegram_upload')
+input_kind IN ('single_source', 'combined_upload', 'combined_telegram')
+delivery_strategy = 'webhook'
+delivery_strategy = 'polling'
+status <> 'cancel_requested'
+status IN ('queued', 'running', 'cancel_requested', 'succeeded')
+job_event_id uuid NOT NULL UNIQUE REFERENCES job_events(id) ON DELETE CASCADE
+CREATE UNIQUE INDEX jobs_canonical_child_unique_idx
