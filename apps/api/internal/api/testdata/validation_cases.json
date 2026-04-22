@@ -1,0 +1,6 @@
+{
+  "unsupported_urls": [
+    "https://example.com/watch?v=abc123",
+    "ftp://youtube.com/watch?v=abc123"
+  ]
+}
