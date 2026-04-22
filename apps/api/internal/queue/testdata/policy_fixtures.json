@@ -1,0 +1,23 @@
+[
+  {
+    "job_type": "transcription",
+    "queue_name": "transcription",
+    "task_type": "job:transcription.run",
+    "max_retry": 3,
+    "timeout": "2h"
+  },
+  {
+    "job_type": "report",
+    "queue_name": "report",
+    "task_type": "job:report.run",
+    "max_retry": 2,
+    "timeout": "45m"
+  },
+  {
+    "job_type": "deep_research",
+    "queue_name": "deep_research",
+    "task_type": "job:deep_research.run",
+    "max_retry": 2,
+    "timeout": "2h"
+  }
+]
