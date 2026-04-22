@@ -264,6 +264,29 @@ async def test_start_processing_downloads_attachment_and_updates_status(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_start_processing_humanizes_machine_like_telegram_audio_name(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    candidate = SourceCandidate(
+        source_id="src-2",
+        kind="telegram_audio",
+        display_name="Audio: AgADBproAAg_9MUs.ogg",
+        url=None,
+        telegram_file_id="file-telegram",
+        mime_type="audio/ogg",
+        file_name="AgADBproAAg_9MUs.ogg",
+    )
+
+    await app._start_processing(chat_id=10, candidate=candidate)
+
+    assert fake_bot.sent_messages[0]["text"] == (
+        "Обрабатываю источник: Аудиофайл из Telegram\n\n"
+        "Скачиваю файл из Telegram и запускаю транскрибацию. Это может занять несколько минут."
+    )
+
+
+@pytest.mark.asyncio
 async def test_handle_get_transcript_returns_missing_artifact_error(tmp_path: Path) -> None:
     fake_bot = FakeBot()
     fake_service = FakeProcessingService(tmp_path)

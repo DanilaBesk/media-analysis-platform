@@ -6,6 +6,7 @@ from pathlib import Path
 from docx import Document
 
 from telegram_transcriber_bot.domain import TranscriptResult
+from telegram_transcriber_bot.source_labels import humanize_source_label, is_human_readable_title, looks_like_machine_file_name
 
 
 def build_transcript_markdown(transcript: TranscriptResult) -> str:
@@ -109,54 +110,15 @@ def build_transcript_title(transcript: TranscriptResult) -> str:
 
 
 def build_source_label(transcript: TranscriptResult) -> str:
-    source_label = transcript.source_label.strip()
-    if source_label.startswith("YouTube:"):
-        value = source_label.split(":", 1)[1].strip()
-        return f"YouTube: {value}" if value else "YouTube"
-    if source_label.startswith("Audio:"):
-        value = source_label.split(":", 1)[1].strip()
-        return _humanize_media_source(value, kind="audio")
-    if source_label.startswith("Video:"):
-        value = source_label.split(":", 1)[1].strip()
-        return _humanize_media_source(value, kind="video")
-    return source_label or "Неизвестный источник"
-
-
-def _humanize_media_source(file_name: str, kind: str) -> str:
-    if not file_name:
-        return "Аудиофайл из Telegram" if kind == "audio" else "Видеофайл из Telegram"
-    if _looks_like_machine_file_name(file_name):
-        return "Аудиофайл из Telegram" if kind == "audio" else "Видеофайл из Telegram"
-    return file_name
+    return humanize_source_label(transcript.source_label)
 
 
 def _is_human_readable_title(value: str) -> bool:
-    if not value:
-        return False
-    return not _looks_like_machine_file_name(value)
+    return is_human_readable_title(value)
 
 
 def _looks_like_machine_file_name(value: str) -> bool:
-    candidate = value.strip()
-    if "." in candidate:
-        candidate = candidate.rsplit(".", 1)[0]
-    if len(candidate) < 12:
-        return False
-    if re.fullmatch(r"[A-Za-z0-9_-]+", candidate) is None:
-        return False
-    if re.fullmatch(r"Ag[A-Za-z0-9_-]{8,}", candidate):
-        return True
-    letters = sum(char.isalpha() for char in candidate)
-    digits = sum(char.isdigit() for char in candidate)
-    uppercase = sum(char.isupper() for char in candidate)
-    lowercase = sum(char.islower() for char in candidate)
-    separators = candidate.count("-") + candidate.count("_")
-    return (
-        letters + digits + separators == len(candidate)
-        and digits >= 3
-        and uppercase >= 2
-        and lowercase >= 2
-    )
+    return looks_like_machine_file_name(value)
 
 
 def normalize_report_markdown(markdown_content: str) -> str:

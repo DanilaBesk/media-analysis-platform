@@ -15,6 +15,7 @@ from telegram_transcriber_bot.config import Settings
 from telegram_transcriber_bot.domain import MediaAttachment, SourceCandidate
 from telegram_transcriber_bot.media_groups import MediaGroupAccumulator
 from telegram_transcriber_bot.service import ProcessingService
+from telegram_transcriber_bot.source_labels import humanize_source_label
 from telegram_transcriber_bot.source_extractor import extract_sources
 
 
@@ -188,7 +189,7 @@ class TelegramTranscriberApp:
         await self._start_processing(callback.message.chat.id, candidate)
 
     async def _start_processing(self, chat_id: int, candidate: SourceCandidate) -> None:
-        status_message = await self.bot.send_message(chat_id, f"Обрабатываю источник: {candidate.display_name}")
+        status_message = await self.bot.send_message(chat_id, _build_processing_status_text(candidate))
         try:
             prepared_candidate = await self._download_attachment_if_needed(candidate)
             job = await asyncio.to_thread(self.processing_service.process_source, prepared_candidate)
@@ -353,6 +354,19 @@ def _build_result_keyboard(job_id: str) -> InlineKeyboardMarkup:
     builder.button(text="Создать исследовательский отчет", callback_data=f"report:{job_id}")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def _build_processing_status_text(candidate: SourceCandidate) -> str:
+    humanized_source = humanize_source_label(candidate.display_name)
+    if candidate.kind in {"telegram_audio", "telegram_video"}:
+        return (
+            f"Обрабатываю источник: {humanized_source}\n\n"
+            "Скачиваю файл из Telegram и запускаю транскрибацию. Это может занять несколько минут."
+        )
+    return (
+        f"Обрабатываю источник: {humanized_source}\n\n"
+        "Проверяю доступные субтитры и при необходимости запущу транскрибацию."
+    )
 
 
 def _build_deep_research_keyboard(job_id: str) -> InlineKeyboardMarkup:
