@@ -276,7 +276,7 @@
         <file>apps/api/internal/jobs/*_test.go</file>
       </test-files>
       <module-checks>
-        <check-1>go test ./... -run ApiJobs</check-1>
+        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiJobs</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Create root and child jobs under correct lineage and delivery rules.</scenario-1>

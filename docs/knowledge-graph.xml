@@ -32,13 +32,17 @@
       </annotations>
     </M-API-HTTP>
 
-    <M-API-JOBS NAME="ApiJobs" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-API-JOBS NAME="ApiJobs" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Own job creation, lineage, status transitions, child-job reuse, retry, and cancel semantics.</purpose>
       <path>apps/api/internal/jobs</path>
       <depends>M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
       <verification-ref>V-M-API-JOBS</verification-ref>
       <annotations>
-        <export-createJob PURPOSE="Create root and child jobs under validated business rules." />
+        <export-createTranscriptionJobs PURPOSE="Create one job per uploaded file or one job from a supported URL." />
+        <export-createCombinedTranscriptionJob PURPOSE="Create one transcription job bound to an ordered multi-source input set." />
+        <export-createChildJob PURPOSE="Create or reuse canonical child jobs under validated business rules." />
+        <export-cancelJob PURPOSE="Apply cooperative cancellation semantics." />
+        <export-retryJob PURPOSE="Create a new lineage-linked retry row." />
         <export-transitionJob PURPOSE="Enforce allowed lifecycle transitions and version increments." />
         <type-JobLineage PURPOSE="Root, parent, and retry relationships preserved across all job types." />
         <type-CombinedTranscriptionJob PURPOSE="One transcription job bound to an ordered multi-source input set." />
