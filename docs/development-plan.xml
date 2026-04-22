@@ -1386,7 +1386,7 @@
       </notes>
     </M-MCP-ADAPTER>
 
-    <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" LAYER="5" ORDER="1" STATUS="planned">
+    <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" LAYER="5" ORDER="1" STATUS="implemented">
       <contract>
         <purpose>Own local Docker Compose topology, service dependencies, and environment contracts.</purpose>
         <scope>Compose topology, healthchecks, startup ordering, volumes, service env contracts, and smoke-run expectations.</scope>
@@ -1625,10 +1625,10 @@
   </ImplementationWaves>
 
   <ImplementationOrder>
-    <Phase-1 name="Grace Foundation And Contract Freeze" status="pending">
+    <Phase-1 name="Grace Foundation And Contract Freeze" status="done">
       <goal>Prepare the repository for GRACE-driven implementation and freeze contracts before any large code move.</goal>
       <step-1 module="M-CONTRACTS" status="done" verification="V-M-CONTRACTS">Convert the migration plan into canonical OpenAPI, JSON schema, WebSocket, and webhook contracts.</step-1>
-      <step-2 module="M-INFRA-COMPOSE" status="pending" verification="V-M-INFRA-COMPOSE">Define required runtime topology, services, and health expectations in a GRACE-governed shape.</step-2>
+      <step-2 module="M-INFRA-COMPOSE" status="done" verification="V-M-INFRA-COMPOSE">Define required runtime topology, services, and health expectations in a GRACE-governed shape.</step-2>
     </Phase-1>
 
     <Phase-2 name="Control Plane Foundation" status="pending">

@@ -157,7 +157,7 @@
       </annotations>
     </M-MCP-ADAPTER>
 
-    <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" STATUS="planned">
+    <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Define and bootstrap the local runtime topology for API, workers, adapters, and storage dependencies.</purpose>
       <path>infra/docker-compose.yml</path>
       <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
