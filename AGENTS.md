@@ -27,7 +27,7 @@
 - The current large migration brief in `docs/plans/2026-04-19-telegram-transcriber-platform-monorepo-migration.md` remains the detailed architecture baseline, but the GRACE XML docs are now the canonical structure for future planning, execution packets, verification, and graph updates.
 - New modules should carry GRACE-style module contracts and stable semantic/log anchors when they are implemented.
 - For implementation from this point forward, default to GRACE packet-driven execution rather than freeform refactoring.
-- Current first execution target is `M-CONTRACTS-wave-1` from `docs/operational-packets.xml`.
+- Current next execution target is `M-INFRA-COMPOSE-wave-1` from `docs/operational-packets.xml`.
 - Recommended next GRACE steps:
   - use `$grace-execute` to execute the next approved packet;
   - use `$grace-reviewer` for scoped gate reviews after each packet;

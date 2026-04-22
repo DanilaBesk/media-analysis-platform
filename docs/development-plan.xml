@@ -186,9 +186,9 @@
       <entity>JobRelation</entity>
     </CoreEntities>
     <JobTypes>
-      <type>transcription</type>
-      <type>report</type>
-      <type>deep_research</type>
+      <type-transcription>transcription</type-transcription>
+      <type-report>report</type-report>
+      <type-deep-research>deep_research</type-deep-research>
     </JobTypes>
     <InputShapes>
       <shape>single-source transcription job backed by a one-item source set</shape>
@@ -680,12 +680,12 @@
       <field>payload.progress_message</field>
     </EventEnvelope>
     <EventTypes>
-      <type>job.created</type>
-      <type>job.updated</type>
-      <type>job.artifact_created</type>
-      <type>job.completed</type>
-      <type>job.failed</type>
-      <type>job.canceled</type>
+      <type-job-created>job.created</type-job-created>
+      <type-job-updated>job.updated</type-job-updated>
+      <type-job-artifact-created>job.artifact_created</type-job-artifact-created>
+      <type-job-completed>job.completed</type-job-completed>
+      <type-job-failed>job.failed</type-job-failed>
+      <type-job-canceled>job.canceled</type-job-canceled>
     </EventTypes>
     <MandatoryRule>Polling is the correctness path. WebSocket is a latency optimization. UI must re-fetch job snapshots through REST on version gaps or reconnect.</MandatoryRule>
   </WebSocketContract>

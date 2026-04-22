@@ -492,23 +492,25 @@
 
     <V-M-INFRA-COMPOSE MODULE="M-INFRA-COMPOSE" PRIORITY="high">
       <test-files>
-        <file>compose smoke scripts</file>
+        <file>infra/docker-compose.yml</file>
+        <file>infra/env/*.env.example</file>
+        <file>infra/scripts/compose-smoke.sh</file>
       </test-files>
       <module-checks>
-        <check-1>docker compose up -d</check-1>
-        <check-2>docker compose ps</check-2>
+        <check-1>docker compose -f infra/docker-compose.yml config</check-1>
+        <check-2>bash infra/scripts/compose-smoke.sh --check-config</check-2>
       </module-checks>
       <scenarios>
-        <scenario-1 kind="success">Full local stack reaches healthy state with required services and volumes.</scenario-1>
-        <scenario-2 kind="failure">Missing dependencies such as PostgreSQL, Redis, MinIO, or model caches fail fast and observably.</scenario-2>
+        <scenario-1 kind="success">Compose topology defines the required services, env-file contracts, healthchecks, volumes, and startup ordering before runtime modules are implemented.</scenario-1>
+        <scenario-2 kind="failure">Missing services, env contracts, or invalid compose wiring fail fast through config validation and smoke-script checks.</scenario-2>
       </scenarios>
       <required-log-markers>
         <marker-1>[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]</marker-1>
       </required-log-markers>
       <required-trace-assertions>
-        <assertion-1>Cutover cannot happen until compose-wide smoke verification passes.</assertion-1>
+        <assertion-1>Phase-1 validates topology shape only; full stack boot remains a later phase gate after service modules exist.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Exercise healthchecks and startup ordering under clean local state.</wave-follow-up>
+      <wave-follow-up>Exercise healthchecks and startup ordering under clean local state once API and worker entrypoints exist.</wave-follow-up>
       <phase-follow-up>Run full smoke matrix before deleting the old single-process runtime path.</phase-follow-up>
     </V-M-INFRA-COMPOSE>
   </ModuleVerification>

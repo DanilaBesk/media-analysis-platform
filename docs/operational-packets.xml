@@ -213,6 +213,87 @@ VerificationPlan / TestingStrategy / V-M-CONTRACTS / Gate-Phase-1:
       </notes>
     </ExecutionPacket>
 
+    <ExecutionPacket packet-id="M-INFRA-COMPOSE-wave-1" module="M-INFRA-COMPOSE" phase="Phase-1" step="2" verification-ref="V-M-INFRA-COMPOSE">
+      <module-id>M-INFRA-COMPOSE</module-id>
+      <module-name>InfraCompose</module-name>
+      <purpose>Freeze the local runtime topology and validation scaffolding so later API, worker, UI, Telegram, and MCP steps land inside one canonical compose boundary instead of improvising service wiring per module.</purpose>
+      <write-scope>
+        <file-1>infra/docker-compose.yml</file-1>
+        <file-2>infra/env/*.env.example</file-2>
+        <file-3>infra/scripts/compose-smoke.sh</file-3>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>This Phase-1 step defines topology and config-validation scaffolding; it does not implement the API, workers, UI, or adapters themselves.</note-1>
+        <note-2>Do not broaden into `apps/api`, `workers/*`, `apps/web`, `apps/telegram-bot`, `apps/mcp-server`, or runtime code while executing this packet.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-INFRA-COMPOSE:
+- Purpose: own local Docker Compose topology, service dependencies, and environment contracts.
+- Scope: compose topology, healthchecks, startup ordering, volumes, service env contracts, and smoke-run expectations.
+- Links: M-INFRA-COMPOSE, V-M-INFRA-COMPOSE, DF-001, DF-003, DF-006, DF-007.
+- Note: this step prepares the canonical runtime boundary before service implementation spreads across later phases.
+
+ComposeDesign + RepositoryShape + EnvironmentContracts:
+- Define required services for postgres, redis, minio, api, worker-transcription, worker-report, worker-deep-research, web, telegram-bot, and mcp-server.
+- Freeze healthcheck expectations, named volumes, env-file layout, and startup ordering assumptions in one compose-owned surface.
+- Because the service modules are not implemented yet, Phase-1 verification is config-level and smoke-scaffold-level rather than full stack boot.
+
+ImplementationOrder / Phase-1 step-2:
+- Define required runtime topology, services, and health expectations in a GRACE-governed shape before Phase-2 begins.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-INFRA-COMPOSE:
+- Path: infra/docker-compose.yml
+- Depends: M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER
+- Verification ref: V-M-INFRA-COMPOSE
+- Purpose: define and bootstrap the local runtime topology for API, workers, adapters, and storage dependencies.
+- Public annotations already expected in the graph:
+  - export-composeStack
+
+Existing CrossLinks:
+- M-INFRA-COMPOSE -> M-API-HTTP relation="runs"
+- M-INFRA-COMPOSE -> M-WORKER-TRANSCRIPTION relation="runs"
+- M-INFRA-COMPOSE -> M-WORKER-REPORT relation="runs"
+- M-INFRA-COMPOSE -> M-WORKER-DEEP-RESEARCH relation="runs"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="future-service-modules">Compose depends on later service modules conceptually, but this Phase-1 packet only freezes their runtime slots, not their implementations.</dependency-1>
+        <dependency-2 module="M-CONTRACTS">The topology must respect the already-frozen control-plane versus adapter boundary and expose only the runtime roles implied by the contract package.</dependency-2>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-1:
+- Module checks validate compose shape and smoke scaffolding, not full service boot, because runtime entrypoints are delivered in later phases.
+- Success scenario: compose topology defines required services, env-file contracts, healthchecks, volumes, and startup ordering.
+- Failure scenario: missing services, env contracts, or invalid compose wiring fail fast through config validation and smoke-script checks.
+- Required marker: [InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]
+- Required assertion: Phase-1 validates topology shape only; compose-wide boot remains a later gate after service modules exist.
+- Wave follow-up: exercise healthchecks and startup ordering under clean local state once API and worker entrypoints exist.
+- Phase follow-up: run full smoke matrix before deleting the old single-process runtime path.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>docker compose -f infra/docker-compose.yml config</command-1>
+        <command-2>bash infra/scripts/compose-smoke.sh --check-config</command-2>
+        <evidence-1>Compose shape covers postgres, redis, minio, api, worker-transcription, worker-report, worker-deep-research, web, telegram-bot, and mcp-server with explicit env-file and volume expectations.</evidence-1>
+        <evidence-2>Runtime boot is not claimed in this phase; only deterministic config validation and smoke scaffolding are required before Phase-2 implementation starts.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: no module-import changes are expected outside the compose-owned runtime boundary.</field-1>
+        <field-2>exports: confirm `export-composeStack` once the compose surface and smoke script exist.</field-2>
+        <field-3>annotations: refine only runtime-topology annotations that become real and stable after this packet.</field-3>
+        <field-4>CrossLinks: preserve existing runtime `runs` links; do not broaden ownership across business modules.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: define concrete compose config and smoke-script coverage under `infra/`.</field-1>
+        <field-2>module-checks: preserve `docker compose -f infra/docker-compose.yml config` and the smoke-script config check as the narrow authoritative commands for this phase.</field-2>
+        <field-3>required-log-markers: preserve `[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]` for the topology verification path.</field-3>
+        <field-4>follow-up-checks: wave follow-up is live healthcheck exercise once service entrypoints exist; phase follow-up is full compose smoke before cutover.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet unblocks the next session by making the next executable target explicit in the execution layer.</note-1>
+        <note-2>The compose module should centralize env and service wiring decisions so later module sessions do not fork local runtime assumptions.</note-2>
+      </notes>
+    </ExecutionPacket>
+
     <ExecutionPacket packet-id="M-API-STORAGE-wave-2" module="M-API-STORAGE" phase="Phase-2" step="1" verification-ref="V-M-API-STORAGE">
       <module-id>M-API-STORAGE</module-id>
       <module-name>ApiStorage</module-name>
