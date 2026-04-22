@@ -21,7 +21,7 @@
       </annotations>
     </M-CONTRACTS>
 
-    <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="planned">
+    <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="implemented">
       <purpose>Expose create, list, get, cancel, retry, artifact, event, and internal worker endpoints for the control plane.</purpose>
       <path>apps/api/internal/api</path>
       <depends>M-CONTRACTS, M-API-JOBS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
@@ -29,6 +29,7 @@
       <annotations>
         <export-registerRoutes PURPOSE="Bind public and internal HTTP routes." />
         <export-validateRequest PURPOSE="Apply request validation and idempotency rules." />
+        <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
       </annotations>
     </M-API-HTTP>
 

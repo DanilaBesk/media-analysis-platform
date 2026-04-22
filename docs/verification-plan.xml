@@ -312,7 +312,7 @@
       <required-trace-assertions>
         <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run API handler tests with real multipart and JSON fixtures.</wave-follow-up>
+      <wave-follow-up>Multipart and JSON handler fixtures now live under apps/api/internal/api/api_test.go; remaining follow-up is live-server curl smoke once an executable API binary is wired.</wave-follow-up>
       <phase-follow-up>Full route regression against generated SDKs and manual curl smoke checks.</phase-follow-up>
     </V-M-API-HTTP>
 
