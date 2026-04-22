@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/common/enums.schema.json",
+  "title": "Shared enum surface",
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "jobStatus": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "running",
+        "cancel_requested",
+        "succeeded",
+        "failed",
+        "canceled"
+      ]
+    },
+    "jobType": {
+      "type": "string",
+      "enum": [
+        "transcription",
+        "report",
+        "deep_research"
+      ]
+    },
+    "sourceKind": {
+      "type": "string",
+      "enum": [
+        "uploaded_file",
+        "telegram_upload",
+        "youtube_url"
+      ]
+    },
+    "artifactKind": {
+      "type": "string",
+      "enum": [
+        "transcript_plain",
+        "transcript_segmented_markdown",
+        "transcript_docx",
+        "report_markdown",
+        "report_docx",
+        "deep_research_markdown",
+        "execution_log"
+      ]
+    },
+    "deliveryStrategy": {
+      "type": "string",
+      "enum": [
+        "polling",
+        "webhook"
+      ]
+    },
+    "submissionKind": {
+      "type": "string",
+      "enum": [
+        "transcription_upload",
+        "transcription_url",
+        "report_create",
+        "deep_research_create",
+        "job_retry"
+      ]
+    },
+    "jobEventType": {
+      "type": "string",
+      "enum": [
+        "job.created",
+        "job.updated",
+        "job.artifact_created",
+        "job.completed",
+        "job.failed",
+        "job.canceled"
+      ]
+    },
+    "workerKind": {
+      "type": "string",
+      "enum": [
+        "transcription",
+        "report",
+        "deep_research"
+      ]
+    },
+    "taskType": {
+      "type": "string",
+      "enum": [
+        "transcription.run",
+        "report.run",
+        "deep_research.run"
+      ]
+    },
+    "workerOutcome": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "failed",
+        "canceled"
+      ]
+    },
+    "sourceSetInputKind": {
+      "type": "string",
+      "enum": [
+        "single_source",
+        "combined_upload",
+        "combined_telegram"
+      ]
+    }
+  }
+}

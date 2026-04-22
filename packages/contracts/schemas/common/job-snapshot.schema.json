@@ -1,0 +1,340 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/common/job-snapshot.schema.json",
+  "title": "JobSnapshot",
+  "type": "object",
+  "required": [
+    "job_id",
+    "root_job_id",
+    "job_type",
+    "status",
+    "version",
+    "delivery",
+    "source_set",
+    "artifacts",
+    "children",
+    "created_at"
+  ],
+  "properties": {
+    "job_id": {
+      "$ref": "./enums.schema.json#/$defs/uuid"
+    },
+    "root_job_id": {
+      "$ref": "./enums.schema.json#/$defs/uuid"
+    },
+    "parent_job_id": {
+      "oneOf": [
+        {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retry_of_job_id": {
+      "oneOf": [
+        {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "job_type": {
+      "$ref": "./enums.schema.json#/$defs/jobType"
+    },
+    "status": {
+      "$ref": "./enums.schema.json#/$defs/jobStatus"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "display_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "client_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "delivery": {
+      "$ref": "#/$defs/delivery"
+    },
+    "source_set": {
+      "$ref": "#/$defs/sourceSet"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifactSummary"
+      }
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/childJobReference"
+      }
+    },
+    "progress": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/progressState"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "latest_error": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/errorInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "started_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "cancel_requested_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "delivery": {
+      "type": "object",
+      "required": [
+        "strategy"
+      ],
+      "properties": {
+        "strategy": {
+          "$ref": "./enums.schema.json#/$defs/deliveryStrategy"
+        },
+        "webhook_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceSet": {
+      "type": "object",
+      "required": [
+        "source_set_id",
+        "input_kind",
+        "items"
+      ],
+      "properties": {
+        "source_set_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "input_kind": {
+          "$ref": "./enums.schema.json#/$defs/sourceSetInputKind"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/sourceSetItem"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceSetItem": {
+      "type": "object",
+      "required": [
+        "position",
+        "source"
+      ],
+      "properties": {
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source": {
+          "$ref": "#/$defs/sourceReference"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceReference": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "source_kind"
+      ],
+      "properties": {
+        "source_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "source_kind": {
+          "$ref": "./enums.schema.json#/$defs/sourceKind"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "original_filename": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactSummary": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "artifact_kind",
+        "filename",
+        "mime_type",
+        "size_bytes",
+        "created_at"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "artifact_kind": {
+          "$ref": "./enums.schema.json#/$defs/artifactKind"
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mime_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "childJobReference": {
+      "type": "object",
+      "required": [
+        "job_id",
+        "job_type",
+        "status",
+        "version"
+      ],
+      "properties": {
+        "job_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "job_type": {
+          "$ref": "./enums.schema.json#/$defs/jobType"
+        },
+        "status": {
+          "$ref": "./enums.schema.json#/$defs/jobStatus"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "progressState": {
+      "type": "object",
+      "required": [
+        "stage"
+      ],
+      "properties": {
+        "stage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "errorInfo": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

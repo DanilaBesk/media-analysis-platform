@@ -1,0 +1,1746 @@
+<DevelopmentPlan VERSION="0.3.0">
+  <ArchitectureNotes>
+    <objective>Replace the monolithic bot with a contract-first GRACE-governed platform where the Go API owns orchestration and Python workers own heavy execution.</objective>
+    <document-role>This artifact is the GRACE execution and architecture backbone for the migration. It is intentionally detailed enough to replace the original long-form markdown plan rather than merely summarize it.</document-role>
+    <non-goal>Do not preserve a long-lived legacy compatibility layer and do not move heavy ML or report logic into Go.</non-goal>
+    <risk-1>Cross-surface contract drift between API, workers, Web UI, Telegram, and MCP can invalidate large implementation waves if contracts are not frozen first.</risk-1>
+    <risk-2>Retry, cancel, and webhook delivery can look correct in happy-path demos but regress under partial failure unless they are modeled before code extraction.</risk-2>
+  </ArchitectureNotes>
+
+  <PreservationMap>
+    <section original="1. Purpose of This Document" target="RequirementsAnalysis/Purpose; DevelopmentPlan/ArchitectureNotes" note="The role of the migration plan as implementation SSOT is preserved." />
+    <section original="2. Current State Summary" target="RequirementsAnalysis/CurrentState; DevelopmentPlan/MigrationContext" note="Current monolith shape, files, storage model, and preserved capabilities are preserved." />
+    <section original="3. Non-Goals for the First Platform Version" target="RequirementsAnalysis/NonGoals" note="All explicitly excluded scopes are preserved." />
+    <section original="4. Architectural Principles" target="RequirementsAnalysis/Principles; DevelopmentPlan/GuidingArchitecture" note="All platform rules and separation principles are preserved." />
+    <section original="4.1 Frozen Design Decisions" target="RequirementsAnalysis/FrozenDecisions; DevelopmentPlan/DecisionProvenance" note="All fixed migration decisions remain explicit and immutable until superseded." />
+    <section original="5. Recommended Target Architecture" target="TechnologyStack/ArchitectureShape; DevelopmentPlan/GuidingArchitecture" note="High-level components and control-plane versus execution-plane split are preserved." />
+    <section original="6. Target Monorepo Layout" target="TechnologyStack/MonorepoLayout; DevelopmentPlan/RepositoryShape" note="Target repository structure is preserved." />
+    <section original="7. Runtime Topology" target="TechnologyStack/RuntimeTopology; DevelopmentPlan/ComposeDesign" note="Compose services, network assumptions, and CPU-only whisper shape are preserved." />
+    <section original="8. Domain Model" target="DevelopmentPlan/DomainContracts" note="Core entities, job types, statuses, artifact kinds, and delivery strategies are preserved." />
+    <section original="9. PostgreSQL Schema" target="DevelopmentPlan/PersistentModel" note="All operational tables, important fields, constraints, and rules are preserved." />
+    <section original="10. Redis and Asynq Design" target="TechnologyStack/StorageAndQueueContracts; DevelopmentPlan/QueueContract" note="Queue design, payload shape, retries, and SkipRetry rules are preserved." />
+    <section original="11. MinIO Storage Model" target="TechnologyStack/StorageAndQueueContracts; DevelopmentPlan/StorageContract" note="Buckets, object keys, access model, and presigned download behavior are preserved." />
+    <section original="12. HTTP API Contract" target="DevelopmentPlan/PublicApiContract" note="Request rules, endpoints, delivery model, idempotency, and error codes are preserved." />
+    <section original="13. WebSocket Contract" target="DevelopmentPlan/WebSocketContract" note="Endpoint, event envelope, subscription model, and polling precedence rule are preserved." />
+    <section original="14. Worker Contract" target="DevelopmentPlan/InternalWorkerContract" note="Claim-run-finalize lifecycle, internal endpoints, and worker-specific progress models are preserved." />
+    <section original="15. Cancellation Semantics" target="DevelopmentPlan/CancellationPolicy" note="API rules, worker rules, and subprocess handling are preserved." />
+    <section original="16. Retry Semantics" target="DevelopmentPlan/RetryPolicy" note="Retry-as-new-job lineage model is preserved." />
+    <section original="17. Client Responsibilities" target="DevelopmentPlan/ClientResponsibilities" note="Responsibilities for Web UI, Telegram bot, and MCP are preserved." />
+    <section original="18. React UI Requirements" target="DevelopmentPlan/UxRequirements/WebUi" note="Required pages, actions, and late-wave admin operations are preserved." />
+    <section original="19. MCP Server Requirements" target="DevelopmentPlan/UxRequirements/Mcp" note="Required tool surface is preserved." />
+    <section original="20. Telegram Bot Requirements" target="DevelopmentPlan/UxRequirements/Telegram" note="Thin adapter behavior and current UX preservation are preserved." />
+    <section original="21. Docker Compose Design" target="TechnologyStack/RuntimeTopology; DevelopmentPlan/ComposeDesign" note="Required services, volumes, and CPU resource notes are preserved." />
+    <section original="22. Environment Variables" target="TechnologyStack/EnvironmentVariables; DevelopmentPlan/EnvironmentContracts" note="Per-service environment contract is preserved." />
+    <section original="23. Migration Mapping from Current Files" target="DevelopmentPlan/MigrationMapping" note="Current-file to target-module mapping is preserved." />
+    <section original="24. Implementation Waves" target="DevelopmentPlan/ImplementationWaves" note="Wave 0 through Wave 9, deliverables, files, and phases are preserved." />
+    <section original="25. Testing and Verification Strategy" target="VerificationPlan/TestingStrategy; VerificationPlan/ModuleVerification; VerificationPlan/PhaseGates" note="Contract, API, worker, UI, Telegram, and MCP verification plans are preserved." />
+    <section original="26. Risks and Mitigations" target="DevelopmentPlan/RisksAndMitigations" note="All named risks and mitigation directions are preserved." />
+    <section original="27. Definition of Done" target="DevelopmentPlan/DefinitionOfDone" note="Completion criteria are preserved." />
+    <section original="28. Immediate Next Task Recommendation" target="DevelopmentPlan/ImmediateNextTask" note="Recommended implementation order is preserved as historical guidance." />
+    <section original="29. Execution Rule for Future Sessions" target="DevelopmentPlan/ExecutionRules" note="Do and do-not rules for future implementation sessions are preserved." />
+  </PreservationMap>
+
+  <MigrationContext>
+    <current-entrypoint>src/telegram_transcriber_bot/__main__.py</current-entrypoint>
+    <current-files>
+      <file path="src/telegram_transcriber_bot/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
+      <file path="src/telegram_transcriber_bot/service.py" role="Current application service for processing sources, writing job metadata, generating report artifacts, and running deep research" />
+      <file path="src/telegram_transcriber_bot/transcribers.py" role="YouTube transcript fast path and Whisper fallback" />
+      <file path="src/telegram_transcriber_bot/documents.py" role="Markdown and DOCX artifact rendering" />
+      <file path="src/telegram_transcriber_bot/cglm_runner.py" role="Report generation subprocess adapter" />
+      <file path="src/telegram_transcriber_bot/deep_research.py" role="Deep research multi-phase pipeline" />
+    </current-files>
+    <current-storage>
+      <item>local files under .data/jobs/job_id</item>
+      <item>local metadata JSON per job</item>
+      <item>no external queue</item>
+      <item>no DB</item>
+      <item>no external object storage</item>
+      <item>no HTTP API</item>
+      <item>no Web UI</item>
+      <item>no MCP server</item>
+    </current-storage>
+    <preserved-capabilities>
+      <item>YouTube transcription</item>
+      <item>Telegram voice, audio, video, and document transcription</item>
+      <item>media group handling</item>
+      <item>plain transcript output</item>
+      <item>segmented transcript output</item>
+      <item>report generation</item>
+      <item>deep research generation</item>
+      <item>artifact reuse inside the current process</item>
+    </preserved-capabilities>
+  </MigrationContext>
+
+  <DecisionProvenance>
+    <decision id="D-001">Separate HTTP API server selected as the single backend boundary.</decision>
+    <decision id="D-002">Async job model selected rather than synchronous request-response execution.</decision>
+    <decision id="D-003">Separate worker processes execute heavy work; API does not run transcription, report generation, or deep research inline.</decision>
+    <decision id="D-004">Object storage chosen as MinIO in Docker Compose.</decision>
+    <decision id="D-005">PostgreSQL chosen as the persistent source of truth for jobs and artifact metadata.</decision>
+    <decision id="D-006">No auth model in v1 because the stack is local-only.</decision>
+    <decision id="D-007">MCP remains a separate thin adapter rather than being embedded into the API process.</decision>
+    <decision id="D-008">Sources are uploaded through the API in v1 rather than via direct MinIO uploads.</decision>
+    <decision id="D-009">Initial platform version intentionally drops cross-request dedupe and reuse.</decision>
+    <decision id="D-010">Report and deep research are modeled as distinct child job types, not stages within one mutable row.</decision>
+    <decision id="D-011">Project remains self-hosted and local-first without quotas.</decision>
+    <decision id="D-012">Simple React UI is required and lives as a separate monorepo app.</decision>
+    <decision id="D-013">Everything is containerized under Docker Compose including CPU-only Whisper runtime.</decision>
+    <decision id="D-014">Clients choose one delivery strategy per job, polling by default or webhook when explicitly configured.</decision>
+    <decision id="D-015">asynq is the queue substrate.</decision>
+    <decision id="D-016">Artifact downloads use MinIO presigned links rather than API proxying.</decision>
+    <decision id="D-017">Multi-file upload through the API is required in the first version.</decision>
+    <decision id="D-018">There is no legacy compatibility track; the repository is refactored directly into the target architecture.</decision>
+    <decision id="D-019">Go API module granularity is fixed for the migration horizon as internal/api, internal/jobs, internal/storage, internal/queue, internal/ws, and internal/db.</decision>
+    <decision id="D-020">Worker-control contracts remain explicit HTTP routes for the migration and first platform version.</decision>
+    <decision id="D-021">Redis is reserved for asynq queueing only; event delivery is driven from persisted job events, WebSocket broadcast, and webhook dispatch inside the API.</decision>
+  </DecisionProvenance>
+
+  <GuidingArchitecture>
+    <HighLevelComponents>
+      <component path="apps/api" role="Go HTTP API and WebSocket server" />
+      <component path="workers/transcription" role="Python worker for transcription jobs" />
+      <component path="workers/report" role="Python worker for report generation jobs" />
+      <component path="workers/deep-research" role="Python worker for deep-research jobs" />
+      <component path="apps/web" role="React UI for job creation, monitoring, and downloads" />
+      <component path="apps/telegram-bot" role="Thin Python bot adapter over the HTTP API" />
+      <component path="apps/mcp-server" role="Thin MCP adapter over the HTTP API" />
+      <component path="packages/contracts" role="OpenAPI definitions, JSON schemas, WS envelopes, webhook envelopes, and shared enums" />
+      <component path="packages/sdk-ts" role="Typed client for Web UI and MCP server" />
+      <component path="packages/sdk-py" role="Typed Python client for Telegram bot, workers, and local internal tooling" />
+      <component path="infra/docker-compose.yml" role="Local deployment topology" />
+      <component path="webhook-delivery-subsystem" role="Outbound callback delivery owned by the API server" />
+    </HighLevelComponents>
+    <ControlPlaneVsExecutionPlane>
+      <control-plane-responsibilities>
+        <item>accept uploads and source creation requests</item>
+        <item>create jobs and child jobs</item>
+        <item>resolve delivery strategy polling or webhook for create requests</item>
+        <item>persist job state in PostgreSQL</item>
+        <item>store source files in MinIO</item>
+        <item>enqueue work in asynq</item>
+        <item>stream job updates via WebSocket</item>
+        <item>deliver outbound webhooks on job lifecycle changes</item>
+        <item>expose polling endpoints</item>
+        <item>expose artifact metadata and MinIO presigned download links</item>
+        <item>enforce idempotency and child-job reuse semantics</item>
+        <item>implement retry and cancel semantics</item>
+      </control-plane-responsibilities>
+      <execution-plane-responsibilities>
+        <item>execute transcription</item>
+        <item>execute report generation</item>
+        <item>execute deep research generation</item>
+        <item>upload artifacts to MinIO</item>
+        <item>emit progress updates back to the API</item>
+        <item>respond to cancellation checks</item>
+        <item>record structured failures</item>
+      </execution-plane-responsibilities>
+    </ControlPlaneVsExecutionPlane>
+  </GuidingArchitecture>
+
+  <RepositoryShape>
+    <layout>
+      <entry path="apps/api/cmd/api" />
+      <entry path="apps/api/internal/api" />
+      <entry path="apps/api/internal/jobs" />
+      <entry path="apps/api/internal/storage" />
+      <entry path="apps/api/internal/queue" />
+      <entry path="apps/api/internal/ws" />
+      <entry path="apps/api/internal/db" />
+      <entry path="apps/api/migrations" />
+      <entry path="apps/web/src/app" />
+      <entry path="apps/web/src/pages" />
+      <entry path="apps/web/src/components" />
+      <entry path="apps/web/src/features/jobs" />
+      <entry path="apps/web/src/features/artifacts" />
+      <entry path="apps/web/src/lib/api" />
+      <entry path="apps/telegram-bot/src/telegram_transcriber_bot_client" />
+      <entry path="apps/mcp-server/src" />
+      <entry path="workers/common/src/transcriber_workers_common" />
+      <entry path="workers/transcription/src" />
+      <entry path="workers/report/src" />
+      <entry path="workers/deep-research/src" />
+      <entry path="packages/contracts/openapi" />
+      <entry path="packages/contracts/schemas" />
+      <entry path="packages/contracts/ws" />
+      <entry path="packages/sdk-ts" />
+      <entry path="packages/sdk-py" />
+      <entry path="infra/docker-compose.yml" />
+      <entry path="infra/env" />
+      <entry path="infra/minio" />
+      <entry path="infra/init" />
+    </layout>
+    <notes>
+      <note-1>The repository is restructured directly into the target monorepo shape.</note-1>
+      <note-2>There is no long-lived legacy subtree and no compatibility branch inside the target structure.</note-2>
+      <note-3>Existing Python modules may remain briefly while being actively moved, but the plan assumes direct replacement rather than prolonged coexistence.</note-3>
+    </notes>
+  </RepositoryShape>
+
+  <DomainContracts>
+    <CoreEntities>
+      <entity>Source</entity>
+      <entity>Job</entity>
+      <entity>Artifact</entity>
+      <entity>JobEvent</entity>
+      <entity>JobRelation</entity>
+    </CoreEntities>
+    <JobTypes>
+      <type>transcription</type>
+      <type>report</type>
+      <type>deep_research</type>
+    </JobTypes>
+    <InputShapes>
+      <shape>single-source transcription job backed by a one-item source set</shape>
+      <shape>combined multi-media transcription job backed by an ordered multi-item source set</shape>
+    </InputShapes>
+    <JobStatuses>
+      <status>queued</status>
+      <status>running</status>
+      <status>succeeded</status>
+      <status>failed</status>
+      <status>cancel_requested</status>
+      <status>canceled</status>
+    </JobStatuses>
+    <ArtifactKinds>
+      <kind>source_original</kind>
+      <kind>transcript_plain</kind>
+      <kind>transcript_segmented_markdown</kind>
+      <kind>transcript_docx</kind>
+      <kind>report_markdown</kind>
+      <kind>report_docx</kind>
+      <kind>deep_research_markdown</kind>
+      <kind>execution_log</kind>
+    </ArtifactKinds>
+    <DeliveryStrategy>
+      <strategy>polling</strategy>
+      <strategy>webhook</strategy>
+      <rules>
+        <rule-1>Each job chooses exactly one delivery strategy.</rule-1>
+        <rule-2>Default delivery strategy is polling.</rule-2>
+        <rule-3>Webhook can be requested only at job creation and requires a callback URL.</rule-3>
+        <rule-4>The API always returns job identifiers and initial snapshots even when webhook is selected.</rule-4>
+        <rule-5>Polling endpoints remain available as recovery and read access even for webhook-configured jobs.</rule-5>
+      </rules>
+    </DeliveryStrategy>
+  </DomainContracts>
+
+  <PersistentModel>
+    <Enums>
+      <enum name="source_kind">uploaded_file, telegram_upload, youtube_url</enum>
+      <enum name="job_type">transcription, report, deep_research</enum>
+      <enum name="job_status">queued, running, cancel_requested, succeeded, failed, canceled</enum>
+      <enum name="delivery_strategy">polling, webhook</enum>
+      <enum name="artifact_kind">transcript_plain, transcript_segmented_markdown, transcript_docx, report_markdown, report_docx, deep_research_markdown, execution_log</enum>
+      <enum name="submission_kind">transcription_upload, transcription_url, report_create, deep_research_create, job_retry</enum>
+    </Enums>
+    <Table name="job_submissions">
+      <purpose>Represent idempotent create requests including multi-file upload cases that cannot be modeled safely on jobs alone.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>submission_kind text not null</column>
+        <column>idempotency_key text not null</column>
+        <column>request_fingerprint text not null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>unique on submission_kind and idempotency_key</constraint>
+        <constraint>index on created_at descending</constraint>
+      </constraints>
+      <rules>
+        <rule>One submission may create many jobs for POST /v1/transcription-jobs.</rule>
+        <rule>Same submission key plus same normalized request returns the original accepted response.</rule>
+        <rule>Same submission key plus different normalized request returns idempotency_conflict.</rule>
+      </rules>
+    </Table>
+    <Table name="sources">
+      <purpose>Persist uploaded-file, Telegram-upload, and YouTube URL source metadata.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>source_kind text not null</column>
+        <column>display_name text not null</column>
+        <column>original_filename text null</column>
+        <column>mime_type text null</column>
+        <column>source_url text null</column>
+        <column>object_key text null</column>
+        <column>size_bytes bigint null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>youtube_url rows require source_url and do not require object_key</constraint>
+        <constraint>uploaded_file and telegram_upload rows require object_key</constraint>
+        <constraint>object_key unique where not null</constraint>
+      </constraints>
+      <rules>
+        <rule>YouTube sources may exist without MinIO objects in v1.</rule>
+        <rule>Sources are reusable input records; jobs reference source sets rather than direct source_id after the source-set migration.</rule>
+      </rules>
+    </Table>
+    <Table name="source_sets">
+      <purpose>Represent ordered input sets for transcription jobs so single-file and combined multi-media flows share one model.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>input_kind text not null</column>
+        <column>display_name text null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>input_kind is constrained to single_source, combined_upload, or combined_telegram in v1 implementation space</constraint>
+      </constraints>
+      <rules>
+        <rule>Single-file transcription jobs use a one-item source set.</rule>
+        <rule>Combined transcription jobs use a multi-item ordered source set.</rule>
+      </rules>
+    </Table>
+    <Table name="source_set_items">
+      <purpose>Persist the ordered list of sources that belong to one source set.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>source_set_id uuid not null references source_sets on delete cascade</column>
+        <column>source_id uuid not null references sources</column>
+        <column>position int not null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>unique on source_set_id and position</constraint>
+        <constraint>index on source_set_id ascending</constraint>
+      </constraints>
+      <rules>
+        <rule>position defines the final transcription order.</rule>
+        <rule>The same source may appear in only one position within one source set in normal API flows.</rule>
+      </rules>
+    </Table>
+    <Table name="jobs">
+      <purpose>Represent root jobs, child jobs, retries, delivery strategy, progress, and terminal outcomes.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>submission_id uuid null references job_submissions</column>
+        <column>root_job_id uuid not null references jobs</column>
+        <column>parent_job_id uuid null references jobs</column>
+        <column>retry_of_job_id uuid null references jobs</column>
+        <column>source_set_id uuid not null references source_sets</column>
+        <column>job_type text not null</column>
+        <column>status text not null</column>
+        <column>delivery_strategy text not null default polling</column>
+        <column>webhook_url text null</column>
+        <column>version bigint not null default 1</column>
+        <column>progress_stage text not null default queued</column>
+        <column>progress_message text not null default empty</column>
+        <column>params jsonb not null default empty object</column>
+        <column>client_ref text null</column>
+        <column>error_code text null</column>
+        <column>error_message text null</column>
+        <column>cancel_requested_at timestamptz null</column>
+        <column>created_at timestamptz not null default now()</column>
+        <column>started_at timestamptz null</column>
+        <column>finished_at timestamptz null</column>
+      </columns>
+      <constraints>
+        <constraint>webhook rows require webhook_url, polling rows do not carry webhook_url</constraint>
+        <constraint>cancel_requested rows require cancel_requested_at</constraint>
+        <constraint>indexes on root_job_id, parent_job_id, retry_of_job_id, source_set_id, job_type plus status</constraint>
+        <constraint>partial unique canonical child constraint by parent_job_id and job_type for non-retry active or completed rows</constraint>
+      </constraints>
+      <rules>
+        <rule>Initial transcription job has root_job_id equal to id, no parent_job_id, and no retry_of_job_id.</rule>
+        <rule>Retry jobs keep root_job_id and parent_job_id but set retry_of_job_id.</rule>
+        <rule>Report jobs point to transcription parents; deep-research jobs point to report parents.</rule>
+        <rule>Only one canonical non-retry child per parent and job_type exists in v1; reruns happen through retry rows.</rule>
+        <rule>Retries and child jobs reuse the same source_set_id as their parent lineage.</rule>
+      </rules>
+    </Table>
+    <Table name="job_artifacts">
+      <purpose>Persist output artifact metadata after successful MinIO object writes.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>job_id uuid not null references jobs on delete cascade</column>
+        <column>artifact_kind text not null</column>
+        <column>filename text not null</column>
+        <column>format text not null</column>
+        <column>mime_type text not null</column>
+        <column>object_key text not null</column>
+        <column>size_bytes bigint null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>unique job_id and artifact_kind</constraint>
+        <constraint>unique object_key</constraint>
+      </constraints>
+      <rules>
+        <rule>source_original is not modeled as a job artifact in v1 because uploaded originals already live in sources.</rule>
+        <rule>Create rows only after object upload succeeds.</rule>
+        <rule>Transcription success requires transcript_plain, transcript_segmented_markdown, and transcript_docx.</rule>
+        <rule>Report success requires report_markdown and report_docx.</rule>
+        <rule>Deep-research success requires deep_research_markdown.</rule>
+      </rules>
+    </Table>
+    <Table name="job_events">
+      <purpose>Append-only timeline and delivery trigger store keyed by job version.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>job_id uuid not null references jobs on delete cascade</column>
+        <column>root_job_id uuid not null references jobs</column>
+        <column>event_type text not null</column>
+        <column>version bigint not null</column>
+        <column>payload jsonb not null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>unique on job_id and version</constraint>
+        <constraint>indexes on job_id ascending and root_job_id ascending timelines</constraint>
+      </constraints>
+      <rules>
+        <rule>Timeline events are append-only.</rule>
+        <rule>One job version maps to one persisted event row.</rule>
+        <rule>Webhook deliveries reference job_events rather than mutable job rows.</rule>
+      </rules>
+    </Table>
+    <Table name="webhook_deliveries">
+      <purpose>Persist bounded webhook retry state across API restarts.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>job_event_id uuid not null unique references job_events on delete cascade</column>
+        <column>job_id uuid not null references jobs on delete cascade</column>
+        <column>target_url text not null</column>
+        <column>payload jsonb not null</column>
+        <column>state text not null default pending</column>
+        <column>attempt_count int not null default 0</column>
+        <column>next_attempt_at timestamptz not null default now()</column>
+        <column>last_attempt_at timestamptz null</column>
+        <column>delivered_at timestamptz null</column>
+        <column>last_http_status int null</column>
+        <column>last_error text null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>indexes on state plus next_attempt_at and job_id plus created_at</constraint>
+      </constraints>
+      <rules>
+        <rule>Create one row per emitted job_event when delivery_strategy equals webhook.</rule>
+        <rule>No separate per-attempt history table is required in v1; attempt_count plus last outcome is operationally enough.</rule>
+      </rules>
+    </Table>
+  </PersistentModel>
+
+  <QueueContract>
+    <Queueing>
+      <queue name="transcription" task-type="job:transcription.run" max-retry="3" timeout="2h" />
+      <queue name="report" task-type="job:report.run" max-retry="2" timeout="45m" />
+      <queue name="deep_research" task-type="job:deep_research.run" max-retry="2" timeout="2h" />
+    </Queueing>
+    <PayloadShape>Minimal payload is job_id plus attempt number. Full mutable job metadata must not be placed in asynq payloads.</PayloadShape>
+    <OwnershipRules>
+      <rule-1>The API owns business retry semantics even though asynq performs transport retries.</rule-1>
+      <rule-2>asynq retries are only for transient infrastructure failures.</rule-2>
+      <rule-3>Deterministic business failures must use SkipRetry rather than blind queue repetition.</rule-3>
+    </OwnershipRules>
+    <SkipRetryCases>
+      <case>claim rejected because job is already terminal or already owned</case>
+      <case>cancel is already authoritative</case>
+      <case>required parent artifact is missing</case>
+      <case>request data is invalid</case>
+      <case>pipeline or model failure that should surface to the user as terminal failed</case>
+    </SkipRetryCases>
+  </QueueContract>
+
+  <StorageContract>
+    <Buckets>
+      <bucket>sources</bucket>
+      <bucket>artifacts</bucket>
+    </Buckets>
+    <ObjectKeys>
+      <key>sources/source_id/original/sanitized_filename</key>
+      <key>artifacts/job_id/transcript/plain/transcript.txt</key>
+      <key>artifacts/job_id/transcript/segmented/transcript.md</key>
+      <key>artifacts/job_id/transcript/docx/transcript.docx</key>
+      <key>artifacts/job_id/report/markdown/report.md</key>
+      <key>artifacts/job_id/report/docx/report.docx</key>
+      <key>artifacts/job_id/deep-research/markdown/evidence-research-final-report.md</key>
+      <key>artifacts/job_id/logs/execution.log</key>
+    </ObjectKeys>
+    <AccessModel>
+      <rule-1>Clients do not upload directly to MinIO in v1.</rule-1>
+      <rule-2>API stores source files in MinIO.</rule-2>
+      <rule-3>Workers write artifacts to MinIO.</rule-3>
+      <rule-4>Clients receive MinIO presigned download links from the API and download directly from those links.</rule-4>
+      <rule-5>YouTube sources may exist only as DB rows and worker-local temporary materialization in v1.</rule-5>
+    </AccessModel>
+    <PresignedLinks>
+      <field>download_url</field>
+      <field>download_url_expires_at</field>
+      <rule>Presigned URLs are generated by the API at read time and must be treated as ephemeral.</rule>
+      <rule>Job snapshots and artifact metadata remain available from the API even when URLs expire.</rule>
+    </PresignedLinks>
+  </StorageContract>
+
+  <PublicApiContract>
+    <CommonRequestRules>
+      <rule-1>Create endpoints support optional Idempotency-Key.</rule-1>
+      <rule-2>Create endpoints accept delivery strategy. If delivery strategy is webhook, a webhook URL is required.</rule-2>
+      <rule-3>Equivalent request plus same Idempotency-Key returns the original accepted response rather than creating new jobs.</rule-3>
+      <rule-4>Retry is intentionally not idempotent.</rule-4>
+      <rule-5>Create-child behavior is stronger than idempotency: if a canonical child already exists, return it even without an idempotency key.</rule-5>
+      <rule-6>Multipart request normalization includes scalar fields and ordered file manifest with filename, size_bytes, and sha256.</rule-6>
+      <rule-7>Recommended first-version maximum request size is 1 GiB.</rule-7>
+      <rule-8>The existing upload endpoint preserves one uploaded file to one transcription job semantics; combined multi-media transcription uses a separate endpoint.</rule-8>
+    </CommonRequestRules>
+    <SharedEnums>
+      <enum name="JobStatus">queued, running, cancel_requested, succeeded, failed, canceled</enum>
+      <enum name="JobType">transcription, report, deep_research</enum>
+      <enum name="SourceKind">uploaded_file, telegram_upload, youtube_url</enum>
+      <enum name="ArtifactKind">transcript_plain, transcript_segmented_markdown, transcript_docx, report_markdown, report_docx, deep_research_markdown, execution_log</enum>
+    </SharedEnums>
+    <ErrorEnvelope>
+      <field>error.code</field>
+      <field>error.message</field>
+      <field>error.details</field>
+    </ErrorEnvelope>
+    <Endpoint method="POST" path="/v1/transcription-jobs">
+      <purpose>Create one transcription job per uploaded file.</purpose>
+      <content-type>multipart/form-data</content-type>
+      <fields>
+        <field>files binary required one or more</field>
+        <field>display_name optional only when exactly one file is uploaded</field>
+        <field>client_ref optional</field>
+        <field>delivery_strategy optional default polling</field>
+        <field>delivery_webhook_url optional required when delivery_strategy equals webhook</field>
+      </fields>
+      <response>202 Accepted always returns jobs array, even for one file.</response>
+      <behavior>
+        <rule>Multiple uploaded files create one transcription job per file.</rule>
+        <rule>Uploaded files are persisted to MinIO before queueing work.</rule>
+        <rule>Reject empty file parts and ambiguous display_name usage for multi-file upload.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/transcription-jobs/combined">
+      <purpose>Create one combined transcription job from an ordered set of uploaded media files.</purpose>
+      <content-type>multipart/form-data</content-type>
+      <fields>
+        <field>files binary required one or more</field>
+        <field>display_name optional combined-operation label</field>
+        <field>client_ref optional</field>
+        <field>delivery_strategy optional default polling</field>
+        <field>delivery_webhook_url optional required when delivery_strategy equals webhook</field>
+      </fields>
+      <response>202 Accepted returns one job snapshot, not an array.</response>
+      <behavior>
+        <rule>API persists each uploaded file as its own source object.</rule>
+        <rule>API creates one ordered source set preserving multipart file order.</rule>
+        <rule>API creates one transcription job bound to that source set.</rule>
+        <rule>Combined flow does not change the semantics of POST /v1/transcription-jobs or the URL flow.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/transcription-jobs/from-url">
+      <purpose>Create transcription job from supported YouTube URL.</purpose>
+      <request-fields>
+        <field>source_kind must be youtube_url</field>
+        <field>url absolute http or https</field>
+        <field>display_name optional</field>
+        <field>delivery strategy object</field>
+      </request-fields>
+      <validation>
+        <rule>Allowed hosts are youtube.com, www.youtube.com, m.youtube.com, and youtu.be.</rule>
+      </validation>
+      <response>202 Accepted with the same job envelope shape as upload flow.</response>
+    </Endpoint>
+    <Endpoint method="GET" path="/v1/jobs/{job_id}">
+      <purpose>Return authoritative job snapshot with artifacts, children, and lineage.</purpose>
+      <rule>job_id must be UUID.</rule>
+    </Endpoint>
+    <Endpoint method="GET" path="/v1/jobs">
+      <purpose>List jobs for local operational UI and adapters.</purpose>
+      <query-params>status, job_type, root_job_id, page, page_size</query-params>
+      <ordering>created_at descending</ordering>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/transcription-jobs/{job_id}/report-jobs">
+      <purpose>Create or reuse canonical report child job.</purpose>
+      <preconditions>
+        <item>parent job exists</item>
+        <item>parent job_type equals transcription</item>
+        <item>parent status equals succeeded</item>
+        <item>required transcript_plain artifact exists</item>
+      </preconditions>
+      <rule>Repeated create requests return existing canonical child unless explicit retry is used.</rule>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/report-jobs/{job_id}/deep-research-jobs">
+      <purpose>Create or reuse canonical deep-research child job.</purpose>
+      <preconditions>
+        <item>parent job exists</item>
+        <item>parent job_type equals report</item>
+        <item>parent status equals succeeded</item>
+        <item>required report_markdown artifact exists</item>
+      </preconditions>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/jobs/{job_id}/cancel">
+      <purpose>Apply cooperative cancellation semantics.</purpose>
+      <behavior>
+        <rule>If job is queued and not claimed, API may finalize directly as canceled.</rule>
+        <rule>If job is running, API sets cancel_requested and worker must observe it cooperatively.</rule>
+        <rule>If job is terminal, API returns current job unchanged.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/jobs/{job_id}/retry">
+      <purpose>Create new retry row linked by retry_of_job_id.</purpose>
+      <validation>
+        <rule>Only terminal jobs may be retried.</rule>
+        <rule>Retry preserves root_job_id and parent_job_id when applicable and reuses source_set_id.</rule>
+      </validation>
+    </Endpoint>
+    <Endpoint method="GET" path="/v1/artifacts/{artifact_id}">
+      <purpose>Resolve artifact metadata plus MinIO presigned download URL.</purpose>
+      <rule>Clients never construct MinIO URLs themselves.</rule>
+    </Endpoint>
+    <Endpoint method="GET" path="/v1/jobs/{job_id}/events">
+      <purpose>Expose append-only event timeline for UI and MCP introspection.</purpose>
+    </Endpoint>
+    <WebhookDeliveryContract>
+      <configuration>
+        <field>delivery.strategy equals webhook</field>
+        <field>delivery.webhook.url required</field>
+      </configuration>
+      <envelope-fields>
+        <field>event_id</field>
+        <field>event_type</field>
+        <field>job_id</field>
+        <field>root_job_id</field>
+        <field>job_type</field>
+        <field>version</field>
+        <field>emitted_at</field>
+        <field>job_url</field>
+        <field>payload.status</field>
+        <field>payload.progress_stage</field>
+        <field>payload.progress_message</field>
+      </envelope-fields>
+      <delivery-rules>
+        <rule>Webhook is best-effort delivery, not the sole source of truth.</rule>
+        <rule>Failed deliveries are retried with bounded backoff and durable state.</rule>
+        <rule>Any 2xx is delivered.</rule>
+        <rule>Retry on network error, timeout, 408, 429, and 5xx.</rule>
+        <rule>Do not retry other 4xx.</rule>
+        <rule>Recommended backoff sequence is immediate, 10s, 30s, 2m, 10m.</rule>
+      </delivery-rules>
+      <not-in-v1>
+        <item>signing secret</item>
+        <item>custom headers</item>
+        <item>custom per-request retry policy</item>
+        <item>per-request event filtering</item>
+      </not-in-v1>
+    </WebhookDeliveryContract>
+    <ApiErrorCodes>
+      <code>invalid_json</code>
+      <code>invalid_multipart</code>
+      <code>invalid_query</code>
+      <code>invalid_uuid</code>
+      <code>job_not_found</code>
+      <code>artifact_not_found</code>
+      <code>idempotency_conflict</code>
+      <code>invalid_job_state</code>
+      <code>retry_requires_terminal_job</code>
+      <code>request_too_large</code>
+      <code>file_too_large</code>
+      <code>unsupported_media_type</code>
+      <code>validation_failed</code>
+      <code>webhook_url_required</code>
+      <code>invalid_webhook_url</code>
+      <code>unsupported_source_url</code>
+      <code>parent_job_not_succeeded</code>
+      <code>required_artifact_missing</code>
+      <code>display_name_not_allowed_for_multi_file_upload</code>
+      <code>internal_error</code>
+      <code>storage_unavailable</code>
+      <code>queue_unavailable</code>
+      <code>dependency_unavailable</code>
+    </ApiErrorCodes>
+    <JobErrorCodes>
+      <code>source_fetch_failed</code>
+      <code>transcription_failed</code>
+      <code>report_failed</code>
+      <code>deep_research_failed</code>
+      <code>artifact_upload_failed</code>
+      <code>canceled</code>
+      <code>internal_error</code>
+    </JobErrorCodes>
+  </PublicApiContract>
+
+  <WebSocketContract>
+    <Endpoint>GET /v1/ws</Endpoint>
+    <SubscriptionModel>
+      <default>All connected Web UI clients receive the versioned event stream and filter client-side in local deployment.</default>
+      <v1-rule>No subscribe message exists in v1.</v1-rule>
+    </SubscriptionModel>
+    <EventEnvelope>
+      <field>event_id</field>
+      <field>event_type</field>
+      <field>job_id</field>
+      <field>root_job_id</field>
+      <field>version</field>
+      <field>emitted_at</field>
+      <field>payload.status</field>
+      <field>payload.progress_stage</field>
+      <field>payload.progress_message</field>
+    </EventEnvelope>
+    <EventTypes>
+      <type>job.created</type>
+      <type>job.updated</type>
+      <type>job.artifact_created</type>
+      <type>job.completed</type>
+      <type>job.failed</type>
+      <type>job.canceled</type>
+    </EventTypes>
+    <MandatoryRule>Polling is the correctness path. WebSocket is a latency optimization. UI must re-fetch job snapshots through REST on version gaps or reconnect.</MandatoryRule>
+  </WebSocketContract>
+
+  <InternalWorkerContract>
+    <Lifecycle>
+      <step-1>Receive asynq task containing job_id.</step-1>
+      <step-2>Ask the API or internal service layer to claim the job.</step-2>
+      <step-3>If claim fails because the job is already terminal or already owned, stop.</step-3>
+      <step-4>Mark job running through the authoritative claim path.</step-4>
+      <step-5>Emit progress events.</step-5>
+      <step-6>Execute the work.</step-6>
+      <step-7>Upload artifacts to MinIO.</step-7>
+      <step-8>Report artifact metadata.</step-8>
+      <step-9>Finalize as succeeded, failed, or canceled.</step-9>
+    </Lifecycle>
+    <StatusTransitions>
+      <transition>queued to running</transition>
+      <transition>queued to canceled</transition>
+      <transition>running to succeeded</transition>
+      <transition>running to failed</transition>
+      <transition>running to cancel_requested</transition>
+      <transition>cancel_requested to canceled</transition>
+      <transition>cancel_requested to failed</transition>
+    </StatusTransitions>
+    <InternalEndpoints>
+      <endpoint method="POST" path="/internal/v1/jobs/{job_id}/claim">
+        <fields>worker_kind, task_type</fields>
+        <behavior>Atomically claims execution, performs queued to running, sets started_at, and returns execution_id, lineage, ordered inputs, params, and version.</behavior>
+      </endpoint>
+      <endpoint method="POST" path="/internal/v1/jobs/{job_id}/progress">
+        <fields>execution_id, progress_stage, progress_message</fields>
+      </endpoint>
+      <endpoint method="POST" path="/internal/v1/jobs/{job_id}/artifacts">
+        <fields>execution_id and artifacts array with artifact_kind, format, filename, mime_type, object_key, and size_bytes</fields>
+        <behavior>Upserts artifact metadata by job_id and artifact_kind only after object upload succeeds.</behavior>
+      </endpoint>
+      <endpoint method="POST" path="/internal/v1/jobs/{job_id}/finalize">
+        <fields>execution_id, outcome, progress_stage, progress_message, error_code, error_message</fields>
+        <behavior>Validates required artifacts on success, writes terminal state, sets finished_at, and emits timeline, WebSocket, and webhook side effects.</behavior>
+      </endpoint>
+      <endpoint method="GET" path="/internal/v1/jobs/{job_id}/cancel-check">
+        <fields>execution_id</fields>
+        <response>cancel_requested, status, cancel_requested_at</response>
+      </endpoint>
+    </InternalEndpoints>
+    <NotInV1>
+      <item>heartbeat endpoint</item>
+      <item>lease renewal endpoint</item>
+      <item>worker registration endpoint</item>
+      <item>pause or resume execution endpoint</item>
+    </NotInV1>
+    <WorkerSpecifics>
+      <TranscriptionWorker>
+        <reused-sources>current transcribers.py, transcript rendering in documents.py, source materialization logic from service.py</reused-sources>
+        <outputs>transcript_plain, transcript_segmented_markdown, transcript_docx</outputs>
+        <progress-stages>queued, materializing_source, concatenating_inputs, transcribing, rendering_artifacts, uploading_artifacts, completed, failed, canceled</progress-stages>
+      </TranscriptionWorker>
+      <ReportWorker>
+        <reused-sources>current cglm_runner.py and report docx rendering in documents.py</reused-sources>
+        <outputs>report_markdown, report_docx</outputs>
+        <progress-stages>queued, loading_transcript, generating_report, rendering_artifacts, uploading_artifacts, completed, failed, canceled</progress-stages>
+      </ReportWorker>
+      <DeepResearchWorker>
+        <reused-sources>current deep_research.py</reused-sources>
+        <outputs>deep_research_markdown and optional execution_log</outputs>
+        <progress-stages>queued, loading_report, researching, writing_output, uploading_artifacts, completed, failed, canceled</progress-stages>
+      </DeepResearchWorker>
+    </WorkerSpecifics>
+  </InternalWorkerContract>
+
+  <CancellationPolicy>
+    <ApiRules>
+      <rule-1>When cancel is requested, set cancel_requested_at.</rule-1>
+      <rule-2>If running, set job status to cancel_requested and emit an event.</rule-2>
+      <rule-3>If queued and still not claimed, API may finalize directly as canceled.</rule-3>
+      <rule-4>If job is already terminal, return the current snapshot unchanged.</rule-4>
+    </ApiRules>
+    <WorkerRules>
+      <rule-1>Check cancellation before expensive initialization.</rule-1>
+      <rule-2>Check cancellation between major phases.</rule-2>
+      <rule-3>Check cancellation after subprocess completion.</rule-3>
+      <rule-4>Check cancellation before artifact upload when skipping is still safe.</rule-4>
+      <rule-5>Check cancellation inside loops when processing chunked or long-running work.</rule-5>
+    </WorkerRules>
+    <SubprocessHandling>
+      <rule-1>cglm and deep research subprocess handles must be tracked.</rule-1>
+      <rule-2>If cancel is observed, worker should terminate subprocess.</rule-2>
+      <rule-3>If subprocess termination succeeds, finalize as canceled.</rule-3>
+      <rule-4>If subprocess crashes during an authoritative cancel, still report canceled unless corruption requires failed.</rule-4>
+    </SubprocessHandling>
+  </CancellationPolicy>
+
+  <RetryPolicy>
+    <rule-1>Retry creates a new job row and keeps historical rows immutable.</rule-1>
+    <rule-2>New retry row references old row through retry_of_job_id.</rule-2>
+    <rule-3>Retry preserves root_job_id and parent_job_id when applicable.</rule-3>
+      <rule-4>Retry reuses source_set_id.</rule-4>
+    <rule-5>Retry must not copy artifacts or job events from the source row.</rule-5>
+    <rule-6>Create-child operations reuse existing canonical child rows instead of spawning siblings.</rule-6>
+    <rule-7>If the caller wants a new report or deep-research run, retry the existing child job instead of calling create-child again.</rule-7>
+    <rationale>Retry-as-new-job is cleaner for UI history, debugging, MCP introspection, and event auditability.</rationale>
+  </RetryPolicy>
+
+  <ClientResponsibilities>
+    <WebUi>
+      <item>create jobs</item>
+      <item>list and inspect jobs</item>
+      <item>subscribe to WebSocket and fall back to polling</item>
+      <item>surface delivery strategy choice between polling and webhook on create flows</item>
+      <item>trigger report and deep-research child jobs</item>
+      <item>cancel and retry jobs</item>
+      <item>download artifacts</item>
+    </WebUi>
+      <TelegramBot>
+      <item>receive Telegram user input</item>
+        <item>download attachments from Telegram when needed</item>
+        <item>upload files to the API</item>
+        <item>submit Telegram media groups and explicit combined batches through the combined transcription endpoint</item>
+        <item>create URL jobs through the API</item>
+      <item>poll for result readiness by default</item>
+      <item>send resulting artifacts back to Telegram users</item>
+      <item>expose buttons that trigger API actions</item>
+    </TelegramBot>
+    <TelegramBotForbidden>
+      <item>run transcription locally</item>
+      <item>generate reports locally</item>
+      <item>write direct job metadata</item>
+      <item>own artifact lifecycle</item>
+    </TelegramBotForbidden>
+    <McpServer>
+      <item>wrap API as MCP tools</item>
+      <item>expose create, read, list, retry, cancel, report, and deep-research operations</item>
+      <item>return artifact metadata and download handles</item>
+    </McpServer>
+    <McpServerForbidden>
+      <item>contain execution logic</item>
+      <item>talk directly to Redis, MinIO, or workers</item>
+    </McpServerForbidden>
+  </ClientResponsibilities>
+
+  <UxRequirements>
+    <WebUi>
+      <required-pages>Create Job, Jobs List, Job Details</required-pages>
+      <required-capabilities>
+        <item>upload file</item>
+        <item>upload multiple files in one request</item>
+        <item>create one combined transcription job from multiple files when explicitly selected</item>
+        <item>submit YouTube URL</item>
+        <item>observe live state</item>
+        <item>view artifact list</item>
+        <item>download artifacts</item>
+        <item>create report job</item>
+        <item>create deep-research job</item>
+        <item>cancel job</item>
+        <item>retry job</item>
+      </required-capabilities>
+      <late-wave-admin-capabilities>
+        <item>delete job</item>
+        <item>delete job artifacts</item>
+        <item>re-resolve fresh download link for expired artifacts</item>
+        <item>manual rerun via explicit retry actions</item>
+      </late-wave-admin-capabilities>
+      <recommended-stack>React, TypeScript, Vite, TanStack Query, React Router</recommended-stack>
+    </WebUi>
+    <Mcp>
+      <required-tools>
+        <tool>create_transcription_job_from_file</tool>
+        <tool>create_transcription_job_from_url</tool>
+        <tool>get_job</tool>
+        <tool>list_jobs</tool>
+        <tool>create_report_job</tool>
+        <tool>create_deep_research_job</tool>
+        <tool>cancel_job</tool>
+        <tool>retry_job</tool>
+        <tool>list_job_artifacts</tool>
+        <tool>get_artifact_download_info</tool>
+      </required-tools>
+      <recommended-stack>TypeScript, official MCP SDK, generated or thin typed API client from packages/sdk-ts</recommended-stack>
+    </Mcp>
+    <Telegram>
+      <recommended-stack>Python, aiogram, packages/sdk-py or thin internal API client</recommended-stack>
+      <behavior-mapping>
+        <map>upload media to POST /v1/transcription-jobs</map>
+        <map>combined media to POST /v1/transcription-jobs/combined</map>
+        <map>YouTube URL to POST /v1/transcription-jobs/from-url</map>
+        <map>plain transcript ready to send plain transcript artifact</map>
+        <map>segmented transcript button to resolve and send segmented artifact</map>
+        <map>report button to create report job and wait or poll</map>
+        <map>deep research button to create deep-research job and wait or poll</map>
+      </behavior-mapping>
+      <runtime-policy>
+        <rule>Telegram bot does not expose advanced per-job runtime knobs in v1.</rule>
+        <rule>Backend service defaults are used.</rule>
+        <rule>Bot chooses its delivery strategy explicitly per request and defaults to polling.</rule>
+        <rule>Telegram media groups map automatically to the combined transcription flow; sequential standalone media use the combined flow only after an explicit user action such as Обработать вместе.</rule>
+      </runtime-policy>
+    </Telegram>
+  </UxRequirements>
+
+  <ComposeDesign>
+    <RequiredServices>
+      <service name="postgres" notes="local persistent volume and initialized database" />
+      <service name="redis" notes="no persistence requirement beyond local convenience" />
+      <service name="minio" notes="local persistent volume plus published S3 endpoint and published admin console on localhost" />
+      <service name="minio-init" notes="creates sources and artifacts buckets" />
+      <service name="api" notes="depends on postgres, redis, minio; exposes HTTP and WebSocket; owns webhook delivery dispatcher" />
+      <service name="worker-transcription" notes="depends on api, redis, minio; includes ffmpeg and faster-whisper" />
+      <service name="worker-report" notes="depends on api, redis, minio" />
+      <service name="worker-deep-research" notes="depends on api, redis, minio" />
+      <service name="web" notes="depends on api" />
+      <service name="telegram-bot" notes="depends on api" />
+      <service name="mcp-server" notes="depends on api" />
+    </RequiredServices>
+    <Volumes>
+      <volume>postgres-data</volume>
+      <volume>minio-data</volume>
+      <volume>whisper-model-cache</volume>
+      <volume>report-and-deep-research-temp-space</volume>
+      <volume>retained-log-volume</volume>
+    </Volumes>
+    <CpuNotes>
+      <note-1>Do not start multiple transcription workers by default if CPU is constrained.</note-1>
+      <note-2>Keep report and deep-research workers separate so they do not block the transcription queue.</note-2>
+      <note-3>Surface long-running progress in API and WebSocket so UI does not appear frozen.</note-3>
+    </CpuNotes>
+  </ComposeDesign>
+
+  <EnvironmentContracts>
+    <SharedInfrastructure>POSTGRES_DSN, REDIS_URL, MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_SOURCES, MINIO_BUCKET_ARTIFACTS</SharedInfrastructure>
+    <Api>API_BIND_ADDR, API_BASE_URL, WS_BASE_URL, MAX_UPLOAD_SIZE_BYTES, WEBHOOK_DELIVERY_ENABLED, WEBHOOK_DELIVERY_MAX_ATTEMPTS, WEBHOOK_DELIVERY_BACKOFF_SECONDS</Api>
+    <TranscriptionWorker>WHISPER_MODEL, WHISPER_DEVICE equals cpu, WHISPER_COMPUTE_TYPE, FFMPEG_BIN</TranscriptionWorker>
+    <ReportWorker>CGLM_BIN, REPORT_PROMPT_SUFFIX</ReportWorker>
+    <DeepResearchWorker>CLAUDE_BIN, DEEP_RESEARCH_MODEL</DeepResearchWorker>
+    <TelegramBot>TELEGRAM_BOT_TOKEN, API_BASE_URL</TelegramBot>
+    <Web>VITE_API_BASE_URL, VITE_WS_URL</Web>
+    <McpServer>API_BASE_URL</McpServer>
+  </EnvironmentContracts>
+
+  <MigrationMapping>
+    <Map from="src/telegram_transcriber_bot/transcribers.py" to="workers/common/src/transcriber_workers_common/transcribers.py and workers/transcription/src" />
+    <Map from="src/telegram_transcriber_bot/documents.py" to="workers/common/src/transcriber_workers_common/documents.py" />
+    <Map from="src/telegram_transcriber_bot/cglm_runner.py" to="workers/report/src" />
+    <Map from="src/telegram_transcriber_bot/deep_research.py" to="workers/deep-research/src" />
+    <Map from="src/telegram_transcriber_bot/service.py" to="execution-specific code into Python workers; orchestration semantics into Go API; metadata persistence replaced by PostgreSQL, MinIO, and Redis integration" />
+    <Map from="src/telegram_transcriber_bot/bot.py" to="message parsing, Telegram downloads, client-side polling or wait flow, result delivery, and callback-to-API mapping only" />
+    <MovedOutFromBot>direct execution, local job state persistence, direct report generation, deep research execution</MovedOutFromBot>
+  </MigrationMapping>
+
+  <Modules>
+    <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" LAYER="0" ORDER="1" STATUS="implemented">
+      <contract>
+        <purpose>Provide the canonical API, WebSocket, webhook, enum, and validation contracts for the entire platform.</purpose>
+        <scope>OpenAPI routes, shared schemas, public enums, webhook envelopes, WebSocket envelopes, and internal worker DTOs.</scope>
+        <inputs>
+          <param name="migration-plan" type="planning-artifact" />
+        </inputs>
+        <outputs>
+          <param name="openapi" type="schema-set" />
+          <param name="shared-enums" type="schema-set" />
+        </outputs>
+        <links>M-CONTRACTS, V-M-CONTRACTS, DF-001, DF-003</links>
+        <errors>
+          <error code="contract_drift" />
+        </errors>
+      </contract>
+      <interface>
+        <export-openapi PURPOSE="Describe public and internal HTTP routes." />
+        <export-validationSchemas PURPOSE="Describe request and response validation surfaces." />
+      </interface>
+      <depends>none</depends>
+      <target>
+        <source>packages/contracts</source>
+        <tests>packages/contracts/tests/test_contract_surfaces.py</tests>
+      </target>
+      <observability>
+        <log-prefix>[Contracts]</log-prefix>
+        <critical-block>BLOCK_VALIDATE_CONTRACT_SURFACE</critical-block>
+      </observability>
+      <verification-ref>V-M-CONTRACTS</verification-ref>
+      <notes>
+        <note-1>This module must be complete before the first large implementation wave.</note-1>
+      </notes>
+    </M-CONTRACTS>
+
+    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" LAYER="0" ORDER="2" STATUS="planned">
+      <contract>
+        <purpose>Own PostgreSQL persistence, MinIO access, presigned URL resolution, and durable webhook-delivery records.</purpose>
+        <scope>SQL persistence, MinIO object IO, presigned URL generation, source and artifact lifecycle checks, and durable delivery bookkeeping.</scope>
+        <inputs>
+          <param name="db-queries" type="sqlc-generated-queries" />
+          <param name="object-store-client" type="minio-client" />
+        </inputs>
+        <outputs>
+          <param name="job-records" type="persistent-state" />
+          <param name="artifact-resolution" type="metadata-plus-presigned-url" />
+        </outputs>
+        <links>M-API-STORAGE, V-M-API-STORAGE, DF-001, DF-003, DF-006, DF-007</links>
+        <errors>
+          <error code="storage_unavailable" />
+        </errors>
+      </contract>
+      <interface>
+        <export-persistJob PURPOSE="Create and transition jobs with versioned state." />
+        <export-resolveArtifact PURPOSE="Return artifact metadata plus a fresh presigned URL." />
+      </interface>
+      <depends>M-CONTRACTS</depends>
+      <target>
+        <source>apps/api/internal/storage</source>
+        <tests>apps/api/internal/storage/*_test.go</tests>
+      </target>
+      <observability>
+        <log-prefix>[ApiStorage]</log-prefix>
+        <critical-block>BLOCK_PERSIST_JOB_AND_ARTIFACT</critical-block>
+      </observability>
+      <verification-ref>V-M-API-STORAGE</verification-ref>
+      <notes>
+        <note-1>job_submissions and webhook_deliveries are mandatory early tables, not optional polish.</note-1>
+      </notes>
+    </M-API-STORAGE>
+
+    <M-API-QUEUE NAME="ApiQueue" TYPE="INTEGRATION" LAYER="0" ORDER="3" STATUS="planned">
+      <contract>
+        <purpose>Publish typed asynq tasks and encode queue-level retry and timeout defaults without owning business semantics.</purpose>
+        <scope>Task type mapping, payload shaping, timeout policy, max retry settings, and SkipRetry classification.</scope>
+        <inputs>
+          <param name="job-id" type="uuid" />
+          <param name="job-type" type="enum" />
+        </inputs>
+        <outputs>
+          <param name="queued-task" type="asynq-task" />
+        </outputs>
+        <links>M-API-QUEUE, V-M-API-QUEUE, DF-001, DF-004, DF-005, DF-006, DF-007</links>
+        <errors>
+          <error code="queue_unavailable" />
+        </errors>
+      </contract>
+      <interface>
+        <export-enqueue PURPOSE="Publish job:transcription.run, job:report.run, and job:deep_research.run tasks." />
+      </interface>
+      <depends>M-CONTRACTS</depends>
+      <target>
+        <source>apps/api/internal/queue</source>
+        <tests>apps/api/internal/queue/*_test.go</tests>
+      </target>
+      <observability>
+        <log-prefix>[ApiQueue]</log-prefix>
+        <critical-block>BLOCK_ENQUEUE_JOB</critical-block>
+      </observability>
+      <verification-ref>V-M-API-QUEUE</verification-ref>
+      <notes>
+        <note-1>Business-visible retry remains API-owned even though asynq performs transport-level retries.</note-1>
+      </notes>
+    </M-API-QUEUE>
+
+    <M-API-EVENTS NAME="ApiEvents" TYPE="INTEGRATION" LAYER="1" ORDER="1" STATUS="planned">
+      <contract>
+        <purpose>Emit authoritative job events to job timelines, WebSocket clients, and webhook deliveries.</purpose>
+        <scope>Versioned event persistence, WebSocket fanout, webhook scheduling, and reconnect-safe event semantics.</scope>
+        <inputs>
+          <param name="job-transition" type="versioned-job-state" />
+        </inputs>
+        <outputs>
+          <param name="timeline-event" type="job-event" />
+          <param name="websocket-broadcast" type="event-envelope" />
+          <param name="webhook-delivery-record" type="delivery-record" />
+        </outputs>
+        <links>M-API-EVENTS, V-M-API-EVENTS, DF-003</links>
+        <errors>
+          <error code="event_dispatch_failed" />
+        </errors>
+      </contract>
+      <interface>
+        <export-emitJobEvent PURPOSE="Persist and fan out versioned job events." />
+      </interface>
+      <depends>M-CONTRACTS, M-API-STORAGE</depends>
+      <target>
+        <source>apps/api/internal/ws</source>
+        <tests>apps/api/internal/ws/*_test.go</tests>
+      </target>
+      <observability>
+        <log-prefix>[ApiEvents]</log-prefix>
+        <critical-block>BLOCK_EMIT_VERSIONED_EVENT</critical-block>
+      </observability>
+      <verification-ref>V-M-API-EVENTS</verification-ref>
+      <notes>
+        <note-1>WebSocket is a low-latency UI channel; polling remains the correctness path.</note-1>
+      </notes>
+    </M-API-EVENTS>
+
+    <M-API-JOBS NAME="ApiJobs" TYPE="CORE_LOGIC" LAYER="1" ORDER="2" STATUS="planned">
+      <contract>
+        <purpose>Enforce delivery strategy, idempotency, job lineage, child reuse, cancel, retry, and terminal-state invariants.</purpose>
+        <scope>Root job creation, child-job creation, state transitions, version increments, retry lineage, cancel semantics, and idempotency enforcement.</scope>
+        <inputs>
+          <param name="validated-request" type="contract-object" />
+        </inputs>
+        <outputs>
+          <param name="job-snapshot" type="versioned-job-snapshot" />
+        </outputs>
+        <links>M-API-JOBS, V-M-API-JOBS, DF-001, DF-002, DF-004, DF-005, DF-006, DF-007</links>
+        <errors>
+          <error code="invalid_job_state" />
+          <error code="idempotency_conflict" />
+        </errors>
+      </contract>
+      <interface>
+        <export-createTranscriptionJobs PURPOSE="Create one job per uploaded file or one job from a supported URL." />
+        <export-createChildJob PURPOSE="Create or reuse canonical report or deep-research child jobs." />
+        <export-cancelJob PURPOSE="Apply cooperative cancellation semantics." />
+        <export-retryJob PURPOSE="Create a new lineage-linked retry row." />
+      </interface>
+      <depends>M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
+      <target>
+        <source>apps/api/internal/jobs</source>
+        <tests>apps/api/internal/jobs/*_test.go</tests>
+      </target>
+      <observability>
+        <log-prefix>[ApiJobs]</log-prefix>
+        <critical-block>BLOCK_VALIDATE_AND_TRANSITION_JOB</critical-block>
+      </observability>
+      <verification-ref>V-M-API-JOBS</verification-ref>
+      <notes>
+        <note-1>Workers must never bypass this module’s transition rules.</note-1>
+      </notes>
+    </M-API-JOBS>
+
+    <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" LAYER="2" ORDER="1" STATUS="planned">
+      <contract>
+        <purpose>Expose public and internal HTTP routes that bind incoming requests to API job orchestration logic.</purpose>
+        <scope>Multipart upload handling, JSON request validation, route binding, error envelopes, and WebSocket session entry.</scope>
+        <inputs>
+          <param name="http-request" type="public-or-internal-http-request" />
+        </inputs>
+        <outputs>
+          <param name="http-response" type="validated-contract-response" />
+        </outputs>
+        <links>M-API-HTTP, V-M-API-HTTP, DF-001, DF-002, DF-003, DF-004, DF-005, DF-006, DF-007</links>
+        <errors>
+          <error code="validation_failed" />
+          <error code="dependency_unavailable" />
+        </errors>
+      </contract>
+      <interface>
+        <export-registerRoutes PURPOSE="Bind external and internal routes." />
+        <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
+      </interface>
+      <depends>M-CONTRACTS, M-API-JOBS, M-API-STORAGE, M-API-EVENTS</depends>
+      <target>
+        <source>apps/api/internal/api</source>
+        <tests>apps/api/internal/api/*_test.go</tests>
+      </target>
+      <observability>
+        <log-prefix>[ApiHttp]</log-prefix>
+        <critical-block>BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE</critical-block>
+      </observability>
+      <verification-ref>V-M-API-HTTP</verification-ref>
+      <notes>
+        <note-1>Public routes and internal worker routes should remain explicit rather than merged by convention.</note-1>
+      </notes>
+    </M-API-HTTP>
+
+    <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" LAYER="2" ORDER="2" STATUS="planned">
+      <contract>
+        <purpose>Provide shared Python helpers for claim, progress, finalize calls, storage utilities, and execution scaffolding.</purpose>
+        <scope>Internal API client helpers, artifact upload helpers, typed execution context parsing, and common cancellation probes.</scope>
+        <inputs>
+          <param name="internal-api-config" type="client-config" />
+        </inputs>
+        <outputs>
+          <param name="shared-worker-utilities" type="python-package" />
+        </outputs>
+        <links>M-WORKER-COMMON, V-M-WORKER-COMMON, DF-001, DF-004, DF-005, DF-006, DF-007</links>
+        <errors>
+          <error code="internal_api_unavailable" />
+        </errors>
+      </contract>
+      <interface>
+        <export-jobApiClient PURPOSE="Call internal worker endpoints safely." />
+      </interface>
+      <depends>M-CONTRACTS</depends>
+      <target>
+        <source>workers/common</source>
+        <tests>workers/common/tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[WorkerCommon]</log-prefix>
+        <critical-block>BLOCK_CALL_INTERNAL_CONTROL_PLANE</critical-block>
+      </observability>
+      <verification-ref>V-M-WORKER-COMMON</verification-ref>
+      <notes>
+        <note-1>Keep worker-to-API DTOs stable and versioned through M-CONTRACTS.</note-1>
+      </notes>
+    </M-WORKER-COMMON>
+
+    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" LAYER="3" ORDER="1" STATUS="planned">
+      <contract>
+        <purpose>Reuse source extraction, YouTube resolution, faster-whisper, and document rendering to produce transcript artifacts.</purpose>
+        <scope>Source materialization, subtitle fast path, Whisper fallback, transcript rendering, artifact upload, and terminal finalization.</scope>
+        <inputs>
+          <param name="transcription-job" type="claimed-job-execution" />
+        </inputs>
+        <outputs>
+          <param name="transcript-plain" type="artifact" />
+          <param name="transcript-segmented" type="artifact" />
+          <param name="transcript-docx" type="artifact" />
+        </outputs>
+        <links>M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION, DF-001, DF-002, DF-006, DF-007</links>
+        <errors>
+          <error code="source_fetch_failed" />
+          <error code="transcription_failed" />
+        </errors>
+      </contract>
+      <interface>
+        <export-runTranscription PURPOSE="Execute one claimed transcription job." />
+      </interface>
+      <depends>M-WORKER-COMMON</depends>
+      <target>
+        <source>workers/transcription</source>
+        <tests>workers/transcription/tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[WorkerTranscription]</log-prefix>
+        <critical-block>BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE</critical-block>
+      </observability>
+      <verification-ref>V-M-WORKER-TRANSCRIPTION</verification-ref>
+      <notes>
+        <note-1>This module reuses current Python execution logic instead of rewriting ML behavior in Go.</note-1>
+      </notes>
+    </M-WORKER-TRANSCRIPTION>
+
+    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" LAYER="3" ORDER="2" STATUS="planned">
+      <contract>
+        <purpose>Generate markdown and DOCX research reports from transcript artifacts using cglm.</purpose>
+        <scope>cglm command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.</scope>
+        <inputs>
+          <param name="report-job" type="claimed-job-execution" />
+        </inputs>
+        <outputs>
+          <param name="report-markdown" type="artifact" />
+          <param name="report-docx" type="artifact" />
+        </outputs>
+        <links>M-WORKER-REPORT, V-M-WORKER-REPORT, DF-004, DF-006</links>
+        <errors>
+          <error code="report_failed" />
+        </errors>
+      </contract>
+      <interface>
+        <export-runReport PURPOSE="Execute one claimed report job." />
+      </interface>
+      <depends>M-WORKER-COMMON</depends>
+      <target>
+        <source>workers/report</source>
+        <tests>workers/report/tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[WorkerReport]</log-prefix>
+        <critical-block>BLOCK_EXECUTE_REPORT_PIPELINE</critical-block>
+      </observability>
+      <verification-ref>V-M-WORKER-REPORT</verification-ref>
+      <notes>
+        <note-1>Cancellation must be subprocess-aware because cglm runs out of process.</note-1>
+      </notes>
+    </M-WORKER-REPORT>
+
+    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" LAYER="3" ORDER="3" STATUS="planned">
+      <contract>
+        <purpose>Run the evidence-driven deep-research pipeline and persist the final markdown output plus optional execution logs.</purpose>
+        <scope>Phase-driven deep-research execution, required artifact validation, optional log persistence, and terminal finalization.</scope>
+        <inputs>
+          <param name="deep-research-job" type="claimed-job-execution" />
+        </inputs>
+        <outputs>
+          <param name="deep-research-markdown" type="artifact" />
+        </outputs>
+        <links>M-WORKER-DEEP-RESEARCH, V-M-WORKER-DEEP-RESEARCH, DF-005, DF-006</links>
+        <errors>
+          <error code="deep_research_failed" />
+        </errors>
+      </contract>
+      <interface>
+        <export-runDeepResearch PURPOSE="Execute one claimed deep-research job." />
+      </interface>
+      <depends>M-WORKER-COMMON</depends>
+      <target>
+        <source>workers/deep-research</source>
+        <tests>workers/deep-research/tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[WorkerDeepResearch]</log-prefix>
+        <critical-block>BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE</critical-block>
+      </observability>
+      <verification-ref>V-M-WORKER-DEEP-RESEARCH</verification-ref>
+      <notes>
+        <note-1>Deep-research phase gates and required artifacts must remain deterministic under the new job shell.</note-1>
+      </notes>
+    </M-WORKER-DEEP-RESEARCH>
+
+    <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" LAYER="4" ORDER="1" STATUS="planned">
+      <contract>
+        <purpose>Expose the local browser UI for submission, monitoring, artifact download, and late-wave admin operations.</purpose>
+        <scope>Jobs list, job details, uploads, URL submission, artifact resolution, polling and WS reconciliation, and late-wave admin actions.</scope>
+        <inputs>
+          <param name="http-api" type="typed-sdk-client" />
+          <param name="websocket-events" type="live-update-stream" />
+        </inputs>
+        <outputs>
+          <param name="browser-ui" type="local-ui-surface" />
+        </outputs>
+        <links>M-WEB-UI, V-M-WEB-UI, DF-001, DF-003, DF-006, DF-007</links>
+        <errors>
+          <error code="ui_state_drift" />
+        </errors>
+      </contract>
+      <interface>
+        <export-jobsList PURPOSE="List and filter jobs." />
+        <export-jobDetails PURPOSE="Show lineage, status, artifacts, and admin actions." />
+      </interface>
+      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <target>
+        <source>apps/web</source>
+        <tests>apps/web tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[WebUi]</log-prefix>
+        <critical-block>BLOCK_RECONCILE_POLLING_AND_WS_STATE</critical-block>
+      </observability>
+      <verification-ref>V-M-WEB-UI</verification-ref>
+      <notes>
+        <note-1>Polling is the truth path; WebSocket is only the latency optimization path.</note-1>
+      </notes>
+    </M-WEB-UI>
+
+    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="2" STATUS="planned">
+      <contract>
+        <purpose>Preserve Telegram UX while delegating all business logic to the API.</purpose>
+        <scope>Telegram update parsing, temporary media download, API submission, polling wait flow, callback mapping, and artifact sending.</scope>
+        <inputs>
+          <param name="telegram-update" type="telegram-event" />
+        </inputs>
+        <outputs>
+          <param name="telegram-reply" type="user-facing-bot-message-or-file" />
+        </outputs>
+        <links>M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER, DF-001, DF-004, DF-005, DF-007</links>
+        <errors>
+          <error code="telegram_upload_failed" />
+        </errors>
+      </contract>
+      <interface>
+        <export-handleMedia PURPOSE="Upload Telegram media to the API and send resulting artifacts back." />
+      </interface>
+      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <target>
+        <source>apps/telegram-bot</source>
+        <tests>apps/telegram-bot/tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[TelegramAdapter]</log-prefix>
+        <critical-block>BLOCK_SUBMIT_AND_WAIT_FOR_JOB</critical-block>
+      </observability>
+      <verification-ref>V-M-TELEGRAM-ADAPTER</verification-ref>
+      <notes>
+        <note-1>Default delivery strategy is polling for Telegram flows.</note-1>
+      </notes>
+    </M-TELEGRAM-ADAPTER>
+
+    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="3" STATUS="planned">
+      <contract>
+        <purpose>Expose the platform as an MCP surface over the same typed HTTP API client.</purpose>
+        <scope>MCP tool definitions, API request mapping, result shaping, and tool-level read or write parity with the HTTP API.</scope>
+        <inputs>
+          <param name="mcp-tool-call" type="adapter-request" />
+        </inputs>
+        <outputs>
+          <param name="mcp-tool-response" type="adapter-response" />
+        </outputs>
+        <links>M-MCP-ADAPTER, V-M-MCP-ADAPTER, DF-001, DF-004, DF-005, DF-007</links>
+        <errors>
+          <error code="mcp_contract_violation" />
+        </errors>
+      </contract>
+      <interface>
+        <export-createTranscriptionJob PURPOSE="Create jobs through MCP." />
+        <export-readJob PURPOSE="Inspect jobs, artifacts, and event timelines through MCP." />
+      </interface>
+      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <target>
+        <source>apps/mcp-server</source>
+        <tests>apps/mcp-server tests</tests>
+      </target>
+      <observability>
+        <log-prefix>[McpAdapter]</log-prefix>
+        <critical-block>BLOCK_MAP_MCP_TOOL_TO_API_CALL</critical-block>
+      </observability>
+      <verification-ref>V-M-MCP-ADAPTER</verification-ref>
+      <notes>
+        <note-1>MCP remains a thin adapter and must not gain direct DB, queue, or MinIO access.</note-1>
+      </notes>
+    </M-MCP-ADAPTER>
+
+    <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" LAYER="5" ORDER="1" STATUS="planned">
+      <contract>
+        <purpose>Own local Docker Compose topology, service dependencies, and environment contracts.</purpose>
+        <scope>Compose topology, healthchecks, startup ordering, volumes, service env contracts, and smoke-run expectations.</scope>
+        <inputs>
+          <param name="service-config" type="compose-and-env-files" />
+        </inputs>
+        <outputs>
+          <param name="local-runtime-topology" type="running-compose-stack" />
+        </outputs>
+        <links>M-INFRA-COMPOSE, V-M-INFRA-COMPOSE, DF-001, DF-003, DF-006, DF-007</links>
+        <errors>
+          <error code="compose_boot_failed" />
+        </errors>
+      </contract>
+      <interface>
+        <export-composeStack PURPOSE="Start and verify the local platform stack." />
+      </interface>
+      <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
+      <target>
+        <source>infra/docker-compose.yml</source>
+        <tests>compose smoke scripts</tests>
+      </target>
+      <observability>
+        <log-prefix>[InfraCompose]</log-prefix>
+        <critical-block>BLOCK_VERIFY_LOCAL_STACK_HEALTH</critical-block>
+      </observability>
+      <verification-ref>V-M-INFRA-COMPOSE</verification-ref>
+      <notes>
+        <note-1>Healthchecks are required before cutover because there is no long-lived legacy fallback track.</note-1>
+      </notes>
+    </M-INFRA-COMPOSE>
+  </Modules>
+
+  <DataFlow>
+    <DF-001 NAME="UploadedFileTranscription" TRIGGER="multipart transcription create request">
+      <step-1>Client uploads one or more files to the API with delivery strategy defaulting to polling unless webhook is selected.</step-1>
+      <step-2>API stores source files in MinIO, persists job_submissions, sources, and jobs, then enqueues one transcription task per file.</step-2>
+      <step-3>Transcription worker claims the job, materializes source input, runs transcription, renders artifacts, uploads them, and finalizes the job.</step-3>
+      <step-4>API emits versioned events, exposes polling reads, and schedules webhook deliveries only for jobs whose delivery strategy is webhook.</step-4>
+      <evidence>V-M-API-JOBS, V-M-API-QUEUE, V-M-WORKER-TRANSCRIPTION, V-M-API-EVENTS</evidence>
+    </DF-001>
+
+    <DF-007 NAME="CombinedUploadedMediaTranscription" TRIGGER="combined multipart transcription create request">
+      <step-1>Client uploads one or more files to the combined endpoint with delivery strategy defaulting to polling unless webhook is selected.</step-1>
+      <step-2>API stores each source file in MinIO, persists one ordered source set plus its ordered source_set_items, then creates one transcription job bound to that source set.</step-2>
+      <step-3>Transcription worker claims the job, materializes all ordered inputs, normalizes them to a common audio representation, concatenates them in temp space, runs one transcription pass, renders one artifact set, uploads it, and finalizes the job.</step-3>
+      <step-4>API emits versioned events, exposes one authoritative polling snapshot, and schedules webhook deliveries only when the combined job uses webhook delivery.</step-4>
+      <evidence>V-M-CONTRACTS, V-M-API-STORAGE, V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-TELEGRAM-ADAPTER</evidence>
+    </DF-007>
+
+    <DF-002 NAME="YouTubeUrlToTranscript" TRIGGER="URL transcription create request">
+      <step-1>Client submits a supported YouTube URL to the API.</step-1>
+      <step-2>API validates the URL host, persists source metadata, creates a transcription job, and enqueues it.</step-2>
+      <step-3>Worker resolves transcript or media through YouTube adapters, generates transcript artifacts, and finalizes the job.</step-3>
+      <evidence>V-M-API-HTTP, V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION</evidence>
+    </DF-002>
+
+    <DF-003 NAME="VersionedEventDelivery" TRIGGER="job state transition or artifact creation">
+      <step-1>API writes a new job_events row whenever job version advances or an artifact is created.</step-1>
+      <step-2>Web UI receives low-latency updates through WebSocket and reconciles with REST on reconnect or version gaps.</step-2>
+      <step-3>If the job uses webhook, API persists a webhook_deliveries row and retries bounded delivery until success or dead state.</step-3>
+      <evidence>V-M-API-EVENTS, V-M-WEB-UI</evidence>
+    </DF-003>
+
+    <DF-004 NAME="TranscriptToReport" TRIGGER="report child job create request">
+      <step-1>API validates that the parent transcription job succeeded and contains transcript_plain.</step-1>
+      <step-2>API reuses an existing canonical report child or creates a new report job and enqueues it.</step-2>
+      <step-3>Report worker runs cglm, renders report artifacts, uploads them, and finalizes the report job.</step-3>
+      <evidence>V-M-API-JOBS, V-M-WORKER-REPORT</evidence>
+    </DF-004>
+
+    <DF-005 NAME="ReportToDeepResearch" TRIGGER="deep-research child job create request">
+      <step-1>API validates that the parent report job succeeded and contains report_markdown.</step-1>
+      <step-2>API reuses an existing canonical deep-research child or creates a new deep-research job and enqueues it.</step-2>
+      <step-3>Deep-research worker runs the evidence-driven pipeline, uploads final markdown and optional logs, and finalizes the job.</step-3>
+      <evidence>V-M-API-JOBS, V-M-WORKER-DEEP-RESEARCH</evidence>
+    </DF-005>
+
+    <DF-006 NAME="CancelOrRetry" TRIGGER="cancel or retry request">
+      <step-1>API validates current job state and either finalizes queued jobs as canceled or marks running jobs as cancel_requested.</step-1>
+      <step-2>Workers check cancellation between expensive phases and finalize as canceled when authoritative cancellation is observed.</step-2>
+      <step-3>Retry creates a new lineage-linked job row and never mutates historical execution records.</step-3>
+      <evidence>V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-WORKER-REPORT, V-M-WORKER-DEEP-RESEARCH</evidence>
+    </DF-006>
+  </DataFlow>
+
+  <ImplementationWaves>
+    <Wave-0 name="Baseline Freeze And Acceptance SSOT" status="pending">
+      <goal>Freeze current behavior so the migration has a hard acceptance target.</goal>
+      <deliverables>
+        <item>migration baseline doc</item>
+        <item>behavior matrix</item>
+        <item>artifact matrix</item>
+        <item>current runtime verification notes</item>
+      </deliverables>
+      <files>
+        <file>Create docs/architecture/current-system-baseline.md</file>
+        <file>Create docs/architecture/current-behavior-matrix.md</file>
+        <file>Modify README.md</file>
+      </files>
+      <Phase-0-1>Record current supported flows: YouTube, Telegram voice, Telegram audio or video or document, media groups, plain transcript, segmented transcript, report, deep research.</Phase-0-1>
+      <Phase-0-2>Record current artifacts transcript.txt, transcript.md, transcript.docx, report.md, report.docx, and deep research final report.</Phase-0-2>
+      <Phase-0-3>Freeze acceptance tests and identify which current tests must remain conceptually valid after migration.</Phase-0-3>
+      <Phase-0-4>Freeze newly accepted architectural decisions including asynq, polling plus webhook strategy model, MinIO presigned downloads, multi-file upload, no legacy compatibility track, and late-wave admin operations.</Phase-0-4>
+    </Wave-0>
+
+    <Wave-1 name="Monorepo Bootstrap And Contracts" status="pending">
+      <goal>Create the monorepo structure and contract package before implementation spreads.</goal>
+      <files>
+        <file>Create apps/api</file>
+        <file>Create apps/web</file>
+        <file>Create apps/telegram-bot</file>
+        <file>Create apps/mcp-server</file>
+        <file>Create workers and packages directories</file>
+        <file>Create infra/docker-compose.yml</file>
+      </files>
+      <Phase-1-1>Create repository structure and placeholder READMEs.</Phase-1-1>
+      <Phase-1-2>Write OpenAPI draft for create transcription job, get job, list jobs, create report job, create deep-research job, cancel, retry, artifact resolve endpoint, idempotency, delivery strategy and webhook fields, and multi-file upload shapes.</Phase-1-2>
+      <Phase-1-2a>Freeze the separate combined transcription endpoint and source-set semantics without changing the existing one-file-to-one-job upload contract.</Phase-1-2a>
+      <Phase-1-3>Write WebSocket schema draft with event envelope and event types.</Phase-1-3>
+      <Phase-1-3a>Write webhook schema draft with envelope, retry semantics, lifecycle events, and failure handling.</Phase-1-3a>
+      <Phase-1-4>Define shared enums for job types, statuses, artifact kinds, and source kinds.</Phase-1-4>
+    </Wave-1>
+
+    <Wave-2 name="Infrastructure And Go API Skeleton" status="pending">
+      <goal>Bring up local infra and a compilable API skeleton with DB and queue wiring.</goal>
+      <files>
+        <file>Create apps/api/cmd/api/main.go</file>
+        <file>Create apps/api/internal/api</file>
+        <file>Create apps/api/internal/db</file>
+        <file>Create apps/api/internal/jobs</file>
+        <file>Create apps/api/internal/queue</file>
+        <file>Create apps/api/internal/storage</file>
+        <file>Create apps/api/internal/ws</file>
+        <file>Create apps/api/migrations sql files</file>
+        <file>Create infra/env/api.env.example</file>
+      </files>
+      <Phase-2-1>Add PostgreSQL migrations for sources, source_sets, source_set_items, jobs, job_artifacts, job_events, job_submissions, and webhook_deliveries.</Phase-2-1>
+      <Phase-2-2>Add MinIO integration and bucket bootstrap assumptions.</Phase-2-2>
+      <Phase-2-3>Add Redis queue producer through asynq by job type.</Phase-2-3>
+      <Phase-2-4>Add REST endpoints as stubs first and then as persistence-backed handlers.</Phase-2-4>
+      <Phase-2-5>Add WebSocket server with connection, event broadcast, and reconnect-safe snapshot rule.</Phase-2-5>
+      <Phase-2-6>Add webhook delivery subsystem with stored webhook metadata, background delivery loop, bounded retry, and event emission rules per job type.</Phase-2-6>
+    </Wave-2>
+
+    <Wave-3 name="Transcription Worker Extraction" status="pending">
+      <goal>Move transcription execution out of the monolithic bot into a standalone worker.</goal>
+      <files>
+        <file>Create workers/common/src/transcriber_workers_common</file>
+        <file>Create workers/transcription/src</file>
+        <file>Create workers/transcription/tests</file>
+      </files>
+      <Phase-3-1>Extract reusable Python execution library by moving transcription and document rendering logic into worker-common.</Phase-3-1>
+      <Phase-3-2>Implement worker claim and run loop: receive job_id, fetch ordered input metadata, download one or more sources from MinIO if needed, concatenate ordered media when the source set has multiple items, execute transcription, upload artifacts, publish progress, finalize job through the API-owned control contract.</Phase-3-2>
+      <Phase-3-3>Preserve current output formats: plain transcript, segmented markdown transcript, transcript docx.</Phase-3-3>
+      <Phase-3-4>Add cancellation integration by checking the cancel flag before and after long work.</Phase-3-4>
+    </Wave-3>
+
+    <Wave-4 name="Report Worker Extraction" status="pending">
+      <goal>Split report generation into a dedicated job type and worker.</goal>
+      <files>
+        <file>Create workers/report/src</file>
+        <file>Create workers/report/tests</file>
+      </files>
+      <Phase-4-1>Extract report generation package by moving cglm_runner and report DOCX generation into report worker layer.</Phase-4-1>
+      <Phase-4-2>Implement report job creation in API with validation that parent transcription artifacts exist.</Phase-4-2>
+      <Phase-4-3>Implement report worker lifecycle: claim report job, read transcript artifact, run cglm, upload markdown and docx, finalize.</Phase-4-3>
+    </Wave-4>
+
+    <Wave-5 name="Deep Research Worker Extraction" status="pending">
+      <goal>Split deep research into a dedicated job type and worker.</goal>
+      <files>
+        <file>Create workers/deep-research/src</file>
+        <file>Create workers/deep-research/tests</file>
+      </files>
+      <Phase-5-1>Extract deep research package with minimal rewrite.</Phase-5-1>
+      <Phase-5-2>Implement API deep-research child-job creation with report artifact validation.</Phase-5-2>
+      <Phase-5-3>Implement cooperative cancellation around each phase and subprocess execution.</Phase-5-3>
+    </Wave-5>
+
+    <Wave-6 name="Web UI Delivery" status="pending">
+      <goal>Deliver a simple operational React UI over the live API.</goal>
+      <files>
+        <file>Create apps/web/src/app</file>
+        <file>Create apps/web/src/features/jobs</file>
+        <file>Create apps/web/src/features/artifacts</file>
+        <file>Create apps/web/src/lib/api</file>
+      </files>
+      <Phase-6-1>Scaffold app shell with routes, layout, and API client wiring.</Phase-6-1>
+      <Phase-6-2>Create jobs list page displaying job type, status, created time, and progress.</Phase-6-2>
+      <Phase-6-3>Create job details page showing status, progress, event timeline, artifacts, and child jobs.</Phase-6-3>
+      <Phase-6-4>Add create job form supporting per-file upload, explicit combined multi-media upload, and YouTube URL submission.</Phase-6-4>
+      <Phase-6-5>Add polling and WebSocket integration using polling as fallback and WebSocket for fast updates.</Phase-6-5>
+      <Phase-6-6>Add actions for report, deep research, cancel, and retry.</Phase-6-6>
+      <Phase-6-7>Add delivery strategy controls with default polling, required webhook URL validation, and explicit explanation that each job chooses exactly one strategy: polling or webhook.</Phase-6-7>
+      <Phase-6-8>Add late-wave admin operations on job details page: delete job, delete artifacts, refresh expired artifact download link, explicit manual retry actions.</Phase-6-8>
+    </Wave-6>
+
+    <Wave-7 name="Telegram Bot Migration" status="pending">
+      <goal>Replace direct execution in Telegram bot with API calls.</goal>
+      <files>
+        <file>Create apps/telegram-bot/src</file>
+        <file>Create packages/sdk-py</file>
+      </files>
+      <Phase-7-1>Add typed Python API client supporting create upload job, create combined upload job, create URL job, get job, list jobs, create report job, create deep-research job, cancel, retry, and artifact resolution.</Phase-7-1>
+      <Phase-7-2>Adapt message flow so the bot becomes an input parser, Telegram downloader, HTTP client, and artifact sender. Use explicit delivery strategy per request and default to polling. Map Telegram media groups to the combined endpoint and allow explicit buffered combined submission for sequential media.</Phase-7-2>
+      <Phase-7-3>Preserve current UX: plain transcript immediate delivery, segmented transcript button, report button, deep research button.</Phase-7-3>
+      <Phase-7-4>Remove execution coupling so the bot no longer imports execution core directly.</Phase-7-4>
+    </Wave-7>
+
+    <Wave-8 name="MCP Server Delivery" status="pending">
+      <goal>Expose the platform to MCP as a clean adapter.</goal>
+      <files>
+        <file>Create apps/mcp-server/src/index.ts</file>
+        <file>Create apps/mcp-server/src/tools</file>
+        <file>Reuse packages/sdk-ts</file>
+      </files>
+      <Phase-8-1>Scaffold MCP server.</Phase-8-1>
+      <Phase-8-2>Add core tools for create transcription job, get job, list jobs, create report job, create deep-research job, cancel, and retry.</Phase-8-2>
+      <Phase-8-3>Add artifact visibility through artifact metadata and download endpoints.</Phase-8-3>
+    </Wave-8>
+
+    <Wave-9 name="Compose Hardening And Cutover" status="pending">
+      <goal>Make the new platform the default local runtime.</goal>
+      <files>
+        <file>Modify infra/docker-compose.yml</file>
+        <file>Modify README.md</file>
+        <file>Create docs/architecture/cutover-checklist.md</file>
+        <file>Create docs/architecture/runtime-ops.md</file>
+      </files>
+      <Phase-9-1>Add persistent volumes and init scripts.</Phase-9-1>
+      <Phase-9-2>Add healthchecks.</Phase-9-2>
+      <Phase-9-3>Add local runbook documenting startup, restart, logs, and common failures.</Phase-9-3>
+      <Phase-9-4>Cut over old single-process entrypoint after compose smoke verification and functional parity checks pass.</Phase-9-4>
+    </Wave-9>
+  </ImplementationWaves>
+
+  <ImplementationOrder>
+    <Phase-1 name="Grace Foundation And Contract Freeze" status="pending">
+      <goal>Prepare the repository for GRACE-driven implementation and freeze contracts before any large code move.</goal>
+      <step-1 module="M-CONTRACTS" status="done" verification="V-M-CONTRACTS">Convert the migration plan into canonical OpenAPI, JSON schema, WebSocket, and webhook contracts.</step-1>
+      <step-2 module="M-INFRA-COMPOSE" status="pending" verification="V-M-INFRA-COMPOSE">Define required runtime topology, services, and health expectations in a GRACE-governed shape.</step-2>
+    </Phase-1>
+
+    <Phase-2 name="Control Plane Foundation" status="pending">
+      <goal>Build the minimum Go control plane that can persist jobs, enqueue work, and expose contract-compliant HTTP routes.</goal>
+      <step-1 module="M-API-STORAGE" status="pending" verification="V-M-API-STORAGE">Add PostgreSQL migrations and MinIO integration.</step-1>
+      <step-2 module="M-API-QUEUE" status="pending" verification="V-M-API-QUEUE">Add asynq task publishing and retry policy wiring.</step-2>
+      <step-3 module="M-API-JOBS" status="pending" verification="V-M-API-JOBS">Implement job creation, child reuse, cancel, retry, and lineage rules.</step-3>
+      <step-4 module="M-API-EVENTS" status="pending" verification="V-M-API-EVENTS">Implement job events, WebSocket fanout, and persisted webhook delivery scheduling.</step-4>
+      <step-5 module="M-API-HTTP" status="pending" verification="V-M-API-HTTP">Expose public and internal worker routes.</step-5>
+    </Phase-2>
+
+    <Phase-3 name="Transcription Worker Extraction" status="pending">
+      <goal>Extract the current transcription path into a standalone worker without changing user-visible artifact semantics.</goal>
+      <step-1 module="M-WORKER-COMMON" status="pending" verification="V-M-WORKER-COMMON">Create shared Python worker API and storage helpers.</step-1>
+      <step-2 module="M-WORKER-TRANSCRIPTION" status="pending" verification="V-M-WORKER-TRANSCRIPTION">Move current transcription execution and transcript rendering into worker form.</step-2>
+    </Phase-3>
+
+    <Phase-4 name="Report And Deep Research Extraction" status="pending">
+      <goal>Split report and deep-research execution into dedicated workers with stable child-job contracts.</goal>
+      <step-1 module="M-WORKER-REPORT" status="pending" verification="V-M-WORKER-REPORT">Extract report generation through cglm into the report worker.</step-1>
+      <step-2 module="M-WORKER-DEEP-RESEARCH" status="pending" verification="V-M-WORKER-DEEP-RESEARCH">Extract deep-research pipeline into the dedicated worker.</step-2>
+    </Phase-4>
+
+    <Phase-5 name="Adapter And UI Cutover" status="pending">
+      <goal>Move all user-facing entrypoints to thin adapters over the API.</goal>
+      <step-1 module="M-WEB-UI" status="pending" verification="V-M-WEB-UI">Implement local job submission, monitoring, artifact download, and admin details pages.</step-1>
+      <step-2 module="M-TELEGRAM-ADAPTER" status="pending" verification="V-M-TELEGRAM-ADAPTER">Replace bot-side orchestration with API calls while preserving Telegram UX.</step-2>
+      <step-3 module="M-MCP-ADAPTER" status="pending" verification="V-M-MCP-ADAPTER">Expose the same core operations through MCP.</step-3>
+    </Phase-5>
+
+    <Phase-6 name="Compose Hardening And Final Cutover" status="pending">
+      <goal>Validate the full local stack, enforce health gates, and remove the old single-process entrypoint.</goal>
+      <step-1 module="M-INFRA-COMPOSE" status="pending" verification="V-M-INFRA-COMPOSE">Harden compose startup order, healthchecks, volumes, and smoke scripts.</step-1>
+      <step-2 module="M-API-HTTP" status="pending" verification="V-M-API-HTTP">Verify full-stack parity against the frozen acceptance matrix before deleting the old runtime path.</step-2>
+    </Phase-6>
+  </ImplementationOrder>
+
+  <RisksAndMitigations>
+    <risk id="R-1">
+      <name>Rewriting too much execution logic</name>
+      <mitigation>Keep the Python execution plane, move code instead of rewriting for style, and introduce wrappers rather than reinventions.</mitigation>
+    </risk>
+    <risk id="R-2">
+      <name>Premature Go rewrite of ML or report logic</name>
+      <mitigation>Go owns the control plane only; workers stay Python.</mitigation>
+    </risk>
+    <risk id="R-3">
+      <name>WebSocket state drift</name>
+      <mitigation>Polling remains authoritative fallback and jobs carry a monotonic version field.</mitigation>
+    </risk>
+    <risk id="R-4">
+      <name>Cancellation is inconsistent across job types</name>
+      <mitigation>Define cooperative cancellation checkpoints per worker and test subprocess termination explicitly.</mitigation>
+    </risk>
+    <risk id="R-5">
+      <name>Compose stack becomes fragile</name>
+      <mitigation>Add healthchecks, startup order, runbook documentation, and keep local deployment assumptions simple.</mitigation>
+    </risk>
+    <risk id="R-6">
+      <name>Big-bang cutover increases integration risk</name>
+      <mitigation>Freeze behavior baseline early, move UX only after API and workers are correct, and require compose-wide smoke verification before replacing the old entrypoint.</mitigation>
+    </risk>
+  </RisksAndMitigations>
+
+  <DefinitionOfDone>
+    <criterion>API server owns all business logic orchestration.</criterion>
+    <criterion>Transcription, report, and deep research run only in workers.</criterion>
+    <criterion>Telegram bot is a thin API client.</criterion>
+    <criterion>MCP server is a thin API client.</criterion>
+    <criterion>Web UI can create, observe, and manage jobs.</criterion>
+    <criterion>PostgreSQL is authoritative job state storage.</criterion>
+    <criterion>MinIO stores source files and artifacts.</criterion>
+    <criterion>Redis-backed asynq is used for queueing, while event delivery is driven from persisted job events inside the API.</criterion>
+    <criterion>Polling and WebSocket are both implemented.</criterion>
+    <criterion>Webhook callback mode is implemented for all job types.</criterion>
+    <criterion>Retry creates new jobs.</criterion>
+    <criterion>Cancellation works across all job types.</criterion>
+    <criterion>Artifact downloads resolve to valid presigned MinIO links.</criterion>
+    <criterion>Multi-file upload through the API works.</criterion>
+    <criterion>Admin operations on the web details page exist in the planned late-wave scope.</criterion>
+    <criterion>Docker Compose can bring up the full platform locally.</criterion>
+    <criterion>Current core capabilities are preserved.</criterion>
+  </DefinitionOfDone>
+
+  <ImmediateNextTask>
+    <historical-guidance>Implementation should start with Wave 0 and Wave 1 only. Do not begin with UI or Telegram refactor first.</historical-guidance>
+    <recommended-order>
+      <item>create packages/contracts</item>
+      <item>bootstrap apps/api</item>
+      <item>add DB schema and asynq producer</item>
+      <item>add transcription worker</item>
+      <item>verify end-to-end transcription job path</item>
+      <item>only then add UI and adapter clients</item>
+    </recommended-order>
+  </ImmediateNextTask>
+
+  <ExecutionRules>
+    <rule>Do not start from the UI.</rule>
+    <rule>Do not start from the MCP server.</rule>
+    <rule>Do not rewrite Python execution into Go.</rule>
+    <rule>Do not add auth or quota logic.</rule>
+    <rule>Do not build direct client-to-MinIO uploads in v1.</rule>
+    <rule>Do not use WebSocket as the only status mechanism.</rule>
+    <rule>Do not expose arbitrary runtime tuning knobs in Web UI or Telegram bot in v1.</rule>
+    <rule>Do not treat webhook delivery as stronger than polling.</rule>
+    <rule>Do not implement retry by mutating a finished job row.</rule>
+    <separation>Go API equals control plane; Python workers equal execution plane; UI, Telegram bot, and MCP equal adapters.</separation>
+  </ExecutionRules>
+
+  <ExecutionPolicy>
+    <default-profile>balanced</default-profile>
+    <controller-owns>docs/development-plan.xml, docs/knowledge-graph.xml, docs/verification-plan.xml, docs/requirements.xml, docs/technology.xml</controller-owns>
+    <worker-owns>Only module source files and module-local tests inside the approved write scope for the active module packet.</worker-owns>
+  </ExecutionPolicy>
+</DevelopmentPlan>

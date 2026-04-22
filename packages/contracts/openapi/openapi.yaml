@@ -1,0 +1,664 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Telegram Transcriber Platform API",
+    "version": "1.0.0",
+    "description": "Frozen Phase-1 contract surface for the Go control plane, Python workers, Web UI, Telegram adapter, and MCP adapter."
+  },
+  "paths": {
+    "/v1/transcription-jobs": {
+      "post": {
+        "operationId": "createTranscriptionJobs",
+        "summary": "Create one transcription job per uploaded file.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "../schemas/http/create-transcription-upload.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns one job snapshot per uploaded file.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "jobs"
+                  ],
+                  "properties": {
+                    "jobs": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "$ref": "../schemas/common/job-snapshot.schema.json"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/transcription-jobs/combined": {
+      "post": {
+        "operationId": "createCombinedTranscriptionJob",
+        "summary": "Create one combined transcription job from an ordered set of uploaded media files.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "../schemas/http/create-transcription-upload.schema.json#/$defs/combinedTranscriptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns one job snapshot for the ordered source set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/transcription-jobs/from-url": {
+      "post": {
+        "operationId": "createTranscriptionFromUrl",
+        "summary": "Create a transcription job from a supported YouTube URL.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/create-transcription-from-url.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns one job snapshot for the URL-based transcription job.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "operationId": "getJob",
+        "summary": "Return the authoritative job snapshot.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authoritative job snapshot with artifacts, lineage, and child jobs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/job-snapshot.schema.json"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/jobs": {
+      "get": {
+        "operationId": "listJobs",
+        "summary": "List jobs for local operational tooling.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/jobStatus"
+            }
+          },
+          {
+            "name": "job_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/jobType"
+            }
+          },
+          {
+            "name": "root_job_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 1
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Jobs ordered by created_at descending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json#/$defs/jobListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/transcription-jobs/{job_id}/report-jobs": {
+      "post": {
+        "operationId": "createReportJob",
+        "summary": "Create or reuse the canonical report child job.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/create-report.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns the canonical report child job snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/report-jobs/{job_id}/deep-research-jobs": {
+      "post": {
+        "operationId": "createDeepResearchJob",
+        "summary": "Create or reuse the canonical deep-research child job.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/create-deep-research.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns the canonical deep-research child job snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/cancel": {
+      "post": {
+        "operationId": "cancelJob",
+        "summary": "Apply cooperative cancellation semantics.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Returns the authoritative job snapshot after applying cancel logic.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/retry": {
+      "post": {
+        "operationId": "retryJob",
+        "summary": "Create a new retry row linked by retry_of_job_id.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns the newly created retry job snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "resolveArtifact",
+        "summary": "Resolve artifact metadata plus a MinIO presigned download URL.",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact metadata and download handle.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/artifact-resolution.schema.json"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/jobs/{job_id}/events": {
+      "get": {
+        "operationId": "listJobEvents",
+        "summary": "Return the append-only event timeline for a job.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versioned event timeline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json#/$defs/jobEventListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ws": {
+      "get": {
+        "operationId": "openJobEventStream",
+        "summary": "Open the shared v1 WebSocket stream.",
+        "responses": {
+          "101": {
+            "description": "Versioned event stream upgrade.",
+            "x-event-schema": {
+              "$ref": "../schemas/ws/job-event.schema.json"
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{job_id}/claim": {
+      "post": {
+        "operationId": "claimJobForWorker",
+        "summary": "Claim execution and transition a queued job to running.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Claimed execution with ordered inputs and lineage.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{job_id}/progress": {
+      "post": {
+        "operationId": "recordWorkerProgress",
+        "summary": "Record a worker progress update.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/progressRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Progress accepted."
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{job_id}/artifacts": {
+      "post": {
+        "operationId": "recordWorkerArtifacts",
+        "summary": "Upsert artifact metadata after object upload succeeds.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/artifactUpsertRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Artifact metadata accepted."
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{job_id}/finalize": {
+      "post": {
+        "operationId": "finalizeWorkerJob",
+        "summary": "Finalize a claimed job as succeeded, failed, or canceled.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/finalizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Returns the authoritative terminal job snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/job-snapshot.schema.json"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/jobs/{job_id}/cancel-check": {
+      "get": {
+        "operationId": "checkWorkerCancelState",
+        "summary": "Read the cooperative cancel state for a claimed job.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          },
+          {
+            "name": "execution_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancel state for the claimed job execution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/cancelCheckResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "JobId": {
+        "name": "job_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      }
+    },
+    "responses": {
+      "ErrorEnvelope": {
+        "description": "Structured API error envelope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common/error-envelope.schema.json"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "JobSnapshot": {
+        "$ref": "../schemas/common/job-snapshot.schema.json"
+      },
+      "ErrorEnvelope": {
+        "$ref": "../schemas/common/error-envelope.schema.json"
+      },
+      "TranscriptionUploadRequest": {
+        "$ref": "../schemas/http/create-transcription-upload.schema.json"
+      },
+      "CombinedTranscriptionRequest": {
+        "$ref": "../schemas/http/create-transcription-upload.schema.json#/$defs/combinedTranscriptionRequest"
+      },
+      "TranscriptionFromUrlRequest": {
+        "$ref": "../schemas/http/create-transcription-from-url.schema.json"
+      },
+      "CreateReportRequest": {
+        "$ref": "../schemas/http/create-report.schema.json"
+      },
+      "CreateDeepResearchRequest": {
+        "$ref": "../schemas/http/create-deep-research.schema.json"
+      },
+      "JobAcceptedEnvelope": {
+        "$ref": "../schemas/http/job-control.schema.json"
+      },
+      "ArtifactResolution": {
+        "$ref": "../schemas/http/artifact-resolution.schema.json"
+      },
+      "WorkerClaimResponse": {
+        "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimResponse"
+      },
+      "WorkerFinalizeRequest": {
+        "$ref": "../schemas/internal/worker-control.schema.json#/$defs/finalizeRequest"
+      },
+      "JobEvent": {
+        "$ref": "../schemas/ws/job-event.schema.json"
+      },
+      "WebhookJobLifecycleEvent": {
+        "$ref": "../schemas/webhook/job-lifecycle.schema.json"
+      }
+    }
+  }
+}

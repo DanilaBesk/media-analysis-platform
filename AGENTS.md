@@ -14,6 +14,26 @@
 - Until a git remote is configured, treat the Beads push-to-remote checklist as conditional rather than immediately runnable in this repo.
 - When you discover follow-up work, record it in Beads instead of ad-hoc markdown notes.
 
+## GRACE Protocol
+
+- This repo is now GRACE-initialized. Treat these files as first-class engineering artifacts:
+  - `docs/requirements.xml`
+  - `docs/technology.xml`
+  - `docs/development-plan.xml`
+  - `docs/verification-plan.xml`
+  - `docs/knowledge-graph.xml`
+  - `docs/operational-packets.xml`
+- For architecture or implementation work, update GRACE artifacts before or alongside code changes rather than letting design drift live only in chat or ad-hoc markdown.
+- The current large migration brief in `docs/plans/2026-04-19-telegram-transcriber-platform-monorepo-migration.md` remains the detailed architecture baseline, but the GRACE XML docs are now the canonical structure for future planning, execution packets, verification, and graph updates.
+- New modules should carry GRACE-style module contracts and stable semantic/log anchors when they are implemented.
+- For implementation from this point forward, default to GRACE packet-driven execution rather than freeform refactoring.
+- Current first execution target is `M-CONTRACTS-wave-1` from `docs/operational-packets.xml`.
+- Recommended next GRACE steps:
+  - use `$grace-execute` to execute the next approved packet;
+  - use `$grace-reviewer` for scoped gate reviews after each packet;
+  - use `$grace-refresh` only when shared GRACE artifacts must be synchronized to implemented code;
+  - use `docs/operational-packets.xml` as the canonical packet and delta schema during execution.
+
 ## Repo Basics
 
 - Runtime: Python `3.12` with `uv`.
@@ -52,14 +72,14 @@ bd close <id>         # Complete work
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, complete all applicable steps below. Push-to-remote steps are mandatory only if a git remote is configured for this repo.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+4. **PUSH TO REMOTE** - Mandatory only when a git remote is configured:
    ```bash
    git pull --rebase
    bd dolt push
@@ -71,8 +91,8 @@ bd close <id>         # Complete work
 7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- If a git remote is configured, work is NOT complete until `git push` succeeds
+- If no git remote is configured, do not invent one and do not claim remote-sync steps were completed
+- NEVER say "ready to push when you are" when remote push is required - YOU must push
+- If push fails and a remote exists, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->

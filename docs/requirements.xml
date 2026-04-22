@@ -1,0 +1,236 @@
+<RequirementsAnalysis VERSION="0.3.0">
+  <Project>
+    <name>telegram-transcriber-bot</name>
+    <annotation>Lossless GRACE requirements surface for migrating the current single-process Telegram transcription bot into a local-first monorepo platform with a Go control plane, Python workers, React UI, thin Telegram adapter, thin MCP adapter, PostgreSQL, Redis plus asynq, MinIO, WebSocket, webhook, retry, and cooperative cancellation.</annotation>
+    <keywords>telegram, transcription, whisper, faster-whisper, reports, deep research, go api, python workers, react ui, mcp, minio, postgres, redis, asynq, polling, webhook, docker compose, monorepo</keywords>
+  </Project>
+
+  <Purpose>
+    <purpose-1>This document is the GRACE requirements source of truth for the migration from the current monolithic Telegram bot to the target multi-application local platform.</purpose-1>
+    <purpose-2>It exists to preserve the full intent of the original migration plan while translating it into GRACE-governed requirements, constraints, and acceptance expectations.</purpose-2>
+    <purpose-3>It must remain sufficient for architecture alignment, execution sequencing, API and event contract definition, monorepo bootstrapping, worker split design, UI and adapter adaptation, Docker Compose rollout, verification, and cutover without rediscovering major decisions.</purpose-3>
+  </Purpose>
+
+  <CurrentState>
+    <runtime-entrypoint>src/telegram_transcriber_bot/__main__.py</runtime-entrypoint>
+    <current-shape>single Python application with one runtime entrypoint and local filesystem-backed job storage</current-shape>
+    <current-modules>
+      <module path="src/telegram_transcriber_bot/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
+      <module path="src/telegram_transcriber_bot/service.py" role="Current application service for processing sources, writing job metadata, generating report artifacts, and running deep research" />
+      <module path="src/telegram_transcriber_bot/transcribers.py" role="YouTube transcript fast path and Whisper fallback" />
+      <module path="src/telegram_transcriber_bot/documents.py" role="Markdown and DOCX artifact rendering" />
+      <module path="src/telegram_transcriber_bot/cglm_runner.py" role="Report generation subprocess adapter" />
+      <module path="src/telegram_transcriber_bot/deep_research.py" role="Deep research multi-phase pipeline" />
+    </current-modules>
+    <current-storage>
+      <item>local files under .data/jobs/job_id</item>
+      <item>local metadata JSON per job</item>
+      <item>no external queue</item>
+      <item>no PostgreSQL</item>
+      <item>no external object storage</item>
+      <item>no HTTP API</item>
+      <item>no Web UI</item>
+      <item>no MCP server</item>
+    </current-storage>
+    <preserved-user-capabilities>
+      <item>YouTube transcription</item>
+      <item>Telegram voice, audio, video, and document transcription</item>
+      <item>media group handling</item>
+      <item>plain transcript output</item>
+      <item>segmented transcript output</item>
+      <item>report generation</item>
+      <item>deep research generation</item>
+      <item>artifact reuse inside the current process</item>
+    </preserved-user-capabilities>
+  </CurrentState>
+
+  <Principles>
+    <principle-1>All business logic lives behind the API server boundary.</principle-1>
+    <principle-2>Telegram bot, Web UI, and MCP are transport adapters only.</principle-2>
+    <principle-3>Workers perform heavy execution and never expose public transport contracts.</principle-3>
+    <principle-4>PostgreSQL is the persistent system of record for jobs and artifact metadata.</principle-4>
+    <principle-5>Redis is ephemeral infrastructure for asynq queues only, not the source of truth.</principle-5>
+    <principle-6>MinIO stores source files and output artifacts; clients do not write to it directly in v1.</principle-6>
+    <principle-7>Polling is the correctness path; WebSocket is a latency optimization and webhook is a delivery strategy, not a stronger source of truth.</principle-7>
+    <principle-8>Retry creates a new job; historical executions stay immutable.</principle-8>
+    <principle-9>Cancellation is cooperative, explicit, and phase-aware.</principle-9>
+    <principle-10>Migration should reuse the working Python execution core whenever that is safer and cheaper than rewriting it.</principle-10>
+  </Principles>
+
+  <FrozenDecisions>
+    <decision-1>API server is implemented in Go and acts as the sole control plane.</decision-1>
+    <decision-2>Heavy execution remains in Python workers.</decision-2>
+    <decision-3>Queueing is implemented with asynq, not Redis Streams or Redis lists.</decision-3>
+    <decision-4>Workers must not perform arbitrary business-state mutation through ad hoc SQL writes; they use the control-plane contract or a tightly scoped internal service layer owned by the API.</decision-4>
+    <decision-5>Create endpoints support optional Idempotency-Key.</decision-5>
+    <decision-6>Repeated create-child requests return the existing active or completed canonical child job unless the caller explicitly retries.</decision-6>
+    <decision-7>Progress is stage-based and message-based; fake percentages are forbidden.</decision-7>
+    <decision-8>Cancellation is cooperative and phase-aware from the first version.</decision-8>
+    <decision-9>Retry always creates a new job row.</decision-9>
+    <decision-10>Advanced runtime knobs are not exposed in Web UI or Telegram bot in v1.</decision-10>
+    <decision-11>Artifact downloads use MinIO presigned links in v1.</decision-11>
+    <decision-12>Each job chooses exactly one delivery strategy: polling or webhook.</decision-12>
+    <decision-13>Default delivery strategy is polling.</decision-13>
+    <decision-14>The API always returns job identifiers and initial job snapshots regardless of delivery strategy.</decision-14>
+    <decision-15>Webhook is supported for all job types and requires a callback URL.</decision-15>
+    <decision-16>WebSocket is the live-update channel for the Web UI.</decision-16>
+    <decision-17>First-version file uploads go through the API and support multiple files in one request.</decision-17>
+    <decision-18>There is no legacy compatibility track; the repository is restructured directly toward the target architecture.</decision-18>
+  </FrozenDecisions>
+
+  <Actors>
+    <actor-EndUser>Single local operator submitting media, URLs, and follow-up report or deep-research actions.</actor-EndUser>
+    <actor-TelegramBot>Thin Telegram transport adapter that uploads sources and returns artifacts.</actor-TelegramBot>
+    <actor-WebUI>Browser-based local UI for uploads, monitoring, downloads, and admin actions.</actor-WebUI>
+    <actor-MCPClient>Local MCP consumer that creates jobs and inspects results through the same HTTP API.</actor-MCPClient>
+    <actor-APIControlPlane>Go API service that owns contracts, orchestration, state transitions, artifact metadata, idempotency, lineage, delivery, and cancellation semantics.</actor-APIControlPlane>
+    <actor-Worker>Python worker process executing transcription, report, or deep-research jobs.</actor-Worker>
+    <actor-Operator>Local operator maintaining Docker Compose runtime and troubleshooting failed jobs.</actor-Operator>
+  </Actors>
+
+  <UseCases>
+    <UC-001>
+      <Actor>EndUser</Actor>
+      <Action>Submits one or more uploaded files for transcription through the API, Web UI, or Telegram adapter.</Action>
+      <Goal>Receive one queued transcription job per uploaded file without touching MinIO directly.</Goal>
+      <Preconditions>API, PostgreSQL, Redis, and MinIO are reachable; at least one valid non-empty file is supplied.</Preconditions>
+      <AcceptanceCriteria>API persists source objects to MinIO, creates one transcription job per file, returns initial job snapshots immediately, and preserves the chosen delivery strategy.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-001, DF-006</RelatedFlows>
+    </UC-001>
+
+    <UC-001B>
+      <Actor>EndUser</Actor>
+      <Action>Submits multiple uploaded media files as one ordered combined transcription operation through the API or Telegram adapter.</Action>
+      <Goal>Receive one queued transcription job whose final transcript spans all uploaded media in the supplied order.</Goal>
+      <Preconditions>API, PostgreSQL, Redis, and MinIO are reachable; at least one valid non-empty file is supplied; caller chooses the combined transcription endpoint explicitly.</Preconditions>
+      <AcceptanceCriteria>API persists each source object to MinIO, creates one ordered source set, creates one transcription job bound to that source set, and returns one initial job snapshot immediately with the chosen delivery strategy.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-007, DF-006</RelatedFlows>
+    </UC-001B>
+
+    <UC-002>
+      <Actor>EndUser</Actor>
+      <Action>Submits a supported YouTube URL for transcription.</Action>
+      <Goal>Receive a transcription job without first uploading a local file.</Goal>
+      <Preconditions>URL is absolute http or https and matches supported YouTube hosts.</Preconditions>
+      <AcceptanceCriteria>API validates the source URL, creates a source row and a transcription job, and the worker materializes the media or transcript path during execution.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-002</RelatedFlows>
+    </UC-002>
+
+    <UC-003>
+      <Actor>EndUser</Actor>
+      <Action>Observes job progress by polling, webhook callbacks, or WebSocket when using the Web UI.</Action>
+      <Goal>Track job execution until terminal state and fetch final artifacts.</Goal>
+      <Preconditions>Job exists; polling or webhook delivery strategy has been selected at creation time.</Preconditions>
+      <AcceptanceCriteria>Polling remains authoritative, webhook notifications are best-effort for all job types, WebSocket is available for UI live updates, and API exposes artifact metadata with presigned MinIO download URLs.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-001, DF-002, DF-003</RelatedFlows>
+    </UC-003>
+
+    <UC-004>
+      <Actor>EndUser</Actor>
+      <Action>Requests a report job from a succeeded transcription job.</Action>
+      <Goal>Generate markdown and DOCX research reports from transcript output.</Goal>
+      <Preconditions>Parent transcription job succeeded and transcript_plain exists.</Preconditions>
+      <AcceptanceCriteria>API returns an existing canonical report child if present or creates a new report child job otherwise; reruns require explicit retry.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-004</RelatedFlows>
+    </UC-004>
+
+    <UC-005>
+      <Actor>EndUser</Actor>
+      <Action>Requests a deep-research job from a succeeded report job.</Action>
+      <Goal>Produce a deeper evidence-driven markdown report using the existing deep-research pipeline.</Goal>
+      <Preconditions>Parent report job succeeded and report_markdown exists.</Preconditions>
+      <AcceptanceCriteria>API creates or reuses the canonical deep-research child, workers persist the final markdown artifact, and terminal state is visible through polling plus webhook delivery when the job chooses webhook strategy.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-005</RelatedFlows>
+    </UC-005>
+
+    <UC-006>
+      <Actor>EndUser</Actor>
+      <Action>Cancels or retries a queued, running, or terminal job.</Action>
+      <Goal>Stop unnecessary work and rerun failed or canceled work without mutating execution history.</Goal>
+      <Preconditions>Target job exists.</Preconditions>
+      <AcceptanceCriteria>Queued jobs may be canceled immediately, running jobs transition through cancel_requested, and retry always creates a new job row linked by retry_of_job_id.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-006</RelatedFlows>
+    </UC-006>
+
+    <UC-007>
+      <Actor>WebUI</Actor>
+      <Action>Provides a local operational surface for listing jobs, creating jobs, downloading artifacts, deleting jobs, deleting artifacts, and refreshing expired links.</Action>
+      <Goal>Give the operator a usable local admin surface without direct DB or MinIO access.</Goal>
+      <Preconditions>Web UI and API are running in local deployment.</Preconditions>
+      <AcceptanceCriteria>Late-wave admin actions remain API-owned, preserve lineage rules, and block unsafe artifact deletion when descendant jobs still depend on data.</AcceptanceCriteria>
+      <Priority>medium</Priority>
+      <RelatedFlows>DF-001, DF-003, DF-006</RelatedFlows>
+    </UC-007>
+
+    <UC-008>
+      <Actor>TelegramBot</Actor>
+      <Action>Acts as a thin transport adapter over the API.</Action>
+      <Goal>Preserve current Telegram UX while removing business logic from the bot runtime.</Goal>
+      <Preconditions>API is reachable; Telegram media can be downloaded temporarily by the adapter.</Preconditions>
+      <AcceptanceCriteria>Bot uploads source data to the API, waits by polling by default, sends returned artifacts to the user, preserves report and deep-research affordances, auto-maps Telegram media groups to combined transcription jobs, and may submit buffered sequential media through the same combined flow when the user explicitly chooses to process them together.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-001, DF-004, DF-005, DF-007</RelatedFlows>
+    </UC-008>
+
+    <UC-009>
+      <Actor>MCPClient</Actor>
+      <Action>Creates and inspects jobs through MCP tools backed by the API.</Action>
+      <Goal>Expose the same platform capabilities to model-driven clients without duplicating business logic.</Goal>
+      <Preconditions>MCP adapter is running and API is reachable.</Preconditions>
+      <AcceptanceCriteria>MCP tools map cleanly onto API operations, expose artifact metadata and download handles, and never talk directly to Redis, MinIO, or worker runtimes.</AcceptanceCriteria>
+      <Priority>medium</Priority>
+      <RelatedFlows>DF-001, DF-004, DF-005</RelatedFlows>
+    </UC-009>
+  </UseCases>
+
+  <NonGoals>
+    <item-1>Public internet deployment.</item-1>
+    <item-2>Production-grade security model, authentication, authorization, or RBAC.</item-2>
+    <item-3>Quotas, billing, rate limiting, or multi-tenant user isolation.</item-3>
+    <item-4>GPU support for Whisper in v1; target is CPU-only local Docker runtime.</item-4>
+    <item-5>Global dedupe or reuse semantics across uploads and URLs in v1.</item-5>
+    <item-6>Distributed multi-region deployment, Kubernetes, or high-availability failover architecture.</item-6>
+    <item-7>Direct client uploads to MinIO in v1.</item-7>
+    <item-8>A long-lived legacy compatibility layer or legacy subtree.</item-8>
+  </NonGoals>
+
+  <Constraints>
+    <constraint-1>Must run as a local Docker Compose deployment with PostgreSQL, Redis, MinIO, API, workers, Web UI, Telegram adapter, and MCP adapter.</constraint-1>
+    <constraint-2>Polling remains the correctness path; webhook and WebSocket are delivery or update layers, not stronger sources of truth.</constraint-2>
+    <constraint-3>Artifact downloads must use MinIO presigned URLs returned by the API.</constraint-3>
+    <constraint-4>Retry must create a new job and preserve lineage; terminal rows are immutable.</constraint-4>
+    <constraint-5>Workers must not perform direct arbitrary business-state SQL writes.</constraint-5>
+    <constraint-6>Multi-file upload must be supported through the API in the first version.</constraint-6>
+    <constraint-7>Webhook is a per-job delivery strategy chosen at create time and requires a callback URL.</constraint-7>
+    <constraint-8>Web UI, Telegram bot, and MCP server must all consume the same API contracts.</constraint-8>
+    <constraint-9>The migration must preserve current core capabilities: YouTube, Telegram voice or audio or video or document, media groups, plain transcript, segmented transcript, report generation, and deep research generation.</constraint-9>
+    <constraint-10>The platform must support explicit combined multi-media transcription as one ordered job without changing the existing per-file upload contract.</constraint-10>
+  </Constraints>
+
+  <Risks>
+    <risk-1>Rewriting transport and orchestration at once can hide contract drift between API, workers, UI, Telegram, and MCP.</risk-1>
+    <risk-2>Long-running transcription, report, and deep-research tasks can partially succeed and expose weak retry or cancel semantics.</risk-2>
+    <risk-3>Without explicit artifact and source lifecycle rules, admin delete actions can corrupt descendant jobs or orphan storage objects.</risk-3>
+    <risk-4>Webhook delivery can appear reliable during happy paths but lose retry durability if not persisted across API restarts.</risk-4>
+    <risk-5>Premature Go rewrites of ML or report logic would add risk without architectural gain.</risk-5>
+    <risk-6>Compose stack fragility can obscure whether failures come from contracts, workers, or runtime topology.</risk-6>
+  </Risks>
+
+  <ResolvedQuestions>
+    <resolution-1>Go API granularity is fixed for the migration horizon as `internal/api`, `internal/jobs`, `internal/storage`, `internal/queue`, `internal/ws`, and `internal/db`. Finer GRACE subdivision is explicitly deferred until after the first full-system migration cutover and only if implementation pressure proves it necessary.</resolution-1>
+    <resolution-2>API-owned worker-control contracts remain explicit HTTP routes for the entire migration and first platform version. They are not collapsed into an in-process shared service layer during this migration because transport-adapter independence and containerized worker boundaries are part of the target architecture.</resolution-2>
+  </ResolvedQuestions>
+
+  <PreservationPolicy>
+    <rule-1>These requirements intentionally preserve the full meaning of the original markdown migration plan rather than compressing it into a short summary.</rule-1>
+    <rule-2>The original plan sections on purpose, current state, non-goals, principles, frozen decisions, and preserved user-visible capabilities are represented here verbatim in meaning and must remain synchronized with the GRACE planning artifacts.</rule-2>
+    <rule-3>Detailed contracts, data model, wave structure, testing strategy, definition of done, and execution rules are expanded in the GRACE development and verification artifacts, not discarded.</rule-3>
+  </PreservationPolicy>
+</RequirementsAnalysis>

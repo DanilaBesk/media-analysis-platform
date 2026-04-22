@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/ws/job-event.schema.json",
+  "title": "JobEvent",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "job_id",
+    "root_job_id",
+    "version",
+    "emitted_at",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "event_type": {
+      "$ref": "../common/enums.schema.json#/$defs/jobEventType"
+    },
+    "job_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "root_job_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "emitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/jobStatus"
+        },
+        "progress_stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/artifact-resolution.schema.json",
+  "title": "ArtifactResolution",
+  "type": "object",
+  "required": [
+    "artifact_id",
+    "job_id",
+    "artifact_kind",
+    "filename",
+    "mime_type",
+    "size_bytes",
+    "download",
+    "created_at"
+  ],
+  "properties": {
+    "artifact_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "job_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "artifact_kind": {
+      "$ref": "../common/enums.schema.json#/$defs/artifactKind"
+    },
+    "filename": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mime_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "size_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "download": {
+      "type": "object",
+      "required": [
+        "provider",
+        "url",
+        "expires_at"
+      ],
+      "properties": {
+        "provider": {
+          "const": "minio_presigned_url"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

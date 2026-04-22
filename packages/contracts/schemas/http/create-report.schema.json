@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-report.schema.json",
+  "title": "CreateReportRequest",
+  "type": "object",
+  "properties": {
+    "client_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "delivery": {
+      "$ref": "./create-transcription-upload.schema.json#/$defs/deliveryRequest"
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,760 @@
+<OperationalPackets VERSION="0.3.0">
+  <ExecutionPacketTemplate>
+    <!-- Canonical controller-to-worker execution packet. -->
+    <ExecutionPacket>
+      <module-id>M-EXAMPLE</module-id>
+      <module-name>ExampleDomain</module-name>
+      <purpose>Implement the approved module without architectural drift.</purpose>
+      <write-scope>
+        <file-1>src/example/index.ts</file-1>
+        <file-2>src/example/index.test.ts</file-2>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+Planned module contract excerpt goes here.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+Knowledge graph entry excerpt goes here.
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-LOGGER">Structured logger interface with stable marker fields.</dependency-1>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+Verification-plan excerpt goes here.
+      ]]></verification-excerpt>
+      <expected-graph-delta-fields>
+        <field-1>imports</field-1>
+        <field-2>exports</field-2>
+        <field-3>annotations</field-3>
+        <field-4>CrossLinks</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files</field-1>
+        <field-2>module-checks</field-2>
+        <field-3>required-log-markers</field-3>
+        <field-4>follow-up-checks</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>Workers should only read more context when the packet is insufficient.</note-1>
+      </notes>
+    </ExecutionPacket>
+  </ExecutionPacketTemplate>
+
+  <GraphDeltaTemplate>
+    <!-- Canonical worker-to-controller graph delta. -->
+    <GraphDelta module="M-EXAMPLE">
+      <imports-added>
+        <import-1>M-LOGGER</import-1>
+      </imports-added>
+      <imports-removed />
+      <exports-added>
+        <export-1>runExample</export-1>
+      </exports-added>
+      <exports-removed />
+      <annotations-added>
+        <annotation-1>&lt;fn-runExample PURPOSE="Execute the example flow" /&gt;</annotation-1>
+      </annotations-added>
+      <annotations-removed />
+      <cross-links-added>
+        <CrossLink from="M-EXAMPLE" to="M-LOGGER" relation="uses" />
+      </cross-links-added>
+      <cross-links-removed />
+      <notes>
+        <note-1>Only list graph facts that really changed in the code.</note-1>
+      </notes>
+    </GraphDelta>
+  </GraphDeltaTemplate>
+
+  <VerificationDeltaTemplate>
+    <!-- Canonical worker-to-controller verification delta. -->
+    <VerificationDelta module="M-EXAMPLE">
+      <test-files-added>
+        <file-1>src/example/index.test.ts</file-1>
+      </test-files-added>
+      <test-files-removed />
+      <module-checks>
+        <command-1>bun test src/example/index.test.ts</command-1>
+        <command-2>bun x tsc --noEmit</command-2>
+      </module-checks>
+      <required-log-markers>
+        <marker-1>[ExampleDomain][runExample][BLOCK_EXECUTE_FLOW]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Failure path must not emit BLOCK_PERSIST_RESULT.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>
+        <item-1>Run merged-surface integration check for the logger adapter.</item-1>
+      </wave-follow-up>
+      <phase-follow-up>
+        <item-1>Run the broader regression suite before marking the phase done.</item-1>
+      </phase-follow-up>
+    </VerificationDelta>
+  </VerificationDeltaTemplate>
+
+  <FailurePacketTemplate>
+    <!-- Canonical verification-to-fixer failure handoff. -->
+    <FailurePacket>
+      <scenario>Primary success path fails on valid input.</scenario>
+      <contract-ref>M-EXAMPLE / V-M-EXAMPLE / scenario-1</contract-ref>
+      <expected-evidence>
+        <marker-1>[ExampleDomain][runExample][BLOCK_VALIDATE_INPUT]</marker-1>
+        <assertion-1>Expected return value should equal "ok".</assertion-1>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[ExampleDomain][runExample][BLOCK_VALIDATE_INPUT] emitted</log-1>
+        <trace-1>BLOCK_VALIDATE_INPUT -> threw EXAMPLE_INVALID_STATE</trace-1>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_VALIDATE_INPUT</first-divergent-block>
+      <suggested-next-action>Read the contract, inspect the divergent block, and apply the smallest safe fix.</suggested-next-action>
+    </FailurePacket>
+  </FailurePacketTemplate>
+
+  <ProjectExecutionPackets>
+    <ExecutionPacket packet-id="M-CONTRACTS-wave-1" module="M-CONTRACTS" phase="Phase-1" step="1" verification-ref="V-M-CONTRACTS">
+      <module-id>M-CONTRACTS</module-id>
+      <module-name>Contracts</module-name>
+      <purpose>Freeze the canonical contract package against the lossless GRACE SSOT so every later control-plane and adapter step consumes the same OpenAPI, schema, WebSocket, webhook, enum, and worker DTO surface.</purpose>
+      <write-scope>
+        <file-1>packages/contracts/openapi/openapi.yaml</file-1>
+        <file-2>packages/contracts/schemas/common/enums.schema.json</file-2>
+        <file-3>packages/contracts/schemas/common/error-envelope.schema.json</file-3>
+        <file-4>packages/contracts/schemas/common/job-snapshot.schema.json</file-4>
+        <file-5>packages/contracts/schemas/http/create-transcription-upload.schema.json</file-5>
+        <file-6>packages/contracts/schemas/http/create-transcription-from-url.schema.json</file-6>
+        <file-7>packages/contracts/schemas/http/create-report.schema.json</file-7>
+        <file-8>packages/contracts/schemas/http/create-deep-research.schema.json</file-8>
+        <file-9>packages/contracts/schemas/http/job-control.schema.json</file-9>
+        <file-10>packages/contracts/schemas/http/artifact-resolution.schema.json</file-10>
+        <file-11>packages/contracts/schemas/internal/worker-control.schema.json</file-11>
+        <file-12>packages/contracts/ws/job-event.schema.json</file-12>
+        <file-13>packages/contracts/webhook/job-lifecycle.schema.json</file-13>
+        <file-14>packages/contracts/tests/test_contract_surfaces.py</file-14>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Repository state is still pre-monorepo, so this step creates the minimal `packages/contracts` tree needed for the frozen public surface.</note-1>
+        <note-2>Do not broaden into `packages/sdk-ts`, `packages/sdk-py`, `apps/api`, `workers/*`, `apps/web`, or compose/bootstrap files in this step.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-CONTRACTS:
+- Purpose: provide the canonical API, WebSocket, webhook, enum, and validation contracts for the entire platform.
+- Scope: OpenAPI routes, shared schemas, public enums, webhook envelopes, WebSocket envelopes, and internal worker DTOs.
+- Links: M-CONTRACTS, V-M-CONTRACTS, DF-001, DF-003, DF-007.
+- Note: this module must be complete before the first large implementation wave.
+
+PublicApiContract + WebSocketContract + InternalWorkerContract:
+- Create endpoints support optional Idempotency-Key, but retry is intentionally non-idempotent.
+- If delivery strategy is webhook, a webhook URL is required.
+- The existing upload endpoint preserves one-file-to-one-job semantics, while combined multi-media transcription uses a separate `/v1/transcription-jobs/combined` endpoint.
+- WebSocket envelope and webhook envelope carry versioned event fields, but polling remains the authoritative read path.
+- Internal worker claim, progress, artifact, finalize, and cancel-check DTOs are part of the same frozen contract surface, and claim returns ordered inputs rather than assuming a single source.
+
+ImplementationOrder / Phase-1 + DefinitionOfDone + ExecutionRules:
+- Phase-1 step-1 converts the migration plan into canonical OpenAPI, JSON schema, WebSocket, and webhook contracts.
+- Freeze polling, webhook, retry, cancel, idempotency, child reuse, and multi-file upload semantics before any major code wave.
+- Do not treat webhook delivery or WebSocket as stronger than polling.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-CONTRACTS:
+- Path: packages/contracts
+- Depends: none
+- Verification ref: V-M-CONTRACTS
+- Purpose: own shared OpenAPI, JSON schema, webhook, WebSocket, and enum contracts that every runtime surface depends on.
+- Public annotations already expected in the graph:
+  - export-openapi
+  - export-websocket-schema
+  - export-webhook-schema
+  - type-JobSnapshot
+  - type-DeliveryStrategy
+  - type-ArtifactResolution
+  - type-WorkerFinalizeRequest
+  - type-SourceSet
+
+Existing CrossLinks:
+- M-CONTRACTS -> M-API-HTTP relation="defines-public-contracts-for"
+- M-API-HTTP -> M-CONTRACTS relation="depends-on-contracts-from"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="none">No upstream module dependencies. This freeze point is consumed next by M-API-STORAGE, M-API-QUEUE, M-API-JOBS, M-API-EVENTS, M-API-HTTP, and M-WORKER-COMMON.</dependency-1>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / V-M-CONTRACTS / Gate-Phase-1:
+- Contract tests must cover OpenAPI validation, JSON schema tests for WebSocket and webhook envelopes, SDK compatibility expectations, and delivery-strategy plus idempotency normalization.
+- Module check: validate OpenAPI, JSON schemas, and enum surfaces against the frozen design decisions.
+- Success scenario: polling and webhook create requests share the same canonical job snapshot envelope.
+- Success scenario: combined transcription create request preserves one-job semantics while reusing the canonical job snapshot envelope.
+- Failure scenario: invalid delivery strategy or missing webhook URL is rejected deterministically.
+- Required marker: [Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]
+- Required assertion: retry remains non-idempotent while create endpoints support Idempotency-Key.
+- Module readiness target: ready-after-contract-tests.
+- Phase gate evidence: polling, webhook, retry, cancel, idempotency, and child reuse semantics must be represented in contracts and verification before Phase-2 begins.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>.venv/bin/python -m pytest packages/contracts/tests/test_contract_surfaces.py</command-1>
+        <command-2>Contract-specific schema validation covering OpenAPI, shared enums, webhook, WebSocket, and internal worker DTO coherence.</command-2>
+        <evidence-1>The same canonical job snapshot and error envelope are reused across per-file upload, combined upload, URL, child-create, cancel, retry, artifact-resolve, WebSocket, and webhook surfaces.</evidence-1>
+        <evidence-2>Wave follow-up remains SDK regeneration only; broader phase follow-up is freezing the contract diff before M-API-STORAGE and M-API-QUEUE start.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: remain none unless the final file layout introduces a shared helper strictly inside `packages/contracts`.</field-1>
+        <field-2>exports: confirm `export-openapi`, `export-validationSchemas`, `export-websocket-schema`, `export-webhook-schema`, and the shared public types already annotated in the knowledge graph.</field-2>
+        <field-3>annotations: refine only package-level contract annotations that become public and stable after this freeze.</field-3>
+        <field-4>CrossLinks: no new module links are expected in this step; adjust only if the real public contract surface materially differs from the current graph entry.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add concrete `packages/contracts/tests/*` coverage for OpenAPI, shared schemas, WS, webhook, and worker DTO coherence.</field-1>
+        <field-2>module-checks: preserve a narrow contract-validation command set and record the exact command that becomes authoritative.</field-2>
+        <field-3>required-log-markers: preserve `[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]` for the schema validation path.</field-3>
+        <field-4>follow-up-checks: keep wave follow-up focused on SDK regeneration and phase follow-up focused on contract freeze before control-plane implementation.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>Start by freezing shared enums, the delivery model, job snapshot envelope, error envelope, and artifact-resolution shape; route-specific schemas should reuse those shapes instead of re-declaring them.</note-1>
+        <note-2>Model multipart and JSON create flows as semantically aligned after defaulting `delivery.strategy=polling`, but preserve the split between per-file upload and explicit combined upload semantics.</note-2>
+        <note-3>Include internal worker claim, progress, cancel-check, artifacts, and finalize DTOs in the first freeze because M-WORKER-COMMON depends on those contracts immediately after Phase-2 foundation work starts.</note-3>
+        <note-4>Keep polling authoritative in every schema and example. WebSocket and webhook are delivery layers, not stronger read models.</note-4>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-API-STORAGE-wave-2" module="M-API-STORAGE" phase="Phase-2" step="1" verification-ref="V-M-API-STORAGE">
+      <module-id>M-API-STORAGE</module-id>
+      <module-name>ApiStorage</module-name>
+      <purpose>Implement the first control-plane persistence boundary that makes PostgreSQL authoritative, MinIO durable, and artifact resolution plus webhook-delivery state reproducible for later job, events, and HTTP steps.</purpose>
+      <write-scope>
+        <file-1>apps/api/internal/storage/*.go</file-1>
+        <file-2>apps/api/internal/storage/*_test.go</file-2>
+        <file-3>apps/api/internal/storage/migrations/*.sql</file-3>
+        <file-4>apps/api/internal/storage/testdata/*</file-4>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Keep this step inside storage, migrations, and storage-local tests only.</note-1>
+        <note-2>Do not pull queue publishing, HTTP route logic, or job business rules into the storage package.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-API-STORAGE:
+- Purpose: own PostgreSQL persistence, MinIO access, presigned URL resolution, and durable webhook-delivery records.
+- Scope: SQL persistence, MinIO object IO, presigned URL generation, source and artifact lifecycle checks, and durable delivery bookkeeping.
+- Links: M-API-STORAGE, V-M-API-STORAGE, DF-001, DF-003, DF-006, DF-007.
+- Note: `job_submissions` and `webhook_deliveries` are mandatory early tables, not optional polish.
+
+PersistentModel + StorageContract + MigrationMapping:
+- Storage step owns `job_submissions`, `sources`, `source_sets`, `source_set_items`, `jobs`, `job_artifacts`, `job_events`, and `webhook_deliveries`.
+- Enforce canonical rules for multi-file idempotent submissions, source/object-key constraints, ordered source sets, job lineage columns, artifact uniqueness, append-only job events, and durable webhook-delivery retry state.
+- MinIO buckets are `sources` and `artifacts`; clients never upload directly to MinIO in v1, and presigned download links are generated by the API at read time.
+- `src/telegram_transcriber_bot/service.py` orchestration metadata is replaced by PostgreSQL, MinIO, and Redis-backed infrastructure in the new control plane.
+
+ImplementationOrder / Phase-2 step-1:
+- Add PostgreSQL migrations for sources, jobs, job_artifacts, job_events, job_submissions, and webhook_deliveries.
+- Add MinIO integration and presigned artifact resolution assumptions before queue, jobs, events, and HTTP build on top.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-API-STORAGE:
+- Path: apps/api/internal/storage
+- Depends: M-CONTRACTS
+- Verification ref: V-M-API-STORAGE
+- Purpose: persist source metadata, jobs, artifacts, events, and webhook-delivery records while generating presigned artifact links.
+- Public annotations already expected in the graph:
+  - export-persistSource
+  - export-resolveArtifact
+  - type-JobSubmission
+  - type-WebhookDelivery
+
+Existing CrossLinks:
+- M-API-JOBS -> M-API-STORAGE relation="persists-through"
+- M-API-STORAGE -> M-API-JOBS relation="stores-state-for"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">Consume the frozen delivery strategy, artifact resolution, job snapshot, error envelope, and enum surfaces. Storage must not re-invent public shapes or drift from canonical enum values.</dependency-1>
+        <dependency-2 module="M-API-JOBS-and-M-API-EVENTS">M-API-JOBS and M-API-EVENTS consume this storage surface next. Keep storage public methods narrow and persistence-oriented so the next steps reuse source-set and lineage state instead of embedding duplicate table logic elsewhere.</dependency-2>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / V-M-API-STORAGE / Gate-Phase-2:
+- Module check: go test ./... -run ApiStorage
+- Success scenario: source rows, source sets, jobs, artifacts, events, and webhook deliveries persist with correct lineage and constraints.
+- Success scenario: combined transcription persistence creates one ordered source set plus ordered source_set_items and one job bound to that source set.
+- Failure scenario: artifact resolution fails cleanly when object store or DB is unavailable.
+- Required marker: [ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]
+- Required assertion: successful artifact uploads create DB rows only after object persistence succeeds.
+- Wave follow-up: run migration application and rollback smoke checks.
+- Phase follow-up: validate presigned artifact URLs against a real MinIO container.
+- Phase gate evidence: DB migrations apply cleanly and the next control-plane steps return canonical envelopes built on this storage layer.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>go test ./... -run ApiStorage</command-1>
+        <command-2>Migration application and rollback smoke checks for the Phase-2 schema set.</command-2>
+        <evidence-1>All required Phase-2 tables and constraints exist with the lossless PersistentModel semantics preserved, including ordered source sets for combined transcription.</evidence-1>
+        <evidence-2>Presigned artifact resolution stays ephemeral and API-owned; object-store or DB outages surface deterministic storage failures instead of partial DB success.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: M-CONTRACTS only, plus internal storage helpers that stay inside the same module boundary.</field-1>
+        <field-2>exports: confirm `export-persistSource`, `export-resolveArtifact`, and any stable persistence-facing helpers that become public to M-API-JOBS or M-API-EVENTS.</field-2>
+        <field-3>annotations: refine only storage-owned public types and functions backed by real code, especially job submission and webhook delivery state.</field-3>
+        <field-4>CrossLinks: preserve the existing M-API-JOBS storage links; add no new public cross-links unless a real storage-facing dependency becomes explicit in code.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add migration, MinIO, and persistence tests under `apps/api/internal/storage/*_test.go` and storage-local fixtures.</field-1>
+        <field-2>module-checks: preserve `go test ./... -run ApiStorage` and add the concrete migration smoke command chosen by the implementation.</field-2>
+        <field-3>required-log-markers: preserve `[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]` for the critical persistence path.</field-3>
+        <field-4>follow-up-checks: wave follow-up is migration smoke; phase follow-up is real MinIO validation and Phase-2 route checks that depend on this storage layer.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>Create artifact rows only after MinIO object writes succeed.</note-1>
+        <note-2>Presigned URLs are generated at read time; job snapshots and artifact metadata remain available even when URLs expire.</note-2>
+        <note-3>YouTube sources may exist as DB rows without MinIO source objects in v1, but uploaded and Telegram sources require object keys.</note-3>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-API-QUEUE-wave-2" module="M-API-QUEUE" phase="Phase-2" step="2" verification-ref="V-M-API-QUEUE">
+      <module-id>M-API-QUEUE</module-id>
+      <module-name>ApiQueue</module-name>
+      <purpose>Introduce the typed asynq publishing surface for Phase-2 without leaking business semantics into transport concerns.</purpose>
+      <write-scope>
+        <file-1>apps/api/internal/queue/*.go</file-1>
+        <file-2>apps/api/internal/queue/*_test.go</file-2>
+        <file-3>apps/api/internal/queue/testdata/*</file-3>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Keep this step in queue publishing and queue-local tests only.</note-1>
+        <note-2>Do not move job lifecycle rules, storage writes, or worker logic into this package.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-API-QUEUE:
+- Purpose: publish typed asynq tasks and encode queue-level retry and timeout defaults without owning business semantics.
+- Scope: task type mapping, payload shaping, timeout policy, max retry settings, and SkipRetry classification.
+- Links: M-API-QUEUE, V-M-API-QUEUE, DF-001, DF-004, DF-005, DF-006.
+- Note: business-visible retry remains API-owned even though asynq performs transport-level retries.
+
+QueueContract:
+- Queue names and task types are frozen:
+  - transcription -> job:transcription.run (max-retry 3, timeout 2h)
+  - report -> job:report.run (max-retry 2, timeout 45m)
+  - deep_research -> job:deep_research.run (max-retry 2, timeout 2h)
+- Minimal payload is `job_id` plus attempt number. Full mutable job metadata must not be placed in asynq payloads.
+- Deterministic business failures must use SkipRetry, including terminal claim rejection, authoritative cancel, missing parent artifact, invalid request data, and terminal model or pipeline failures.
+
+ImplementationOrder / Phase-2 step-2:
+- Add Redis queue producer through asynq by job type before job orchestration wires the queue into the business layer.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-API-QUEUE:
+- Path: apps/api/internal/queue
+- Depends: M-CONTRACTS, M-API-JOBS
+- Verification ref: V-M-API-QUEUE
+- Purpose: bridge job creation and background execution through asynq queues and retry policies.
+- Public annotations already expected in the graph:
+  - export-enqueueJob
+
+Existing CrossLinks:
+- M-API-JOBS -> M-API-QUEUE relation="enqueues-through"
+- M-API-QUEUE -> M-API-JOBS relation="accepts-work-from"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">Consume the frozen job types, statuses, and error semantics so queue payloads remain canonical and transport-only.</dependency-1>
+        <dependency-2 module="M-API-JOBS-next-step">Implementation order puts queue before jobs. Keep the queue surface narrow and transport-oriented so Phase-2 step-3 can call it without forcing business semantics into the queue layer.</dependency-2>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / V-M-API-QUEUE / Gate-Phase-2:
+- Module check: go test ./... -run ApiQueue
+- Success scenario: jobs enqueue with correct task types, payloads, retries, and timeouts.
+- Failure scenario: deterministic business failures use SkipRetry rather than repeating indefinitely.
+- Required marker: [ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]
+- Required assertion: queue payload must not contain full mutable job metadata.
+- Wave follow-up: run queue smoke checks against Redis and asynq inspector.
+- Phase follow-up: verify queue behavior under cancel and dependency outage scenarios.
+- Phase gate evidence: Phase-2 needs an enqueueable control plane before worker extraction starts.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>go test ./... -run ApiQueue</command-1>
+        <command-2>Queue smoke checks against Redis for task type, retry, timeout, and SkipRetry behavior.</command-2>
+        <evidence-1>Only `job_id` and attempt metadata enter task payloads; mutable snapshots remain in PostgreSQL and are re-read through storage or jobs logic.</evidence-1>
+        <evidence-2>Deterministic business failures produce SkipRetry rather than blind queue repetition.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: M-CONTRACTS only during the queue step itself; do not introduce direct Redis-facing dependencies into unrelated modules through the queue package.</field-1>
+        <field-2>exports: confirm the stable enqueue entrypoint and any queue-type constants that become public to M-API-JOBS.</field-2>
+        <field-3>annotations: refine only transport-facing queue annotations backed by real code.</field-3>
+        <field-4>CrossLinks: preserve the existing M-API-JOBS and M-API-QUEUE relationship; do not create new public links unless a real public queue facade emerges.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add queue payload, retry-policy, and SkipRetry tests under `apps/api/internal/queue/*_test.go`.</field-1>
+        <field-2>module-checks: preserve `go test ./... -run ApiQueue` and add the concrete Redis queue smoke command chosen by implementation.</field-2>
+        <field-3>required-log-markers: preserve `[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]` for the authoritative enqueue path.</field-3>
+        <field-4>follow-up-checks: wave follow-up is queue smoke against Redis; phase follow-up is cancel and outage behavior once jobs and events are wired.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>Transport retry is not business retry. Retry-as-new-job stays API-owned.</note-1>
+        <note-2>Queue payloads should be stable enough for workers but intentionally too small to become an alternate source of truth.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-API-JOBS-wave-2" module="M-API-JOBS" phase="Phase-2" step="3" verification-ref="V-M-API-JOBS">
+      <module-id>M-API-JOBS</module-id>
+      <module-name>ApiJobs</module-name>
+      <purpose>Centralize Phase-2 business invariants so create, child reuse, cancel, retry, and lineage logic stay in one authoritative control-plane module.</purpose>
+      <write-scope>
+        <file-1>apps/api/internal/jobs/*.go</file-1>
+        <file-2>apps/api/internal/jobs/*_test.go</file-2>
+        <file-3>apps/api/internal/jobs/testdata/*</file-3>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Keep this step inside the jobs package and jobs-local tests only.</note-1>
+        <note-2>Do not re-implement storage schema logic, queue transport policy, or WebSocket and webhook delivery machinery inside jobs.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-API-JOBS:
+- Purpose: enforce delivery strategy, idempotency, job lineage, child reuse, cancel, retry, and terminal-state invariants.
+- Scope: root job creation, child-job creation, state transitions, version increments, retry lineage, cancel semantics, and idempotency enforcement.
+- Links: M-API-JOBS, V-M-API-JOBS, DF-001, DF-002, DF-004, DF-005, DF-006, DF-007.
+- Note: workers must never bypass this module's transition rules.
+
+PublicApiContract + RetryPolicy + CancellationPolicy + PersistentModel:
+- Create endpoints support optional Idempotency-Key; equivalent request plus same key returns the original accepted response.
+- The existing upload endpoint preserves one-file-to-one-job behavior; combined upload creates one job bound to one ordered source set.
+- Create-child behavior is stronger than idempotency: if a canonical child already exists, return it even without an idempotency key.
+- Retry is intentionally non-idempotent and creates a new row linked by `retry_of_job_id`; historical rows stay immutable.
+- Cancel may finalize queued jobs directly as canceled, or set `cancel_requested` for running jobs; terminal jobs return unchanged.
+- Persistent model rules freeze root, parent, retry, source-set, delivery, progress, and child uniqueness semantics.
+
+ImplementationOrder / Phase-2 step-3:
+- Implement job creation, child reuse, cancel, retry, and lineage rules after storage and queue primitives exist but before event and HTTP adapters close the public surface.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-API-JOBS:
+- Path: apps/api/internal/jobs
+- Depends: M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS
+- Verification ref: V-M-API-JOBS
+- Purpose: own job creation, lineage, status transitions, child-job reuse, retry, and cancel semantics.
+- Public annotations already expected in the graph:
+  - export-createJob
+  - export-transitionJob
+  - type-JobLineage
+  - type-CombinedTranscriptionJob
+
+Existing CrossLinks:
+- M-API-JOBS -> M-API-STORAGE relation="persists-through"
+- M-API-JOBS -> M-API-QUEUE relation="enqueues-through"
+- M-API-JOBS -> M-API-EVENTS relation="emits-through"
+- M-API-JOBS -> M-API-HTTP relation="served-through"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">Consume the frozen request, snapshot, error, delivery, cancel, retry, and child-create contract semantics without redefining them in the jobs package.</dependency-1>
+        <dependency-2 module="M-API-STORAGE">Use storage as the only authoritative read and write path for submissions, sources, source sets, jobs, artifacts, events, and delivery state.</dependency-2>
+        <dependency-3 module="M-API-QUEUE">Queue publishing must stay transport-only. Jobs decides if and when enqueue happens, but must not leak mutable business state into queue payloads.</dependency-3>
+        <dependency-4 module="M-API-EVENTS-next-step">Knowledge graph marks events as a dependency even though implementation order places jobs first. Keep jobs on a narrow event-emission seam and do not absorb WebSocket or webhook logic here.</dependency-4>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / V-M-API-JOBS / Gate-Phase-2:
+- Module check: go test ./... -run ApiJobs
+- Success scenario: create root and child jobs under correct lineage and delivery rules.
+- Success scenario: combined transcription create produces one job from an ordered source set without breaking per-file upload semantics.
+- Failure scenario: reject invalid transitions, malformed idempotency replays, and missing artifact prerequisites.
+- Required marker: [ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]
+- Required assertion: retry must create a new row and never mutate terminal historical rows.
+- Required assertion: combined transcription create must not fan out into one job per file.
+- Testing strategy must prove canonical child reuse, retry-as-new-row, and polling remaining authoritative for webhook-configured jobs.
+- Module readiness target: ready-after-state-transition-tests.
+- Wave follow-up: exercise cancel and retry against real workers, not only storage mocks.
+- Phase follow-up: cross-check child reuse and retry lineage in UI and Telegram flows.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>go test ./... -run ApiJobs</command-1>
+        <command-2>State-transition and lineage checks covering idempotent create, canonical child reuse, cancel, retry, and required-artifact validation.</command-2>
+        <evidence-1>Retry creates a new lineage-linked row, never mutates historical rows, and does not copy artifacts or job events forward.</evidence-1>
+        <evidence-2>Create-child requests reuse canonical children unless explicit retry is invoked, and combined transcription create preserves one-job semantics over ordered inputs.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, and the narrowest possible event-emission seam needed for the next M-API-EVENTS integration step.</field-1>
+        <field-2>exports: confirm stable create, transition, cancel, retry, and child-job entrypoints that M-API-HTTP will route to.</field-2>
+        <field-3>annotations: refine only job orchestration functions and types that become stable public module surface.</field-3>
+        <field-4>CrossLinks: preserve the existing jobs-to-storage, jobs-to-queue, jobs-to-events, and jobs-to-http model; add nothing broader unless code makes a new public dependency explicit.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add lineage, idempotency, child reuse, cancel, retry, and transition tests under `apps/api/internal/jobs/*_test.go`.</field-1>
+        <field-2>module-checks: preserve `go test ./... -run ApiJobs` and record any focused state-transition command added during implementation.</field-2>
+        <field-3>required-log-markers: preserve `[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]` for the authoritative transition path.</field-3>
+        <field-4>follow-up-checks: wave follow-up is real worker integration; phase follow-up is cross-adapter lineage verification after Phase-5 adapters exist.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>Create-child semantics are stronger than idempotency and should not be reinterpreted as "always create new."</note-1>
+        <note-2>Workers, adapters, and HTTP handlers must route through jobs rather than mutating job rows directly.</note-2>
+        <note-3>Do not implement retry by mutating a finished job row.</note-3>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-API-EVENTS-wave-2" module="M-API-EVENTS" phase="Phase-2" step="4" verification-ref="V-M-API-EVENTS">
+      <module-id>M-API-EVENTS</module-id>
+      <module-name>ApiEvents</module-name>
+      <purpose>Make versioned job events durable and fanout-capable without turning WebSocket or webhook into a stronger source of truth than polling.</purpose>
+      <write-scope>
+        <file-1>apps/api/internal/ws/*.go</file-1>
+        <file-2>apps/api/internal/ws/*_test.go</file-2>
+        <file-3>apps/api/internal/ws/testdata/*</file-3>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Keep this step in event persistence, WebSocket fanout, webhook scheduling, and events-local tests only.</note-1>
+        <note-2>Do not create an alternate read model or route orchestration logic here.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-API-EVENTS:
+- Purpose: emit authoritative job events to job timelines, WebSocket clients, and webhook deliveries.
+- Scope: versioned event persistence, WebSocket fanout, webhook scheduling, and reconnect-safe event semantics.
+- Links: M-API-EVENTS, V-M-API-EVENTS, DF-003.
+- Note: WebSocket is a low-latency UI channel; polling remains the correctness path.
+
+PersistentModel + WebSocketContract + PublicApiContract webhook delivery:
+- `job_events` is append-only, one row per job version.
+- `webhook_deliveries` persists bounded retry state across API restarts and references `job_events`, not mutable job rows.
+- Webhook delivery is best-effort with bounded retry and durable state.
+- WebSocket clients must reconcile with REST on reconnect or version gap; polling remains authoritative.
+
+ImplementationOrder / Phase-2 step-4:
+- Implement job events, WebSocket fanout, and persisted webhook delivery scheduling after the jobs module owns authoritative transitions.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-API-EVENTS:
+- Path: apps/api/internal/ws
+- Depends: M-CONTRACTS, M-API-STORAGE
+- Verification ref: V-M-API-EVENTS
+- Purpose: emit timeline, WebSocket, and webhook events from authoritative job transitions.
+- Public annotations already expected in the graph:
+  - export-broadcastEvent
+  - export-scheduleWebhook
+  - type-JobEventEnvelope
+
+Existing CrossLinks:
+- M-API-JOBS -> M-API-EVENTS relation="emits-through"
+- M-API-EVENTS -> M-API-JOBS relation="observes-transitions-from"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">Consume the canonical WebSocket event envelope, webhook fields, delivery semantics, and polling-truth rule without redefining them inside the events module.</dependency-1>
+        <dependency-2 module="M-API-STORAGE">Persist append-only event rows and durable webhook-delivery rows through the authoritative storage layer.</dependency-2>
+        <dependency-3 module="M-API-JOBS">Observe authoritative transitions from jobs and emit versioned events from those transitions rather than from speculative route or worker state.</dependency-3>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / V-M-API-EVENTS / Gate-Phase-2:
+- Module check: go test ./... -run ApiEvents
+- Success scenario: versioned job events emit to timeline, WebSocket, and webhook delivery persistence.
+- Failure scenario: webhook retries back off and persist state across restarts until delivered or dead.
+- Required marker: [ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]
+- Required assertion: polling must remain authoritative even when WebSocket or webhook delivery succeeds.
+- Module readiness target: caution, because webhook retry and WebSocket consistency are review-heavy until live integration checks exist.
+- Wave follow-up: simulate network failure and 5xx webhook responses.
+- Phase follow-up: verify UI reconnect behavior after forced WebSocket disconnect.
+- Phase gate evidence: WebSocket and webhook delivery persistence are wired from versioned events before Phase-2 closes.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>go test ./... -run ApiEvents</command-1>
+        <command-2>Webhook retry and WebSocket reconnect simulations covering network failure, timeout, 5xx, and version-gap recovery.</command-2>
+        <evidence-1>One job version maps to one persisted event row, and webhook delivery state survives API restarts.</evidence-1>
+        <evidence-2>WebSocket fast-path behavior never suppresses the need for REST reconciliation on reconnect or version gaps.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: M-CONTRACTS and M-API-STORAGE, plus the narrow jobs-facing event trigger surface actually needed in code.</field-1>
+        <field-2>exports: confirm stable broadcast and webhook scheduling entrypoints plus the public event-envelope type.</field-2>
+        <field-3>annotations: refine only event-emission and webhook-delivery annotations that become public module surface.</field-3>
+        <field-4>CrossLinks: preserve the existing jobs and events relationship; add no new public links unless HTTP or another module directly consumes events through a stable public contract.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add timeline, WebSocket, webhook retry, and restart-survival tests under `apps/api/internal/ws/*_test.go`.</field-1>
+        <field-2>module-checks: preserve `go test ./... -run ApiEvents` and record the concrete webhook-failure and reconnect smoke commands chosen by implementation.</field-2>
+        <field-3>required-log-markers: preserve `[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]` for the event emission path.</field-3>
+        <field-4>follow-up-checks: wave follow-up is simulated delivery failure; phase follow-up is UI reconnect verification and broader Phase-2 integration.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>Webhook deliveries reference immutable event rows rather than mutable job rows.</note-1>
+        <note-2>Do not let WebSocket become a hidden authoritative read model.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-API-HTTP-wave-2" module="M-API-HTTP" phase="Phase-2" step="5" verification-ref="V-M-API-HTTP">
+      <module-id>M-API-HTTP</module-id>
+      <module-name>ApiHttp</module-name>
+      <purpose>Bind the frozen public and internal HTTP surface to the completed Phase-2 control-plane modules without moving business logic out of jobs, storage, queue, or events.</purpose>
+      <write-scope>
+        <file-1>apps/api/internal/api/*.go</file-1>
+        <file-2>apps/api/internal/api/*_test.go</file-2>
+        <file-3>apps/api/internal/api/testdata/*</file-3>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Keep this step in HTTP handlers, request shaping, WebSocket session entry, and API-local tests only.</note-1>
+        <note-2>Do not move orchestration, persistence, queue, or event logic into the route layer.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-API-HTTP:
+- Purpose: expose public and internal HTTP routes that bind incoming requests to API job orchestration logic.
+- Scope: multipart upload handling, JSON request validation, route binding, error envelopes, and WebSocket session entry.
+- Links: M-API-HTTP, V-M-API-HTTP, DF-001, DF-002, DF-003, DF-004, DF-005, DF-006, DF-007.
+- Note: public routes and internal worker routes should remain explicit rather than merged by convention.
+
+PublicApiContract + InternalWorkerContract + ExecutionRules:
+- Public routes cover per-file multipart upload, combined multipart upload, URL create, get, list, report child create, deep-research child create, cancel, retry, artifact resolve, and events.
+- Internal worker routes cover claim, progress, artifacts, finalize, and cancel-check.
+- Create endpoints support optional Idempotency-Key, delivery strategy, webhook URL validation, and a recommended 1 GiB request limit.
+- Error envelopes use stable `error.code`, `error.message`, and `error.details`.
+- Do not merge public client routes with internal worker-control routes, and do not treat WebSocket as the only status mechanism.
+
+ImplementationOrder / Phase-2 step-5:
+- Expose public and internal worker routes only after storage, queue, jobs, and events surfaces are already in place.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-API-HTTP:
+- Path: apps/api/internal/api
+- Depends: M-CONTRACTS, M-API-JOBS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS
+- Verification ref: V-M-API-HTTP
+- Purpose: expose create, list, get, cancel, retry, artifact, event, and internal worker endpoints for the control plane.
+- Public annotations already expected in the graph:
+  - export-registerRoutes
+  - export-validateRequest
+
+Existing CrossLinks:
+- M-CONTRACTS -> M-API-HTTP relation="defines-public-contracts-for"
+- M-API-HTTP -> M-CONTRACTS relation="depends-on-contracts-from"
+- M-API-HTTP -> M-API-JOBS relation="routes-to"
+- M-API-HTTP -> M-WORKER-TRANSCRIPTION relation="provides-internal-control-plane-to"
+- M-API-HTTP -> M-WORKER-REPORT relation="provides-internal-control-plane-to"
+- M-API-HTTP -> M-WORKER-DEEP-RESEARCH relation="provides-internal-control-plane-to"
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">HTTP must shape requests and responses exactly to the frozen public and internal contract surface, including multipart rules, webhook validation, event envelopes, and error codes.</dependency-1>
+        <dependency-2 module="M-API-JOBS">Route handlers delegate all business orchestration, lineage, cancel, retry, and child-create rules to jobs.</dependency-2>
+        <dependency-3 module="M-API-STORAGE">Artifact resolution and job inspection rely on storage-backed authoritative state and presigned-link semantics.</dependency-3>
+        <dependency-4 module="M-API-EVENTS">WebSocket session entry and event timeline routes rely on the versioned events module while preserving polling as the truth path.</dependency-4>
+        <dependency-5 module="M-API-QUEUE-graph-edge">Knowledge graph includes queue in the HTTP dependency set. Keep any queue awareness indirect through jobs and do not create direct Redis-facing route logic.</dependency-5>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / V-M-API-HTTP / Gate-Phase-2:
+- Module check: go test ./... -run ApiHttp
+- Success scenario: public endpoints shape accepted requests and responses according to the canonical contract, including the separate combined upload route.
+- Failure scenario: invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.
+- Required marker: [ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]
+- Required assertion: internal worker endpoints must not be confused with public client endpoints.
+- Wave follow-up: run API handler tests with real multipart and JSON fixtures for both per-file and combined upload routes.
+- Phase follow-up: full route regression against generated SDKs and manual curl smoke checks.
+- Phase gate evidence: core routes return canonical envelopes, and the full Go control plane can create, persist, enqueue, and inspect jobs using contract-compliant routes.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>go test ./... -run ApiHttp</command-1>
+        <command-2>Route-level per-file multipart, combined multipart, JSON, WebSocket, and internal worker fixture checks plus targeted manual curl smoke coverage.</command-2>
+        <evidence-1>Public route outputs match the canonical job, artifact, event, and error envelopes from M-CONTRACTS.</evidence-1>
+        <evidence-2>Internal worker-control routes stay explicit and do not leak into the public client surface.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: M-CONTRACTS, M-API-JOBS, M-API-STORAGE, and M-API-EVENTS, with any queue awareness remaining indirect through jobs unless code proves otherwise.</field-1>
+        <field-2>exports: confirm stable route registration, request validation, and WebSocket entrypoints that become public module surface.</field-2>
+        <field-3>annotations: refine only route-layer exports that stay stable and do not absorb business logic ownership.</field-3>
+        <field-4>CrossLinks: preserve the current contract, jobs, and worker-facing route graph; add no broader ownership links from HTTP to storage, queue, or events unless real public code requires them.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add multipart, JSON, error-envelope, event-route, WebSocket, and internal worker route tests under `apps/api/internal/api/*_test.go`.</field-1>
+        <field-2>module-checks: preserve `go test ./... -run ApiHttp` and record any fixture-driven handler or curl smoke command added by the implementation.</field-2>
+        <field-3>required-log-markers: preserve `[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]` for the route validation path.</field-3>
+        <field-4>follow-up-checks: wave follow-up is real multipart plus JSON handler coverage; phase follow-up is broader route regression and SDK or manual consumer smoke checks.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>HTTP binds contracts to modules; it does not become the place where business rules live.</note-1>
+        <note-2>Keep public and internal worker routes explicit and independently testable.</note-2>
+      </notes>
+    </ExecutionPacket>
+  </ProjectExecutionPackets>
+
+  <ProjectFailurePackets>
+    <FailurePacket packet-id="M-CONTRACTS-wave-1-webhook-validation-drift" module="M-CONTRACTS" verification-ref="V-M-CONTRACTS">
+      <scenario>Webhook create requests accept `delivery.strategy=webhook` without requiring `delivery.webhook.url`, or return a different job snapshot envelope than polling create flows.</scenario>
+      <contract-ref>M-CONTRACTS / V-M-CONTRACTS / TestingStrategy/ContractTests / DF-001 / DF-003 / DF-007</contract-ref>
+      <expected-evidence>
+        <marker-1>[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]</marker-1>
+        <assertion-1>All create flows default or validate `delivery` consistently and return the same canonical `job` or `jobs` snapshot shape after normalization.</assertion-1>
+        <assertion-2>`POST /v1/jobs/{job_id}/retry` stays non-idempotent and is not merged into create-idempotency rules.</assertion-2>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE] emitted before schema comparison failed</log-1>
+        <trace-1>create-transcription-upload schema accepted `delivery_strategy=webhook` with no webhook URL</trace-1>
+        <trace-2>Webhook or WebSocket envelope drifted away from the canonical job snapshot or delivery shape</trace-2>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_VALIDATE_CONTRACT_SURFACE</first-divergent-block>
+      <suggested-next-action>Inspect the shared delivery, job snapshot, and event-envelope schemas first, then re-compose route-specific schemas from those shared definitions instead of duplicating branches.</suggested-next-action>
+    </FailurePacket>
+
+    <FailurePacket packet-id="M-API-STORAGE-wave-2-artifact-persistence-order-drift" module="M-API-STORAGE" verification-ref="V-M-API-STORAGE">
+      <scenario>Storage writes artifact or delivery rows even though MinIO persistence failed, or Phase-2 tables and constraints do not match the frozen PersistentModel.</scenario>
+      <contract-ref>M-API-STORAGE / V-M-API-STORAGE / PersistentModel / StorageContract / Gate-Phase-2</contract-ref>
+      <expected-evidence>
+        <marker-1>[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]</marker-1>
+        <assertion-1>Artifact rows are created only after object upload succeeds.</assertion-1>
+        <assertion-2>`job_submissions`, `job_events`, and `webhook_deliveries` exist with the required uniqueness and retry-state constraints.</assertion-2>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT] emitted before object-store confirmation or migration failure</log-1>
+        <trace-1>Database row was inserted while MinIO upload or presigned-link resolution failed</trace-1>
+        <trace-2>Migration smoke check showed missing Phase-2 tables or constraint drift</trace-2>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_PERSIST_JOB_AND_ARTIFACT</first-divergent-block>
+      <suggested-next-action>Check migration order and object-store transaction boundaries first; restore storage-authoritative sequencing before inspecting downstream jobs or HTTP behavior.</suggested-next-action>
+    </FailurePacket>
+
+    <FailurePacket packet-id="M-API-QUEUE-wave-2-payload-retry-drift" module="M-API-QUEUE" verification-ref="V-M-API-QUEUE">
+      <scenario>Queue payloads start carrying mutable job metadata, or deterministic business failures retry indefinitely instead of using SkipRetry.</scenario>
+      <contract-ref>M-API-QUEUE / V-M-API-QUEUE / QueueContract / DF-004 / DF-005 / DF-006</contract-ref>
+      <expected-evidence>
+        <marker-1>[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]</marker-1>
+        <assertion-1>Queue payload contains only `job_id` plus attempt metadata.</assertion-1>
+        <assertion-2>Terminal claim rejection, authoritative cancel, missing required artifacts, invalid request data, and terminal model failures use SkipRetry.</assertion-2>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB] emitted before queue test failed</log-1>
+        <trace-1>Task payload serialized mutable job snapshots or delivery metadata</trace-1>
+        <trace-2>Deterministic business error looped through transport retries instead of terminating</trace-2>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_ENQUEUE_JOB</first-divergent-block>
+      <suggested-next-action>Reduce the payload back to canonical task identity fields and re-check QueueContract ownership rules before touching job orchestration logic.</suggested-next-action>
+    </FailurePacket>
+
+    <FailurePacket packet-id="M-API-JOBS-wave-2-lineage-transition-drift" module="M-API-JOBS" verification-ref="V-M-API-JOBS">
+      <scenario>Retry mutates a historical row, canonical child reuse is lost, or cancel and idempotency rules diverge from the frozen PublicApiContract.</scenario>
+      <contract-ref>M-API-JOBS / V-M-API-JOBS / PublicApiContract / RetryPolicy / CancellationPolicy / DF-001 / DF-002 / DF-006 / DF-007</contract-ref>
+      <expected-evidence>
+        <marker-1>[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</marker-1>
+        <assertion-1>Retry creates a new lineage-linked row and does not copy artifacts or events from the source row.</assertion-1>
+        <assertion-2>Create-child requests reuse the canonical child unless explicit retry is requested.</assertion-2>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB] emitted before state assertion failed</log-1>
+        <trace-1>Retry updated a terminal row in place or mutated historical artifacts</trace-1>
+        <trace-2>Repeated report or deep-research create request spawned a sibling instead of returning the canonical child</trace-2>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_VALIDATE_AND_TRANSITION_JOB</first-divergent-block>
+      <suggested-next-action>Inspect jobs-level lineage and child-reuse rules first, then confirm storage and queue are still being treated as dependencies rather than sources of business semantics.</suggested-next-action>
+    </FailurePacket>
+
+    <FailurePacket packet-id="M-API-EVENTS-wave-2-polling-authority-drift" module="M-API-EVENTS" verification-ref="V-M-API-EVENTS">
+      <scenario>Webhook delivery state is not durable across restarts, or WebSocket behavior becomes an authoritative state path instead of a low-latency delivery layer.</scenario>
+      <contract-ref>M-API-EVENTS / V-M-API-EVENTS / WebSocketContract / WebhookDeliveryContract / Gate-Phase-2</contract-ref>
+      <expected-evidence>
+        <marker-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</marker-1>
+        <assertion-1>One persisted job event maps to one versioned event emission.</assertion-1>
+        <assertion-2>Polling remains authoritative even when WebSocket or webhook delivery succeeds.</assertion-2>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT] emitted before event-delivery assertion failed</log-1>
+        <trace-1>Webhook retry state disappeared after restart or retried with non-bounded semantics</trace-1>
+        <trace-2>WebSocket reconnect path reused stale client state without REST reconciliation</trace-2>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_EMIT_VERSIONED_EVENT</first-divergent-block>
+      <suggested-next-action>Check append-only event persistence and durable webhook-delivery bookkeeping before touching UI consumers; then restore the polling-truth rule in the event layer.</suggested-next-action>
+    </FailurePacket>
+
+    <FailurePacket packet-id="M-API-HTTP-wave-2-route-boundary-drift" module="M-API-HTTP" verification-ref="V-M-API-HTTP">
+      <scenario>Public and internal worker routes are conflated, or request-validation failures stop returning the canonical contract envelopes.</scenario>
+      <contract-ref>M-API-HTTP / V-M-API-HTTP / PublicApiContract / InternalWorkerContract / Gate-Phase-2</contract-ref>
+      <expected-evidence>
+        <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
+        <assertion-1>Invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.</assertion-1>
+        <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check routes remain explicit and separate from public client endpoints.</assertion-2>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE] emitted before handler assertion failed</log-1>
+        <trace-1>Missing webhook URL or multipart validation error returned a non-canonical envelope</trace-1>
+        <trace-2>Public router exposed internal worker-control paths by convention or reused public request validation in the wrong direction</trace-2>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE</first-divergent-block>
+      <suggested-next-action>Restore route-layer separation first, then validate request and response shaping strictly against the frozen M-CONTRACTS surface before inspecting downstream module behavior.</suggested-next-action>
+    </FailurePacket>
+  </ProjectFailurePackets>
+</OperationalPackets>

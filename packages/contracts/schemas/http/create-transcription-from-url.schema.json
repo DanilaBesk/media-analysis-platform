@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-transcription-from-url.schema.json",
+  "title": "CreateTranscriptionFromUrlRequest",
+  "type": "object",
+  "required": [
+    "source_kind",
+    "url"
+  ],
+  "properties": {
+    "source_kind": {
+      "const": "youtube_url"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://(www\\.|m\\.)?(youtube\\.com|youtu\\.be)/"
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "client_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "delivery": {
+      "$ref": "./create-transcription-upload.schema.json#/$defs/deliveryRequest"
+    }
+  },
+  "additionalProperties": false
+}

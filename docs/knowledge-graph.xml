@@ -1,0 +1,201 @@
+<KnowledgeGraph>
+  <Project NAME="telegram-transcriber-bot" VERSION="0.3.0">
+    <keywords>telegram, transcription, whisper, faster-whisper, reports, deep research, go api, python workers, react ui, mcp, minio, postgres, redis, asynq, polling, webhook, docker compose</keywords>
+    <annotation>GRACE baseline for migrating the current Telegram transcription bot into a local-first monorepo platform with one Go control plane and multiple thin adapters.</annotation>
+
+    <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" STATUS="implemented">
+      <purpose>Own shared OpenAPI, JSON schema, webhook, WebSocket, and enum contracts that every runtime surface depends on.</purpose>
+      <path>packages/contracts</path>
+      <depends>none</depends>
+      <verification-ref>V-M-CONTRACTS</verification-ref>
+      <annotations>
+        <export-openapi PURPOSE="Canonical HTTP contract definitions for clients and server." />
+        <export-validationSchemas PURPOSE="Canonical JSON schema surface for HTTP, WebSocket, webhook, and internal worker DTO validation." />
+        <export-websocket-schema PURPOSE="Canonical event envelope for UI live updates." />
+        <export-webhook-schema PURPOSE="Canonical outbound callback envelope and delivery rules." />
+        <type-JobSnapshot PURPOSE="Canonical job read model including lineage, artifacts, and children." />
+        <type-DeliveryStrategy PURPOSE="Per-job delivery choice: polling or webhook." />
+        <type-ArtifactResolution PURPOSE="Artifact metadata plus presigned MinIO download link." />
+        <type-WorkerFinalizeRequest PURPOSE="Canonical worker finalization DTO used by all Python workers." />
+        <type-SourceSet PURPOSE="Ordered input set backing one transcription job." />
+      </annotations>
+    </M-CONTRACTS>
+
+    <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="planned">
+      <purpose>Expose create, list, get, cancel, retry, artifact, event, and internal worker endpoints for the control plane.</purpose>
+      <path>apps/api/internal/api</path>
+      <depends>M-CONTRACTS, M-API-JOBS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
+      <verification-ref>V-M-API-HTTP</verification-ref>
+      <annotations>
+        <export-registerRoutes PURPOSE="Bind public and internal HTTP routes." />
+        <export-validateRequest PURPOSE="Apply request validation and idempotency rules." />
+      </annotations>
+    </M-API-HTTP>
+
+    <M-API-JOBS NAME="ApiJobs" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Own job creation, lineage, status transitions, child-job reuse, retry, and cancel semantics.</purpose>
+      <path>apps/api/internal/jobs</path>
+      <depends>M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
+      <verification-ref>V-M-API-JOBS</verification-ref>
+      <annotations>
+        <export-createJob PURPOSE="Create root and child jobs under validated business rules." />
+        <export-transitionJob PURPOSE="Enforce allowed lifecycle transitions and version increments." />
+        <type-JobLineage PURPOSE="Root, parent, and retry relationships preserved across all job types." />
+        <type-CombinedTranscriptionJob PURPOSE="One transcription job bound to an ordered multi-source input set." />
+      </annotations>
+    </M-API-JOBS>
+
+    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="planned">
+      <purpose>Persist source metadata, jobs, artifacts, events, and webhook-delivery records while generating presigned artifact links.</purpose>
+      <path>apps/api/internal/storage</path>
+      <depends>M-CONTRACTS</depends>
+      <verification-ref>V-M-API-STORAGE</verification-ref>
+      <annotations>
+        <export-persistSource PURPOSE="Write source metadata and MinIO object references." />
+        <export-resolveArtifact PURPOSE="Return artifact metadata plus presigned URL." />
+        <type-JobSubmission PURPOSE="Idempotent create-request persistence including multi-file upload normalization." />
+        <type-WebhookDelivery PURPOSE="Durable webhook retry state across API restarts." />
+        <type-SourceSetRecord PURPOSE="Persistent ordered source set reused by single-file and combined transcription jobs." />
+      </annotations>
+    </M-API-STORAGE>
+
+    <M-API-QUEUE NAME="ApiQueue" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Bridge job creation and background execution through asynq queues and retry policies.</purpose>
+      <path>apps/api/internal/queue</path>
+      <depends>M-CONTRACTS, M-API-JOBS</depends>
+      <verification-ref>V-M-API-QUEUE</verification-ref>
+      <annotations>
+        <export-enqueueJob PURPOSE="Publish typed asynq tasks for each job type." />
+      </annotations>
+    </M-API-QUEUE>
+
+    <M-API-EVENTS NAME="ApiEvents" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Emit timeline, WebSocket, and webhook events from authoritative job transitions.</purpose>
+      <path>apps/api/internal/ws</path>
+      <depends>M-CONTRACTS, M-API-STORAGE</depends>
+      <verification-ref>V-M-API-EVENTS</verification-ref>
+      <annotations>
+        <export-broadcastEvent PURPOSE="Publish WebSocket updates to connected clients." />
+        <export-scheduleWebhook PURPOSE="Persist and dispatch webhook deliveries with bounded retry." />
+        <type-JobEventEnvelope PURPOSE="Versioned event model shared across timeline, WebSocket, and webhook." />
+      </annotations>
+    </M-API-EVENTS>
+
+    <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" STATUS="planned">
+      <purpose>Host shared Python execution utilities reused by transcription, report, and deep-research workers.</purpose>
+      <path>workers/common</path>
+      <depends>M-CONTRACTS</depends>
+      <verification-ref>V-M-WORKER-COMMON</verification-ref>
+      <annotations>
+        <export-apiClient PURPOSE="Call internal worker-control endpoints consistently." />
+        <export-artifactWriters PURPOSE="Write worker outputs to MinIO and return metadata payloads." />
+      </annotations>
+    </M-WORKER-COMMON>
+
+    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Execute transcription jobs by reusing existing source materialization, faster-whisper, and transcript rendering logic.</purpose>
+      <path>workers/transcription</path>
+      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
+      <verification-ref>V-M-WORKER-TRANSCRIPTION</verification-ref>
+      <annotations>
+        <export-runTranscription PURPOSE="Claim, execute, emit progress, persist artifacts, and finalize transcription jobs." />
+        <type-OrderedWorkerInput PURPOSE="Ordered transcription inputs resolved by the internal claim surface." />
+      </annotations>
+    </M-WORKER-TRANSCRIPTION>
+
+    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Execute report jobs using `cglm` and report artifact rendering while preserving current report behavior.</purpose>
+      <path>workers/report</path>
+      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
+      <verification-ref>V-M-WORKER-REPORT</verification-ref>
+      <annotations>
+        <export-runReport PURPOSE="Generate markdown and DOCX reports from transcript artifacts." />
+      </annotations>
+    </M-WORKER-REPORT>
+
+    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" STATUS="planned">
+      <purpose>Execute deep-research jobs by reusing the current evidence-driven multi-phase pipeline.</purpose>
+      <path>workers/deep-research</path>
+      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
+      <verification-ref>V-M-WORKER-DEEP-RESEARCH</verification-ref>
+      <annotations>
+        <export-runDeepResearch PURPOSE="Run the deep-research pipeline and persist the final markdown artifact." />
+      </annotations>
+    </M-WORKER-DEEP-RESEARCH>
+
+    <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" STATUS="planned">
+      <purpose>Provide local file/url submission, monitoring, artifact download, and late-wave admin operations.</purpose>
+      <path>apps/web</path>
+      <depends>M-CONTRACTS, M-API-HTTP, M-API-EVENTS</depends>
+      <verification-ref>V-M-WEB-UI</verification-ref>
+      <annotations>
+        <export-jobsPage PURPOSE="List and filter jobs." />
+        <export-jobDetailsPage PURPOSE="Show status, lineage, artifacts, and admin actions." />
+      </annotations>
+    </M-WEB-UI>
+
+    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Act as a thin Telegram transport client over the HTTP API while preserving current user-visible bot flows.</purpose>
+      <path>apps/telegram-bot</path>
+      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <verification-ref>V-M-TELEGRAM-ADAPTER</verification-ref>
+      <annotations>
+        <export-handleIncomingMedia PURPOSE="Download Telegram media temporarily and submit it to the API." />
+        <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, and segmented-artifact actions." />
+        <export-submitCombinedMedia PURPOSE="Submit Telegram media groups or buffered sequential media as one combined transcription job." />
+      </annotations>
+    </M-TELEGRAM-ADAPTER>
+
+    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Expose the same platform capabilities to MCP consumers through a thin adapter over the HTTP API.</purpose>
+      <path>apps/mcp-server</path>
+      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <verification-ref>V-M-MCP-ADAPTER</verification-ref>
+      <annotations>
+        <export-createTranscriptionJob PURPOSE="Create transcription jobs through the MCP surface." />
+        <export-inspectJob PURPOSE="Read jobs, artifacts, and child-job results." />
+      </annotations>
+    </M-MCP-ADAPTER>
+
+    <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" STATUS="planned">
+      <purpose>Define and bootstrap the local runtime topology for API, workers, adapters, and storage dependencies.</purpose>
+      <path>infra/docker-compose.yml</path>
+      <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
+      <verification-ref>V-M-INFRA-COMPOSE</verification-ref>
+      <annotations>
+        <export-composeStack PURPOSE="Bring up the full local stack with deterministic service boundaries." />
+      </annotations>
+    </M-INFRA-COMPOSE>
+
+    <CrossLink from="M-CONTRACTS" to="M-API-HTTP" relation="defines-public-contracts-for" />
+    <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="depends-on-contracts-from" />
+    <CrossLink from="M-API-HTTP" to="M-API-JOBS" relation="routes-to" />
+    <CrossLink from="M-API-JOBS" to="M-API-HTTP" relation="served-through" />
+    <CrossLink from="M-API-JOBS" to="M-API-STORAGE" relation="persists-through" />
+    <CrossLink from="M-API-STORAGE" to="M-API-JOBS" relation="stores-state-for" />
+    <CrossLink from="M-API-JOBS" to="M-API-QUEUE" relation="enqueues-through" />
+    <CrossLink from="M-API-QUEUE" to="M-API-JOBS" relation="accepts-work-from" />
+    <CrossLink from="M-API-JOBS" to="M-API-EVENTS" relation="emits-through" />
+    <CrossLink from="M-API-EVENTS" to="M-API-JOBS" relation="observes-transitions-from" />
+    <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-API-HTTP" relation="claims-and-finalizes-through" />
+    <CrossLink from="M-API-HTTP" to="M-WORKER-TRANSCRIPTION" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WORKER-REPORT" to="M-API-HTTP" relation="claims-and-finalizes-through" />
+    <CrossLink from="M-API-HTTP" to="M-WORKER-REPORT" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-API-HTTP" relation="claims-and-finalizes-through" />
+    <CrossLink from="M-API-HTTP" to="M-WORKER-DEEP-RESEARCH" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WEB-UI" to="M-API-HTTP" relation="consumes" />
+    <CrossLink from="M-API-HTTP" to="M-WEB-UI" relation="serves-data-to" />
+    <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="consumes" />
+    <CrossLink from="M-API-HTTP" to="M-TELEGRAM-ADAPTER" relation="serves-data-to" />
+    <CrossLink from="M-MCP-ADAPTER" to="M-API-HTTP" relation="consumes" />
+    <CrossLink from="M-API-HTTP" to="M-MCP-ADAPTER" relation="serves-data-to" />
+    <CrossLink from="M-INFRA-COMPOSE" to="M-API-HTTP" relation="runs" />
+    <CrossLink from="M-API-HTTP" to="M-INFRA-COMPOSE" relation="deployed-by" />
+    <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-TRANSCRIPTION" relation="runs" />
+    <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-INFRA-COMPOSE" relation="deployed-by" />
+    <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-REPORT" relation="runs" />
+    <CrossLink from="M-WORKER-REPORT" to="M-INFRA-COMPOSE" relation="deployed-by" />
+    <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-DEEP-RESEARCH" relation="runs" />
+    <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-INFRA-COMPOSE" relation="deployed-by" />
+  </Project>
+</KnowledgeGraph>

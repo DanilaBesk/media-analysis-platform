@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/job-control.schema.json",
+  "title": "JobAcceptedEnvelope",
+  "type": "object",
+  "required": [
+    "job"
+  ],
+  "properties": {
+    "job": {
+      "$ref": "../common/job-snapshot.schema.json"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "jobListResponse": {
+      "type": "object",
+      "required": [
+        "items",
+        "page",
+        "page_size"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "../common/job-snapshot.schema.json"
+          }
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "next_page": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "jobEventListResponse": {
+      "type": "object",
+      "required": [
+        "items"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "../ws/job-event.schema.json"
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,287 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/internal/worker-control.schema.json",
+  "title": "WorkerControl",
+  "$defs": {
+    "claimRequest": {
+      "type": "object",
+      "required": [
+        "worker_kind",
+        "task_type"
+      ],
+      "properties": {
+        "worker_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/workerKind"
+        },
+        "task_type": {
+          "$ref": "../common/enums.schema.json#/$defs/taskType"
+        }
+      },
+      "additionalProperties": false
+    },
+    "claimResponse": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "job_id",
+        "root_job_id",
+        "job_type",
+        "version",
+        "ordered_inputs",
+        "params"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "job_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "root_job_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "parent_job_id": {
+          "oneOf": [
+            {
+              "$ref": "../common/enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_of_job_id": {
+          "oneOf": [
+            {
+              "$ref": "../common/enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_type": {
+          "$ref": "../common/enums.schema.json#/$defs/jobType"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ordered_inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/orderedWorkerInput"
+          }
+        },
+        "params": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "orderedWorkerInput": {
+      "type": "object",
+      "required": [
+        "position",
+        "source_id",
+        "source_kind"
+      ],
+      "properties": {
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "source_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/sourceKind"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "original_filename": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "object_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "progressRequest": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "progress_stage"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "progress_stage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "progress_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactDescriptor": {
+      "type": "object",
+      "required": [
+        "artifact_kind",
+        "filename",
+        "mime_type",
+        "object_key",
+        "size_bytes"
+      ],
+      "properties": {
+        "artifact_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactKind"
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mime_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "object_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactUpsertRequest": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "artifacts"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/artifactDescriptor"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "finalizeRequest": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "outcome"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "outcome": {
+          "$ref": "../common/enums.schema.json#/$defs/workerOutcome"
+        },
+        "progress_stage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "progress_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "cancelCheckResponse": {
+      "type": "object",
+      "required": [
+        "cancel_requested",
+        "status"
+      ],
+      "properties": {
+        "cancel_requested": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/jobStatus"
+        },
+        "cancel_requested_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

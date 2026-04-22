@@ -1,0 +1,696 @@
+<VerificationPlan VERSION="0.3.0">
+  <GlobalPolicy>
+    <log-format>[Module][function][BLOCK_NAME] message</log-format>
+    <deterministic-first>true</deterministic-first>
+    <module-level-focus>Fast deterministic checks close to the module, especially for contract validation, state transitions, and artifact rules.</module-level-focus>
+    <wave-level-focus>Checks only merged surfaces touched by the current wave: API plus worker, or API plus adapter, or compose plus service health.</wave-level-focus>
+    <phase-level-focus>Cross-stack regression confidence across Go API, Python workers, adapters, and local runtime topology.</phase-level-focus>
+    <required-structured-fields>jobId, rootJobId, sourceId, workerKind, attemptNo, deliveryStrategy</required-structured-fields>
+    <trace-policy>Prefer ordered block markers and stable event fields over prose-heavy log assertions.</trace-policy>
+    <semantic-verification-policy>Use semantic evaluation only when deterministic equality or ordered trace assertions cannot express correctness safely.</semantic-verification-policy>
+    <polling-truth-rule>Polling remains the authoritative read path even when WebSocket or webhook delivery succeeds.</polling-truth-rule>
+    <redaction>Never log secrets, raw bot tokens, presigned URLs, or large prompt payloads.</redaction>
+  </GlobalPolicy>
+
+  <PreservationMap>
+    <section original="25.1 Contract Tests" target="VerificationPlan/TestingStrategy/ContractTests" note="OpenAPI, JSON schema, and SDK compatibility expectations are preserved." />
+    <section original="25.2 API Integration Tests" target="VerificationPlan/TestingStrategy/ApiIntegrationTests" note="Create, read, child-job, cancel, retry, artifact, idempotency, and webhook tests are preserved." />
+    <section original="25.3 Worker Integration Tests" target="VerificationPlan/TestingStrategy/WorkerIntegrationTests" note="Transcription, report, and deep-research worker integration expectations are preserved." />
+    <section original="25.4 UI Tests" target="VerificationPlan/TestingStrategy/WebUiTests" note="Web UI submission, monitoring, artifact, and late-wave admin checks are preserved." />
+    <section original="25.5 Telegram Bot Tests" target="VerificationPlan/TestingStrategy/TelegramBotTests" note="Thin-adapter Telegram regression checks are preserved." />
+    <section original="25.6 MCP Tests" target="VerificationPlan/TestingStrategy/McpTests" note="MCP tool-to-API mapping checks are preserved." />
+  </PreservationMap>
+
+  <TestingStrategy>
+    <BaselineFreeze>
+      <purpose>Wave 0 preserves the current behavior matrix so later parity checks remain grounded in existing supported flows.</purpose>
+      <required-baseline-checks>
+        <check>Conceptual preservation of YouTube, Telegram voice or audio or video or document, media groups, plain transcript, segmented transcript, report generation, and deep research generation.</check>
+        <check>Artifact-name preservation for transcript.txt, transcript.md, transcript.docx, report.md, report.docx, and deep-research final report semantics.</check>
+        <check>Current Python tests remain the reference baseline until equivalent platform tests replace them.</check>
+      </required-baseline-checks>
+    </BaselineFreeze>
+
+    <ContractTests>
+      <required>
+        <item>OpenAPI schema validation</item>
+        <item>JSON schema tests for WebSocket events</item>
+        <item>JSON schema tests for webhook delivery envelopes</item>
+        <item>SDK compatibility tests for generated or thin clients</item>
+        <item>Validation of delivery strategy shape, webhook requirements, and idempotency request normalization</item>
+      </required>
+      <important-rules>
+        <rule>Retry endpoint is intentionally non-idempotent.</rule>
+        <rule>Create-child semantics are stronger than idempotency and must return canonical existing children when appropriate.</rule>
+      </important-rules>
+    </ContractTests>
+
+    <ApiIntegrationTests>
+      <required>
+        <item>create transcription job from multipart upload</item>
+        <item>create combined transcription job from ordered multipart upload</item>
+        <item>create transcription job from supported YouTube URL</item>
+        <item>get job</item>
+        <item>list jobs</item>
+        <item>create report job</item>
+        <item>create deep-research job</item>
+        <item>cancel</item>
+        <item>retry</item>
+        <item>artifact resolution with presigned MinIO link</item>
+        <item>idempotency behavior for create endpoints</item>
+        <item>webhook callback mode persistence and delivery</item>
+      </required>
+      <must-prove>
+        <proof>Canonical child reuse works for report and deep-research creates.</proof>
+        <proof>Retry creates a new job row and does not mutate historical rows.</proof>
+        <proof>Polling remains authoritative for webhook-configured jobs.</proof>
+        <proof>Combined upload creates one job bound to one ordered source set and yields one transcript artifact set.</proof>
+      </must-prove>
+    </ApiIntegrationTests>
+
+    <WorkerIntegrationTests>
+      <required>
+        <item>transcription worker end-to-end against MinIO, PostgreSQL, Redis, and internal claim or finalize endpoints</item>
+        <item>report worker integration with report artifact output and cglm subprocess handling</item>
+        <item>deep-research worker integration with phase output checks and final markdown persistence</item>
+      </required>
+      <must-prove>
+        <proof>Success finalization never happens before required artifacts are present and registered.</proof>
+        <proof>Cancellation is observed around expensive phases and subprocess handling.</proof>
+        <proof>SkipRetry cases are honored for deterministic business failures.</proof>
+        <proof>Combined transcription jobs preserve ordered input semantics and concatenate inputs before one final transcription pass.</proof>
+      </must-prove>
+    </WorkerIntegrationTests>
+
+    <WebUiTests>
+      <required>
+        <item>upload file</item>
+        <item>upload multiple files</item>
+        <item>create URL job</item>
+        <item>observe live transition via polling</item>
+        <item>observe live transition via WebSocket with REST reconciliation on reconnect or version gap</item>
+        <item>artifact download flow</item>
+        <item>report and deep-research triggers</item>
+        <item>cancel and retry buttons</item>
+        <item>late-wave admin delete and artifact refresh actions</item>
+      </required>
+      <must-prove>
+        <proof>UI treats polling as truth and never trusts stale WebSocket state blindly.</proof>
+        <proof>Expired artifact links can be re-resolved through the API.</proof>
+      </must-prove>
+    </WebUiTests>
+
+    <TelegramBotTests>
+      <required>
+        <item>upload flow through API mock or live API test double</item>
+        <item>combined media-group flow through combined transcription endpoint</item>
+        <item>URL flow through API mock or live API test double</item>
+        <item>button callbacks map to API child-job or artifact actions</item>
+        <item>plain transcript delivery remains first-class</item>
+        <item>segmented transcript button remains preserved</item>
+        <item>report and deep-research button behavior remain preserved</item>
+      </required>
+      <must-prove>
+        <proof>Telegram adapter no longer imports or executes the local execution core.</proof>
+        <proof>Default delivery strategy is polling in bot flows.</proof>
+        <proof>Media groups map to one combined transcription job instead of multiple unrelated jobs.</proof>
+      </must-prove>
+    </TelegramBotTests>
+
+    <McpTests>
+      <required>
+        <item>tool-to-API mapping</item>
+        <item>artifact metadata responses</item>
+        <item>error propagation without hidden business logic</item>
+      </required>
+      <must-prove>
+        <proof>MCP never requires direct DB, Redis, or MinIO access.</proof>
+      </must-prove>
+    </McpTests>
+
+    <CutoverParity>
+      <required>
+        <item>Compose-wide smoke verification passes with all required services healthy.</item>
+        <item>Functional parity against the frozen acceptance matrix is demonstrated.</item>
+        <item>The old single-process runtime path is not removed until parity evidence exists.</item>
+      </required>
+    </CutoverParity>
+  </TestingStrategy>
+
+  <CriticalFlows>
+    <VF-001 NAME="UploadedFileTranscription" USE_CASES="UC-001,UC-003" DATA_FLOW="DF-001" PRIORITY="high">
+      <scenario>User uploads one or more files and receives versioned transcription jobs plus final transcript artifacts.</scenario>
+      <expected-outcome>Each file creates exactly one job, source upload is persisted, worker produces required transcript artifacts, and polling returns a succeeded snapshot.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiJobs][createTranscriptionJobs][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
+        <log-marker>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</log-marker>
+        <trace-sequence>API_CREATE -&gt; ASYNQ_ENQUEUE -&gt; WORKER_CLAIM -&gt; WORKER_FINALIZE_SUCCEEDED</trace-sequence>
+      </required-signals>
+    </VF-001>
+
+    <VF-001B NAME="CombinedUploadedMediaTranscription" USE_CASES="UC-001B,UC-003,UC-008" DATA_FLOW="DF-007" PRIORITY="high">
+      <scenario>User uploads multiple media files as one combined transcription request and receives one succeeded job with one transcript artifact set.</scenario>
+      <expected-outcome>API persists one ordered source set, one job is enqueued, worker concatenates ordered inputs before one transcription pass, and polling returns one succeeded snapshot.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiJobs][createCombinedTranscriptionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
+        <log-marker>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</log-marker>
+        <trace-sequence>API_CREATE_COMBINED -&gt; SOURCE_SET_PERSIST -&gt; ASYNQ_ENQUEUE -&gt; WORKER_CLAIM -&gt; CONCAT_INPUTS -&gt; WORKER_FINALIZE_SUCCEEDED</trace-sequence>
+      </required-signals>
+    </VF-001B>
+
+    <VF-002 NAME="YouTubeTranscription" USE_CASES="UC-002,UC-003" DATA_FLOW="DF-002" PRIORITY="high">
+      <scenario>User submits a valid YouTube URL and receives transcript artifacts without local file upload.</scenario>
+      <expected-outcome>API accepts supported hosts only, worker resolves the media/transcript path correctly, and final artifacts are persisted.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiHttp][createTranscriptionFromUrl][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</log-marker>
+        <log-marker>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</log-marker>
+      </required-signals>
+    </VF-002>
+
+    <VF-003 NAME="WebhookAndPollingConsistency" USE_CASES="UC-003" DATA_FLOW="DF-003" PRIORITY="high">
+      <scenario>A job created with `delivery.strategy=webhook` still remains readable and correct through polling.</scenario>
+      <expected-outcome>API emits versioned events, persists webhook delivery records, retries bounded failures, and `GET /v1/jobs/{job_id}` remains authoritative.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</log-marker>
+        <trace-sequence>JOB_VERSION_INCREMENT -&gt; TIMELINE_EVENT -&gt; WEBSOCKET_BROADCAST -&gt; WEBHOOK_SCHEDULE</trace-sequence>
+      </required-signals>
+    </VF-003>
+
+    <VF-004 NAME="ReportChildReuse" USE_CASES="UC-004" DATA_FLOW="DF-004" PRIORITY="high">
+      <scenario>User requests a report twice for the same succeeded transcription.</scenario>
+      <expected-outcome>API returns the same canonical child job unless explicit retry is requested, and report worker produces markdown and DOCX artifacts.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiJobs][createChildJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
+        <log-marker>[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]</log-marker>
+      </required-signals>
+    </VF-004>
+
+    <VF-005 NAME="DeepResearchChildReuse" USE_CASES="UC-005" DATA_FLOW="DF-005" PRIORITY="high">
+      <scenario>User requests deep research from a succeeded report and later retries the child explicitly.</scenario>
+      <expected-outcome>Initial create reuses or creates one canonical child, retry creates a new row linked by `retry_of_job_id`, and the deep-research worker persists final markdown output.</expected-outcome>
+      <required-signals>
+        <log-marker>[WorkerDeepResearch][runDeepResearch][BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE]</log-marker>
+      </required-signals>
+    </VF-005>
+
+    <VF-006 NAME="CancelAndRetryLineage" USE_CASES="UC-006" DATA_FLOW="DF-006" PRIORITY="high">
+      <scenario>User cancels a running job and later retries it.</scenario>
+      <expected-outcome>Running job transitions through `cancel_requested` to `canceled`, retry creates a new job row, and historical artifacts/events remain intact.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiJobs][cancelJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
+        <trace-sequence>RUNNING -&gt; CANCEL_REQUESTED -&gt; CANCELED</trace-sequence>
+      </required-signals>
+    </VF-006>
+  </CriticalFlows>
+
+  <ModuleVerification>
+    <V-M-CONTRACTS MODULE="M-CONTRACTS" PRIORITY="high">
+      <test-files>
+        <file>packages/contracts/tests/test_contract_surfaces.py</file>
+      </test-files>
+      <module-checks>
+        <check-1>.venv/bin/python -m pytest --no-cov packages/contracts/tests/test_contract_surfaces.py</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Polling and webhook create requests share the same canonical job snapshot envelope.</scenario-1>
+        <scenario-2 kind="failure">Invalid delivery strategy or missing webhook URL is rejected deterministically.</scenario-2>
+        <scenario-3 kind="success">Combined transcription create request preserves one-job semantics while reusing the same canonical job snapshot envelope.</scenario-3>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Retry endpoint must remain non-idempotent while create endpoints support `Idempotency-Key`.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Regenerate any typed client stubs after contract changes.</wave-follow-up>
+      <phase-follow-up>Freeze contract diffs before starting major code waves.</phase-follow-up>
+    </V-M-CONTRACTS>
+
+    <V-M-API-STORAGE MODULE="M-API-STORAGE" PRIORITY="high">
+      <test-files>
+        <file>apps/api/internal/storage/*_test.go</file>
+      </test-files>
+      <module-checks>
+        <check-1>go test ./... -run ApiStorage</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Source rows, jobs, artifacts, events, and webhook deliveries persist with correct lineage and constraints.</scenario-1>
+        <scenario-2 kind="failure">Artifact resolution fails cleanly when object store or DB is unavailable.</scenario-2>
+        <scenario-3 kind="success">Combined transcription persistence creates one source_set, ordered source_set_items, and one job bound to that source set.</scenario-3>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Successful artifact uploads must create DB rows only after object persistence succeeds.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Run migration application and rollback smoke checks.</wave-follow-up>
+      <phase-follow-up>Validate presigned artifact URLs against a real MinIO container.</phase-follow-up>
+    </V-M-API-STORAGE>
+
+    <V-M-API-QUEUE MODULE="M-API-QUEUE" PRIORITY="high">
+      <test-files>
+        <file>apps/api/internal/queue/*_test.go</file>
+      </test-files>
+      <module-checks>
+        <check-1>go test ./... -run ApiQueue</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Jobs enqueue with correct task types, payloads, retries, and timeouts.</scenario-1>
+        <scenario-2 kind="failure">Deterministic business failures use `SkipRetry` rather than repeating indefinitely.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Queue payload must not contain full mutable job metadata.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Run queue smoke checks against Redis and asynq inspector.</wave-follow-up>
+      <phase-follow-up>Verify queue behavior under cancel and dependency outage scenarios.</phase-follow-up>
+    </V-M-API-QUEUE>
+
+    <V-M-API-JOBS MODULE="M-API-JOBS" PRIORITY="high">
+      <test-files>
+        <file>apps/api/internal/jobs/*_test.go</file>
+      </test-files>
+      <module-checks>
+        <check-1>go test ./... -run ApiJobs</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Create root and child jobs under correct lineage and delivery rules.</scenario-1>
+        <scenario-2 kind="failure">Reject invalid transitions, malformed idempotency replays, and missing artifact prerequisites.</scenario-2>
+        <scenario-3 kind="success">Combined transcription create produces one job from an ordered source set without breaking one-file-to-one-job upload semantics.</scenario-3>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Retry must create a new row and never mutate terminal historical rows.</assertion-1>
+        <assertion-2>Combined transcription create must not fan out into one job per file.</assertion-2>
+      </required-trace-assertions>
+      <wave-follow-up>Exercise cancel and retry against real workers, not only storage mocks.</wave-follow-up>
+      <phase-follow-up>Cross-check child reuse and retry lineage in UI and Telegram flows.</phase-follow-up>
+    </V-M-API-JOBS>
+
+    <V-M-API-HTTP MODULE="M-API-HTTP" PRIORITY="high">
+      <test-files>
+        <file>apps/api/internal/api/*_test.go</file>
+      </test-files>
+      <module-checks>
+        <check-1>go test ./... -run ApiHttp</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Public endpoints shape accepted requests and responses according to the canonical contract.</scenario-1>
+        <scenario-2 kind="failure">Invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.</scenario-2>
+        <scenario-3 kind="success">Combined multipart upload is validated independently from the per-file upload endpoint and returns one job envelope.</scenario-3>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Run API handler tests with real multipart and JSON fixtures.</wave-follow-up>
+      <phase-follow-up>Full route regression against generated SDKs and manual curl smoke checks.</phase-follow-up>
+    </V-M-API-HTTP>
+
+    <V-M-API-EVENTS MODULE="M-API-EVENTS" PRIORITY="high">
+      <test-files>
+        <file>apps/api/internal/ws/*_test.go</file>
+      </test-files>
+      <module-checks>
+        <check-1>go test ./... -run ApiEvents</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Versioned job events emit to timeline, WebSocket, and webhook delivery persistence.</scenario-1>
+        <scenario-2 kind="failure">Webhook retries back off and persist state across restarts until delivered or dead.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Polling must remain authoritative even when WebSocket or webhook delivery succeeds.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Simulate network failure and 5xx webhook responses.</wave-follow-up>
+      <phase-follow-up>Verify UI reconnect behavior after forced WebSocket disconnect.</phase-follow-up>
+    </V-M-API-EVENTS>
+
+    <V-M-WORKER-COMMON MODULE="M-WORKER-COMMON" PRIORITY="medium">
+      <test-files>
+        <file>workers/common/tests</file>
+      </test-files>
+      <module-checks>
+        <check-1>.venv/bin/python -m pytest workers/common/tests</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Shared worker API client and artifact helpers produce valid internal control-plane payloads.</scenario-1>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Workers must not bypass internal control-plane contracts.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Reuse these helpers across all worker implementations before diverging code paths appear.</wave-follow-up>
+      <phase-follow-up>Inspect DTO drift whenever contracts change.</phase-follow-up>
+    </V-M-WORKER-COMMON>
+
+    <V-M-WORKER-TRANSCRIPTION MODULE="M-WORKER-TRANSCRIPTION" PRIORITY="high">
+      <test-files>
+        <file>tests/test_transcribers.py</file>
+        <file>tests/test_documents.py</file>
+        <file>workers/transcription/tests</file>
+      </test-files>
+      <module-checks>
+        <check-1>.venv/bin/python -m pytest tests/test_transcribers.py tests/test_documents.py</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Worker produces plain, segmented, and DOCX transcript artifacts from uploaded and YouTube sources.</scenario-1>
+        <scenario-2 kind="failure">Unsupported URLs, empty transcripts, and downloader failures surface deterministic terminal errors.</scenario-2>
+        <scenario-3 kind="success">Worker preserves ordering and emits one artifact set for combined multi-media transcription jobs.</scenario-3>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Success finalization must not happen before all required transcript artifacts exist.</assertion-1>
+        <assertion-2>When more than one ordered input exists, concatenation occurs before the final transcription pass and before success finalization.</assertion-2>
+      </required-trace-assertions>
+      <wave-follow-up>Run end-to-end against real MinIO and internal API claim/finalize endpoints.</wave-follow-up>
+      <phase-follow-up>Replay current Telegram UX expectations using the thin adapter.</phase-follow-up>
+    </V-M-WORKER-TRANSCRIPTION>
+
+    <V-M-WORKER-REPORT MODULE="M-WORKER-REPORT" PRIORITY="high">
+      <test-files>
+        <file>tests/test_cglm_runner.py</file>
+        <file>tests/test_cglm_runner_errors.py</file>
+        <file>workers/report/tests</file>
+      </test-files>
+      <module-checks>
+        <check-1>.venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Report worker produces markdown and DOCX artifacts from transcript input.</scenario-1>
+        <scenario-2 kind="failure">Missing binary, timeout, and non-zero exit are surfaced as deterministic worker failures.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Cancellation must terminate subprocess execution before finalizing `canceled`.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Validate report child reuse semantics through the API.</wave-follow-up>
+      <phase-follow-up>Run report-worker integration against real internal control-plane endpoints.</phase-follow-up>
+    </V-M-WORKER-REPORT>
+
+    <V-M-WORKER-DEEP-RESEARCH MODULE="M-WORKER-DEEP-RESEARCH" PRIORITY="high">
+      <test-files>
+        <file>tests/test_deep_research.py</file>
+        <file>workers/deep-research/tests</file>
+      </test-files>
+      <module-checks>
+        <check-1>.venv/bin/python -m pytest tests/test_deep_research.py</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Deep-research worker preserves required phase artifacts and final markdown output.</scenario-1>
+        <scenario-2 kind="failure">Pipeline timeouts, missing phase artifacts, and blocked writes surface deterministic failures.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[WorkerDeepResearch][runDeepResearch][BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Terminal success must not be emitted if required deep-research outputs are missing.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Run integration against API-created deep-research child jobs.</wave-follow-up>
+      <phase-follow-up>Smoke-check deep-research runtime inside Docker Compose.</phase-follow-up>
+    </V-M-WORKER-DEEP-RESEARCH>
+
+    <V-M-WEB-UI MODULE="M-WEB-UI" PRIORITY="medium">
+      <test-files>
+        <file>apps/web tests</file>
+      </test-files>
+      <module-checks>
+        <check-1>pnpm test</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">UI creates jobs, reconciles polling and WebSocket state, and resolves artifacts via API.</scenario-1>
+        <scenario-2 kind="failure">Expired links and unsupported admin operations fail through API responses rather than client-side guesswork.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>UI must re-fetch from REST on WebSocket reconnect or version gap.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Run browser smoke tests once the app exists.</wave-follow-up>
+      <phase-follow-up>Cover late-wave admin actions and delete constraints.</phase-follow-up>
+    </V-M-WEB-UI>
+
+    <V-M-TELEGRAM-ADAPTER MODULE="M-TELEGRAM-ADAPTER" PRIORITY="medium">
+      <test-files>
+        <file>tests/test_bot.py</file>
+        <file>tests/test_media_groups.py</file>
+        <file>tests/test_main.py</file>
+      </test-files>
+      <module-checks>
+        <check-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py tests/test_main.py</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Telegram adapter uploads media to the API and returns resulting artifacts while preserving current UX.</scenario-1>
+        <scenario-2 kind="failure">Telegram callback flows do not bypass API lineage and child-job rules.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Default Telegram delivery strategy remains polling.</assertion-1>
+        <assertion-2>Media groups map to the combined transcription flow instead of the per-file upload flow.</assertion-2>
+      </required-trace-assertions>
+      <wave-follow-up>Replay current plain-transcript and segmented/report button UX through the new adapter.</wave-follow-up>
+      <phase-follow-up>Validate Telegram runtime under the compose stack before deleting the old entrypoint.</phase-follow-up>
+    </V-M-TELEGRAM-ADAPTER>
+
+    <V-M-MCP-ADAPTER MODULE="M-MCP-ADAPTER" PRIORITY="medium">
+      <test-files>
+        <file>apps/mcp-server tests</file>
+      </test-files>
+      <module-checks>
+        <check-1>pnpm test</check-1>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">MCP tools map cleanly onto API operations without hidden business logic.</scenario-1>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[McpAdapter][mapToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>MCP must not require direct DB, queue, or MinIO access.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Run tool-level integration against a live API container.</wave-follow-up>
+      <phase-follow-up>Check parity with the Web UI and Telegram capability surface.</phase-follow-up>
+    </V-M-MCP-ADAPTER>
+
+    <V-M-INFRA-COMPOSE MODULE="M-INFRA-COMPOSE" PRIORITY="high">
+      <test-files>
+        <file>compose smoke scripts</file>
+      </test-files>
+      <module-checks>
+        <check-1>docker compose up -d</check-1>
+        <check-2>docker compose ps</check-2>
+      </module-checks>
+      <scenarios>
+        <scenario-1 kind="success">Full local stack reaches healthy state with required services and volumes.</scenario-1>
+        <scenario-2 kind="failure">Missing dependencies such as PostgreSQL, Redis, MinIO, or model caches fail fast and observably.</scenario-2>
+      </scenarios>
+      <required-log-markers>
+        <marker-1>[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]</marker-1>
+      </required-log-markers>
+      <required-trace-assertions>
+        <assertion-1>Cutover cannot happen until compose-wide smoke verification passes.</assertion-1>
+      </required-trace-assertions>
+      <wave-follow-up>Exercise healthchecks and startup ordering under clean local state.</wave-follow-up>
+      <phase-follow-up>Run full smoke matrix before deleting the old single-process runtime path.</phase-follow-up>
+    </V-M-INFRA-COMPOSE>
+  </ModuleVerification>
+
+  <VerificationMatrix>
+    <Matrix-1 MODULE="M-CONTRACTS">
+      <success-path>Public and internal contract surfaces remain coherent across HTTP, WebSocket, webhook, and worker DTOs.</success-path>
+      <failure-path>Invalid delivery mode, malformed idempotency replay, or missing webhook URL is rejected with stable error envelopes.</failure-path>
+      <evidence-types>deterministic assertions, schema validation, route-shape assertions</evidence-types>
+      <forbidden-behavior>Do not silently accept a request that violates frozen contract decisions.</forbidden-behavior>
+    </Matrix-1>
+    <Matrix-2 MODULE="M-API-JOBS">
+      <success-path>Root and child jobs are created with correct lineage, versioning, child reuse, and retry semantics.</success-path>
+      <failure-path>Invalid state transitions, missing prerequisite artifacts, and retry misuse fail deterministically.</failure-path>
+      <evidence-types>deterministic assertions, ordered state-transition trace checks</evidence-types>
+      <forbidden-behavior>Do not mutate terminal job rows or spawn sibling child jobs for the same canonical lane.</forbidden-behavior>
+    </Matrix-2>
+    <Matrix-3 MODULE="M-API-EVENTS">
+      <success-path>One authoritative state transition produces one durable event and the correct delivery side effects.</success-path>
+      <failure-path>Webhook dispatch errors are retried with bounded persistence instead of being lost on restart.</failure-path>
+      <evidence-types>deterministic assertions, trace assertions, integration smoke checks</evidence-types>
+      <forbidden-behavior>Do not treat WebSocket or webhook as stronger than polling.</forbidden-behavior>
+    </Matrix-3>
+    <Matrix-4 MODULE="M-WORKER-TRANSCRIPTION">
+      <success-path>Required transcript artifacts exist before finalization and match expected formats.</success-path>
+      <failure-path>Source materialization, downloader, and transcription failures surface terminal error codes without partial success finalization.</failure-path>
+      <evidence-types>deterministic assertions, trace assertions, worker integration checks</evidence-types>
+      <forbidden-behavior>Do not finalize success before all required artifacts are uploaded and registered.</forbidden-behavior>
+    </Matrix-4>
+    <Matrix-5 MODULE="M-WORKER-REPORT">
+      <success-path>Report worker produces markdown and DOCX artifacts from transcript input using `cglm`.</success-path>
+      <failure-path>Timeouts, subprocess failures, and cancellation produce deterministic terminal outcomes.</failure-path>
+      <evidence-types>deterministic assertions, subprocess failure-path tests, integration checks</evidence-types>
+      <forbidden-behavior>Do not hide `cglm` subprocess failure behind generic internal errors.</forbidden-behavior>
+    </Matrix-5>
+    <Matrix-6 MODULE="M-WORKER-DEEP-RESEARCH">
+      <success-path>Deep-research phases emit required artifacts and final markdown output in the expected pipeline order.</success-path>
+      <failure-path>Missing phase outputs, blocked writes, or timeouts stop final success and surface reproducible errors.</failure-path>
+      <evidence-types>deterministic assertions, ordered trace assertions, pipeline smoke checks</evidence-types>
+      <forbidden-behavior>Do not emit terminal success when required deep-research artifacts are missing.</forbidden-behavior>
+    </Matrix-6>
+  </VerificationMatrix>
+
+  <TelemetryRequirements>
+    <Telemetry-1 MODULE="M-API-JOBS">
+      <required-log-1>[ApiJobs][createTranscriptionJobs][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-1>
+      <required-log-2>[ApiJobs][createChildJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-2>
+      <required-log-3>[ApiJobs][cancelJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-3>
+      <required-log-4>[ApiJobs][retryJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-4>
+    </Telemetry-1>
+    <Telemetry-2 MODULE="M-API-EVENTS">
+      <required-log-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</required-log-1>
+      <required-log-2>[ApiEvents][scheduleWebhook][BLOCK_EMIT_VERSIONED_EVENT]</required-log-2>
+    </Telemetry-2>
+    <Telemetry-3 MODULE="M-WORKER-COMMON">
+      <required-log-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</required-log-1>
+    </Telemetry-3>
+    <Telemetry-4 MODULE="M-WORKER-TRANSCRIPTION">
+      <required-log-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</required-log-1>
+    </Telemetry-4>
+    <Telemetry-5 MODULE="M-WORKER-REPORT">
+      <required-log-1>[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]</required-log-1>
+    </Telemetry-5>
+    <Telemetry-6 MODULE="M-WORKER-DEEP-RESEARCH">
+      <required-log-1>[WorkerDeepResearch][runDeepResearch][BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE]</required-log-1>
+    </Telemetry-6>
+    <Telemetry-7 MODULE="M-WEB-UI">
+      <required-log-1>[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE]</required-log-1>
+    </Telemetry-7>
+    <Telemetry-8 MODULE="M-TELEGRAM-ADAPTER">
+      <required-log-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</required-log-1>
+    </Telemetry-8>
+  </TelemetryRequirements>
+
+  <AutonomyReadiness>
+    <ModuleReadiness module="M-CONTRACTS" level="ready-after-contract-tests">
+      <reason>Safe for autonomous work once schemas and route surfaces are backed by deterministic validation tests.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-API-STORAGE" level="ready-after-db-and-minio-integration-tests">
+      <reason>Requires real persistence checks before multi-agent execution is trustworthy.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-API-JOBS" level="ready-after-state-transition-tests">
+      <reason>Central business invariants must be locked before parallel worker and adapter development starts.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-API-EVENTS" level="caution">
+      <reason>Webhook retry and WS consistency are failure-prone; treat as review-heavy until live integration checks exist.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-WORKER-TRANSCRIPTION" level="ready-after-worker-integration-tests">
+      <reason>Existing Python tests help, but control-plane claim/finalize integration must exist first.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-WORKER-REPORT" level="ready-after-subprocess-and-cancel-tests">
+      <reason>`cglm` subprocess behavior adds failure surfaces that need explicit verification.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-WORKER-DEEP-RESEARCH" level="caution">
+      <reason>Phase-driven pipelines are brittle under contract drift; prioritize deterministic artifact checks and strong failure packets.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-WEB-UI" level="ready-after-api-contract-lock">
+      <reason>Safe once polling, WS, and artifact-resolve contracts are frozen.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-TELEGRAM-ADAPTER" level="ready-after-api-and-worker-parity">
+      <reason>Adapter work should start only after the API and transcription flow are already trustworthy.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-MCP-ADAPTER" level="ready-after-api-contract-lock">
+      <reason>Thin adapter, low business risk if API contract is already stable.</reason>
+    </ModuleReadiness>
+    <ModuleReadiness module="M-INFRA-COMPOSE" level="review-heavy">
+      <reason>Compose and health gates affect every runtime surface and should be reviewed with full-stack smoke evidence.</reason>
+    </ModuleReadiness>
+  </AutonomyReadiness>
+
+  <PhaseGates>
+    <Gate-Phase-1 PHASE="Phase-1">
+      <goal>Contracts, GRACE docs, and implementation boundaries are frozen before large code movement starts.</goal>
+      <commands>
+        <command-1>Review docs/requirements.xml, docs/technology.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml for internal consistency.</command-1>
+      </commands>
+      <required-evidence>
+        <evidence-1>All core target modules have graph entries and verification refs.</evidence-1>
+        <evidence-2>Polling, webhook, retry, cancel, idempotency, and child reuse semantics are represented in contracts and verification.</evidence-2>
+      </required-evidence>
+    </Gate-Phase-1>
+
+    <Gate-Phase-2 PHASE="Phase-2">
+      <goal>The Go control plane can create, persist, enqueue, and inspect jobs using contract-compliant routes.</goal>
+      <commands>
+        <command-1>go test ./...</command-1>
+      </commands>
+      <required-evidence>
+        <evidence-1>DB migrations apply cleanly and core routes return canonical envelopes.</evidence-1>
+        <evidence-2>WebSocket and webhook delivery persistence are wired from versioned events.</evidence-2>
+      </required-evidence>
+    </Gate-Phase-2>
+
+    <Gate-Phase-3 PHASE="Phase-3">
+      <goal>Transcription worker end-to-end path works against the new control plane.</goal>
+      <commands>
+        <command-1>.venv/bin/python -m pytest tests/test_transcribers.py tests/test_documents.py</command-1>
+      </commands>
+      <required-evidence>
+        <evidence-1>Required transcript artifacts exist before succeeded finalization.</evidence-1>
+      </required-evidence>
+    </Gate-Phase-3>
+
+    <Gate-Phase-4 PHASE="Phase-4">
+      <goal>Report and deep-research child-job flows are stable under reuse, retry, and cancel semantics.</goal>
+      <commands>
+        <command-1>.venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py tests/test_deep_research.py</command-1>
+      </commands>
+      <required-evidence>
+        <evidence-1>Child create requests reuse canonical rows and retries create lineage-linked new rows.</evidence-1>
+      </required-evidence>
+    </Gate-Phase-4>
+
+    <Gate-Phase-5 PHASE="Phase-5">
+      <goal>All user-facing entrypoints are thin adapters over the API.</goal>
+      <commands>
+        <command-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py</command-1>
+        <command-2>pnpm test</command-2>
+      </commands>
+      <required-evidence>
+        <evidence-1>Telegram, Web UI, and MCP all consume the same API contracts and do not own business logic.</evidence-1>
+      </required-evidence>
+    </Gate-Phase-5>
+
+    <Gate-Phase-6 PHASE="Phase-6">
+      <goal>The full compose stack is healthy and the old single-process path can be removed safely.</goal>
+      <commands>
+        <command-1>docker compose up -d</command-1>
+        <command-2>docker compose ps</command-2>
+      </commands>
+      <required-evidence>
+        <evidence-1>All required services are healthy in local deployment.</evidence-1>
+        <evidence-2>Functional parity against the frozen acceptance matrix is demonstrated.</evidence-2>
+      </required-evidence>
+    </Gate-Phase-6>
+  </PhaseGates>
+
+  <FailurePackets>
+    <triage-policy>When verification fails, produce a failure packet aligned to `docs/operational-packets.xml` and identify the first divergent module, function, or semantic block.</triage-policy>
+    <required-fields>scenario, contract-ref, expected-evidence, observed-evidence, first-divergent-block, suggested-next-action</required-fields>
+    <packet-template>
+      <expected-fields>scenario, expected-evidence, observed-evidence, first-divergent-block, next-action</expected-fields>
+    </packet-template>
+  </FailurePackets>
+</VerificationPlan>

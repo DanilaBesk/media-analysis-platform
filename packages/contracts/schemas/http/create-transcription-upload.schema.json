@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-transcription-upload.schema.json",
+  "title": "CreateTranscriptionUploadRequest",
+  "$ref": "#/$defs/uploadRequest",
+  "$defs": {
+    "binaryFileField": {
+      "type": "string",
+      "format": "binary"
+    },
+    "deliveryRequest": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "$ref": "../common/enums.schema.json#/$defs/deliveryStrategy",
+          "default": "polling"
+        },
+        "webhook": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "webhook"
+              }
+            },
+            "required": [
+              "strategy"
+            ]
+          },
+          "then": {
+            "required": [
+              "webhook"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "webhook": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "webhook"
+            ]
+          },
+          "then": {
+            "properties": {
+              "strategy": {
+                "const": "webhook"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "uploadRequest": {
+      "type": "object",
+      "required": [
+        "files"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/binaryFileField"
+          }
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delivery": {
+          "$ref": "#/$defs/deliveryRequest"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "files": {
+                "minItems": 2
+              }
+            },
+            "required": [
+              "files"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "display_name"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "combinedTranscriptionRequest": {
+      "type": "object",
+      "required": [
+        "files"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/binaryFileField"
+          }
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delivery": {
+          "$ref": "#/$defs/deliveryRequest"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
