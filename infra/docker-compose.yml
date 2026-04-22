@@ -1,0 +1,220 @@
+x-runtime-infra-depends: &runtime-infra-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+  minio-init:
+    condition: service_completed_successfully
+
+x-placeholder-service: &placeholder-service
+  image: busybox:1.36
+  profiles:
+    - future-runtime
+  restart: unless-stopped
+  networks:
+    - platform
+  command:
+    - /bin/sh
+    - -c
+    - echo "[$$SERVICE_ROLE] phase-1 placeholder runtime slot" && touch /tmp/service-ready && sleep infinity
+  healthcheck:
+    test:
+      - CMD-SHELL
+      - test -f /tmp/service-ready
+    interval: 10s
+    timeout: 5s
+    retries: 3
+    start_period: 5s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file:
+      - ./env/postgres.env.example
+    networks:
+      - platform
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    networks:
+      - platform
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    env_file:
+      - ./env/minio.env.example
+    command:
+      - server
+      - /data
+      - --console-address
+      - :9001
+    networks:
+      - platform
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:9000/minio/health/live >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    restart: "no"
+    env_file:
+      - ./env/minio.env.example
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - platform
+    entrypoint:
+      - /bin/sh
+      - -c
+    command: >-
+      mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+      mc mb --ignore-existing local/"$$MINIO_BUCKET_SOURCES" &&
+      mc mb --ignore-existing local/"$$MINIO_BUCKET_ARTIFACTS"
+
+  api:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: api
+    env_file:
+      - ./env/shared.env.example
+      - ./env/api.env.example
+    depends_on: *runtime-infra-depends
+    ports:
+      - "8080:8080"
+    volumes:
+      - retained-log-volume:/var/log/platform
+
+  worker-transcription:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: worker-transcription
+    env_file:
+      - ./env/shared.env.example
+      - ./env/worker-transcription.env.example
+    depends_on:
+      <<: *runtime-infra-depends
+      api:
+        condition: service_healthy
+    volumes:
+      - whisper-model-cache:/var/cache/whisper
+      - retained-log-volume:/var/log/platform
+
+  worker-report:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: worker-report
+    env_file:
+      - ./env/shared.env.example
+      - ./env/worker-report.env.example
+    depends_on:
+      <<: *runtime-infra-depends
+      api:
+        condition: service_healthy
+    volumes:
+      - report-and-deep-research-temp-space:/tmp/runtime
+      - retained-log-volume:/var/log/platform
+
+  worker-deep-research:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: worker-deep-research
+    env_file:
+      - ./env/shared.env.example
+      - ./env/worker-deep-research.env.example
+    depends_on:
+      <<: *runtime-infra-depends
+      api:
+        condition: service_healthy
+    volumes:
+      - report-and-deep-research-temp-space:/tmp/runtime
+      - retained-log-volume:/var/log/platform
+
+  web:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: web
+    env_file:
+      - ./env/web.env.example
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - retained-log-volume:/var/log/platform
+
+  telegram-bot:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: telegram-bot
+    env_file:
+      - ./env/telegram-bot.env.example
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - retained-log-volume:/var/log/platform
+
+  mcp-server:
+    <<: *placeholder-service
+    environment:
+      SERVICE_ROLE: mcp-server
+    env_file:
+      - ./env/mcp-server.env.example
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - retained-log-volume:/var/log/platform
+
+networks:
+  platform:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  minio-data:
+  whisper-model-cache:
+  report-and-deep-research-temp-space:
+  retained-log-volume:
