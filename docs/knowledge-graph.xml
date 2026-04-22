@@ -59,13 +59,13 @@
       </annotations>
     </M-API-STORAGE>
 
-    <M-API-QUEUE NAME="ApiQueue" TYPE="INTEGRATION" STATUS="planned">
+    <M-API-QUEUE NAME="ApiQueue" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Bridge job creation and background execution through asynq queues and retry policies.</purpose>
       <path>apps/api/internal/queue</path>
       <depends>M-CONTRACTS, M-API-JOBS</depends>
       <verification-ref>V-M-API-QUEUE</verification-ref>
       <annotations>
-        <export-enqueueJob PURPOSE="Publish typed asynq tasks for each job type." />
+        <export-enqueue PURPOSE="Publish typed asynq tasks for each job type." />
       </annotations>
     </M-API-QUEUE>
 

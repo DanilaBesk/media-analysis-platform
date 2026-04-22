@@ -254,7 +254,8 @@
         <file>apps/api/internal/queue/*_test.go</file>
       </test-files>
       <module-checks>
-        <check-1>go test ./... -run ApiQueue</check-1>
+        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiQueue</check-1>
+        <check-2>cd apps/api &amp;&amp; API_QUEUE_REDIS_ADDR=$REDIS_ADDR go test ./internal/queue -run ApiQueueSmoke</check-2>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Jobs enqueue with correct task types, payloads, retries, and timeouts.</scenario-1>
@@ -266,7 +267,7 @@
       <required-trace-assertions>
         <assertion-1>Queue payload must not contain full mutable job metadata.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run queue smoke checks against Redis and asynq inspector.</wave-follow-up>
+      <wave-follow-up>Run queue smoke checks against the compose-managed Redis service and asynq inspector.</wave-follow-up>
       <phase-follow-up>Verify queue behavior under cancel and dependency outage scenarios.</phase-follow-up>
     </V-M-API-QUEUE>
 
