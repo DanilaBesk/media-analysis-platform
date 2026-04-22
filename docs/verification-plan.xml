@@ -321,7 +321,7 @@
         <file>apps/api/internal/ws/*_test.go</file>
       </test-files>
       <module-checks>
-        <check-1>go test ./... -run ApiEvents</check-1>
+        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiEvents</check-1>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Versioned job events emit to timeline, WebSocket, and webhook delivery persistence.</scenario-1>

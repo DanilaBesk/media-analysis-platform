@@ -73,14 +73,13 @@
       </annotations>
     </M-API-QUEUE>
 
-    <M-API-EVENTS NAME="ApiEvents" TYPE="INTEGRATION" STATUS="planned">
+    <M-API-EVENTS NAME="ApiEvents" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Emit timeline, WebSocket, and webhook events from authoritative job transitions.</purpose>
       <path>apps/api/internal/ws</path>
       <depends>M-CONTRACTS, M-API-STORAGE</depends>
       <verification-ref>V-M-API-EVENTS</verification-ref>
       <annotations>
-        <export-broadcastEvent PURPOSE="Publish WebSocket updates to connected clients." />
-        <export-scheduleWebhook PURPOSE="Persist and dispatch webhook deliveries with bounded retry." />
+        <export-emitJobEvent PURPOSE="Persist and fan out versioned job events." />
         <type-JobEventEnvelope PURPOSE="Versioned event model shared across timeline, WebSocket, and webhook." />
       </annotations>
     </M-API-EVENTS>
