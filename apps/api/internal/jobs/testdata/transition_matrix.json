@@ -1,0 +1,19 @@
+{
+  "allowed": [
+    { "from": "queued", "to": "running" },
+    { "from": "queued", "to": "canceled" },
+    { "from": "running", "to": "succeeded" },
+    { "from": "running", "to": "failed" },
+    { "from": "running", "to": "cancel_requested" },
+    { "from": "cancel_requested", "to": "canceled" },
+    { "from": "cancel_requested", "to": "failed" }
+  ],
+  "blocked": [
+    { "from": "queued", "to": "succeeded" },
+    { "from": "queued", "to": "cancel_requested" },
+    { "from": "running", "to": "queued" },
+    { "from": "succeeded", "to": "running" },
+    { "from": "failed", "to": "queued" },
+    { "from": "canceled", "to": "running" }
+  ]
+}
