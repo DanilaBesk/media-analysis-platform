@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/net/websocket"
 
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 )
@@ -187,6 +189,47 @@ func TestApiEventsReconnectRequiresRestReconciliationOnVersionGap(t *testing.T) 
 		if got := RequiresRESTReconciliation(tc.lastSeen, tc.incoming); got != tc.want {
 			t.Fatalf("RequiresRESTReconciliation(%d, %d) = %v, want %v", tc.lastSeen, tc.incoming, got, tc.want)
 		}
+	}
+}
+
+func TestApiEventsHubBroadcastsEnvelopeToConnectedWebsocketClients(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub()
+	server := httptest.NewServer(hub)
+	t.Cleanup(server.Close)
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, err := websocket.Dial(wsURL, "", "http://localhost:3000")
+	if err != nil {
+		t.Fatalf("Dial(%s) error = %v", wsURL, err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	envelope := JobEventEnvelope{
+		EventID:   "11111111-1111-1111-1111-111111111111",
+		EventType: "job.updated",
+		JobID:     "22222222-2222-2222-2222-222222222222",
+		RootJobID: "22222222-2222-2222-2222-222222222222",
+		JobType:   "transcription",
+		Version:   2,
+		EmittedAt: time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC),
+		JobURL:    "/v1/jobs/22222222-2222-2222-2222-222222222222",
+		Payload: EventPayload{
+			Status:        "running",
+			ProgressStage: "transcribing",
+		},
+	}
+	if err := hub.Broadcast(context.Background(), envelope); err != nil {
+		t.Fatalf("Broadcast() error = %v", err)
+	}
+
+	var got JobEventEnvelope
+	if err := websocket.JSON.Receive(conn, &got); err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+	if got.EventID != envelope.EventID || got.Version != envelope.Version || got.Payload.ProgressStage != envelope.Payload.ProgressStage {
+		t.Fatalf("received envelope = %#v, want %#v", got, envelope)
 	}
 }
 

@@ -89,11 +89,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	eventsService, err := ws.NewService(repository, nil, nil)
+	websocketHub := ws.NewHub()
+	eventsService, err := ws.NewService(repository, websocketHub, nil)
 	if err != nil {
 		return err
 	}
-	deps, err := api.NewRuntimeDependencies(repository, publisher, eventsService, nil)
+	deps, err := api.NewRuntimeDependencies(repository, publisher, eventsService, websocketHub)
 	if err != nil {
 		return err
 	}
