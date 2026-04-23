@@ -248,7 +248,7 @@
         <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check flows must rely on authoritative execution-claim state instead of reconstructing ownership from `started_at` or process-local memory.</assertion-2>
       </required-trace-assertions>
       <wave-follow-up>Run migration application and rollback smoke checks against a real PostgreSQL service, including the authoritative execution-claim path.</wave-follow-up>
-      <phase-follow-up>Validate presigned artifact URLs against a real MinIO container and a host browser; latest adapter-parity replay showed URLs resolving to Docker-internal `http://minio:9000` instead of a host-reachable endpoint.</phase-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-23">Presigned artifact URL validation passed against the compose MinIO container and host browser path: Web UI resolved job c018df69-65c3-4b90-9620-6051df367448 artifact f13d1902-bdf9-4fc8-be19-8a5d2ebc7c3b to `http://localhost:9000/...` with `X-Amz-Signature`, and host curl downloaded 2336 bytes with HTTP 200.</phase-follow-up>
     </V-M-API-STORAGE>
 
     <V-M-API-QUEUE MODULE="M-API-QUEUE" PRIORITY="high">
@@ -563,7 +563,7 @@
       <required-evidence>Browser smoke, Telegram UX replay for plain/segmented/report actions, and MCP tool-level live API integration results.</required-evidence>
     </Gate>
     <Gate id="CUTOVER-FAILURE-PATHS" status="open" owner-module="M-API-STORAGE,M-API-QUEUE,M-API-EVENTS">
-      <description>Close lower-level failure-path smokes that are still listed as follow-ups: migration rollback, presigned MinIO URL validation, Redis/asynq queue smoke, cancel/outage behavior, webhook 5xx retry, and WebSocket reconnect.</description>
+      <description>Close lower-level failure-path smokes that remain open after public presigned MinIO URL validation: migration rollback, Redis/asynq queue smoke, cancel/outage behavior, webhook 5xx retry, and WebSocket reconnect.</description>
       <required-evidence>Failure-mode commands and logs showing deterministic errors or retries without changing ownership boundaries.</required-evidence>
     </Gate>
     <Gate id="CUTOVER-LEGACY-REMOVAL" status="blocked" owner-module="M-API-HTTP">

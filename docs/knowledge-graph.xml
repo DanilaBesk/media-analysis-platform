@@ -69,6 +69,7 @@
         <export-getActiveJobExecution PURPOSE="Validate active execution ownership across worker lifecycle calls." />
         <export-finishJobExecution PURPOSE="Persist terminal execution completion for authoritative ownership release." />
         <export-resolveArtifact PURPOSE="Return artifact metadata plus presigned URL." />
+        <export-newMinioObjectStoreWithPresignClient PURPOSE="Preserve internal MinIO object IO while signing artifact URLs with a public browser-reachable endpoint." />
         <type-JobSubmission PURPOSE="Idempotent create-request persistence including multi-file upload normalization." />
         <type-JobExecutionRecord PURPOSE="Storage-backed execution_id ownership record shared across claim, progress, artifact, finalize, and cancel-check flows." />
         <type-WebhookDelivery PURPOSE="Durable webhook retry state across API restarts." />

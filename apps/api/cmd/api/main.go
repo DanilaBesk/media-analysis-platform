@@ -28,13 +28,14 @@ const (
 )
 
 type runtimeConfig struct {
-	postgresDSN    string
-	redisURL       string
-	minioEndpoint  string
-	minioAccessKey string
-	minioSecretKey string
-	bindAddr       string
-	maxUploadBytes int64
+	postgresDSN         string
+	redisURL            string
+	minioEndpoint       string
+	minioPublicEndpoint string
+	minioAccessKey      string
+	minioSecretKey      string
+	bindAddr            string
+	maxUploadBytes      int64
 }
 
 func main() {
@@ -69,7 +70,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	objectStore, err := storage.NewMinioObjectStore(minioClient)
+	presignClient := minioClient
+	if cfg.minioPublicEndpoint != "" && cfg.minioPublicEndpoint != cfg.minioEndpoint {
+		presignClient, err = storage.NewMinioClient(cfg.minioPublicEndpoint, cfg.minioAccessKey, cfg.minioSecretKey)
+		if err != nil {
+			return err
+		}
+	}
+	objectStore, err := storage.NewMinioObjectStoreWithPresignClient(minioClient, presignClient)
 	if err != nil {
 		return err
 	}
@@ -122,16 +130,20 @@ func run(ctx context.Context) error {
 
 func loadRuntimeConfig() (runtimeConfig, error) {
 	cfg := runtimeConfig{
-		postgresDSN:    strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
-		redisURL:       strings.TrimSpace(os.Getenv("REDIS_URL")),
-		minioEndpoint:  strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")),
-		minioAccessKey: strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")),
-		minioSecretKey: strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")),
-		bindAddr:       strings.TrimSpace(os.Getenv("API_BIND_ADDR")),
-		maxUploadBytes: defaultMaxUploadBytes,
+		postgresDSN:         strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
+		redisURL:            strings.TrimSpace(os.Getenv("REDIS_URL")),
+		minioEndpoint:       strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")),
+		minioPublicEndpoint: strings.TrimSpace(os.Getenv("MINIO_PUBLIC_ENDPOINT")),
+		minioAccessKey:      strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")),
+		minioSecretKey:      strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")),
+		bindAddr:            strings.TrimSpace(os.Getenv("API_BIND_ADDR")),
+		maxUploadBytes:      defaultMaxUploadBytes,
 	}
 	if cfg.bindAddr == "" {
 		cfg.bindAddr = defaultBindAddr
+	}
+	if cfg.minioPublicEndpoint == "" {
+		cfg.minioPublicEndpoint = cfg.minioEndpoint
 	}
 	for _, field := range []struct {
 		name  string

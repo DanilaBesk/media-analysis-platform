@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -251,6 +252,42 @@ func TestApiStorageResolveArtifactReturnsFreshPresignedURL(t *testing.T) {
 	}
 	if resolution.CreatedAt != createdAt {
 		t.Fatalf("created_at = %v, want %v", resolution.CreatedAt, createdAt)
+	}
+}
+
+func TestApiStorageMinioObjectStoreUsesPublicPresignEndpoint(t *testing.T) {
+	t.Parallel()
+
+	internalClient, err := NewMinioClient("http://minio:9000", "minioadmin", "minioadmin")
+	if err != nil {
+		t.Fatalf("NewMinioClient(internal) error = %v", err)
+	}
+	publicClient, err := NewMinioClient("http://localhost:9000", "minioadmin", "minioadmin")
+	if err != nil {
+		t.Fatalf("NewMinioClient(public) error = %v", err)
+	}
+	objects, err := NewMinioObjectStoreWithPresignClient(internalClient, publicClient)
+	if err != nil {
+		t.Fatalf("NewMinioObjectStoreWithPresignClient() error = %v", err)
+	}
+
+	rawURL, expiresAt, err := objects.PresignGetObject(context.Background(), ArtifactsBucket, "artifacts/job-3/report/markdown/report.md", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("PresignGetObject() error = %v", err)
+	}
+	parsedURL, err := neturl.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse presigned url: %v", err)
+	}
+
+	if parsedURL.Host != "localhost:9000" {
+		t.Fatalf("presigned host = %q, want localhost:9000; url=%s", parsedURL.Host, rawURL)
+	}
+	if parsedURL.Query().Get("X-Amz-Signature") == "" {
+		t.Fatalf("presigned url missing X-Amz-Signature: %s", rawURL)
+	}
+	if !expiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expires_at = %v, want future timestamp", expiresAt)
 	}
 }
 

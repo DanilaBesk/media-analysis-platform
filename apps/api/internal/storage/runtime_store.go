@@ -27,7 +27,8 @@ type SQLStateStore struct {
 }
 
 type MinioObjectStore struct {
-	client *minio.Client
+	client        *minio.Client
+	presignClient *minio.Client
 }
 
 func NewSQLStateStore(db *sql.DB) (*SQLStateStore, error) {
@@ -69,6 +70,7 @@ func NewMinioClient(endpoint, accessKey, secretKey string) (*minio.Client, error
 
 	client, err := minio.New(parsedEndpoint.Host, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+		Region: "us-east-1",
 		Secure: parsedEndpoint.Scheme == "https",
 	})
 	if err != nil {
@@ -78,10 +80,17 @@ func NewMinioClient(endpoint, accessKey, secretKey string) (*minio.Client, error
 }
 
 func NewMinioObjectStore(client *minio.Client) (*MinioObjectStore, error) {
+	return NewMinioObjectStoreWithPresignClient(client, client)
+}
+
+func NewMinioObjectStoreWithPresignClient(client *minio.Client, presignClient *minio.Client) (*MinioObjectStore, error) {
 	if client == nil {
 		return nil, fmt.Errorf("%w: minio client is required", ErrContractViolation)
 	}
-	return &MinioObjectStore{client: client}, nil
+	if presignClient == nil {
+		return nil, fmt.Errorf("%w: minio presign client is required", ErrContractViolation)
+	}
+	return &MinioObjectStore{client: client, presignClient: presignClient}, nil
 }
 
 func (s *SQLStateStore) PersistSource(ctx context.Context, source SourceRecord) error {
@@ -616,7 +625,7 @@ func (s *MinioObjectStore) PutObject(ctx context.Context, bucket, objectKey, con
 }
 
 func (s *MinioObjectStore) PresignGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error) {
-	presignedURL, err := s.client.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
+	presignedURL, err := s.presignClient.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
 	if err != nil {
 		return "", time.Time{}, err
 	}

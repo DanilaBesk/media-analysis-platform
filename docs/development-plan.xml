@@ -918,7 +918,7 @@
   </ComposeDesign>
 
   <EnvironmentContracts>
-    <SharedInfrastructure>POSTGRES_DSN, REDIS_URL, MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_SOURCES, MINIO_BUCKET_ARTIFACTS</SharedInfrastructure>
+    <SharedInfrastructure>POSTGRES_DSN, REDIS_URL, MINIO_ENDPOINT, MINIO_PUBLIC_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_SOURCES, MINIO_BUCKET_ARTIFACTS</SharedInfrastructure>
     <Api>API_BIND_ADDR, API_BASE_URL, WS_BASE_URL, MAX_UPLOAD_SIZE_BYTES, WEBHOOK_DELIVERY_ENABLED, WEBHOOK_DELIVERY_MAX_ATTEMPTS, WEBHOOK_DELIVERY_BACKOFF_SECONDS</Api>
     <TranscriptionWorker>WHISPER_MODEL, WHISPER_DEVICE equals cpu, WHISPER_COMPUTE_TYPE, FFMPEG_BIN</TranscriptionWorker>
     <ReportWorker>CGLM_BIN, REPORT_PROMPT_SUFFIX</ReportWorker>
@@ -1005,6 +1005,7 @@
         <export-getActiveJobExecution PURPOSE="Validate active execution ownership for progress, artifact, finalize, and cancel-check flows." />
         <export-finishJobExecution PURPOSE="Close authoritative execution ownership when a worker reaches a terminal outcome." />
         <export-resolveArtifact PURPOSE="Return artifact metadata plus a fresh presigned URL." />
+        <export-newMinioObjectStoreWithPresignClient PURPOSE="Use the internal MinIO endpoint for object IO while signing browser-facing artifact URLs with the configured public endpoint." />
       </interface>
       <depends>M-CONTRACTS</depends>
       <target>
@@ -1019,6 +1020,7 @@
       <notes>
         <note-1>job_submissions and webhook_deliveries are mandatory early tables, not optional polish.</note-1>
         <note-2>The storage boundary also owns authoritative execution-claim state for `execution_id`; routes and workers must not infer that state from `started_at`, queue payloads, or process-local memory.</note-2>
+        <note-3>Presigned artifact links must publish `MINIO_PUBLIC_ENDPOINT` when configured; do not rewrite Docker-internal MinIO URLs in adapters.</note-3>
       </notes>
     </M-API-STORAGE>
 

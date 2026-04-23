@@ -71,7 +71,7 @@
       <item>services communicate on a private Docker network</item>
       <item>web is published to localhost with WEB_HOST_PORT override support defaulting to 3000</item>
       <item>api is published to localhost</item>
-      <item>MinIO S3 endpoint is published to localhost for presigned download use</item>
+      <item>MinIO S3 endpoint is published to localhost for presigned download use while service-to-service object IO uses Docker-internal DNS</item>
       <item>MinIO admin console is published to localhost</item>
       <item>telegram-bot and mcp-server call api by internal service DNS name</item>
     </network-assumptions>
@@ -123,7 +123,7 @@
     <default-delivery-strategy>polling</default-delivery-strategy>
     <websocket-role>WebSocket is the live-update channel for Web UI only and does not replace polling correctness.</websocket-role>
     <webhook-role>Webhook is a per-job delivery strategy selected at creation time and requires a callback URL.</webhook-role>
-    <download-model>Artifact reads return MinIO presigned URLs from the API; clients never construct bucket paths themselves.</download-model>
+    <download-model>Artifact reads return MinIO presigned URLs from the API; clients never construct bucket paths themselves. The API uses `MINIO_ENDPOINT` for internal object IO and `MINIO_PUBLIC_ENDPOINT` for browser-reachable presigned URLs.</download-model>
   </DeliveryModel>
 
   <EnvironmentVariables>
@@ -131,6 +131,7 @@
       <var>POSTGRES_DSN</var>
       <var>REDIS_URL</var>
       <var>MINIO_ENDPOINT</var>
+      <var>MINIO_PUBLIC_ENDPOINT</var>
       <var>MINIO_ACCESS_KEY</var>
       <var>MINIO_SECRET_KEY</var>
       <var>MINIO_BUCKET_SOURCES</var>
