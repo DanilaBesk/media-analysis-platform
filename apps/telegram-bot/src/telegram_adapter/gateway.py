@@ -106,7 +106,11 @@ class TelegramApiProcessingGateway:
         )
         terminal_report_job = self._wait_for_terminal_job(report_job["job_id"])
         parent = self.load_job(job_id)
-        report = self._download_report_artifacts(terminal_report_job["artifacts"], parent.workspace_dir)
+        report = self._download_report_artifacts(
+            terminal_report_job["artifacts"],
+            parent.workspace_dir,
+            report_job_id=terminal_report_job["job_id"],
+        )
         return ProcessedJob(
             job_id=parent.job_id,
             source=parent.source,
@@ -180,10 +184,17 @@ class TelegramApiProcessingGateway:
             metadata_path=None,
         )
 
-    def _download_report_artifacts(self, artifacts: list[dict], workspace_dir: Path) -> ReportArtifacts:
+    def _download_report_artifacts(
+        self,
+        artifacts: list[dict],
+        workspace_dir: Path,
+        *,
+        report_job_id: str | None = None,
+    ) -> ReportArtifacts:
         report_dir = workspace_dir / "report"
         report_dir.mkdir(parents=True, exist_ok=True)
         return ReportArtifacts(
+            job_id=report_job_id,
             markdown_path=self._download_artifact_by_kind(
                 artifacts,
                 "report_markdown",

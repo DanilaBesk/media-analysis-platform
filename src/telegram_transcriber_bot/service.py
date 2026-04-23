@@ -106,6 +106,7 @@ class ProcessingService:
         report = None
         if report_payload:
             report = ReportArtifacts(
+                job_id=report_payload.get("job_id"),
                 markdown_path=Path(report_payload["markdown_path"]),
                 docx_path=Path(report_payload["docx_path"]),
             )
@@ -148,6 +149,7 @@ class ProcessingService:
         )
         write_report_docx(report_docx_path, report_markdown_path.read_text(encoding="utf-8"))
         job.report = ReportArtifacts(
+            job_id=job.job_id,
             markdown_path=report_markdown_path,
             docx_path=report_docx_path,
         )
@@ -232,6 +234,7 @@ class ProcessingService:
             },
             "report": (
                 {
+                    "job_id": job.report.job_id,
                     "markdown_path": str(job.report.markdown_path),
                     "docx_path": str(job.report.docx_path),
                 }

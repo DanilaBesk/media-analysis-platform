@@ -307,10 +307,11 @@ class TelegramTranscriberApp:
         if job.report is None:
             await callback.message.answer("Отчёт не был сохранён.")
             return
+        deep_research_target_job_id = job.report.job_id or job.job_id
         await callback.message.answer_document(
             FSInputFile(job.report.markdown_path),
             caption="Исследовательский отчёт в формате Markdown.",
-            reply_markup=_build_deep_research_keyboard(job.job_id),
+            reply_markup=_build_deep_research_keyboard(deep_research_target_job_id),
         )
 
     async def _handle_deep_research(self, callback: CallbackQuery) -> None:

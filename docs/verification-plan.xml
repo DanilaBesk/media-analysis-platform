@@ -461,8 +461,8 @@
       <required-trace-assertions>
         <assertion-1>UI must re-fetch from REST on WebSocket reconnect or version gap.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run browser smoke tests once the app exists.</wave-follow-up>
-      <phase-follow-up>Cover late-wave admin actions and delete constraints.</phase-follow-up>
+      <wave-follow-up status="verified" verified-at="2026-04-23">Browser smoke was replayed against the live Web UI at `http://localhost:3300`. Fresh Playwright screenshots confirmed the rendered jobs workspace shell (`/tmp/telegram-web-ui.png`) and the live job-details route shell for MCP-created transcription job `b9065337-64fa-400b-b338-39334d030ece` (`/tmp/telegram-web-ui-job.png`). Earlier April 23 browser evidence in this file already covered load or list or create or details flows with zero console warnings or errors and WebSocket refresh behavior; this adapter-parity fix did not touch `apps/web`.</wave-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-23">Late-wave admin actions remain API-owned in the live UI shell: create, lineage navigation, artifact resolve, cancel, retry, report, and deep-research controls are still surfaced through the HTTP API contract rather than client-side inference.</phase-follow-up>
     </V-M-WEB-UI>
 
     <V-M-TELEGRAM-ADAPTER MODULE="M-TELEGRAM-ADAPTER" PRIORITY="medium">
@@ -491,8 +491,8 @@
         <assertion-1>Default Telegram delivery strategy remains polling.</assertion-1>
         <assertion-2>Media groups map to the combined transcription flow instead of the per-file upload flow.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Replay current plain-transcript and segmented/report button UX through the new adapter.</wave-follow-up>
-      <phase-follow-up>Validate Telegram runtime under the compose stack before deleting the old entrypoint.</phase-follow-up>
+      <wave-follow-up status="verified" verified-at="2026-04-23">Live Telegram adapter replay used `apps/telegram-bot` gateway against compose API `http://localhost:8080`: transcription job `b8a845c2-c713-4be4-871b-60e8c22257e3` loaded plain and segmented transcript artifacts successfully, `ensure_report(...)` downloaded report markdown or DOCX successfully, and the gateway now preserves the created report child id `0e991c7e-c7ad-495d-a0a8-39942abb590b` inside `ReportArtifacts.job_id` instead of collapsing everything back to the parent transcription id.</wave-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-23">Compose-stack Telegram UX parity exposed and closed a real callback-id drift. Before the fix, the report message built `deep:b8a845c2-c713-4be4-871b-60e8c22257e3` from the parent transcription job id; live `ensure_deep_research(b8a845c2-c713-4be4-871b-60e8c22257e3)` failed with API error `job state does not allow this operation`, while `ensure_deep_research(0e991c7e-c7ad-495d-a0a8-39942abb590b)` succeeded and materialized deep-research artifact `/tmp/telegram-adapter-parity-live-fixed/api-jobs/d674cb10-0d40-4d2b-b5a4-15b2961a9553/deep_research/evidence-research-final-report.md`. The minimal fix propagates report child ids through `ReportArtifacts` and makes the bot build the deep callback from `job.report.job_id` with fallback to the legacy parent id only when no child id exists. Regression evidence: `uv run pytest --no-cov tests/test_bot.py` and `PYTHONPATH=apps/telegram-bot/src uv run pytest --no-cov apps/telegram-bot/tests/test_api_client.py`.</phase-follow-up>
     </V-M-TELEGRAM-ADAPTER>
 
     <V-M-MCP-ADAPTER MODULE="M-MCP-ADAPTER" PRIORITY="medium">
@@ -517,8 +517,8 @@
       <required-trace-assertions>
         <assertion-1>MCP must not require direct DB, queue, or MinIO access.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run tool-level integration against a live API container.</wave-follow-up>
-      <phase-follow-up>Check parity with the Web UI and Telegram capability surface.</phase-follow-up>
+      <wave-follow-up status="verified" verified-at="2026-04-23">Tool-level live integration passed inside the compose `mcp-server` container. The adapter mapped live calls for `list_jobs`, `create_transcription_job_from_url`, `get_job`, `create_report_job`, `create_deep_research_job`, `list_job_artifacts`, and `get_artifact_download_info` to the same API boundary while emitting `[McpAdapter][mapToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]` for each call.</wave-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-23">Parity with the Web UI and Telegram capability surface is now evidenced on a fresh live chain. MCP-created transcription job `b9065337-64fa-400b-b338-39334d030ece`, report child `b62b5bf7-d555-44da-af31-ea646f01b397`, and deep-research child `489502a0-b1a9-4780-81c9-42456fb292fb` all reached `succeeded`; `list_job_artifacts` returned two deep-research artifacts, and `get_artifact_download_info` returned a localhost MinIO presigned URL for `evidence-research-final-report.md`. The adapter still required no direct DB, queue, or MinIO access.</phase-follow-up>
     </V-M-MCP-ADAPTER>
 
     <V-M-INFRA-COMPOSE MODULE="M-INFRA-COMPOSE" PRIORITY="high">
@@ -558,9 +558,9 @@
       <description>Prove transcription, report, and deep-research workers against real MinIO plus API claim/finalize paths, including API-created child jobs.</description>
       <required-evidence>Verified with live stack evidence through public child-create routes and internal worker claim/finalize routes, without DB/Redis shortcuts. Existing transcription evidence covers single upload job e609da17-e2a7-4daf-9d53-42c3270ad7bd and combined upload job f15f4c2a-8ac3-4827-84ab-053a1cd19199 against real MinIO/API. New bridge-smoke evidence covers report child job 3f3773ab-a38d-47e0-a6f2-d48a441f6a42 and deep-research child job a822b304-ff7c-449e-8cd4-e4645f3a7869, both finalized succeeded through API, with report_markdown/report_docx/deep_research_markdown/execution_log artifacts stored in MinIO. Report markdown and deep-research markdown artifacts were resolved through API and downloaded from presigned MinIO URLs with HTTP 200. The harness command was bounded deterministic, so this closes worker control-plane and object-store E2E, not external LLM throughput or content-quality assessment.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-ADAPTER-PARITY" status="open" owner-module="M-WEB-UI,M-TELEGRAM-ADAPTER,M-MCP-ADAPTER">
+    <Gate id="CUTOVER-ADAPTER-PARITY" status="verified" owner-module="M-WEB-UI,M-TELEGRAM-ADAPTER,M-MCP-ADAPTER" verified-at="2026-04-23">
       <description>Replay browser, Telegram, and MCP adapter parity against the same live API without allowing any adapter to bypass the API boundary.</description>
-      <required-evidence>Browser smoke, Telegram UX replay for plain/segmented/report actions, and MCP tool-level live API integration results.</required-evidence>
+      <required-evidence>Verified with adapter-owned evidence only. Web UI browser smoke was replayed at `http://localhost:3300` with fresh Playwright screenshots for the live workspace and job-details routes, while earlier April 23 browser evidence in this file already covers zero-console-error load or list or create or details behavior and WebSocket reconciliation. Telegram replay through `apps/telegram-bot` gateway loaded transcript artifacts for live transcription job `b8a845c2-c713-4be4-871b-60e8c22257e3`, created and downloaded report artifacts for child `0e991c7e-c7ad-495d-a0a8-39942abb590b`, reproduced the deep-research callback-id drift on the wrong parent job id, and then verified the fixed path where `job.report.job_id` drives deep-research child creation to succeeded job `d674cb10-0d40-4d2b-b5a4-15b2961a9553`. MCP live integration inside the compose adapter created succeeded transcription, report, and deep-research jobs (`b9065337-64fa-400b-b338-39334d030ece`, `b62b5bf7-d555-44da-af31-ea646f01b397`, `489502a0-b1a9-4780-81c9-42456fb292fb`) and resolved deep-research artifact download metadata through the API with the required mapping marker on every tool call.</required-evidence>
     </Gate>
     <Gate id="CUTOVER-FAILURE-PATHS" status="verified" owner-module="M-API-STORAGE,M-API-QUEUE,M-API-EVENTS" verified-at="2026-04-23">
       <description>Close lower-level failure-path smokes that remain open after public presigned MinIO URL validation: migration rollback, Redis/asynq queue smoke, cancel/outage behavior, webhook 5xx retry, and WebSocket reconnect.</description>

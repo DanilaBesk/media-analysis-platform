@@ -65,6 +65,7 @@ class TranscriptArtifacts:
 class ReportArtifacts:
     markdown_path: Path
     docx_path: Path
+    job_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -76,4 +77,3 @@ class ProcessedJob:
     report: ReportArtifacts | None = None
     metadata_path: Path | None = None
     errors: list[str] = field(default_factory=list)
-

@@ -168,7 +168,7 @@ def _make_job(tmp_path: Path) -> ProcessedJob:
             docx_path=transcript_docx,
             text_path=transcript_txt,
         ),
-        report=ReportArtifacts(markdown_path=report_md, docx_path=report_docx),
+        report=ReportArtifacts(job_id="report-job-123", markdown_path=report_md, docx_path=report_docx),
         metadata_path=workspace / "job.json",
     )
 
@@ -360,7 +360,7 @@ async def test_handle_generate_report_sends_document_on_success(tmp_path: Path) 
     assert document_entry["document"].path.name == "report.md"
     keyboard = document_entry["reply_markup"]
     assert keyboard.inline_keyboard[0][0].text == "Запустить глубокое исследование"
-    assert keyboard.inline_keyboard[0][0].callback_data == "deep:job-123"
+    assert keyboard.inline_keyboard[0][0].callback_data == "deep:report-job-123"
 
 
 def test_extract_attachments_and_guess_suffix() -> None:
