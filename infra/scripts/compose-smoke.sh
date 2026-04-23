@@ -108,6 +108,7 @@ validate_static_contract() {
   require_service_block_snippet "minio-init" "volumes:"
   require_service_block_snippet "minio-init" "./init/minio:/init:ro"
   require_service_block_snippet "minio-init" "/init/bootstrap-buckets.sh"
+  require_service_block_snippet "web" '${WEB_HOST_PORT:-3000}:3000'
   require_compose_snippet 'condition: service_healthy'
   require_compose_snippet 'condition: service_completed_successfully'
   require_compose_snippet 'driver: bridge'

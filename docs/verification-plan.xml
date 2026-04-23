@@ -248,7 +248,7 @@
         <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check flows must rely on authoritative execution-claim state instead of reconstructing ownership from `started_at` or process-local memory.</assertion-2>
       </required-trace-assertions>
       <wave-follow-up>Run migration application and rollback smoke checks against a real PostgreSQL service, including the authoritative execution-claim path.</wave-follow-up>
-      <phase-follow-up>Validate presigned artifact URLs against a real MinIO container.</phase-follow-up>
+      <phase-follow-up>Validate presigned artifact URLs against a real MinIO container and a host browser; latest adapter-parity replay showed URLs resolving to Docker-internal `http://minio:9000` instead of a host-reachable endpoint.</phase-follow-up>
     </V-M-API-STORAGE>
 
     <V-M-API-QUEUE MODULE="M-API-QUEUE" PRIORITY="high">
@@ -308,6 +308,7 @@
         <scenario-2 kind="failure">Invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.</scenario-2>
         <scenario-3 kind="success">Combined multipart upload is validated independently from the per-file upload endpoint and returns one job envelope.</scenario-3>
         <scenario-4 kind="failure">Internal worker routes reject missing or stale execution ids instead of accepting request-local ownership assumptions.</scenario-4>
+        <scenario-5 kind="success">Local Web UI origins receive CORS headers for REST polling and action routes without opening non-local origins.</scenario-5>
       </scenarios>
       <required-log-markers>
         <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
@@ -315,6 +316,7 @@
       <required-trace-assertions>
         <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
         <assertion-2>Internal worker routes validate `execution_id` against authoritative control-plane state rather than route-local memory.</assertion-2>
+        <assertion-3>Browser CORS is an HTTP boundary concern and must remain limited to local development origins.</assertion-3>
       </required-trace-assertions>
       <wave-follow-up status="partially-closed">Executable API runtime and authoritative execution-claim backing are wired and core live lifecycle smoke passed; remaining follow-up is full route regression against the live stack.</wave-follow-up>
       <phase-follow-up status="open">Full route regression across multipart, combined upload, URL, child-job, artifact, cancel, retry, WebSocket, and internal worker routes with manual curl or equivalent live-stack checks.</phase-follow-up>

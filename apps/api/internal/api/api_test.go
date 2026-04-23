@@ -290,6 +290,57 @@ func TestApiHttpInternalWorkerRoutesRemainExplicit(t *testing.T) {
 	}
 }
 
+func TestApiHttpAllowsLocalWebUiCors(t *testing.T) {
+	t.Parallel()
+
+	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/jobs?page=1&page_size=20", nil)
+	req.Header.Set("Origin", "http://localhost:3300")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3300" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want local origin", got)
+	}
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/v1/jobs?page=1&page_size=20", nil)
+	preflight.Header.Set("Origin", "http://localhost:3300")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	preflight.Header.Set("Access-Control-Request-Headers", "Content-Type")
+	preflightRec := httptest.NewRecorder()
+	mux.ServeHTTP(preflightRec, preflight)
+
+	if preflightRec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want %d body=%s", preflightRec.Code, http.StatusNoContent, preflightRec.Body.String())
+	}
+	if got := preflightRec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Idempotency-Key") {
+		t.Fatalf("Access-Control-Allow-Headers = %q, want Idempotency-Key", got)
+	}
+}
+
+func TestApiHttpRejectsNonLocalCorsPreflight(t *testing.T) {
+	t.Parallel()
+
+	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
+
+	req := httptest.NewRequest(http.MethodOptions, "/v1/jobs", nil)
+	req.Header.Set("Origin", "https://example.com")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want empty", got)
+	}
+}
+
 func loadHTTPFixture(t *testing.T) httpFixture {
 	t.Helper()
 

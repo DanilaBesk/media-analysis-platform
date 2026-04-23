@@ -97,23 +97,81 @@ func NewServer(deps Dependencies, opts ...Option) *Server {
 }
 
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /v1/transcription-jobs", s.handleCreateUpload)
-	mux.HandleFunc("POST /v1/transcription-jobs/combined", s.handleCreateCombinedUpload)
-	mux.HandleFunc("POST /v1/transcription-jobs/from-url", s.handleCreateFromURL)
-	mux.HandleFunc("GET /v1/jobs/{job_id}", s.handleGetJob)
-	mux.HandleFunc("GET /v1/jobs", s.handleListJobs)
-	mux.HandleFunc("POST /v1/transcription-jobs/{job_id}/report-jobs", s.handleCreateReport)
-	mux.HandleFunc("POST /v1/report-jobs/{job_id}/deep-research-jobs", s.handleCreateDeepResearch)
-	mux.HandleFunc("POST /v1/jobs/{job_id}/cancel", s.handleCancelJob)
-	mux.HandleFunc("POST /v1/jobs/{job_id}/retry", s.handleRetryJob)
-	mux.HandleFunc("GET /v1/artifacts/{artifact_id}", s.handleResolveArtifact)
-	mux.HandleFunc("GET /v1/jobs/{job_id}/events", s.handleListEvents)
-	mux.HandleFunc("GET /v1/ws", s.HandleWebsocket)
-	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/claim", s.handleClaimJob)
-	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/progress", s.handleRecordProgress)
-	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/artifacts", s.handleRecordArtifacts)
-	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/finalize", s.handleFinalizeJob)
-	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/cancel-check", s.handleCancelCheck)
+	mux.HandleFunc("OPTIONS /v1/transcription-jobs", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/transcription-jobs/combined", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/transcription-jobs/from-url", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/jobs", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/transcription-jobs/{job_id}/report-jobs", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/report-jobs/{job_id}/deep-research-jobs", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}/cancel", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}/retry", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/artifacts/{artifact_id}", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}/events", s.handleCORSPreflight)
+	mux.HandleFunc("POST /v1/transcription-jobs", s.withCORS(s.handleCreateUpload))
+	mux.HandleFunc("POST /v1/transcription-jobs/combined", s.withCORS(s.handleCreateCombinedUpload))
+	mux.HandleFunc("POST /v1/transcription-jobs/from-url", s.withCORS(s.handleCreateFromURL))
+	mux.HandleFunc("GET /v1/jobs/{job_id}", s.withCORS(s.handleGetJob))
+	mux.HandleFunc("GET /v1/jobs", s.withCORS(s.handleListJobs))
+	mux.HandleFunc("POST /v1/transcription-jobs/{job_id}/report-jobs", s.withCORS(s.handleCreateReport))
+	mux.HandleFunc("POST /v1/report-jobs/{job_id}/deep-research-jobs", s.withCORS(s.handleCreateDeepResearch))
+	mux.HandleFunc("POST /v1/jobs/{job_id}/cancel", s.withCORS(s.handleCancelJob))
+	mux.HandleFunc("POST /v1/jobs/{job_id}/retry", s.withCORS(s.handleRetryJob))
+	mux.HandleFunc("GET /v1/artifacts/{artifact_id}", s.withCORS(s.handleResolveArtifact))
+	mux.HandleFunc("GET /v1/jobs/{job_id}/events", s.withCORS(s.handleListEvents))
+	mux.HandleFunc("GET /v1/ws", s.withCORS(s.HandleWebsocket))
+	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/claim", s.withCORS(s.handleClaimJob))
+	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/progress", s.withCORS(s.handleRecordProgress))
+	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/artifacts", s.withCORS(s.handleRecordArtifacts))
+	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/finalize", s.withCORS(s.handleFinalizeJob))
+	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/cancel-check", s.withCORS(s.handleCancelCheck))
+}
+
+func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.writeCORSHeaders(w, r)
+		next(w, r)
+	}
+}
+
+func (s *Server) handleCORSPreflight(w http.ResponseWriter, r *http.Request) {
+	if !s.writeCORSHeaders(w, r) {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) writeCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+	w.Header().Add("Vary", "Origin")
+	if !isAllowedLocalHTTPOrigin(origin) {
+		return false
+	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
+	w.Header().Set("Access-Control-Max-Age", "600")
+	return true
+}
+
+func isAllowedLocalHTTPOrigin(origin string) bool {
+	parsed, err := neturl.Parse(origin)
+	if err != nil {
+		return false
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) HandleWebsocket(w http.ResponseWriter, r *http.Request) {

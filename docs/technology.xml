@@ -69,7 +69,7 @@
       <item>local deployment only</item>
       <item>no auth layer in v1</item>
       <item>services communicate on a private Docker network</item>
-      <item>web is published to localhost</item>
+      <item>web is published to localhost with WEB_HOST_PORT override support defaulting to 3000</item>
       <item>api is published to localhost</item>
       <item>MinIO S3 endpoint is published to localhost for presigned download use</item>
       <item>MinIO admin console is published to localhost</item>

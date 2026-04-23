@@ -206,7 +206,7 @@ services:
     networks:
       - platform
     ports:
-      - "3000:3000"
+      - "${WEB_HOST_PORT:-3000}:3000"
     volumes:
       - ..:/workspace
       - retained-log-volume:/var/log/platform
