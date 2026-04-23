@@ -1299,7 +1299,8 @@ Existing CrossLinks:
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
 VerificationPlan / V-M-TELEGRAM-ADAPTER / Gate-Phase-5:
-- Module check: .venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py tests/test_main.py
+- Module check: .venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py
+- App-local client check: PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py
 - Execution prerequisite: if `apps/telegram-bot` is absent, materialize adapter root files and env contract inside the packet.
 - Success scenario: Telegram adapter uploads media to the API and returns resulting artifacts while preserving current UX.
 - Failure scenario: Telegram callback flows do not bypass API lineage and child-job rules.
@@ -1311,8 +1312,9 @@ VerificationPlan / V-M-TELEGRAM-ADAPTER / Gate-Phase-5:
 - Phase follow-up: validate Telegram runtime under the compose stack before deleting the old entrypoint.
       ]]></verification-excerpt>
       <step-local-verification>
-        <command-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py tests/test_main.py</command-1>
-        <command-2>Adapter-local replay coverage for plain transcript, segmented transcript, report, deep-research, retry, and combined-media callback flows.</command-2>
+        <command-1>.venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py</command-1>
+        <command-2>PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py</command-2>
+        <command-3>Adapter-local replay coverage for plain transcript, segmented transcript, report, deep-research, retry, and combined-media callback flows.</command-3>
         <evidence-1>Bot behavior preserves the current user-visible flow while delegating execution and lineage ownership to the API.</evidence-1>
         <evidence-2>Media groups and buffered sequential media route to the combined endpoint instead of spawning unrelated per-file jobs.</evidence-2>
         <evidence-3>The adapter packet leaves behind any missing app-root metadata and env contract files without broadening into shared-SDK work.</evidence-3>

@@ -468,9 +468,11 @@
         <file>tests/test_bot.py</file>
         <file>tests/test_media_groups.py</file>
         <file>tests/test_main.py</file>
+        <file>apps/telegram-bot/tests/test_api_client.py</file>
       </test-files>
       <module-checks>
-        <check-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py tests/test_main.py</check-1>
+        <check-1>.venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py</check-1>
+        <check-2>PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py</check-2>
       </module-checks>
       <execution-prerequisites>
         <prerequisite-1>If `apps/telegram-bot` is absent, materialize the minimal adapter root inside the packet together with package metadata and env contract files needed for the adapter to run.</prerequisite-1>
@@ -726,9 +728,10 @@
     <Gate-Phase-5 PHASE="Phase-5">
       <goal>All user-facing entrypoints are thin adapters over the API.</goal>
       <commands>
-        <command-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py</command-1>
+        <command-1>.venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py</command-1>
         <command-2>pnpm --dir apps/web test</command-2>
         <command-3>pnpm --dir apps/mcp-server test</command-3>
+        <command-4>PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py</command-4>
       </commands>
       <required-evidence>
         <evidence-1>Telegram, Web UI, and MCP all consume the same API contracts and do not own business logic.</evidence-1>
