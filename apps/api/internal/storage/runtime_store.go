@@ -325,6 +325,32 @@ WHERE id = $1
 	return err
 }
 
+func (s *SQLStateStore) ListDueWebhookDeliveries(ctx context.Context, now time.Time, limit int) ([]WebhookDelivery, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, job_event_id, job_id, target_url, payload, state, attempt_count, next_attempt_at,
+       last_attempt_at, delivered_at, last_http_status, last_error, created_at
+FROM webhook_deliveries
+WHERE state = 'pending'
+  AND next_attempt_at <= $1
+ORDER BY next_attempt_at ASC, created_at ASC, id ASC
+LIMIT $2
+`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var deliveries []WebhookDelivery
+	for rows.Next() {
+		delivery, scanErr := scanWebhookDelivery(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
 func (s *SQLStateStore) ClaimJobExecution(ctx context.Context, req ClaimJobExecutionRequest) (ClaimJobExecutionResult, error) {
 	var result ClaimJobExecutionResult
 	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
@@ -795,6 +821,44 @@ func scanJobEvent(scanner interface {
 		return JobEvent{}, err
 	}
 	return event, nil
+}
+
+func scanWebhookDelivery(scanner interface {
+	Scan(dest ...any) error
+}) (WebhookDelivery, error) {
+	var (
+		delivery       WebhookDelivery
+		lastAttemptAt  sql.NullTime
+		deliveredAt    sql.NullTime
+		lastHTTPStatus sql.NullInt64
+		lastError      sql.NullString
+	)
+	err := scanner.Scan(
+		&delivery.ID,
+		&delivery.JobEventID,
+		&delivery.JobID,
+		&delivery.TargetURL,
+		&delivery.Payload,
+		&delivery.State,
+		&delivery.AttemptCount,
+		&delivery.NextAttemptAt,
+		&lastAttemptAt,
+		&deliveredAt,
+		&lastHTTPStatus,
+		&lastError,
+		&delivery.CreatedAt,
+	)
+	if err != nil {
+		return WebhookDelivery{}, err
+	}
+	delivery.LastAttemptAt = nullTimePtr(lastAttemptAt)
+	delivery.DeliveredAt = nullTimePtr(deliveredAt)
+	if lastHTTPStatus.Valid {
+		status := int(lastHTTPStatus.Int64)
+		delivery.LastHTTPStatus = &status
+	}
+	delivery.LastError = nullStringValue(lastError)
+	return delivery, nil
 }
 
 func scanJobExecution(scanner interface {

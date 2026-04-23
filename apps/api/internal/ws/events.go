@@ -1,10 +1,12 @@
 package ws
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -14,7 +16,10 @@ import (
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 )
 
-const EmitVersionedEventMarker = "[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]"
+const (
+	EmitVersionedEventMarker = "[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]"
+	ScheduleWebhookMarker    = "[ApiEvents][scheduleWebhook][BLOCK_EMIT_VERSIONED_EVENT]"
+)
 
 var (
 	ErrEventDispatchFailed = errors.New("event_dispatch_failed")
@@ -45,6 +50,15 @@ type Broadcaster interface {
 
 type Dispatcher interface {
 	Schedule(ctx context.Context, delivery storage.WebhookDelivery) error
+}
+
+type WebhookDeliveryStore interface {
+	UpdateWebhookDelivery(ctx context.Context, delivery storage.WebhookDelivery) error
+	ListDueWebhookDeliveries(ctx context.Context, now time.Time, limit int) ([]storage.WebhookDelivery, error)
+}
+
+type HTTPDoer interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 type Service struct {
@@ -85,7 +99,7 @@ func NewService(store Store, broadcaster Broadcaster, dispatcher Dispatcher, opt
 		store:       store,
 		broadcaster: broadcaster,
 		dispatcher:  dispatcher,
-		now:         time.Now().UTC,
+		now:         func() time.Time { return time.Now().UTC() },
 		nextID:      uuid.NewString,
 	}
 	for _, opt := range opts {
@@ -129,6 +143,53 @@ type DeliveryAttemptResult struct {
 	HTTPStatus  int
 	Err         error
 	AttemptedAt time.Time
+}
+
+type HTTPWebhookDispatcher struct {
+	store  WebhookDeliveryStore
+	client HTTPDoer
+	logger Logger
+	now    func() time.Time
+}
+
+type WebhookDispatcherOption func(*HTTPWebhookDispatcher)
+
+func WithWebhookHTTPClient(client HTTPDoer) WebhookDispatcherOption {
+	return func(d *HTTPWebhookDispatcher) {
+		d.client = client
+	}
+}
+
+func WithWebhookLogger(logger Logger) WebhookDispatcherOption {
+	return func(d *HTTPWebhookDispatcher) {
+		d.logger = logger
+	}
+}
+
+func WithWebhookClock(now func() time.Time) WebhookDispatcherOption {
+	return func(d *HTTPWebhookDispatcher) {
+		d.now = now
+	}
+}
+
+func NewHTTPWebhookDispatcher(store WebhookDeliveryStore, opts ...WebhookDispatcherOption) (*HTTPWebhookDispatcher, error) {
+	if store == nil {
+		return nil, fmt.Errorf("%w: webhook store is required", ErrInvalidEventState)
+	}
+	dispatcher := &HTTPWebhookDispatcher{
+		store: store,
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+		},
+		now: func() time.Time { return time.Now().UTC() },
+	}
+	for _, opt := range opts {
+		opt(dispatcher)
+	}
+	if dispatcher.client == nil {
+		return nil, fmt.Errorf("%w: webhook http client is required", ErrInvalidEventState)
+	}
+	return dispatcher, nil
 }
 
 func (s *Service) EmitJobEvent(ctx context.Context, req EmitRequest) (EmitResult, error) {
@@ -205,6 +266,70 @@ func (s *Service) EmitJobEvent(ctx context.Context, req EmitRequest) (EmitResult
 	}, nil
 }
 
+func (d *HTTPWebhookDispatcher) Schedule(ctx context.Context, delivery storage.WebhookDelivery) error {
+	attemptedAt := d.now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, delivery.TargetURL, bytes.NewReader(delivery.Payload))
+	if err != nil {
+		updated := ApplyWebhookAttempt(delivery, DeliveryAttemptResult{Err: err, AttemptedAt: attemptedAt})
+		d.logf("%s delivery_id=%s state=%s attempt=%d error=%q", ScheduleWebhookMarker, updated.ID, updated.State, updated.AttemptCount, updated.LastError)
+		return d.store.UpdateWebhookDelivery(ctx, updated)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	response, err := d.client.Do(req)
+	if err != nil {
+		updated := ApplyWebhookAttempt(delivery, DeliveryAttemptResult{Err: err, AttemptedAt: attemptedAt})
+		d.logf("%s delivery_id=%s state=%s attempt=%d error=%q", ScheduleWebhookMarker, updated.ID, updated.State, updated.AttemptCount, updated.LastError)
+		return d.store.UpdateWebhookDelivery(ctx, updated)
+	}
+	defer response.Body.Close()
+	_, _ = io.Copy(io.Discard, response.Body)
+
+	updated := ApplyWebhookAttempt(delivery, DeliveryAttemptResult{HTTPStatus: response.StatusCode, AttemptedAt: attemptedAt})
+	status := 0
+	if updated.LastHTTPStatus != nil {
+		status = *updated.LastHTTPStatus
+	}
+	d.logf("%s delivery_id=%s state=%s attempt=%d http_status=%d", ScheduleWebhookMarker, updated.ID, updated.State, updated.AttemptCount, status)
+	return d.store.UpdateWebhookDelivery(ctx, updated)
+}
+
+func (d *HTTPWebhookDispatcher) DispatchDue(ctx context.Context, limit int) (int, error) {
+	if limit <= 0 {
+		return 0, fmt.Errorf("%w: due dispatch limit must be positive", ErrInvalidEventState)
+	}
+	deliveries, err := d.store.ListDueWebhookDeliveries(ctx, d.now(), limit)
+	if err != nil {
+		return 0, fmt.Errorf("%w: list due webhook deliveries: %v", ErrEventDispatchFailed, err)
+	}
+	for idx, delivery := range deliveries {
+		if err := d.Schedule(ctx, delivery); err != nil {
+			return idx, err
+		}
+	}
+	return len(deliveries), nil
+}
+
+func (d *HTTPWebhookDispatcher) Run(ctx context.Context, interval time.Duration, limit int) {
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	_, _ = d.DispatchDue(ctx, limit)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_, _ = d.DispatchDue(ctx, limit)
+		}
+	}
+}
+
 func ApplyWebhookAttempt(delivery storage.WebhookDelivery, result DeliveryAttemptResult) storage.WebhookDelivery {
 	attemptedAt := result.AttemptedAt
 	if attemptedAt.IsZero() {
@@ -273,5 +398,11 @@ func isRetryableStatus(status int) bool {
 func (s *Service) logf(format string, args ...any) {
 	if s.logger != nil {
 		s.logger.Printf(format, args...)
+	}
+}
+
+func (d *HTTPWebhookDispatcher) logf(format string, args ...any) {
+	if d.logger != nil {
+		d.logger.Printf(format, args...)
 	}
 }

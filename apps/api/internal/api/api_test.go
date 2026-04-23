@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/jobs"
+	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/ws"
 )
@@ -158,6 +159,26 @@ func TestApiHttpRejectsInvalidInputsWithStableErrorEnvelopes(t *testing.T) {
 		mux.ServeHTTP(rec, req)
 		assertErrorEnvelope(t, rec, http.StatusBadRequest, "unsupported_source_url")
 	})
+}
+
+func TestApiHttpMapsQueueUnavailableToStableErrorEnvelope(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{uploadErr: queue.ErrQueueUnavailable}
+	mux := newMux(t, Dependencies{Public: public})
+
+	body, contentType := buildMultipart(t, multipartInput{
+		Files: []multipartFile{
+			{Name: "files", Filename: "clip.mp3", ContentType: "audio/mpeg", Body: []byte("audio")},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusServiceUnavailable, "queue_unavailable")
 }
 
 func TestApiHttpRoutesEventsArtifactAndWebsocketShapes(t *testing.T) {
@@ -361,6 +382,7 @@ type httpFixture struct {
 
 type fakePublicService struct {
 	uploadJobs         []JobSnapshot
+	uploadErr          error
 	combinedJob        JobSnapshot
 	lastUpload         UploadCommand
 	lastCombined       UploadCommand
@@ -370,6 +392,9 @@ type fakePublicService struct {
 
 func (f *fakePublicService) CreateUpload(_ context.Context, req UploadCommand) ([]JobSnapshot, error) {
 	f.lastUpload = req
+	if f.uploadErr != nil {
+		return nil, f.uploadErr
+	}
 	if f.uploadJobs == nil {
 		return nil, errors.New("missing upload result")
 	}

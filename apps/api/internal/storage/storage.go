@@ -63,6 +63,7 @@ type StateStore interface {
 	AppendJobEvent(ctx context.Context, event JobEvent) error
 	CreateWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error
 	UpdateWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error
+	ListDueWebhookDeliveries(ctx context.Context, now time.Time, limit int) ([]WebhookDelivery, error)
 	ClaimJobExecution(ctx context.Context, req ClaimJobExecutionRequest) (ClaimJobExecutionResult, error)
 	GetActiveJobExecution(ctx context.Context, jobID, executionID string) (JobExecutionRecord, error)
 	FinishJobExecution(ctx context.Context, req FinishJobExecutionRequest) (JobExecutionRecord, error)
@@ -114,7 +115,7 @@ func NewRepository(state StateStore, objects ObjectStore, opts ...Option) (*Repo
 	repo := &Repository{
 		state:      state,
 		objects:    objects,
-		now:        time.Now().UTC,
+		now:        func() time.Time { return time.Now().UTC() },
 		nextID:     uuid.NewString,
 		presignTTL: 15 * time.Minute,
 	}
@@ -617,6 +618,20 @@ func (r *Repository) UpdateWebhookDelivery(ctx context.Context, delivery Webhook
 		return fmt.Errorf("%w: update webhook delivery: %v", ErrStorageUnavailable, err)
 	}
 	return nil
+}
+
+func (r *Repository) ListDueWebhookDeliveries(ctx context.Context, now time.Time, limit int) ([]WebhookDelivery, error) {
+	if now.IsZero() {
+		return nil, fmt.Errorf("%w: due webhook query requires timestamp", ErrContractViolation)
+	}
+	if limit <= 0 {
+		return nil, fmt.Errorf("%w: due webhook query requires positive limit", ErrContractViolation)
+	}
+	deliveries, err := r.state.ListDueWebhookDeliveries(ctx, now, limit)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list due webhook deliveries: %v", ErrStorageUnavailable, err)
+	}
+	return deliveries, nil
 }
 
 func (r *Repository) ListJobs(ctx context.Context, filter JobListFilter) (JobListPage, error) {

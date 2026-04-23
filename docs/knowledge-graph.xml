@@ -64,6 +64,7 @@
         <export-listArtifactsByJob PURPOSE="Read canonical artifact metadata for one job." />
         <export-listChildJobs PURPOSE="Read canonical child jobs for lineage-aware snapshots." />
         <export-listJobEvents PURPOSE="Read append-only timeline rows for one job." />
+        <export-listDueWebhookDeliveries PURPOSE="Read pending webhook deliveries whose durable retry timestamp is due." />
         <export-upsertArtifacts PURPOSE="Register worker-produced artifact metadata after object persistence succeeds." />
         <export-claimJobExecution PURPOSE="Create authoritative execution ownership rows for queued work." />
         <export-getActiveJobExecution PURPOSE="Validate active execution ownership across worker lifecycle calls." />
@@ -94,6 +95,7 @@
       <verification-ref>V-M-API-EVENTS</verification-ref>
       <annotations>
         <export-emitJobEvent PURPOSE="Persist and fan out versioned job events." />
+        <export-httpWebhookDispatcher PURPOSE="POST webhook envelopes, persist attempt outcomes, and replay due deliveries with bounded retry semantics." />
         <type-JobEventEnvelope PURPOSE="Versioned event model shared across timeline, WebSocket, and webhook." />
       </annotations>
     </M-API-EVENTS>

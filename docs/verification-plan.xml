@@ -247,7 +247,7 @@
         <assertion-1>Successful artifact uploads must create DB rows only after object persistence succeeds.</assertion-1>
         <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check flows must rely on authoritative execution-claim state instead of reconstructing ownership from `started_at` or process-local memory.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Run migration application and rollback smoke checks against a real PostgreSQL service, including the authoritative execution-claim path.</wave-follow-up>
+      <wave-follow-up status="verified" verified-at="2026-04-23">Migration application and rollback smoke passed against compose PostgreSQL through `docker compose -f infra/docker-compose.yml exec -e API_STORAGE_POSTGRES_DSN=postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable api go test ./internal/storage -run ApiStorageMigration -count=1 -v`; the env-gated test created a temporary database, applied all Up tables including job_executions and webhook_deliveries, applied Down, verified the tables were removed, and dropped the temporary database.</wave-follow-up>
       <phase-follow-up status="verified" verified-at="2026-04-23">Presigned artifact URL validation passed against the compose MinIO container and host browser path: Web UI resolved job c018df69-65c3-4b90-9620-6051df367448 artifact f13d1902-bdf9-4fc8-be19-8a5d2ebc7c3b to `http://localhost:9000/...` with `X-Amz-Signature`, and host curl downloaded 2336 bytes with HTTP 200.</phase-follow-up>
     </V-M-API-STORAGE>
 
@@ -269,8 +269,8 @@
       <required-trace-assertions>
         <assertion-1>Queue payload must not contain full mutable job metadata.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run queue smoke checks against the compose-managed Redis service and asynq inspector.</wave-follow-up>
-      <phase-follow-up>Verify queue behavior under cancel and dependency outage scenarios.</phase-follow-up>
+      <wave-follow-up status="verified" verified-at="2026-04-23">Compose Redis/asynq smoke passed through `docker compose -f infra/docker-compose.yml exec -e API_QUEUE_REDIS_ADDR=redis:6379 api go test ./internal/queue -run ApiQueueSmoke -count=1 -v`; the asynq inspector observed the queued transcription task with minimal job_id/attempt payload, queue name, retry count, and timeout.</wave-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-23">Queue outage and cancel behavior were verified through API routes. With Redis stopped, public upload returned HTTP 503 `queue_unavailable` after the first divergent block exposed a prior HTTP 500 mapping drift; the minimal fix maps `queue.ErrQueueUnavailable` to the frozen error envelope. Cancel smoke used public create, internal claim execution 60c38c9d-b3dd-4b47-8d59-df47887db794, public cancel, internal cancel-check returning `cancel_requested=true`, and internal finalize to `canceled` for job 260bd721-3a92-4807-8e96-edd1d3baa05e.</phase-follow-up>
     </V-M-API-QUEUE>
 
     <V-M-API-JOBS MODULE="M-API-JOBS" PRIORITY="high">
@@ -339,8 +339,8 @@
       <required-trace-assertions>
         <assertion-1>Polling must remain authoritative even when WebSocket or webhook delivery succeeds.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Simulate network failure and 5xx webhook responses.</wave-follow-up>
-      <phase-follow-up>Verify UI reconnect behavior after forced WebSocket disconnect.</phase-follow-up>
+      <wave-follow-up status="verified" verified-at="2026-04-23">Webhook 5xx retry is verified by `go test ./internal/ws -run ApiEvents -count=1` and live compose evidence. Live job b8a845c2-c713-4be4-871b-60e8c22257e3 used webhook delivery to a host callback that returned 502 first and 204 later; API logs show delivery d31aebdd-64e5-4760-98b9-1c25ca2b490a pending attempt=1 http_status=502, then after API restart/due replay delivered attempt=2 http_status=204. Storage row confirmed state=delivered, attempt_count=2, last_http_status=204.</wave-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-23">WebSocket reconnect refresh was verified in a real browser at http://localhost:3300/jobs/b8a845c2-c713-4be4-871b-60e8c22257e3. After API restart, browser console emitted `[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE] reason=reconnect route_job_id=b8a845c2-c713-4be4-871b-60e8c22257e3` with zero browser errors or warnings.</phase-follow-up>
     </V-M-API-EVENTS>
 
     <V-M-WORKER-COMMON MODULE="M-WORKER-COMMON" PRIORITY="medium">
@@ -562,9 +562,9 @@
       <description>Replay browser, Telegram, and MCP adapter parity against the same live API without allowing any adapter to bypass the API boundary.</description>
       <required-evidence>Browser smoke, Telegram UX replay for plain/segmented/report actions, and MCP tool-level live API integration results.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-FAILURE-PATHS" status="open" owner-module="M-API-STORAGE,M-API-QUEUE,M-API-EVENTS">
+    <Gate id="CUTOVER-FAILURE-PATHS" status="verified" owner-module="M-API-STORAGE,M-API-QUEUE,M-API-EVENTS" verified-at="2026-04-23">
       <description>Close lower-level failure-path smokes that remain open after public presigned MinIO URL validation: migration rollback, Redis/asynq queue smoke, cancel/outage behavior, webhook 5xx retry, and WebSocket reconnect.</description>
-      <required-evidence>Failure-mode commands and logs showing deterministic errors or retries without changing ownership boundaries.</required-evidence>
+      <required-evidence>Verified with lower-layer owner evidence: live PostgreSQL migration Up/Down smoke in a temporary database; compose Redis/asynq inspector smoke; Redis outage returned HTTP 503 `queue_unavailable` after fixing the first divergent HTTP error-envelope mapping; cancel path went public create - internal claim - public cancel - internal cancel-check - internal finalize to canceled; webhook 502 persisted pending attempt and replayed to delivered attempt 2 after restart; browser WebSocket reconnect triggered REST refresh with the WebUi reconciliation marker and zero console errors.</required-evidence>
     </Gate>
     <Gate id="CUTOVER-LEGACY-REMOVAL" status="blocked" owner-module="M-API-HTTP">
       <description>Remove or replace the old single-process runtime path only after all functional parity gates above pass.</description>

@@ -84,7 +84,7 @@ func newWorkerRuntimeService(jobsService runtimeJobsService, storageService runt
 		jobs:   jobsService,
 		store:  storageService,
 		events: eventsService,
-		now:    time.Now().UTC,
+		now:    func() time.Time { return time.Now().UTC() },
 		nextID: uuid.NewString,
 	}
 }

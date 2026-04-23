@@ -1001,6 +1001,7 @@
         <export-listArtifactsByJob PURPOSE="Read canonical artifact metadata for one job." />
         <export-listChildJobs PURPOSE="Read canonical child jobs for lineage-aware snapshot shaping." />
         <export-listJobEvents PURPOSE="Read the append-only timeline rows for one job." />
+        <export-listDueWebhookDeliveries PURPOSE="Read pending webhook delivery rows whose durable retry timestamp is due." />
         <export-upsertArtifacts PURPOSE="Register worker-produced artifact metadata after object persistence succeeds." />
         <export-claimJobExecution PURPOSE="Create the authoritative execution_id row and atomically claim queued work." />
         <export-getActiveJobExecution PURPOSE="Validate active execution ownership for progress, artifact, finalize, and cancel-check flows." />
@@ -1078,6 +1079,7 @@
       </contract>
       <interface>
         <export-emitJobEvent PURPOSE="Persist and fan out versioned job events." />
+        <export-httpWebhookDispatcher PURPOSE="POST webhook envelopes, persist 2xx/5xx/network attempt outcomes, and replay due deliveries through a bounded runtime loop." />
       </interface>
       <depends>M-CONTRACTS, M-API-STORAGE</depends>
       <target>

@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/jobs"
+	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/ws"
 )
@@ -1062,6 +1063,8 @@ func classifyError(err error) apiError {
 		return apiError{status: http.StatusConflict, code: "execution_not_found", message: "execution_id is not active for this job"}
 	case errors.Is(err, storage.ErrStorageUnavailable):
 		return apiError{status: http.StatusServiceUnavailable, code: "storage_unavailable", message: "storage dependency is unavailable"}
+	case errors.Is(err, queue.ErrQueueUnavailable):
+		return apiError{status: http.StatusServiceUnavailable, code: "queue_unavailable", message: "queue dependency is unavailable"}
 	default:
 		return apiError{status: http.StatusInternalServerError, code: "internal_error", message: "internal server error", details: err.Error()}
 	}

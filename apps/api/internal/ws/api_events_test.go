@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -133,6 +135,30 @@ func TestApiEventsDefaultIDGeneratorUsesUUIDs(t *testing.T) {
 	}
 }
 
+func TestApiEventsDefaultClocksAdvance(t *testing.T) {
+	t.Parallel()
+
+	store := newEventMemoryStore()
+	service, err := NewService(store, nil, nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	dispatcher, err := NewHTTPWebhookDispatcher(store)
+	if err != nil {
+		t.Fatalf("NewHTTPWebhookDispatcher() error = %v", err)
+	}
+
+	serviceFirst := service.now()
+	dispatcherFirst := dispatcher.now()
+	time.Sleep(2 * time.Millisecond)
+	if serviceSecond := service.now(); !serviceSecond.After(serviceFirst) {
+		t.Fatalf("service default clock did not advance: first=%v second=%v", serviceFirst, serviceSecond)
+	}
+	if dispatcherSecond := dispatcher.now(); !dispatcherSecond.After(dispatcherFirst) {
+		t.Fatalf("dispatcher default clock did not advance: first=%v second=%v", dispatcherFirst, dispatcherSecond)
+	}
+}
+
 func TestApiEventsWebhookRetryBackoffAndDeadLetter(t *testing.T) {
 	t.Parallel()
 
@@ -168,6 +194,97 @@ func TestApiEventsWebhookRetryBackoffAndDeadLetter(t *testing.T) {
 	})
 	if delivery.State != storage.WebhookStateDead {
 		t.Fatalf("exhausted retries should dead-letter delivery, got %q", delivery.State)
+	}
+}
+
+func TestApiEventsHTTPWebhookDispatcherPersists5xxRetryAnd2xxDelivery(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("content-type = %q, want application/json", r.Header.Get("Content-Type"))
+		}
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	baseTime := time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC)
+	now := baseTime
+	store := newEventMemoryStore()
+	store.deliveries = append(store.deliveries, storage.WebhookDelivery{
+		ID:            "delivery-http-1",
+		JobEventID:    "event-http-1",
+		JobID:         "job-http-1",
+		TargetURL:     server.URL,
+		Payload:       []byte(`{"event_type":"job.updated"}`),
+		State:         storage.WebhookStatePending,
+		AttemptCount:  0,
+		NextAttemptAt: baseTime,
+		CreatedAt:     baseTime,
+	})
+	logger := &eventsBufferLogger{}
+	dispatcher, err := NewHTTPWebhookDispatcher(
+		store,
+		WithWebhookHTTPClient(server.Client()),
+		WithWebhookClock(func() time.Time { return now }),
+		WithWebhookLogger(logger),
+	)
+	if err != nil {
+		t.Fatalf("NewHTTPWebhookDispatcher() error = %v", err)
+	}
+
+	count, err := dispatcher.DispatchDue(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("first DispatchDue() error = %v", err)
+	}
+	if count != 1 || attempts.Load() != 1 {
+		t.Fatalf("first dispatch count/attempts = %d/%d, want 1/1", count, attempts.Load())
+	}
+	delivery := store.deliveries[0]
+	if delivery.State != storage.WebhookStatePending || delivery.AttemptCount != 1 {
+		t.Fatalf("after 5xx delivery state = %q attempt=%d, want pending attempt=1", delivery.State, delivery.AttemptCount)
+	}
+	if delivery.LastHTTPStatus == nil || *delivery.LastHTTPStatus != http.StatusBadGateway {
+		t.Fatalf("last status = %#v, want 502", delivery.LastHTTPStatus)
+	}
+	if got, want := delivery.NextAttemptAt.Sub(baseTime), 10*time.Second; got != want {
+		t.Fatalf("next retry delay = %v, want %v", got, want)
+	}
+
+	now = baseTime.Add(9 * time.Second)
+	count, err = dispatcher.DispatchDue(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("early DispatchDue() error = %v", err)
+	}
+	if count != 0 || attempts.Load() != 1 {
+		t.Fatalf("early dispatch count/attempts = %d/%d, want 0/1", count, attempts.Load())
+	}
+
+	now = baseTime.Add(10 * time.Second)
+	count, err = dispatcher.DispatchDue(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("second DispatchDue() error = %v", err)
+	}
+	if count != 1 || attempts.Load() != 2 {
+		t.Fatalf("second dispatch count/attempts = %d/%d, want 1/2", count, attempts.Load())
+	}
+	delivery = store.deliveries[0]
+	if delivery.State != storage.WebhookStateDelivered || delivery.AttemptCount != 2 {
+		t.Fatalf("after 2xx delivery state = %q attempt=%d, want delivered attempt=2", delivery.State, delivery.AttemptCount)
+	}
+	if delivery.DeliveredAt == nil || !delivery.DeliveredAt.Equal(now) {
+		t.Fatalf("delivered_at = %v, want %v", delivery.DeliveredAt, now)
+	}
+	if !strings.Contains(logger.String(), ScheduleWebhookMarker) {
+		t.Fatalf("logger output missing marker %q: %s", ScheduleWebhookMarker, logger.String())
 	}
 }
 
@@ -312,6 +429,19 @@ func (s *eventMemoryStore) UpdateWebhookDelivery(_ context.Context, delivery sto
 	}
 	s.deliveries = append(s.deliveries, delivery)
 	return nil
+}
+
+func (s *eventMemoryStore) ListDueWebhookDeliveries(_ context.Context, now time.Time, limit int) ([]storage.WebhookDelivery, error) {
+	due := make([]storage.WebhookDelivery, 0, limit)
+	for _, delivery := range s.deliveries {
+		if delivery.State == storage.WebhookStatePending && !delivery.NextAttemptAt.After(now) {
+			due = append(due, delivery)
+			if len(due) == limit {
+				break
+			}
+		}
+	}
+	return due, nil
 }
 
 type fakeBroadcaster struct {

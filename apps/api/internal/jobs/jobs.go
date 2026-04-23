@@ -99,7 +99,7 @@ func NewService(store Store, enqueuer Enqueuer, opts ...Option) (*Service, error
 	service := &Service{
 		store:  store,
 		queue:  enqueuer,
-		now:    time.Now().UTC,
+		now:    func() time.Time { return time.Now().UTC() },
 		nextID: uuid.NewString,
 	}
 	for _, opt := range opts {

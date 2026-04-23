@@ -347,6 +347,64 @@ func TestApiStorageMigrationContract(t *testing.T) {
 	}
 }
 
+func TestApiStorageMigrationAppliesAndRollsBackOnLivePostgres(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("API_STORAGE_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("set API_STORAGE_POSTGRES_DSN to run live PostgreSQL migration smoke")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	dbName := "api_storage_migration_smoke_" + strings.ReplaceAll(uuid.NewString(), "-", "_")
+	adminDSN, err := postgresDSNWithDatabase(dsn, "postgres")
+	if err != nil {
+		t.Fatalf("postgresDSNWithDatabase(admin) error = %v", err)
+	}
+	smokeDSN, err := postgresDSNWithDatabase(dsn, dbName)
+	if err != nil {
+		t.Fatalf("postgresDSNWithDatabase(smoke) error = %v", err)
+	}
+
+	adminDB, err := OpenPostgresDB(ctx, adminDSN)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB(admin) error = %v", err)
+	}
+	defer adminDB.Close()
+	defer func() {
+		_, _ = adminDB.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+quoteSQLIdentifier(dbName)+" WITH (FORCE)")
+	}()
+
+	if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+quoteSQLIdentifier(dbName)); err != nil {
+		t.Fatalf("CREATE DATABASE smoke db error = %v", err)
+	}
+
+	smokeDB, err := OpenPostgresDB(ctx, smokeDSN)
+	if err != nil {
+		t.Fatalf("OpenPostgresDB(smoke) error = %v", err)
+	}
+	defer smokeDB.Close()
+
+	upSQL, downSQL := migrationSections(t)
+	if _, err := smokeDB.ExecContext(ctx, upSQL); err != nil {
+		t.Fatalf("migration up error = %v", err)
+	}
+	for _, table := range []string{"job_submissions", "sources", "source_sets", "source_set_items", "jobs", "job_executions", "job_artifacts", "job_events", "webhook_deliveries"} {
+		if !tableExists(ctx, t, smokeDB, table) {
+			t.Fatalf("table %s missing after migration up", table)
+		}
+	}
+
+	if _, err := smokeDB.ExecContext(ctx, downSQL); err != nil {
+		t.Fatalf("migration down error = %v", err)
+	}
+	for _, table := range []string{"webhook_deliveries", "job_events", "job_artifacts", "job_executions", "jobs", "source_set_items", "source_sets", "sources", "job_submissions"} {
+		if tableExists(ctx, t, smokeDB, table) {
+			t.Fatalf("table %s still exists after migration down", table)
+		}
+	}
+}
+
 func TestApiStorageInsertSourceSetItemsUsesUUIDIDs(t *testing.T) {
 	t.Parallel()
 
@@ -782,6 +840,58 @@ func requiredMigrationSnippets(t *testing.T) []string {
 	return fragments
 }
 
+func migrationSections(t *testing.T) (string, string) {
+	t.Helper()
+
+	migrationBytes, err := os.ReadFile(filepath.Join("migrations", "0001_job_control_plane_foundation.sql"))
+	if err != nil {
+		t.Fatalf("ReadFile(migration) error = %v", err)
+	}
+
+	parts := strings.Split(string(migrationBytes), "-- +goose Down")
+	if len(parts) != 2 {
+		t.Fatalf("migration must contain exactly one goose Down marker")
+	}
+	upSQL := strings.TrimSpace(strings.Replace(parts[0], "-- +goose Up", "", 1))
+	downSQL := strings.TrimSpace(parts[1])
+	if upSQL == "" || downSQL == "" {
+		t.Fatalf("migration up/down sections must both be non-empty")
+	}
+	return upSQL, downSQL
+}
+
+func postgresDSNWithDatabase(rawDSN, database string) (string, error) {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawDSN))
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "postgres" && parsed.Scheme != "postgresql" {
+		return "", fmt.Errorf("postgres dsn must use postgres:// or postgresql://")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("postgres dsn host is required")
+	}
+	if strings.TrimSpace(database) == "" {
+		return "", fmt.Errorf("database is required")
+	}
+	parsed.Path = "/" + database
+	return parsed.String(), nil
+}
+
+func tableExists(ctx context.Context, t *testing.T, db *sql.DB, table string) bool {
+	t.Helper()
+
+	var relation sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass($1)`, "public."+table).Scan(&relation); err != nil {
+		t.Fatalf("to_regclass(%s) error = %v", table, err)
+	}
+	return relation.Valid
+}
+
+func quoteSQLIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+}
+
 func seedJob(state *memoryStateStore, job JobRecord) {
 	state.jobs[job.ID] = job
 	state.jobOrder = append(state.jobOrder, job.ID)
@@ -970,6 +1080,19 @@ func (m *memoryStateStore) UpdateWebhookDelivery(_ context.Context, delivery Web
 	}
 	m.deliveries = append(m.deliveries, delivery)
 	return nil
+}
+
+func (m *memoryStateStore) ListDueWebhookDeliveries(_ context.Context, now time.Time, limit int) ([]WebhookDelivery, error) {
+	due := make([]WebhookDelivery, 0, limit)
+	for _, delivery := range m.deliveries {
+		if delivery.State == WebhookStatePending && !delivery.NextAttemptAt.After(now) {
+			due = append(due, delivery)
+			if len(due) == limit {
+				break
+			}
+		}
+	}
+	return due, nil
 }
 
 func (m *memoryStateStore) ClaimJobExecution(_ context.Context, req ClaimJobExecutionRequest) (ClaimJobExecutionResult, error) {

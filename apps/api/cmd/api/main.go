@@ -36,6 +36,8 @@ type runtimeConfig struct {
 	minioSecretKey      string
 	bindAddr            string
 	maxUploadBytes      int64
+	webhookDelivery     bool
+	webhookInterval     time.Duration
 }
 
 func main() {
@@ -98,7 +100,16 @@ func run(ctx context.Context) error {
 		return err
 	}
 	websocketHub := ws.NewHub()
-	eventsService, err := ws.NewService(repository, websocketHub, nil)
+	var webhookDispatcher ws.Dispatcher
+	if cfg.webhookDelivery {
+		dispatcher, err := ws.NewHTTPWebhookDispatcher(repository, ws.WithWebhookLogger(logger))
+		if err != nil {
+			return err
+		}
+		webhookDispatcher = dispatcher
+		go dispatcher.Run(ctx, cfg.webhookInterval, 20)
+	}
+	eventsService, err := ws.NewService(repository, websocketHub, webhookDispatcher)
 	if err != nil {
 		return err
 	}
@@ -138,6 +149,7 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		minioSecretKey:      strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")),
 		bindAddr:            strings.TrimSpace(os.Getenv("API_BIND_ADDR")),
 		maxUploadBytes:      defaultMaxUploadBytes,
+		webhookInterval:     time.Second,
 	}
 	if cfg.bindAddr == "" {
 		cfg.bindAddr = defaultBindAddr
@@ -166,6 +178,20 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 			return runtimeConfig{}, fmt.Errorf("MAX_UPLOAD_SIZE_BYTES must be a positive integer")
 		}
 		cfg.maxUploadBytes = parsed
+	}
+	if raw := strings.TrimSpace(os.Getenv("WEBHOOK_DELIVERY_ENABLED")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return runtimeConfig{}, fmt.Errorf("WEBHOOK_DELIVERY_ENABLED must be boolean")
+		}
+		cfg.webhookDelivery = enabled
+	}
+	if raw := strings.TrimSpace(os.Getenv("WEBHOOK_DELIVERY_INTERVAL_SECONDS")); raw != "" {
+		parsed, err := strconv.ParseFloat(raw, 64)
+		if err != nil || parsed <= 0 {
+			return runtimeConfig{}, fmt.Errorf("WEBHOOK_DELIVERY_INTERVAL_SECONDS must be positive")
+		}
+		cfg.webhookInterval = time.Duration(parsed * float64(time.Second))
 	}
 	return cfg, nil
 }
