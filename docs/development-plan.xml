@@ -921,8 +921,9 @@
     <SharedInfrastructure>POSTGRES_DSN, REDIS_URL, MINIO_ENDPOINT, MINIO_PUBLIC_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_SOURCES, MINIO_BUCKET_ARTIFACTS</SharedInfrastructure>
     <Api>API_BIND_ADDR, API_BASE_URL, WS_BASE_URL, MAX_UPLOAD_SIZE_BYTES, WEBHOOK_DELIVERY_ENABLED, WEBHOOK_DELIVERY_MAX_ATTEMPTS, WEBHOOK_DELIVERY_BACKOFF_SECONDS</Api>
     <TranscriptionWorker>WHISPER_MODEL, WHISPER_DEVICE equals cpu, WHISPER_COMPUTE_TYPE, FFMPEG_BIN</TranscriptionWorker>
-    <ReportWorker>CGLM_BIN, REPORT_PROMPT_SUFFIX</ReportWorker>
-    <DeepResearchWorker>CLAUDE_BIN, DEEP_RESEARCH_MODEL</DeepResearchWorker>
+    <ReportWorker>REPORT_HARNESS_BIN, REPORT_HARNESS_TIMEOUT_SECONDS, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TYPE, HOST_HARNESS_TOKEN, HOST_HARNESS_CLIENT_TIMEOUT_SECONDS, REPORT_PROMPT_SUFFIX</ReportWorker>
+    <DeepResearchWorker>CLAUDE_BIN, DEEP_RESEARCH_BIN, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TYPE, HOST_HARNESS_TOKEN, HOST_HARNESS_CLIENT_TIMEOUT_SECONDS, DEEP_RESEARCH_MODEL</DeepResearchWorker>
+    <HostHarness>HOST_HARNESS_HOST, HOST_HARNESS_PORT, HOST_HARNESS_COMMAND, HOST_HARNESS_TYPE, HOST_HARNESS_TOKEN, HOST_HARNESS_TIMEOUT_SECONDS, HOST_WORKSPACE_ROOT</HostHarness>
     <TelegramBot>TELEGRAM_BOT_TOKEN, API_BASE_URL</TelegramBot>
     <Web>VITE_API_BASE_URL, VITE_WS_URL</Web>
     <McpServer>API_BASE_URL</McpServer>
@@ -1247,8 +1248,8 @@
 
     <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" LAYER="3" ORDER="2" STATUS="implemented">
       <contract>
-        <purpose>Generate markdown and DOCX research reports from transcript artifacts using cglm.</purpose>
-        <scope>cglm command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.</scope>
+        <purpose>Generate markdown and DOCX research reports from transcript artifacts using the configured report harness.</purpose>
+        <scope>Report harness command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.</scope>
         <inputs>
           <param name="report-job" type="claimed-job-execution" />
         </inputs>
@@ -1276,7 +1277,7 @@
       </observability>
       <verification-ref>V-M-WORKER-REPORT</verification-ref>
       <notes>
-        <note-1>Cancellation must be subprocess-aware because cglm runs out of process.</note-1>
+        <note-1>Cancellation must be subprocess-aware because the report harness runs out of process.</note-1>
         <note-2>Worker extraction and compose launcher are implemented; remaining verification is API-created child reuse plus real control-plane integration.</note-2>
       </notes>
     </M-WORKER-REPORT>
@@ -1494,7 +1495,7 @@
     <DF-004 NAME="TranscriptToReport" TRIGGER="report child job create request">
       <step-1>API validates that the parent transcription job succeeded and contains transcript_plain.</step-1>
       <step-2>API reuses an existing canonical report child or creates a new report job and enqueues it.</step-2>
-      <step-3>Report worker runs cglm, renders report artifacts, uploads them, and finalizes the report job.</step-3>
+      <step-3>Report worker runs the configured report harness, renders report artifacts, uploads them, and finalizes the report job.</step-3>
       <evidence>V-M-API-JOBS, V-M-WORKER-REPORT</evidence>
     </DF-004>
 
@@ -1689,7 +1690,7 @@
 
     <Phase-4 name="Report And Deep Research Extraction" status="done">
       <goal>Split report and deep-research execution into dedicated workers with stable child-job contracts.</goal>
-      <step-1 module="M-WORKER-REPORT" status="done" verification="V-M-WORKER-REPORT">Extract report generation through cglm into the report worker.</step-1>
+      <step-1 module="M-WORKER-REPORT" status="done" verification="V-M-WORKER-REPORT">Extract report generation through the configured report harness into the report worker.</step-1>
       <step-2 module="M-WORKER-DEEP-RESEARCH" status="done" verification="V-M-WORKER-DEEP-RESEARCH">Extract deep-research pipeline into the dedicated worker.</step-2>
     </Phase-4>
 

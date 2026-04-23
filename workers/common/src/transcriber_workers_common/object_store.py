@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added a dependency-free MinIO object store for worker source downloads and artifact uploads.
+#   LAST_CHANGE: v1.1.0 - Route claimed artifact downloads to the artifact bucket while preserving source downloads for transcription jobs.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
@@ -125,7 +125,7 @@ class WorkerObjectStore:
     # LINKS: M-WORKER-COMMON, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH
     # END_CONTRACT: fetch_file
     def fetch_file(self, *, object_key: str, destination: Path) -> None:
-        body = self._request_object(method="GET", bucket=self.config.source_bucket, object_key=object_key)
+        body = self._request_object(method="GET", bucket=self._bucket_for_fetch(object_key), object_key=object_key)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(body)
 
@@ -144,6 +144,11 @@ class WorkerObjectStore:
             body=content,
             content_type=mime_type,
         )
+
+    def _bucket_for_fetch(self, object_key: str) -> str:
+        if object_key.strip().startswith("artifacts/"):
+            return self.config.artifact_bucket
+        return self.config.source_bucket
 
     def _request_object(
         self,

@@ -1,7 +1,7 @@
 # FILE: workers/report/tests/test_transcriber_worker_report.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Verify the dedicated report worker claims jobs through the shared control plane, preserves markdown plus DOCX outputs, and keeps cglm subprocess failures and cancellation deterministic.
+# PURPOSE: Verify the dedicated report worker claims jobs through the shared control plane, preserves markdown plus DOCX outputs, and keeps report harness subprocess failures and cancellation deterministic.
 # SCOPE: Success finalization ordering, transcript artifact materialization, local report extraction reuse, required-artifact assertions, cancellation checkpoints, and subprocess termination handling.
 # DEPENDS: M-WORKER-REPORT, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-REPORT, V-M-WORKER-REPORT
@@ -20,7 +20,7 @@
 #   test_run_report_claims_and_finalizes_after_required_artifacts_exist - Verifies shared claim/finalize reuse, transcript artifact materialization, and preserved report artifact outputs.
 #   test_process_local_report_reuses_extracted_local_pipeline - Verifies the extracted local helper preserves markdown plus DOCX generation for the legacy shell.
 #   test_run_report_fails_when_required_artifacts_are_missing - Verifies success is impossible before both required report artifacts exist.
-#   test_run_report_surfaces_deterministic_cglm_failures - Verifies missing binary, timeout, and non-zero exit surface as deterministic worker failures.
+#   test_run_report_surfaces_deterministic_report_harness_failures - Verifies missing binary, timeout, and non-zero exit surface as deterministic worker failures.
 #   test_run_report_checks_cancellation_inside_worker_loop - Verifies authoritative cancellation finalizes `canceled` without artifact registration.
 #   test_run_command_with_cancellation_terminates_process_before_raising - Verifies subprocess ownership stays inside the worker loop when cancellation is observed.
 # END_MODULE_MAP
@@ -296,12 +296,12 @@ def test_run_report_fails_when_required_artifacts_are_missing(tmp_path: Path, mo
 @pytest.mark.parametrize(
     ("failure_message", "match_text"),
     [
-        ("cglm executable not found: /custom/bin/cglm", "executable not found"),
-        ("cglm timed out while generating a report", "timed out"),
-        ("cglm failed with exit code 7: boom", "exit code 7"),
+        ("report harness executable not found: /custom/bin/report-harness", "executable not found"),
+        ("report harness timed out while generating a report", "timed out"),
+        ("report harness failed with exit code 7: boom", "exit code 7"),
     ],
 )
-def test_run_report_surfaces_deterministic_cglm_failures(
+def test_run_report_surfaces_deterministic_report_harness_failures(
     tmp_path: Path,
     monkeypatch,
     failure_message: str,

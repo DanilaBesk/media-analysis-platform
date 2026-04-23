@@ -124,7 +124,7 @@
     </M-WORKER-TRANSCRIPTION>
 
     <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Execute report jobs using `cglm` and report artifact rendering while preserving current report behavior.</purpose>
+      <purpose>Execute report jobs using the configured report harness and report artifact rendering while preserving current report behavior.</purpose>
       <path>workers/report</path>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-REPORT</verification-ref>

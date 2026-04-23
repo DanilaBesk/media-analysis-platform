@@ -60,7 +60,7 @@
     <service name="minio-init" role="Bucket bootstrap for sources and artifacts buckets" />
     <service name="api" role="Go control plane exposing REST and WebSocket" />
     <service name="worker-transcription" role="Python transcription execution service including ffmpeg and faster-whisper" />
-    <service name="worker-report" role="Python report execution service using cglm" />
+    <service name="worker-report" role="Python report execution service using the configured report harness" />
     <service name="worker-deep-research" role="Python deep-research execution service" />
     <service name="web" role="Local React operational UI" />
     <service name="telegram-bot" role="Thin Telegram adapter over the HTTP API" />
@@ -85,7 +85,7 @@
     <dep name="python-dotenv" version=">=1.1.1" purpose="Local environment loading for Python runtime components." />
     <dep name="youtube-transcript-api" version=">=1.2.3" purpose="Fast subtitle retrieval path for YouTube sources." />
     <dep name="yt-dlp" version=">=2025.1.15" purpose="YouTube media extraction fallback path." />
-    <dep name="cglm" version="external-cli" purpose="Mandatory report generation CLI invoked by the report worker." />
+    <dep name="report-harness" version="external-cli" purpose="Configurable report generation CLI invoked by the report worker; legacy cglm wrappers remain supported through the harness contract." />
     <dep name="net/http" version="stdlib" purpose="Go HTTP routing layer for the control plane." />
     <dep name="pgx" version="v5.9.2" purpose="Go PostgreSQL access layer through database/sql." />
     <dep name="minio-go" version="v7.0.100" purpose="Go MinIO/S3 artifact and source object access." />
@@ -153,6 +153,7 @@
       <var>WORKER_POLL_INTERVAL_SECONDS</var>
       <var>WORKER_MAX_IDLE_POLLS</var>
       <var>WORKER_MAX_PROCESSED_JOBS</var>
+      <var>HOST_WORKSPACE_ROOT</var>
     </worker-common>
     <transcription-worker>
       <var>WHISPER_MODEL</var>
@@ -161,13 +162,31 @@
       <var>FFMPEG_BIN</var>
     </transcription-worker>
     <report-worker>
-      <var>CGLM_BIN</var>
+      <var>REPORT_HARNESS_BIN</var>
+      <var>REPORT_HARNESS_TIMEOUT_SECONDS</var>
+      <var>HOST_HARNESS_BRIDGE_URL</var>
+      <var>HOST_HARNESS_TYPE</var>
+      <var>HOST_HARNESS_TOKEN</var>
+      <var>HOST_HARNESS_CLIENT_TIMEOUT_SECONDS</var>
       <var>REPORT_PROMPT_SUFFIX</var>
     </report-worker>
     <deep-research-worker>
       <var>CLAUDE_BIN</var>
+      <var>DEEP_RESEARCH_BIN</var>
+      <var>HOST_HARNESS_BRIDGE_URL</var>
+      <var>HOST_HARNESS_TYPE</var>
+      <var>HOST_HARNESS_TOKEN</var>
       <var>DEEP_RESEARCH_MODEL</var>
     </deep-research-worker>
+    <host-harness>
+      <var>HOST_HARNESS_HOST</var>
+      <var>HOST_HARNESS_PORT</var>
+      <var>HOST_HARNESS_COMMAND</var>
+      <var>HOST_HARNESS_TYPE</var>
+      <var>HOST_HARNESS_TOKEN</var>
+      <var>HOST_HARNESS_TIMEOUT_SECONDS</var>
+      <var>HOST_WORKSPACE_ROOT</var>
+    </host-harness>
     <telegram-bot>
       <var>TELEGRAM_BOT_TOKEN</var>
       <var>API_BASE_URL</var>

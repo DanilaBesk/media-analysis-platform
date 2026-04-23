@@ -487,19 +487,15 @@ func (s *workerRuntimeService) CancelCheck(ctx context.Context, jobID, execution
 }
 
 func (s *workerRuntimeService) claimResponseFromJob(ctx context.Context, job storage.JobRecord, execution storage.JobExecutionRecord) (ClaimResponse, error) {
-	orderedSources, err := s.store.ListOrderedSources(ctx, job.SourceSetID)
-	if err != nil {
-		return ClaimResponse{}, err
-	}
 	params := map[string]any{}
 	if len(job.ParamsJSON) > 0 {
 		if err := json.Unmarshal(job.ParamsJSON, &params); err != nil {
 			return ClaimResponse{}, fmt.Errorf("decode job params: %w", err)
 		}
 	}
-	inputs := make([]OrderedInput, 0, len(orderedSources))
-	for _, ordered := range orderedSources {
-		inputs = append(inputs, orderedInputFromSource(ordered))
+	inputs, err := s.claimInputsForJob(ctx, job)
+	if err != nil {
+		return ClaimResponse{}, err
 	}
 	return ClaimResponse{
 		ExecutionID:   execution.ExecutionID,
@@ -512,6 +508,68 @@ func (s *workerRuntimeService) claimResponseFromJob(ctx context.Context, job sto
 		OrderedInputs: inputs,
 		Params:        params,
 	}, nil
+}
+
+func (s *workerRuntimeService) claimInputsForJob(ctx context.Context, job storage.JobRecord) ([]OrderedInput, error) {
+	switch job.JobType {
+	case queue.JobTypeTranscription:
+		orderedSources, err := s.store.ListOrderedSources(ctx, job.SourceSetID)
+		if err != nil {
+			return nil, err
+		}
+		inputs := make([]OrderedInput, 0, len(orderedSources))
+		for _, ordered := range orderedSources {
+			inputs = append(inputs, orderedInputFromSource(ordered))
+		}
+		return inputs, nil
+	case queue.JobTypeReport:
+		if strings.TrimSpace(job.ParentJobID) == "" {
+			return nil, fmt.Errorf("report claim requires parent transcription job")
+		}
+		artifact, err := s.findFirstArtifactByKind(ctx, job.ParentJobID, "transcript_segmented_markdown", "transcript_plain")
+		if err != nil {
+			return nil, err
+		}
+		return []OrderedInput{orderedInputFromArtifact(0, "Transcript", artifact)}, nil
+	case queue.JobTypeDeepResearch:
+		if strings.TrimSpace(job.ParentJobID) == "" {
+			return nil, fmt.Errorf("deep research claim requires parent report job")
+		}
+		reportJob, err := s.store.GetJob(ctx, job.ParentJobID)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(reportJob.ParentJobID) == "" {
+			return nil, fmt.Errorf("deep research claim requires report parent to reference transcription job")
+		}
+		transcriptArtifact, err := s.findFirstArtifactByKind(ctx, reportJob.ParentJobID, "transcript_segmented_markdown", "transcript_plain")
+		if err != nil {
+			return nil, err
+		}
+		reportArtifact, err := s.findFirstArtifactByKind(ctx, reportJob.ID, "report_markdown")
+		if err != nil {
+			return nil, err
+		}
+		return []OrderedInput{
+			orderedInputFromArtifact(0, "Transcript", transcriptArtifact),
+			orderedInputFromArtifact(1, "Report", reportArtifact),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported claim job type %q", job.JobType)
+	}
+}
+
+func (s *workerRuntimeService) findFirstArtifactByKind(ctx context.Context, jobID string, artifactKinds ...string) (storage.ArtifactRecord, error) {
+	for _, artifactKind := range artifactKinds {
+		artifact, err := s.store.FindArtifactByKind(ctx, jobID, artifactKind)
+		if err != nil {
+			return storage.ArtifactRecord{}, err
+		}
+		if artifact != nil {
+			return *artifact, nil
+		}
+	}
+	return storage.ArtifactRecord{}, fmt.Errorf("%w: required claim input artifact missing", jobs.ErrMissingArtifact)
 }
 
 func (s *workerRuntimeService) ensureRequiredArtifacts(ctx context.Context, job storage.JobRecord) error {
@@ -735,6 +793,23 @@ func orderedInputFromSource(source storage.OrderedSource) OrderedInput {
 		ObjectKey:        stringPtr(source.Source.ObjectKey),
 		SourceURL:        stringPtr(source.Source.SourceURL),
 		SizeBytes:        int64Ptr(source.Source.SizeBytes),
+	}
+}
+
+func orderedInputFromArtifact(position int, label string, artifact storage.ArtifactRecord) OrderedInput {
+	filename := filepath.Base(strings.TrimSpace(artifact.Filename))
+	displayName := strings.TrimSpace(label)
+	if filename != "" {
+		displayName = displayName + ": " + filename
+	}
+	return OrderedInput{
+		Position:         position,
+		SourceID:         artifact.ID,
+		SourceKind:       storage.SourceKindUploadedFile,
+		DisplayName:      stringPtr(displayName),
+		OriginalFilename: stringPtr(filename),
+		ObjectKey:        stringPtr(artifact.ObjectKey),
+		SizeBytes:        int64Ptr(artifact.SizeBytes),
 	}
 }
 

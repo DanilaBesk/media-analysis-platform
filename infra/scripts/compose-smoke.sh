@@ -64,11 +64,14 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/env/worker-transcription.env.example"
   require_file "${ROOT_DIR}/infra/env/worker-report.env.example"
   require_file "${ROOT_DIR}/infra/env/worker-deep-research.env.example"
+  require_file "${ROOT_DIR}/infra/env/host-harness.env.example"
   require_file "${ROOT_DIR}/infra/env/web.env.example"
   require_file "${ROOT_DIR}/infra/env/telegram-bot.env.example"
   require_file "${ROOT_DIR}/infra/env/mcp-server.env.example"
   require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
   require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
+  require_file "${ROOT_DIR}/infra/host-tools/host-harness-client.py"
+  require_file "${ROOT_DIR}/infra/host-tools/host-harness-server.py"
 
   for service in \
     postgres \
@@ -111,6 +114,10 @@ validate_static_contract() {
   require_service_block_snippet "minio-init" "/init/bootstrap-buckets.sh"
   require_service_block_snippet "worker-transcription" "dockerfile: infra/images/worker-transcription/Dockerfile"
   require_service_block_snippet "worker-transcription" "image: telegram-transcriber-worker-transcription:local"
+  require_service_block_snippet "worker-report" '${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/report'
+  require_service_block_snippet "worker-report" '${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}'
+  require_service_block_snippet "worker-deep-research" '${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/deep-research'
+  require_service_block_snippet "worker-deep-research" '${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}'
   require_service_block_snippet "web" '${WEB_HOST_PORT:-3000}:3000'
   require_compose_snippet 'condition: service_healthy'
   require_compose_snippet 'condition: service_completed_successfully'

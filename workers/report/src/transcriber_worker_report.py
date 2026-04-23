@@ -1,8 +1,8 @@
 # FILE: workers/report/src/transcriber_worker_report.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Execute claimed report jobs through the shared control-plane client while preserving current cglm-based report generation behavior.
-# SCOPE: Worker claim/run orchestration, transcript artifact materialization, cglm subprocess lifecycle handling, report artifact rendering, cancellation checks, and local helpers reused by the legacy service shell.
+# PURPOSE: Execute claimed report jobs through the shared control-plane client while preserving current report-generation behavior behind a configurable host harness.
+# SCOPE: Worker claim/run orchestration, transcript artifact materialization, report harness subprocess lifecycle handling, report artifact rendering, cancellation checks, and local helpers reused by the legacy service shell.
 # DEPENDS: M-WORKER-REPORT, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-REPORT, V-M-WORKER-REPORT
 # ROLE: RUNTIME
@@ -10,15 +10,16 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Introduced the report worker shell and extracted the legacy cglm runner into the dedicated worker package.
+#   LAST_CHANGE: v1.1.0 - Prefer a generic report harness command contract while keeping legacy cglm import compatibility.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
 #   ClaimedInputStore - Defines the transcript-artifact download boundary for claimed worker inputs.
 #   ReportWorkerResult - Returns the successful worker execution evidence used by packet-local tests.
 #   WorkerCancellationRequested - Signals authoritative cancellation observed by the dedicated worker loop.
-#   build_cglm_command - Derive the canonical cglm command from the materialized transcript path.
-#   generate_report - Run cglm locally and write normalized markdown for compatibility callers.
+#   build_cglm_command - Compatibility alias for the canonical report harness command builder.
+#   build_report_harness_command - Derive the canonical report harness command from the materialized transcript path.
+#   generate_report - Run the configured report harness locally and write normalized markdown for compatibility callers.
 #   process_local_report - Execute the preserved local report pipeline and write markdown plus DOCX artifacts.
 #   runReport - Claims a job, executes the report pipeline, registers artifacts, and finalizes through the shared control plane.
 # END_MODULE_MAP
@@ -102,6 +103,7 @@ __all__ = [
     "ReportWorkerResult",
     "WorkerCancellationRequested",
     "build_cglm_command",
+    "build_report_harness_command",
     "generate_report",
     "process_local_report",
     "runReport",
@@ -128,14 +130,14 @@ class ReportInputError(RuntimeError):
     pass
 
 
-def build_cglm_command(transcript_path: Path, report_prompt_suffix: str = "") -> list[str]:
+def build_report_harness_command(transcript_path: Path, report_prompt_suffix: str = "") -> list[str]:
     resolved_transcript_path = transcript_path.resolve()
     prompt = REPORT_PROMPT_TEMPLATE.format(transcript_path=resolved_transcript_path).strip()
     if report_prompt_suffix:
         prompt = f"{prompt}\n\n{report_prompt_suffix.strip()}"
 
     return [
-        _resolve_cglm_executable(),
+        _resolve_report_harness_executable(),
         "-p",
         "--output-format",
         "text",
@@ -148,6 +150,10 @@ def build_cglm_command(transcript_path: Path, report_prompt_suffix: str = "") ->
     ]
 
 
+def build_cglm_command(transcript_path: Path, report_prompt_suffix: str = "") -> list[str]:
+    return build_report_harness_command(transcript_path, report_prompt_suffix=report_prompt_suffix)
+
+
 def generate_report(
     transcript_path: Path,
     report_path: Path,
@@ -158,9 +164,9 @@ def generate_report(
         raise FileNotFoundError(f"Transcript file does not exist: {transcript_path}")
 
     runner = command_runner or _run_command
-    output = runner(build_cglm_command(transcript_path, report_prompt_suffix=report_prompt_suffix)).strip()
+    output = runner(build_report_harness_command(transcript_path, report_prompt_suffix=report_prompt_suffix)).strip()
     if not output:
-        raise RuntimeError("cglm returned an empty report")
+        raise RuntimeError("report harness returned an empty report")
 
     normalized_output = normalize_report_markdown(output)
     report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -221,7 +227,7 @@ def runReport(
             execution.job_id,
             execution_id=execution.execution_id,
             progress_stage="generating_report",
-            progress_message="Running cglm report pipeline",
+            progress_message="Running report harness pipeline",
         )
         _LOGGER.info(
             "%s job_id=%s execution_id=%s transcript_path=%s",
@@ -237,6 +243,7 @@ def runReport(
             command_runner=lambda command: _run_command_with_cancellation(
                 command,
                 check_cancellation=lambda: _check_cancellation(api_client, execution),
+                timeout_seconds=_resolve_report_harness_timeout_seconds(),
             ),
         )
 
@@ -372,7 +379,11 @@ def _resolve_materialized_filename(ordered_input: OrderedWorkerInput) -> str:
     return f"{ordered_input.source_id}.md"
 
 
-def _resolve_cglm_executable() -> str:
+def _resolve_report_harness_executable() -> str:
+    configured = os.getenv("REPORT_HARNESS_BIN", "").strip()
+    if configured:
+        return configured
+
     configured = os.getenv("CGLM_BIN", "").strip()
     if configured:
         return configured
@@ -385,7 +396,26 @@ def _resolve_cglm_executable() -> str:
     if fallback.exists():
         return str(fallback)
 
-    raise RuntimeError("cglm executable not found. Set CGLM_BIN or add cglm to PATH.")
+    raise RuntimeError("report harness executable not found. Set REPORT_HARNESS_BIN or CGLM_BIN, or add cglm to PATH.")
+
+
+def _resolve_cglm_executable() -> str:
+    return _resolve_report_harness_executable()
+
+
+def _resolve_report_harness_timeout_seconds() -> float:
+    for env_name in ("REPORT_HARNESS_TIMEOUT_SECONDS", "CGLM_TIMEOUT_SECONDS"):
+        configured = os.getenv(env_name, "").strip()
+        if not configured:
+            continue
+        try:
+            timeout_seconds = float(configured)
+        except ValueError as exc:
+            raise RuntimeError(f"{env_name} must be a number of seconds") from exc
+        if timeout_seconds <= 0:
+            raise RuntimeError(f"{env_name} must be greater than zero")
+        return timeout_seconds
+    return _DEFAULT_COMMAND_TIMEOUT_SECONDS
 
 
 def _build_command_env() -> dict[str, str]:
@@ -421,15 +451,15 @@ def _run_command(command: list[str]) -> str:
             capture_output=True,
             text=True,
             check=False,
-            timeout=_DEFAULT_COMMAND_TIMEOUT_SECONDS,
+            timeout=_resolve_report_harness_timeout_seconds(),
             env=_build_command_env(),
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(f"cglm executable not found: {command[0]}") from exc
+        raise RuntimeError(f"report harness executable not found: {command[0]}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("cglm timed out while generating a report") from exc
+        raise RuntimeError("report harness timed out while generating a report") from exc
     if completed.returncode != 0:
-        raise RuntimeError(f"cglm failed with exit code {completed.returncode}: {completed.stderr.strip()}")
+        raise RuntimeError(f"report harness failed with exit code {completed.returncode}: {completed.stderr.strip()}")
     return completed.stdout
 
 
@@ -449,7 +479,7 @@ def _run_command_with_cancellation(
             env=_build_command_env(),
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(f"cglm executable not found: {command[0]}") from exc
+        raise RuntimeError(f"report harness executable not found: {command[0]}") from exc
 
     deadline = time.monotonic() + timeout_seconds
     try:
@@ -459,7 +489,7 @@ def _run_command_with_cancellation(
                 break
             if time.monotonic() >= deadline:
                 _terminate_process(process)
-                raise RuntimeError("cglm timed out while generating a report")
+                raise RuntimeError("report harness timed out while generating a report")
             time.sleep(poll_interval_seconds)
 
         stdout, stderr = process.communicate()
@@ -468,7 +498,7 @@ def _run_command_with_cancellation(
         raise
 
     if process.returncode != 0:
-        raise RuntimeError(f"cglm failed with exit code {process.returncode}: {stderr.strip()}")
+        raise RuntimeError(f"report harness failed with exit code {process.returncode}: {stderr.strip()}")
     return stdout
 
 

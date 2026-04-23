@@ -17,6 +17,7 @@
 #   RecordingObjectTransport - Captures object-store requests without requiring live MinIO.
 #   test_object_store_config_from_env_preserves_minio_contract - Verifies env-backed MinIO config parsing.
 #   test_fetch_file_uses_source_bucket_and_writes_destination - Verifies source downloads and signed GET request shape.
+#   test_fetch_file_uses_artifact_bucket_for_claimed_artifact_inputs - Verifies child-worker artifact inputs are read from the artifact bucket.
 #   test_put_bytes_uses_artifact_bucket_and_content_headers - Verifies artifact uploads and signed PUT request shape.
 # END_MODULE_MAP
 
@@ -71,6 +72,18 @@ def test_fetch_file_uses_source_bucket_and_writes_destination(tmp_path: Path) ->
     headers = transport.calls[0]["headers"]
     assert headers["X-Amz-Date"] == "20260423T120000Z"
     assert headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=access/20260423/us-east-1/s3/aws4_request")
+
+
+def test_fetch_file_uses_artifact_bucket_for_claimed_artifact_inputs(tmp_path: Path) -> None:
+    transport = RecordingObjectTransport(response=b"artifact-bytes")
+    store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
+
+    destination = tmp_path / "inputs" / "transcript.md"
+    store.fetch_file(object_key="artifacts/job/transcript/segmented/transcript.md", destination=destination)
+
+    assert destination.read_bytes() == b"artifact-bytes"
+    assert transport.calls[0]["method"] == "GET"
+    assert transport.calls[0]["url"] == "http://minio:9000/artifacts/artifacts/job/transcript/segmented/transcript.md"
 
 
 def test_put_bytes_uses_artifact_bucket_and_content_headers() -> None:

@@ -71,7 +71,7 @@
     <WorkerIntegrationTests>
       <required>
         <item>transcription worker end-to-end against MinIO, PostgreSQL, Redis, and internal claim or finalize endpoints</item>
-        <item>report worker integration with report artifact output and cglm subprocess handling</item>
+        <item>report worker integration with report artifact output and report harness subprocess handling</item>
         <item>deep-research worker integration with phase output checks and final markdown persistence</item>
       </required>
       <must-prove>
@@ -413,7 +413,7 @@
         <assertion-1>Cancellation must terminate subprocess execution before finalizing `canceled`.</assertion-1>
       </required-trace-assertions>
       <wave-follow-up status="open">Validate report child reuse semantics through the API.</wave-follow-up>
-      <phase-follow-up status="open" blocked-by="worker-report-runtime-cglm">Run report-worker integration against real internal control-plane endpoints. Latest live evidence: report child job 83e9ad36-dd91-47a9-833d-4866c7e431c8 was created from succeeded transcription job e609da17-e2a7-4daf-9d53-42c3270ad7bd, claimed by worker-report, reached [WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE], and finalized failed with latest_error.code=report_failed, message=cglm executable not found: cglm. symptom: API-created report child cannot complete in compose. cause: worker-report compose runtime image does not provide the configured cglm executable; host /Users/danila/bin/cglm is a zsh wrapper around claude and is not a packaged Linux container binary. first divergent block: [WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE], not M-API-HTTP child creation, queue claim, MinIO, or WorkerCommon finalize. minimal safe fix: define and package a report-worker runtime that supplies a valid cglm/Claude-compatible executable and credentials contract, or explicitly document a supported container runtime injection path under M-WORKER-REPORT/M-INFRA-COMPOSE ownership. verification command: recreate worker-report, create a report child from a succeeded transcription job through POST /v1/transcription-jobs/{job_id}/report-jobs, and poll /v1/jobs/{report_job_id} until succeeded with report.md and report.docx artifacts.</phase-follow-up>
+      <phase-follow-up status="open" blocked-by="external-harness-latency">Run report-worker integration against real internal control-plane endpoints. Latest live evidence: report retry job 1c3c4be8-8f2f-4109-9bbb-09a995cb33ee was created from combined transcription job f15f4c2a-8ac3-4827-84ab-053a1cd19199 after claim-input and artifact-bucket fixes, claimed by worker-report, materialized the transcript artifact, reached progress stage generating_report with message "Running report harness pipeline", and stayed running through the host harness bridge until manually canceled after several minutes of no terminal response from the configured external harness. Cancellation finalized as status=canceled with progress stage canceled. first divergent block is now external report harness latency/throughput, not M-API-HTTP child creation, worker claim payload, MinIO artifact fetch, compose missing executable, or WorkerCommon cancellation handling. Gate closure still requires one successful report child with report.md and report.docx artifacts, preferably against a small transcript fixture or a bounded test harness command before rerunning the full combined transcript.</phase-follow-up>
     </V-M-WORKER-REPORT>
 
     <V-M-WORKER-DEEP-RESEARCH MODULE="M-WORKER-DEEP-RESEARCH" PRIORITY="high">
@@ -436,7 +436,7 @@
         <assertion-1>Terminal success must not be emitted if required deep-research outputs are missing.</assertion-1>
       </required-trace-assertions>
       <wave-follow-up status="open">Run integration against API-created deep-research child jobs.</wave-follow-up>
-      <phase-follow-up status="partially-closed" blocked-by="worker-deep-research-runtime-claude">Compose health smoke starts the deep-research runtime; API-created child-job execution remains open. Runtime precheck evidence: infra-worker-deep-research-1 has CLAUDE_BIN=claude and DEEP_RESEARCH_MODEL=sonnet, but command -v claude and command -v cglm return no executable in the current compose image. Deep-research child execution is still blocked behind the report child failure, so no deep-research gate closure is claimed.</phase-follow-up>
+      <phase-follow-up status="partially-closed" blocked-by="host-harness-live-verification">Compose health smoke starts the deep-research runtime; API-created child-job execution remains open. Runtime wiring now supports DEEP_RESEARCH_BIN and CLAUDE_BIN plus the configurable host harness bridge, but deep-research gate closure still requires a live API-created deep-research child after the report child succeeds.</phase-follow-up>
     </V-M-WORKER-DEEP-RESEARCH>
 
     <V-M-WEB-UI MODULE="M-WEB-UI" PRIORITY="medium">
@@ -545,7 +545,7 @@
         <assertion-2>Phase-6 hardening must prove clean stack startup and smoke-script success before the old single-process runtime path is removed.</assertion-2>
       </required-trace-assertions>
       <wave-follow-up status="closed">Healthchecks and startup ordering were exercised with runtime services enabled and compose live-smoke convergence.</wave-follow-up>
-      <phase-follow-up status="open">Run the full functional smoke matrix before deleting the old single-process runtime path.</phase-follow-up>
+      <phase-follow-up status="open">Run the full functional smoke matrix before deleting the old single-process runtime path. Report and deep-research compose workers now have a configurable host harness bridge contract: HOST_HARNESS_COMMAND chooses the developer-local CLI, HOST_HARNESS_TYPE declares its adapter semantics, and HOST_WORKSPACE_ROOT must point at a host-visible repo path so the host harness can read worker materialized files.</phase-follow-up>
     </V-M-INFRA-COMPOSE>
   </ModuleVerification>
 
@@ -554,9 +554,9 @@
       <description>Run live-stack route regression for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes.</description>
       <required-evidence>Verified with contract-shaped request and response captures from the compose stack: direct curl covered multipart upload, combined upload, URL submission, report and deep-research child creation, artifact resolution, cancel, retry, invalid request envelopes, stale execution rejection, and internal worker-control claim/progress/cancel-check/artifact/finalize routes; Playwright covered WebSocket open and browser console cleanliness. No M-API-HTTP route-level patch was required. Downstream worker failures observed during replay are outside this gate and remain owned by CUTOVER-WORKER-E2E.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-WORKER-E2E" status="open" owner-module="M-WORKER-TRANSCRIPTION,M-WORKER-REPORT,M-WORKER-DEEP-RESEARCH" blocked-by="worker-report-runtime-cglm">
+    <Gate id="CUTOVER-WORKER-E2E" status="open" owner-module="M-WORKER-TRANSCRIPTION,M-WORKER-REPORT,M-WORKER-DEEP-RESEARCH" blocked-by="host-harness-live-verification">
       <description>Prove transcription, report, and deep-research workers against real MinIO plus API claim/finalize paths, including API-created child jobs.</description>
-      <required-evidence>At least one successful root transcription execution and one report/deep-research child chain, with artifacts stored through MinIO and terminal state persisted through the API. Current evidence: transcription side is verified with live single and combined uploads against real MinIO/API claim/finalize paths; report child job 83e9ad36-dd91-47a9-833d-4866c7e431c8 proves the child chain reaches worker-report and fails at missing cglm inside the report runtime, so report and deep-research completion remain open.</required-evidence>
+      <required-evidence>At least one successful root transcription execution and one report/deep-research child chain, with artifacts stored through MinIO and terminal state persisted through the API. Current evidence: transcription side is verified with live single and combined uploads against real MinIO/API claim/finalize paths; report child execution now reaches the configured host harness bridge and cancellation finalizes cleanly, but the latest real external harness attempt 1c3c4be8-8f2f-4109-9bbb-09a995cb33ee did not return a report within the observed window. The gate remains open until report/deep-research child jobs succeed live.</required-evidence>
     </Gate>
     <Gate id="CUTOVER-ADAPTER-PARITY" status="open" owner-module="M-WEB-UI,M-TELEGRAM-ADAPTER,M-MCP-ADAPTER">
       <description>Replay browser, Telegram, and MCP adapter parity against the same live API without allowing any adapter to bypass the API boundary.</description>
@@ -598,10 +598,10 @@
       <forbidden-behavior>Do not finalize success before all required artifacts are uploaded and registered.</forbidden-behavior>
     </Matrix-4>
     <Matrix-5 MODULE="M-WORKER-REPORT">
-      <success-path>Report worker produces markdown and DOCX artifacts from transcript input using `cglm`.</success-path>
+      <success-path>Report worker produces markdown and DOCX artifacts from transcript input using the configured report harness.</success-path>
       <failure-path>Timeouts, subprocess failures, and cancellation produce deterministic terminal outcomes.</failure-path>
       <evidence-types>deterministic assertions, subprocess failure-path tests, integration checks</evidence-types>
-      <forbidden-behavior>Do not hide `cglm` subprocess failure behind generic internal errors.</forbidden-behavior>
+      <forbidden-behavior>Do not hide report harness subprocess failure behind generic internal errors.</forbidden-behavior>
     </Matrix-5>
     <Matrix-6 MODULE="M-WORKER-DEEP-RESEARCH">
       <success-path>Deep-research phases emit required artifacts and final markdown output in the expected pipeline order.</success-path>
@@ -660,7 +660,7 @@
       <reason>Existing Python tests help, but control-plane claim/finalize integration must exist first.</reason>
     </ModuleReadiness>
     <ModuleReadiness module="M-WORKER-REPORT" level="ready-after-subprocess-and-cancel-tests">
-      <reason>`cglm` subprocess behavior adds failure surfaces that need explicit verification.</reason>
+      <reason>Report harness subprocess behavior adds failure surfaces that need explicit verification.</reason>
     </ModuleReadiness>
     <ModuleReadiness module="M-WORKER-DEEP-RESEARCH" level="caution">
       <reason>Phase-driven pipelines are brittle under contract drift; prioritize deterministic artifact checks and strong failure packets.</reason>

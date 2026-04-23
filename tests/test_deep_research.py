@@ -281,12 +281,17 @@ def test_resolve_claude_executable_prefers_env_then_path(monkeypatch) -> None:
     assert deep_research._resolve_claude_executable() == "/custom/bin/claude"
 
     monkeypatch.delenv("DEEP_RESEARCH_BIN", raising=False)
+    monkeypatch.setenv("CLAUDE_BIN", "/custom/bin/claude-from-contract")
+    assert deep_research._resolve_claude_executable() == "/custom/bin/claude-from-contract"
+
+    monkeypatch.delenv("CLAUDE_BIN", raising=False)
     monkeypatch.setattr(deep_research.shutil, "which", lambda _: "/usr/local/bin/claude")
     assert deep_research._resolve_claude_executable() == "/usr/local/bin/claude"
 
 
 def test_resolve_claude_executable_uses_fallback_and_raises_when_missing(monkeypatch) -> None:
     monkeypatch.delenv("DEEP_RESEARCH_BIN", raising=False)
+    monkeypatch.delenv("CLAUDE_BIN", raising=False)
     monkeypatch.setattr(deep_research.shutil, "which", lambda _: None)
     existing_paths = {str(Path("/opt/homebrew/bin/claude"))}
     monkeypatch.setattr(Path, "exists", lambda self: str(self) in existing_paths)

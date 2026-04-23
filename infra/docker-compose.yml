@@ -144,7 +144,7 @@ services:
     image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     restart: unless-stopped
     environment:
-      WORKER_WORKSPACE_ROOT: /tmp/runtime/report
+      WORKER_WORKSPACE_ROOT: ${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/report
     env_file:
       - ./env/shared.env.example
       - ./env/worker-report.env.example
@@ -164,6 +164,7 @@ services:
       - platform
     volumes:
       - ..:/workspace
+      - ${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}
       - report-and-deep-research-temp-space:/tmp/runtime
       - retained-log-volume:/var/log/platform
 
@@ -171,7 +172,7 @@ services:
     image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
     restart: unless-stopped
     environment:
-      WORKER_WORKSPACE_ROOT: /tmp/runtime/deep-research
+      WORKER_WORKSPACE_ROOT: ${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/deep-research
     env_file:
       - ./env/shared.env.example
       - ./env/worker-deep-research.env.example
@@ -191,6 +192,7 @@ services:
       - platform
     volumes:
       - ..:/workspace
+      - ${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}
       - report-and-deep-research-temp-space:/tmp/runtime
       - retained-log-volume:/var/log/platform
 

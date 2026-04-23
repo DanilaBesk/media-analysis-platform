@@ -926,7 +926,7 @@ VerificationPlan / V-M-WORKER-TRANSCRIPTION / Gate-Phase-3:
     <ExecutionPacket packet-id="M-WORKER-REPORT-wave-4" module="M-WORKER-REPORT" phase="Phase-4" step="1" verification-ref="V-M-WORKER-REPORT">
       <module-id>M-WORKER-REPORT</module-id>
       <module-name>WorkerReport</module-name>
-      <purpose>Extract report generation into a dedicated worker that consumes transcript artifacts, executes `cglm`, preserves markdown plus DOCX outputs, and keeps subprocess cancellation under the API-owned job shell.</purpose>
+      <purpose>Extract report generation into a dedicated worker that consumes transcript artifacts, executes the configured report harness, preserves markdown plus DOCX outputs, and keeps subprocess cancellation under the API-owned job shell.</purpose>
       <packet-state>completed</packet-state>
       <completion-evidence>.venv/bin/python -m pytest workers/report/tests passed; compose-ready report launcher exists and reuses WorkerCommon runtime.</completion-evidence>
       <write-scope>
@@ -943,8 +943,8 @@ VerificationPlan / V-M-WORKER-TRANSCRIPTION / Gate-Phase-3:
       </write-scope-notes>
       <contract-excerpt><![CDATA[
 DevelopmentPlan / M-WORKER-REPORT:
-- Purpose: generate markdown and DOCX research reports from transcript artifacts using cglm.
-- Scope: cglm command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.
+- Purpose: generate markdown and DOCX research reports from transcript artifacts using the configured report harness.
+- Scope: report harness command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.
 - Links: M-WORKER-REPORT, V-M-WORKER-REPORT, DF-004, DF-006.
 - Error: report_failed.
 
@@ -958,7 +958,7 @@ KnowledgeGraph / M-WORKER-REPORT:
 - Path: workers/report
 - Depends: M-WORKER-COMMON, M-CONTRACTS
 - Verification ref: V-M-WORKER-REPORT
-- Purpose: execute report jobs using `cglm` and report artifact rendering while preserving current report behavior.
+- Purpose: execute report jobs using the configured report harness and report artifact rendering while preserving current report behavior.
 - Public annotations already expected in the graph:
   - export-runReport
 
@@ -983,7 +983,7 @@ VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
       <step-local-verification>
         <command-1>.venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py</command-1>
         <command-2>.venv/bin/python -m pytest workers/report/tests</command-2>
-        <evidence-1>Report worker preserves markdown and DOCX outputs while running `cglm` behind the dedicated worker shell.</evidence-1>
+        <evidence-1>Report worker preserves markdown and DOCX outputs while running the configured report harness behind the dedicated worker shell.</evidence-1>
         <evidence-2>Subprocess timeout, missing binary, non-zero exit, and cancel-aware handling are observable through the worker packet boundary.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
@@ -993,14 +993,14 @@ VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
         <field-4>CrossLinks: preserve HTTP control-plane and shared-runtime reuse links.</field-4>
       </expected-graph-delta-fields>
       <expected-verification-delta-fields>
-        <field-1>test-files: preserve current cglm regression coverage while adding `workers/report/tests`.</field-1>
+        <field-1>test-files: preserve current report harness regression coverage while adding `workers/report/tests`.</field-1>
         <field-2>module-checks: keep the narrow report-focused pytest commands.</field-2>
         <field-3>required-log-markers: preserve `[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]`.</field-3>
         <field-4>follow-up-checks: API child reuse stays wave follow-up and real control-plane integration stays phase follow-up.</field-4>
       </expected-verification-delta-fields>
       <notes>
         <note-1>Report job creation remains API-owned; this packet only extracts the execution layer.</note-1>
-        <note-2>Keep cglm subprocess semantics explicit and cancel-aware.</note-2>
+        <note-2>Keep report harness subprocess semantics explicit and cancel-aware.</note-2>
       </notes>
     </ExecutionPacket>
 
@@ -1499,13 +1499,14 @@ VerificationPlan / V-M-MCP-ADAPTER / Gate-Phase-5:
       <module-name>InfraCompose</module-name>
       <purpose>Harden the compose stack for the post-implementation phase by proving startup order, healthchecks, persistent volumes, and stack-local smoke execution before final cutover.</purpose>
       <packet-state>completed</packet-state>
-      <completion-evidence>docker compose config, compose-smoke --check-config, and compose-smoke --live-smoke passed with API, workers, Web UI, Telegram adapter, MCP adapter, Postgres, Redis, MinIO, and MinIO init converged. 2026-04-23 follow-up evidence: worker-transcription now builds from infra/images/worker-transcription/Dockerfile and provides /usr/bin/ffmpeg for live transcription E2E.</completion-evidence>
+      <completion-evidence>docker compose config, compose-smoke --check-config, and compose-smoke --live-smoke passed with API, workers, Web UI, Telegram adapter, MCP adapter, Postgres, Redis, MinIO, and MinIO init converged. 2026-04-23 follow-up evidence: worker-transcription now builds from infra/images/worker-transcription/Dockerfile and provides /usr/bin/ffmpeg for live transcription E2E; report/deep-research runtime wiring now exposes a configurable host harness command/type bridge instead of hard-coding one developer CLI name.</completion-evidence>
       <write-scope>
         <file-1>infra/docker-compose.yml</file-1>
         <file-2>infra/env/*.env.example</file-2>
         <file-3>infra/init/*</file-3>
         <file-4>infra/scripts/compose-smoke.sh</file-4>
         <file-5>infra/images/worker-transcription/Dockerfile</file-5>
+        <file-6>infra/host-tools/*.py</file-6>
       </write-scope>
       <write-scope-notes>
         <note-1>Keep this packet inside compose topology, env contracts, init scripts, and smoke verification assets.</note-1>
@@ -1514,7 +1515,7 @@ VerificationPlan / V-M-MCP-ADAPTER / Gate-Phase-5:
       <contract-excerpt><![CDATA[
 DevelopmentPlan / M-INFRA-COMPOSE:
 - Purpose: own local Docker Compose topology, service dependencies, and environment contracts.
-- Scope: compose topology, healthchecks, startup ordering, volumes, service env contracts, and smoke-run expectations.
+- Scope: compose topology, healthchecks, startup ordering, volumes, service env contracts, configurable host harness bridge wiring, and smoke-run expectations.
 - Links: M-INFRA-COMPOSE, V-M-INFRA-COMPOSE, DF-001, DF-003, DF-006, DF-007.
 - Error: compose_boot_failed.
 
@@ -1574,7 +1575,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
         <field-4>CrossLinks: preserve runtime `runs` edges and avoid adding business-logic ownership edges.</field-4>
       </expected-graph-delta-fields>
       <expected-verification-delta-fields>
-        <field-1>test-files: keep compose, env-example, init-script, worker runtime image, and smoke-script coverage inside `infra/`.</field-1>
+        <field-1>test-files: keep compose, env-example, init-script, worker runtime image, host harness bridge, and smoke-script coverage inside `infra/`.</field-1>
         <field-2>module-checks: preserve config validation plus compose smoke commands as authoritative checks.</field-2>
         <field-3>required-log-markers: preserve `[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]`.</field-3>
         <field-4>follow-up-checks: compose health convergence is closed; full functional smoke matrix remains the final phase gate before cutover.</field-4>
@@ -1673,7 +1674,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
       </expected-verification-delta-fields>
       <open-cutover-gates>
         <gate-1 id="CUTOVER-PARITY-HTTP" status="verified" verified-at="2026-04-23">Live-stack route regression passed for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes; no M-API-HTTP route-level patch was required.</gate-1>
-        <gate-2 id="CUTOVER-WORKER-E2E" blocked-by="worker-report-runtime-cglm">Transcription execution is verified against real MinIO and API claim/finalize paths for single and combined uploads; report/deep-research child-chain execution remains open because API-created report child job 83e9ad36-dd91-47a9-833d-4866c7e431c8 failed inside [WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE] with cglm executable not found: cglm.</gate-2>
+        <gate-2 id="CUTOVER-WORKER-E2E" blocked-by="external-harness-latency">Transcription execution is verified against real MinIO and API claim/finalize paths for single and combined uploads; report child execution now reaches the configurable host harness bridge and cancellation finalizes cleanly, but report/deep-research child-chain execution remains open until a real harness run returns report artifacts and the API-created deep-research child succeeds.</gate-2>
         <gate-3 id="CUTOVER-ADAPTER-PARITY">Replay Web UI browser smoke, Telegram UX, and MCP tool-level live API integration against the same stack.</gate-3>
         <gate-4 id="CUTOVER-FAILURE-PATHS">Close storage, queue, webhook, and WebSocket failure-path smokes that remain open in verification-plan.xml.</gate-4>
         <gate-5 id="CUTOVER-LEGACY-REMOVAL">Delete or replace the old single-process runtime path only after all previous gates pass.</gate-5>
@@ -1836,7 +1837,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
     </FailurePacket>
 
     <FailurePacket packet-id="M-WORKER-REPORT-wave-4-subprocess-cancel-drift" module="M-WORKER-REPORT" verification-ref="V-M-WORKER-REPORT">
-      <scenario>Report worker loses deterministic subprocess failure handling, or cancellation does not terminate `cglm` before finalizing `canceled`.</scenario>
+      <scenario>Report worker loses deterministic subprocess failure handling, or cancellation does not terminate the report harness before finalizing `canceled`.</scenario>
       <contract-ref>M-WORKER-REPORT / V-M-WORKER-REPORT / Phase-4 step-1 / DF-004 / DF-006</contract-ref>
       <expected-evidence>
         <marker-1>[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]</marker-1>
@@ -1845,7 +1846,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
       </expected-evidence>
       <observed-evidence>
         <log-1>[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE] emitted before subprocess assertion failed</log-1>
-        <trace-1>cglm process outlived cancel handling or terminal state emission</trace-1>
+        <trace-1>report harness process outlived cancel handling or terminal state emission</trace-1>
         <trace-2>Report worker surfaced non-deterministic subprocess errors or partial artifact output</trace-2>
       </observed-evidence>
       <first-divergent-block>BLOCK_EXECUTE_REPORT_PIPELINE</first-divergent-block>

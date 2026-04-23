@@ -663,6 +663,10 @@ def _resolve_claude_executable() -> str:
     if configured:
         return configured
 
+    configured = os.getenv("CLAUDE_BIN", "").strip()
+    if configured:
+        return configured
+
     resolved = shutil.which("claude")
     if resolved:
         return resolved

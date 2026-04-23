@@ -246,6 +246,109 @@ func TestApiHttpRuntimeWorkerLifecycleUsesAuthoritativeExecutionState(t *testing
 	}
 }
 
+func TestApiHttpRuntimeClaimUsesTranscriptArtifactForReportChild(t *testing.T) {
+	t.Parallel()
+
+	parent := runtimeJobRecord("11111111-1111-1111-1111-111111111111", queue.JobTypeTranscription, "succeeded", 4)
+	child := runtimeJobRecord("22222222-2222-2222-2222-222222222222", queue.JobTypeReport, "running", 2)
+	child.RootJobID = parent.ID
+	child.ParentJobID = parent.ID
+	execution := storage.JobExecutionRecord{
+		ExecutionID: "33333333-3333-3333-3333-333333333333",
+		JobID:       child.ID,
+		WorkerKind:  "report",
+		TaskType:    "report.run",
+		ClaimedAt:   time.Date(2026, 4, 23, 10, 1, 0, 0, time.UTC),
+	}
+	store := &runtimeStorageDouble{
+		jobs: map[string]storage.JobRecord{
+			parent.ID: parent,
+			child.ID:  child,
+		},
+		orderedSourcesByID: map[string][]storage.OrderedSource{
+			parent.SourceSetID: {
+				{Position: 0, Source: storage.SourceRecord{ID: "source-a", SourceKind: storage.SourceKindUploadedFile}},
+				{Position: 1, Source: storage.SourceRecord{ID: "source-b", SourceKind: storage.SourceKindUploadedFile}},
+			},
+		},
+		artifactsByJob: map[string][]storage.ArtifactRecord{
+			parent.ID: {
+				runtimeArtifact("artifact-transcript", parent.ID, "transcript_segmented_markdown", "transcript.md", "artifacts/parent/transcript/segmented/transcript.md"),
+			},
+		},
+		claimResult: storage.ClaimJobExecutionResult{Job: child, Execution: &execution, Claimed: true},
+	}
+	service := newWorkerRuntimeService(&runtimeJobsDouble{}, store, &runtimeEventsDouble{})
+
+	claimResponse, err := service.Claim(context.Background(), child.ID, ClaimRequest{
+		WorkerKind: "report",
+		TaskType:   "report.run",
+	})
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if got := len(claimResponse.OrderedInputs); got != 1 {
+		t.Fatalf("ordered input count = %d, want 1", got)
+	}
+	input := claimResponse.OrderedInputs[0]
+	if input.SourceID != "artifact-transcript" || input.ObjectKey == nil || *input.ObjectKey != "artifacts/parent/transcript/segmented/transcript.md" {
+		t.Fatalf("report claim input = %#v, want transcript artifact", input)
+	}
+}
+
+func TestApiHttpRuntimeClaimUsesTranscriptAndReportArtifactsForDeepResearchChild(t *testing.T) {
+	t.Parallel()
+
+	root := runtimeJobRecord("11111111-1111-1111-1111-111111111111", queue.JobTypeTranscription, "succeeded", 4)
+	report := runtimeJobRecord("22222222-2222-2222-2222-222222222222", queue.JobTypeReport, "succeeded", 4)
+	report.RootJobID = root.ID
+	report.ParentJobID = root.ID
+	deepResearch := runtimeJobRecord("33333333-3333-3333-3333-333333333333", queue.JobTypeDeepResearch, "running", 2)
+	deepResearch.RootJobID = root.ID
+	deepResearch.ParentJobID = report.ID
+	execution := storage.JobExecutionRecord{
+		ExecutionID: "44444444-4444-4444-4444-444444444444",
+		JobID:       deepResearch.ID,
+		WorkerKind:  "deep_research",
+		TaskType:    "deep_research.run",
+		ClaimedAt:   time.Date(2026, 4, 23, 10, 1, 0, 0, time.UTC),
+	}
+	store := &runtimeStorageDouble{
+		jobs: map[string]storage.JobRecord{
+			root.ID:         root,
+			report.ID:       report,
+			deepResearch.ID: deepResearch,
+		},
+		artifactsByJob: map[string][]storage.ArtifactRecord{
+			root.ID: {
+				runtimeArtifact("artifact-transcript", root.ID, "transcript_segmented_markdown", "transcript.md", "artifacts/root/transcript/segmented/transcript.md"),
+			},
+			report.ID: {
+				runtimeArtifact("artifact-report", report.ID, "report_markdown", "report.md", "artifacts/report/report/markdown/report.md"),
+			},
+		},
+		claimResult: storage.ClaimJobExecutionResult{Job: deepResearch, Execution: &execution, Claimed: true},
+	}
+	service := newWorkerRuntimeService(&runtimeJobsDouble{}, store, &runtimeEventsDouble{})
+
+	claimResponse, err := service.Claim(context.Background(), deepResearch.ID, ClaimRequest{
+		WorkerKind: "deep_research",
+		TaskType:   "deep_research.run",
+	})
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if got := len(claimResponse.OrderedInputs); got != 2 {
+		t.Fatalf("ordered input count = %d, want 2", got)
+	}
+	if claimResponse.OrderedInputs[0].SourceID != "artifact-transcript" {
+		t.Fatalf("first deep-research input = %#v, want transcript artifact", claimResponse.OrderedInputs[0])
+	}
+	if claimResponse.OrderedInputs[1].SourceID != "artifact-report" {
+		t.Fatalf("second deep-research input = %#v, want report artifact", claimResponse.OrderedInputs[1])
+	}
+}
+
 func TestApiHttpRuntimeWorkerLifecycleRejectsStaleExecution(t *testing.T) {
 	t.Parallel()
 
@@ -522,6 +625,20 @@ func runtimeSourceSet(sourceSetID, inputKind string) storage.SourceSetRecord {
 		Items: []storage.SourceSetItem{
 			{Position: 0, SourceID: "22222222-2222-2222-2222-222222222222"},
 		},
+	}
+}
+
+func runtimeArtifact(id, jobID, artifactKind, filename, objectKey string) storage.ArtifactRecord {
+	return storage.ArtifactRecord{
+		ID:           id,
+		JobID:        jobID,
+		ArtifactKind: artifactKind,
+		Filename:     filename,
+		Format:       "markdown",
+		MIMEType:     "text/markdown; charset=utf-8",
+		ObjectKey:    objectKey,
+		SizeBytes:    42,
+		CreatedAt:    time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC),
 	}
 }
 

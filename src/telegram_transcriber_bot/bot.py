@@ -104,7 +104,7 @@ class TelegramTranscriberApp:
         await message.answer(
             "Поддерживается YouTube, прямые Telegram audio/video и текст с несколькими источниками. "
             "После обработки бот сразу отдаёт цельную txt-транскрибацию, по кнопке может прислать markdown-версию по сегментам, "
-            "может собрать формальный markdown-отчёт через cglm "
+            "может собрать формальный markdown-отчёт через настроенную AI-упряжку "
             "и затем запустить deep research по evidence-first пайплайну."
         )
 
@@ -291,7 +291,7 @@ class TelegramTranscriberApp:
             return
 
         await _safe_callback_answer(callback, "Запускаю генерацию отчёта...")
-        status_message = await callback.message.answer("Готовлю исследовательский отчёт через cglm...")
+        status_message = await callback.message.answer("Готовлю исследовательский отчёт через настроенную AI-упряжку...")
         async with lock:
             try:
                 job = await asyncio.to_thread(
