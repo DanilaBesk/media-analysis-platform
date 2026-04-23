@@ -758,6 +758,8 @@ VerificationPlan / TestingStrategy / V-M-API-HTTP / Gate-Phase-2:
       <module-id>M-WORKER-COMMON</module-id>
       <module-name>WorkerCommon</module-name>
       <purpose>Extract the shared Python worker runtime layer so transcription, report, and deep-research workers all use one canonical internal API client, artifact-writing contract, and execution scaffold.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>.venv/bin/python -m pytest workers/common/tests passed; shared API client, object-store adapter, and worker loop are consumed by all worker launcher packets.</completion-evidence>
       <write-scope>
         <file-1>workers/common/src/transcriber_workers_common/*.py</file-1>
         <file-2>workers/common/tests/*.py</file-2>
@@ -804,6 +806,7 @@ VerificationPlan / V-M-WORKER-COMMON / Gate-Phase-3:
 - Success scenario: shared worker API client and artifact helpers produce valid internal control-plane payloads.
 - Failure scenario: internal API unavailability or malformed artifact payloads fail deterministically before worker-specific execution continues.
 - Required marker: [WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]
+- Runtime marker: [WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]
 - Required assertions:
   - workers must not bypass internal control-plane contracts;
   - artifact helper output remains compatible with canonical finalize and artifact-registration DTOs.
@@ -838,6 +841,8 @@ VerificationPlan / V-M-WORKER-COMMON / Gate-Phase-3:
       <module-id>M-WORKER-TRANSCRIPTION</module-id>
       <module-name>WorkerTranscription</module-name>
       <purpose>Move transcription execution into a dedicated worker that claims jobs through the API-owned control contract, preserves current transcript outputs, and handles ordered combined-media inputs deterministically.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>.venv/bin/python -m pytest workers/transcription/tests passed; compose-ready transcription launcher exists and reuses WorkerCommon runtime.</completion-evidence>
       <write-scope>
         <file-1>workers/transcription/src/*.py</file-1>
         <file-2>workers/transcription/tests/*.py</file-2>
@@ -921,6 +926,8 @@ VerificationPlan / V-M-WORKER-TRANSCRIPTION / Gate-Phase-3:
       <module-id>M-WORKER-REPORT</module-id>
       <module-name>WorkerReport</module-name>
       <purpose>Extract report generation into a dedicated worker that consumes transcript artifacts, executes `cglm`, preserves markdown plus DOCX outputs, and keeps subprocess cancellation under the API-owned job shell.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>.venv/bin/python -m pytest workers/report/tests passed; compose-ready report launcher exists and reuses WorkerCommon runtime.</completion-evidence>
       <write-scope>
         <file-1>workers/report/src/*.py</file-1>
         <file-2>workers/report/tests/*.py</file-2>
@@ -1000,6 +1007,8 @@ VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
       <module-id>M-WORKER-DEEP-RESEARCH</module-id>
       <module-name>WorkerDeepResearch</module-name>
       <purpose>Extract the deep-research pipeline into a dedicated worker that preserves phase artifacts, final markdown output, optional execution logs, and deterministic terminal-failure handling.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>.venv/bin/python -m pytest workers/deep-research/tests passed; compose-ready deep-research launcher exists and reuses WorkerCommon runtime.</completion-evidence>
       <write-scope>
         <file-1>workers/deep-research/src/*.py</file-1>
         <file-2>workers/deep-research/tests/*.py</file-2>
@@ -1486,6 +1495,8 @@ VerificationPlan / V-M-MCP-ADAPTER / Gate-Phase-5:
       <module-id>M-INFRA-COMPOSE</module-id>
       <module-name>InfraCompose</module-name>
       <purpose>Harden the compose stack for the post-implementation phase by proving startup order, healthchecks, persistent volumes, and stack-local smoke execution before final cutover.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>docker compose config, compose-smoke --check-config, and compose-smoke --live-smoke passed with API, workers, Web UI, Telegram adapter, MCP adapter, Postgres, Redis, MinIO, and MinIO init converged.</completion-evidence>
       <write-scope>
         <file-1>infra/docker-compose.yml</file-1>
         <file-2>infra/env/*.env.example</file-2>
@@ -1546,7 +1557,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
       <step-local-verification>
         <command-1>docker compose -f infra/docker-compose.yml config</command-1>
         <command-2>bash infra/scripts/compose-smoke.sh --check-config</command-2>
-        <command-3>Compose smoke verification with all runtime services healthy and persistent volume plus init-script paths exercised.</command-3>
+        <command-3>bash infra/scripts/compose-smoke.sh --live-smoke</command-3>
         <evidence-1>Stack startup order and healthchecks converge without manual ordering hacks.</evidence-1>
         <evidence-2>Persistent volume and init-script wiring are proven before cutover rather than assumed from config shape alone.</evidence-2>
       </step-local-verification>
@@ -1560,7 +1571,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
         <field-1>test-files: keep compose, env-example, init-script, and smoke-script coverage inside `infra/`.</field-1>
         <field-2>module-checks: preserve config validation plus compose smoke commands as authoritative checks.</field-2>
         <field-3>required-log-markers: preserve `[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]`.</field-3>
-        <field-4>follow-up-checks: full smoke matrix remains the final phase gate before cutover.</field-4>
+        <field-4>follow-up-checks: compose health convergence is closed; full functional smoke matrix remains the final phase gate before cutover.</field-4>
       </expected-verification-delta-fields>
       <notes>
         <note-1>This packet is runtime hardening, not new architecture.</note-1>
@@ -1572,6 +1583,8 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
       <module-id>M-API-HTTP</module-id>
       <module-name>ApiHttp</module-name>
       <purpose>Close the cutover wave by proving full-stack API parity against the frozen acceptance matrix and keeping any final HTTP-layer changes limited to route-level gaps surfaced by evidence.</purpose>
+      <packet-state>next-open</packet-state>
+      <entry-condition>Start only after M-INFRA-COMPOSE-wave-6 is completed and compose live-smoke health convergence is proven.</entry-condition>
       <write-scope>
         <file-1>apps/api/internal/api/*_test.go</file-1>
         <file-2>apps/api/internal/api/testdata/*</file-2>
@@ -1651,6 +1664,13 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
         <field-3>required-log-markers: preserve `[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]`.</field-3>
         <field-4>follow-up-checks: legacy path removal remains blocked on explicit cutover evidence, not on assumptions.</field-4>
       </expected-verification-delta-fields>
+      <open-cutover-gates>
+        <gate-1 id="CUTOVER-PARITY-HTTP">Run live-stack route regression for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes.</gate-1>
+        <gate-2 id="CUTOVER-WORKER-E2E">Prove worker execution against real MinIO and API claim/finalize paths for transcription, report, and deep-research jobs.</gate-2>
+        <gate-3 id="CUTOVER-ADAPTER-PARITY">Replay Web UI browser smoke, Telegram UX, and MCP tool-level live API integration against the same stack.</gate-3>
+        <gate-4 id="CUTOVER-FAILURE-PATHS">Close storage, queue, webhook, and WebSocket failure-path smokes that remain open in verification-plan.xml.</gate-4>
+        <gate-5 id="CUTOVER-LEGACY-REMOVAL">Delete or replace the old single-process runtime path only after all previous gates pass.</gate-5>
+      </open-cutover-gates>
       <notes>
         <note-1>This is a verification-heavy packet and should not be used as a pretext for broad control-plane refactors.</note-1>
         <note-2>Use first-divergent-block reasoning: if parity fails outside HTTP, hand off through failure packets instead of patching blindly in the route layer.</note-2>

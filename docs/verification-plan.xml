@@ -316,8 +316,8 @@
         <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
         <assertion-2>Internal worker routes validate `execution_id` against authoritative control-plane state rather than route-local memory.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Multipart and JSON handler fixtures now live under apps/api/internal/api/api_test.go; remaining follow-up is live-server curl smoke once an executable API binary and authoritative execution-claim backing are wired.</wave-follow-up>
-      <phase-follow-up>Full route regression against generated SDKs and manual curl smoke checks.</phase-follow-up>
+      <wave-follow-up status="partially-closed">Executable API runtime and authoritative execution-claim backing are wired and core live lifecycle smoke passed; remaining follow-up is full route regression against the live stack.</wave-follow-up>
+      <phase-follow-up status="open">Full route regression across multipart, combined upload, URL, child-job, artifact, cancel, retry, WebSocket, and internal worker routes with manual curl or equivalent live-stack checks.</phase-follow-up>
     </V-M-API-HTTP>
 
     <V-M-API-EVENTS MODULE="M-API-EVENTS" PRIORITY="high">
@@ -354,13 +354,14 @@
       </scenarios>
       <required-log-markers>
         <marker-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</marker-1>
+        <marker-2>[WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]</marker-2>
       </required-log-markers>
       <required-trace-assertions>
         <assertion-1>Workers must not bypass internal control-plane contracts.</assertion-1>
         <assertion-2>Artifact helper output must remain compatible with the canonical worker finalize and artifact-registration DTOs.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Reuse these helpers across all worker implementations before diverging code paths appear.</wave-follow-up>
-      <phase-follow-up>Inspect DTO drift whenever contracts change.</phase-follow-up>
+      <wave-follow-up status="closed">Helpers are reused by transcription, report, and deep-research worker launchers; continue to inspect DTO drift whenever contracts change.</wave-follow-up>
+      <phase-follow-up status="open">Inspect DTO drift whenever contracts change during cutover parity work.</phase-follow-up>
     </V-M-WORKER-COMMON>
 
     <V-M-WORKER-TRANSCRIPTION MODULE="M-WORKER-TRANSCRIPTION" PRIORITY="high">
@@ -371,6 +372,7 @@
       </test-files>
       <module-checks>
         <check-1>.venv/bin/python -m pytest tests/test_transcribers.py tests/test_documents.py</check-1>
+        <check-2>.venv/bin/python -m pytest workers/transcription/tests</check-2>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Worker produces plain, segmented, and DOCX transcript artifacts from uploaded and YouTube sources.</scenario-1>
@@ -384,8 +386,8 @@
         <assertion-1>Success finalization must not happen before all required transcript artifacts exist.</assertion-1>
         <assertion-2>When more than one ordered input exists, concatenation occurs before the final transcription pass and before success finalization.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Run end-to-end against real MinIO and internal API claim/finalize endpoints.</wave-follow-up>
-      <phase-follow-up>Replay current Telegram UX expectations using the thin adapter.</phase-follow-up>
+      <wave-follow-up status="open">Run end-to-end against real MinIO and internal API claim/finalize endpoints.</wave-follow-up>
+      <phase-follow-up status="open">Replay current Telegram UX expectations using the thin adapter.</phase-follow-up>
     </V-M-WORKER-TRANSCRIPTION>
 
     <V-M-WORKER-REPORT MODULE="M-WORKER-REPORT" PRIORITY="high">
@@ -396,6 +398,7 @@
       </test-files>
       <module-checks>
         <check-1>.venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py</check-1>
+        <check-2>.venv/bin/python -m pytest workers/report/tests</check-2>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Report worker produces markdown and DOCX artifacts from transcript input.</scenario-1>
@@ -407,8 +410,8 @@
       <required-trace-assertions>
         <assertion-1>Cancellation must terminate subprocess execution before finalizing `canceled`.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Validate report child reuse semantics through the API.</wave-follow-up>
-      <phase-follow-up>Run report-worker integration against real internal control-plane endpoints.</phase-follow-up>
+      <wave-follow-up status="open">Validate report child reuse semantics through the API.</wave-follow-up>
+      <phase-follow-up status="open">Run report-worker integration against real internal control-plane endpoints.</phase-follow-up>
     </V-M-WORKER-REPORT>
 
     <V-M-WORKER-DEEP-RESEARCH MODULE="M-WORKER-DEEP-RESEARCH" PRIORITY="high">
@@ -418,6 +421,7 @@
       </test-files>
       <module-checks>
         <check-1>.venv/bin/python -m pytest tests/test_deep_research.py</check-1>
+        <check-2>.venv/bin/python -m pytest workers/deep-research/tests</check-2>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Deep-research worker preserves required phase artifacts and final markdown output.</scenario-1>
@@ -429,8 +433,8 @@
       <required-trace-assertions>
         <assertion-1>Terminal success must not be emitted if required deep-research outputs are missing.</assertion-1>
       </required-trace-assertions>
-      <wave-follow-up>Run integration against API-created deep-research child jobs.</wave-follow-up>
-      <phase-follow-up>Smoke-check deep-research runtime inside Docker Compose.</phase-follow-up>
+      <wave-follow-up status="open">Run integration against API-created deep-research child jobs.</wave-follow-up>
+      <phase-follow-up status="partially-closed">Compose health smoke starts the deep-research runtime; API-created child-job execution remains open.</phase-follow-up>
     </V-M-WORKER-DEEP-RESEARCH>
 
     <V-M-WEB-UI MODULE="M-WEB-UI" PRIORITY="medium">
@@ -522,6 +526,7 @@
       <module-checks>
         <check-1>docker compose -f infra/docker-compose.yml config</check-1>
         <check-2>bash infra/scripts/compose-smoke.sh --check-config</check-2>
+        <check-3>bash infra/scripts/compose-smoke.sh --live-smoke</check-3>
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Compose topology defines the required services, env-file contracts, healthchecks, volumes, and startup ordering before runtime modules are implemented.</scenario-1>
@@ -535,10 +540,33 @@
         <assertion-1>Phase-1 validates topology shape only; full stack boot remains a later phase gate after service modules exist.</assertion-1>
         <assertion-2>Phase-6 hardening must prove clean stack startup and smoke-script success before the old single-process runtime path is removed.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Exercise healthchecks and startup ordering under clean local state once API and worker entrypoints exist.</wave-follow-up>
-      <phase-follow-up>Run full smoke matrix before deleting the old single-process runtime path.</phase-follow-up>
+      <wave-follow-up status="closed">Healthchecks and startup ordering were exercised with runtime services enabled and compose live-smoke convergence.</wave-follow-up>
+      <phase-follow-up status="open">Run the full functional smoke matrix before deleting the old single-process runtime path.</phase-follow-up>
     </V-M-INFRA-COMPOSE>
   </ModuleVerification>
+
+  <CutoverRemainingGates>
+    <Gate id="CUTOVER-PARITY-HTTP" status="open" owner-module="M-API-HTTP">
+      <description>Run live-stack route regression for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes.</description>
+      <required-evidence>Contract-shaped request and response captures from the compose stack plus narrow route-level fixes only when HTTP is the first divergent block.</required-evidence>
+    </Gate>
+    <Gate id="CUTOVER-WORKER-E2E" status="open" owner-module="M-WORKER-TRANSCRIPTION,M-WORKER-REPORT,M-WORKER-DEEP-RESEARCH">
+      <description>Prove transcription, report, and deep-research workers against real MinIO plus API claim/finalize paths, including API-created child jobs.</description>
+      <required-evidence>At least one successful root transcription execution and one report/deep-research child chain, with artifacts stored through MinIO and terminal state persisted through the API.</required-evidence>
+    </Gate>
+    <Gate id="CUTOVER-ADAPTER-PARITY" status="open" owner-module="M-WEB-UI,M-TELEGRAM-ADAPTER,M-MCP-ADAPTER">
+      <description>Replay browser, Telegram, and MCP adapter parity against the same live API without allowing any adapter to bypass the API boundary.</description>
+      <required-evidence>Browser smoke, Telegram UX replay for plain/segmented/report actions, and MCP tool-level live API integration results.</required-evidence>
+    </Gate>
+    <Gate id="CUTOVER-FAILURE-PATHS" status="open" owner-module="M-API-STORAGE,M-API-QUEUE,M-API-EVENTS">
+      <description>Close lower-level failure-path smokes that are still listed as follow-ups: migration rollback, presigned MinIO URL validation, Redis/asynq queue smoke, cancel/outage behavior, webhook 5xx retry, and WebSocket reconnect.</description>
+      <required-evidence>Failure-mode commands and logs showing deterministic errors or retries without changing ownership boundaries.</required-evidence>
+    </Gate>
+    <Gate id="CUTOVER-LEGACY-REMOVAL" status="blocked" owner-module="M-API-HTTP">
+      <description>Remove or replace the old single-process runtime path only after all functional parity gates above pass.</description>
+      <required-evidence>Explicit cutover evidence pack and clean regression gates before deleting legacy entrypoints.</required-evidence>
+    </Gate>
+  </CutoverRemainingGates>
 
   <VerificationMatrix>
     <Matrix-1 MODULE="M-CONTRACTS">
@@ -592,6 +620,7 @@
     </Telemetry-2>
     <Telemetry-3 MODULE="M-WORKER-COMMON">
       <required-log-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</required-log-1>
+      <required-log-2>[WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]</required-log-2>
     </Telemetry-3>
     <Telemetry-4 MODULE="M-WORKER-TRANSCRIPTION">
       <required-log-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</required-log-1>
@@ -671,22 +700,26 @@
     </Gate-Phase-2>
 
     <Gate-Phase-3 PHASE="Phase-3">
-      <goal>Transcription worker end-to-end path works against the new control plane.</goal>
+      <goal>Transcription worker extraction is packet-complete and has a remaining live-control-plane verification gate.</goal>
       <commands>
         <command-1>.venv/bin/python -m pytest tests/test_transcribers.py tests/test_documents.py</command-1>
+        <command-2>.venv/bin/python -m pytest workers/common/tests workers/transcription/tests</command-2>
       </commands>
       <required-evidence>
         <evidence-1>Required transcript artifacts exist before succeeded finalization.</evidence-1>
+        <evidence-2>Live MinIO plus internal API claim/finalize E2E remains required before final cutover.</evidence-2>
       </required-evidence>
     </Gate-Phase-3>
 
     <Gate-Phase-4 PHASE="Phase-4">
-      <goal>Report and deep-research child-job flows are stable under reuse, retry, and cancel semantics.</goal>
+      <goal>Report and deep-research worker extraction is packet-complete and has remaining API-created child-job integration gates.</goal>
       <commands>
         <command-1>.venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py tests/test_deep_research.py</command-1>
+        <command-2>.venv/bin/python -m pytest workers/report/tests workers/deep-research/tests</command-2>
       </commands>
       <required-evidence>
         <evidence-1>Child create requests reuse canonical rows and retries create lineage-linked new rows.</evidence-1>
+        <evidence-2>Report and deep-research child jobs execute against real internal control-plane endpoints before final cutover.</evidence-2>
       </required-evidence>
     </Gate-Phase-4>
 
@@ -707,12 +740,14 @@
     <Gate-Phase-6 PHASE="Phase-6">
       <goal>The full compose stack is healthy and the old single-process path can be removed safely.</goal>
       <commands>
-        <command-1>docker compose up -d</command-1>
-        <command-2>docker compose ps</command-2>
+        <command-1>bash infra/scripts/compose-smoke.sh --live-smoke</command-1>
+        <command-2>Full route regression with multipart, combined upload, URL, child-job, artifact, cancel, retry, WebSocket, and internal worker fixtures against the live stack.</command-2>
+        <command-3>Acceptance-matrix parity replay proving the new stack covers the frozen baseline before legacy cutover.</command-3>
       </commands>
       <required-evidence>
         <evidence-1>All required services are healthy in local deployment.</evidence-1>
         <evidence-2>Functional parity against the frozen acceptance matrix is demonstrated.</evidence-2>
+        <evidence-3>Old single-process runtime path is removed only after explicit parity evidence exists.</evidence-3>
       </required-evidence>
     </Gate-Phase-6>
   </PhaseGates>

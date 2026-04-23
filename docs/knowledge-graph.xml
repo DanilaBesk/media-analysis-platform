@@ -97,7 +97,7 @@
       </annotations>
     </M-API-EVENTS>
 
-    <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" STATUS="planned">
+    <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" STATUS="implemented">
       <purpose>Host shared Python execution utilities reused by transcription, report, and deep-research workers.</purpose>
       <path>workers/common</path>
       <depends>M-CONTRACTS</depends>
@@ -105,37 +105,42 @@
       <annotations>
         <export-apiClient PURPOSE="Call internal worker-control endpoints consistently." />
         <export-artifactWriters PURPOSE="Write worker outputs to MinIO and return metadata payloads." />
+        <export-runWorkerLoop PURPOSE="Execute one shared polling or one-shot worker loop for all worker services." />
+        <export-objectStore PURPOSE="Fetch source objects and upload artifact objects through the shared MinIO adapter." />
       </annotations>
     </M-WORKER-COMMON>
 
-    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Execute transcription jobs by reusing existing source materialization, faster-whisper, and transcript rendering logic.</purpose>
       <path>workers/transcription</path>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-TRANSCRIPTION</verification-ref>
       <annotations>
         <export-runTranscription PURPOSE="Claim, execute, emit progress, persist artifacts, and finalize transcription jobs." />
+        <export-launchTranscriptionWorker PURPOSE="Start the compose-ready transcription worker process." />
         <type-OrderedWorkerInput PURPOSE="Ordered transcription inputs resolved by the internal claim surface." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
 
-    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Execute report jobs using `cglm` and report artifact rendering while preserving current report behavior.</purpose>
       <path>workers/report</path>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-REPORT</verification-ref>
       <annotations>
         <export-runReport PURPOSE="Generate markdown and DOCX reports from transcript artifacts." />
+        <export-launchReportWorker PURPOSE="Start the compose-ready report worker process." />
       </annotations>
     </M-WORKER-REPORT>
 
-    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" STATUS="planned">
+    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" STATUS="implemented">
       <purpose>Execute deep-research jobs by reusing the current evidence-driven multi-phase pipeline.</purpose>
       <path>workers/deep-research</path>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-DEEP-RESEARCH</verification-ref>
       <annotations>
         <export-runDeepResearch PURPOSE="Run the deep-research pipeline and persist the final markdown artifact." />
+        <export-launchDeepResearchWorker PURPOSE="Start the compose-ready deep-research worker process." />
       </annotations>
     </M-WORKER-DEEP-RESEARCH>
 

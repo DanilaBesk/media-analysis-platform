@@ -1,7 +1,7 @@
-<TechnologyStack VERSION="0.3.0">
+  <TechnologyStack VERSION="0.4.0">
   <Runtime>Docker Compose local deployment v2</Runtime>
-  <Language>Go 1.24.x plus Python 3.12.x plus TypeScript 5.x</Language>
-  <Framework>chi plus pgx plus sqlc plus goose plus asynq plus React and Vite planned for v1</Framework>
+  <Language>Go 1.26 plus Python 3.12.x plus TypeScript 5.x</Language>
+  <Framework>stdlib net/http plus database/sql pgx driver plus goose-style SQL migrations plus asynq plus React, React Router, Vite, and packet-local MCP/Telegram clients</Framework>
 
   <ArchitectureShape>
     <goal>Separate orchestration from execution while keeping a single local deployment topology.</goal>
@@ -19,8 +19,8 @@
     <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Python Telegram adapter over HTTP API" />
     <component id="apps-mcp-server" path="apps/mcp-server" role="Thin MCP adapter over HTTP API" />
     <component id="packages-contracts" path="packages/contracts" role="OpenAPI definitions, JSON schemas, WebSocket schemas, webhook schemas, and shared enums" />
-    <component id="packages-sdk-ts" path="packages/sdk-ts" role="Typed client for Web UI and MCP server" />
-    <component id="packages-sdk-py" path="packages/sdk-py" role="Typed Python client for Telegram bot and Python workers or local internal tooling" />
+    <component id="packages-sdk-ts" path="packages/sdk-ts" role="Deferred shared TypeScript SDK; current Web UI and MCP adapter use packet-local clients" />
+    <component id="packages-sdk-py" path="packages/sdk-py" role="Deferred shared Python SDK; current Telegram adapter and Python workers use packet-local clients" />
     <component id="infra-compose" path="infra/docker-compose.yml" role="Local deployment topology" />
   </TargetComponents>
 
@@ -86,21 +86,21 @@
     <dep name="youtube-transcript-api" version=">=1.2.3" purpose="Fast subtitle retrieval path for YouTube sources." />
     <dep name="yt-dlp" version=">=2025.1.15" purpose="YouTube media extraction fallback path." />
     <dep name="cglm" version="external-cli" purpose="Mandatory report generation CLI invoked by the report worker." />
-    <dep name="chi" version="planned" purpose="Go HTTP routing layer for the control plane." />
-    <dep name="pgx" version="planned" purpose="Go PostgreSQL access layer." />
-    <dep name="sqlc" version="planned" purpose="Typed query generation for Go and PostgreSQL." />
-    <dep name="goose" version="planned" purpose="Database migrations for the Go API." />
-    <dep name="asynq" version="planned" purpose="Redis-backed task queueing for workers." />
-    <dep name="React" version="planned" purpose="Local browser UI for submission, monitoring, and admin actions." />
-    <dep name="Vite" version="planned" purpose="Web UI development and build pipeline." />
-    <dep name="TanStack Query" version="planned" purpose="Polling, cache, and mutation management in the Web UI." />
-    <dep name="React Router" version="planned" purpose="Simple page routing for the local Web UI." />
-    <dep name="official MCP SDK" version="planned" purpose="MCP adapter implementation in TypeScript." />
+    <dep name="net/http" version="stdlib" purpose="Go HTTP routing layer for the control plane." />
+    <dep name="pgx" version="v5.9.2" purpose="Go PostgreSQL access layer through database/sql." />
+    <dep name="minio-go" version="v7.0.100" purpose="Go MinIO/S3 artifact and source object access." />
+    <dep name="goose-style-sql" version="current" purpose="Database migrations for the Go API, applied by the runtime bootstrap path." />
+    <dep name="asynq" version="v0.25.1" purpose="Redis-backed task queueing for workers." />
+    <dep name="React" version="18.3.1" purpose="Local browser UI for submission, monitoring, and admin actions." />
+    <dep name="Vite" version="5.4.10" purpose="Web UI development and build pipeline." />
+    <dep name="React Router" version="6.28.0" purpose="Simple page routing for the local Web UI." />
+    <dep name="Vitest" version="2.1.4" purpose="Web UI and MCP adapter packet-local tests." />
+    <dep name="MCP SDK" version="deferred" purpose="Current MCP adapter uses a packet-local TypeScript shell and API client until shared SDK extraction is justified." />
   </Dependencies>
 
   <VersionConstraints>
-    <constraint lib="python" min="3.12" max="3.12.x" reason="Current repository and future workers are designed around Python 3.12." />
-    <constraint lib="go" min="1.24.0" max="1.24.x" reason="Go control plane should target a stable modern release." />
+    <constraint lib="python" min="3.12" max="3.12.x" reason="Current repository and workers are designed around Python 3.12." />
+    <constraint lib="go" min="1.26.0" max="1.26.x" reason="apps/api/go.mod and compose runtime use Go 1.26." />
     <constraint lib="node" min="22.0.0" max="22.x" reason="React and Vite workspace should run on one consistent local Node runtime." />
   </VersionConstraints>
 
@@ -145,6 +145,14 @@
       <var>WEBHOOK_DELIVERY_MAX_ATTEMPTS</var>
       <var>WEBHOOK_DELIVERY_BACKOFF_SECONDS</var>
     </api>
+    <worker-common>
+      <var>API_BASE_URL</var>
+      <var>INTERNAL_API_TIMEOUT_SECONDS</var>
+      <var>WORKER_WORKSPACE_ROOT</var>
+      <var>WORKER_POLL_INTERVAL_SECONDS</var>
+      <var>WORKER_MAX_IDLE_POLLS</var>
+      <var>WORKER_MAX_PROCESSED_JOBS</var>
+    </worker-common>
     <transcription-worker>
       <var>WHISPER_MODEL</var>
       <var>WHISPER_DEVICE</var>
@@ -178,15 +186,15 @@
     <tool name="test-runner-python" value="pytest" version=">=8.4.2" />
     <tool name="async-test-support" value="pytest-asyncio" version=">=1.2.0" />
     <tool name="coverage" value="pytest-cov" version=">=7.0.0" />
-    <tool name="workspace-js" value="pnpm workspaces" version="planned" />
-    <tool name="go-test" value="go test" version="planned" />
+    <tool name="workspace-js" value="pnpm app-local package roots" version="10.27.0" />
+    <tool name="go-test" value="go test" version="current" />
     <tool name="compose" value="docker compose" version="v2" />
   </Tooling>
 
   <Testing>
     <baseline-python>
       <command>.venv/bin/python -m pytest tests/test_service.py tests/test_transcribers.py tests/test_bot.py</command>
-      <focus>Current deterministic unit and contract checks in the monolithic Python codebase while worker extraction is not complete.</focus>
+      <focus>Legacy Python behavior checks that must remain conceptually preserved after worker extraction.</focus>
     </baseline-python>
     <baseline-full>
       <command>.venv/bin/python -m pytest</command>
@@ -194,7 +202,7 @@
     </baseline-full>
     <target-cross-stack>
       <command>go test ./... &amp;&amp; .venv/bin/python -m pytest &amp;&amp; pnpm test</command>
-      <focus>Target-state cross-stack validation once Go API, Python workers, Web UI, and adapters exist.</focus>
+      <focus>Target-state cross-stack validation now that Go API, Python workers, Web UI, and adapters exist.</focus>
     </target-cross-stack>
     <contract-scope>OpenAPI validation, schema validation for WebSocket and webhook envelopes, and generated client compatibility.</contract-scope>
     <mocking-policy>Prefer deterministic fakes, monkeypatching, and narrow subprocess or storage adapters over broad end-to-end mocks. Queue, storage, and webhook boundaries must have contract-level tests.</mocking-policy>

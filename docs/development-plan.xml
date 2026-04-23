@@ -1169,7 +1169,7 @@
       </notes>
     </M-API-HTTP>
 
-    <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" LAYER="2" ORDER="2" STATUS="planned">
+    <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" LAYER="2" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Provide shared Python helpers for claim, progress, finalize calls, storage utilities, and execution scaffolding.</purpose>
         <scope>Internal API client helpers, artifact upload helpers, typed execution context parsing, and common cancellation probes.</scope>
@@ -1186,6 +1186,8 @@
       </contract>
       <interface>
         <export-jobApiClient PURPOSE="Call internal worker endpoints safely." />
+        <export-runWorkerLoop PURPOSE="Poll queued jobs or execute a one-shot job through one shared worker loop." />
+        <export-objectStore PURPOSE="Fetch source objects and upload artifact objects through the shared MinIO/S3 adapter." />
       </interface>
       <depends>M-CONTRACTS</depends>
       <target>
@@ -1199,10 +1201,11 @@
       <verification-ref>V-M-WORKER-COMMON</verification-ref>
       <notes>
         <note-1>Keep worker-to-API DTOs stable and versioned through M-CONTRACTS.</note-1>
+        <note-2>Runtime scaffold, API client, object-store adapter, and packet-local tests are implemented; remaining work is live integration evidence, not shared-helper extraction.</note-2>
       </notes>
     </M-WORKER-COMMON>
 
-    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" LAYER="3" ORDER="1" STATUS="planned">
+    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" LAYER="3" ORDER="1" STATUS="implemented">
       <contract>
         <purpose>Reuse source extraction, YouTube resolution, faster-whisper, and document rendering to produce transcript artifacts.</purpose>
         <scope>Source materialization, subtitle fast path, Whisper fallback, transcript rendering, artifact upload, and terminal finalization.</scope>
@@ -1222,6 +1225,7 @@
       </contract>
       <interface>
         <export-runTranscription PURPOSE="Execute one claimed transcription job." />
+        <export-launchTranscriptionWorker PURPOSE="Start the compose-ready transcription worker process using WorkerCommon runtime wiring." />
       </interface>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <target>
@@ -1235,10 +1239,11 @@
       <verification-ref>V-M-WORKER-TRANSCRIPTION</verification-ref>
       <notes>
         <note-1>This module reuses current Python execution logic instead of rewriting ML behavior in Go.</note-1>
+        <note-2>Worker extraction and compose launcher are implemented; remaining verification is real MinIO plus internal API claim/finalize integration.</note-2>
       </notes>
     </M-WORKER-TRANSCRIPTION>
 
-    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" LAYER="3" ORDER="2" STATUS="planned">
+    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" LAYER="3" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Generate markdown and DOCX research reports from transcript artifacts using cglm.</purpose>
         <scope>cglm command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.</scope>
@@ -1256,6 +1261,7 @@
       </contract>
       <interface>
         <export-runReport PURPOSE="Execute one claimed report job." />
+        <export-launchReportWorker PURPOSE="Start the compose-ready report worker process using WorkerCommon runtime wiring." />
       </interface>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <target>
@@ -1269,10 +1275,11 @@
       <verification-ref>V-M-WORKER-REPORT</verification-ref>
       <notes>
         <note-1>Cancellation must be subprocess-aware because cglm runs out of process.</note-1>
+        <note-2>Worker extraction and compose launcher are implemented; remaining verification is API-created child reuse plus real control-plane integration.</note-2>
       </notes>
     </M-WORKER-REPORT>
 
-    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" LAYER="3" ORDER="3" STATUS="planned">
+    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" LAYER="3" ORDER="3" STATUS="implemented">
       <contract>
         <purpose>Run the evidence-driven deep-research pipeline and persist the final markdown output plus optional execution logs.</purpose>
         <scope>Phase-driven deep-research execution, required artifact validation, optional log persistence, and terminal finalization.</scope>
@@ -1289,6 +1296,7 @@
       </contract>
       <interface>
         <export-runDeepResearch PURPOSE="Execute one claimed deep-research job." />
+        <export-launchDeepResearchWorker PURPOSE="Start the compose-ready deep-research worker process using WorkerCommon runtime wiring." />
       </interface>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <target>
@@ -1302,6 +1310,7 @@
       <verification-ref>V-M-WORKER-DEEP-RESEARCH</verification-ref>
       <notes>
         <note-1>Deep-research phase gates and required artifacts must remain deterministic under the new job shell.</note-1>
+        <note-2>Worker extraction and compose launcher are implemented; remaining verification is API-created deep-research child-job integration under the live stack.</note-2>
       </notes>
     </M-WORKER-DEEP-RESEARCH>
 
@@ -1540,7 +1549,7 @@
       <Phase-1-4>Define shared enums for job types, statuses, artifact kinds, and source kinds.</Phase-1-4>
     </Wave-1>
 
-    <Wave-2 name="Infrastructure And Go API Skeleton" status="pending">
+    <Wave-2 name="Infrastructure And Go API Skeleton" status="done">
       <goal>Bring up local infra and a compilable API skeleton with DB and queue wiring.</goal>
       <files>
         <file>Create apps/api/cmd/api/main.go</file>
@@ -1562,7 +1571,7 @@
       <Phase-2-6>Add webhook delivery subsystem with stored webhook metadata, background delivery loop, bounded retry, and event emission rules per job type.</Phase-2-6>
     </Wave-2>
 
-    <Wave-3 name="Transcription Worker Extraction" status="pending">
+    <Wave-3 name="Transcription Worker Extraction" status="done">
       <goal>Move transcription execution out of the monolithic bot into a standalone worker.</goal>
       <files>
         <file>Create workers/common/src/transcriber_workers_common</file>
@@ -1575,7 +1584,7 @@
       <Phase-3-4>Add cancellation integration by checking the cancel flag before and after long work.</Phase-3-4>
     </Wave-3>
 
-    <Wave-4 name="Report Worker Extraction" status="pending">
+    <Wave-4 name="Report Worker Extraction" status="done">
       <goal>Split report generation into a dedicated job type and worker.</goal>
       <files>
         <file>Create workers/report/src</file>
@@ -1586,7 +1595,7 @@
       <Phase-4-3>Implement report worker lifecycle: claim report job, read transcript artifact, run cglm, upload markdown and docx, finalize.</Phase-4-3>
     </Wave-4>
 
-    <Wave-5 name="Deep Research Worker Extraction" status="pending">
+    <Wave-5 name="Deep Research Worker Extraction" status="done">
       <goal>Split deep research into a dedicated job type and worker.</goal>
       <files>
         <file>Create workers/deep-research/src</file>
@@ -1639,7 +1648,7 @@
       <Phase-8-3>Add artifact visibility through artifact metadata and download endpoints.</Phase-8-3>
     </Wave-8>
 
-    <Wave-9 name="Compose Hardening And Cutover" status="pending">
+    <Wave-9 name="Compose Hardening And Cutover" status="in_progress">
       <goal>Make the new platform the default local runtime.</goal>
       <files>
         <file>Modify infra/docker-compose.yml</file>
@@ -1647,10 +1656,10 @@
         <file>Create docs/architecture/cutover-checklist.md</file>
         <file>Create docs/architecture/runtime-ops.md</file>
       </files>
-      <Phase-9-1>Add persistent volumes and init scripts.</Phase-9-1>
-      <Phase-9-2>Add healthchecks.</Phase-9-2>
-      <Phase-9-3>Add local runbook documenting startup, restart, logs, and common failures.</Phase-9-3>
-      <Phase-9-4>Cut over old single-process entrypoint after compose smoke verification and functional parity checks pass.</Phase-9-4>
+      <Phase-9-1 status="done">Add persistent volumes and init scripts.</Phase-9-1>
+      <Phase-9-2 status="done">Add healthchecks and prove compose live-smoke convergence.</Phase-9-2>
+      <Phase-9-3 status="pending">Add local runbook documenting startup, restart, logs, and common failures.</Phase-9-3>
+      <Phase-9-4 status="blocked-on-cutover-parity">Cut over old single-process entrypoint after compose smoke verification and functional parity checks pass.</Phase-9-4>
     </Wave-9>
   </ImplementationWaves>
 
@@ -1670,16 +1679,16 @@
       <step-5 module="M-API-HTTP" status="done" verification="V-M-API-HTTP">Expose public and internal worker routes.</step-5>
     </Phase-2>
 
-    <Phase-3 name="Transcription Worker Extraction" status="pending">
+    <Phase-3 name="Transcription Worker Extraction" status="done">
       <goal>Extract the current transcription path into a standalone worker without changing user-visible artifact semantics.</goal>
-      <step-1 module="M-WORKER-COMMON" status="pending" verification="V-M-WORKER-COMMON">Create shared Python worker API and storage helpers.</step-1>
-      <step-2 module="M-WORKER-TRANSCRIPTION" status="pending" verification="V-M-WORKER-TRANSCRIPTION">Move current transcription execution and transcript rendering into worker form.</step-2>
+      <step-1 module="M-WORKER-COMMON" status="done" verification="V-M-WORKER-COMMON">Create shared Python worker API and storage helpers.</step-1>
+      <step-2 module="M-WORKER-TRANSCRIPTION" status="done" verification="V-M-WORKER-TRANSCRIPTION">Move current transcription execution and transcript rendering into worker form.</step-2>
     </Phase-3>
 
-    <Phase-4 name="Report And Deep Research Extraction" status="pending">
+    <Phase-4 name="Report And Deep Research Extraction" status="done">
       <goal>Split report and deep-research execution into dedicated workers with stable child-job contracts.</goal>
-      <step-1 module="M-WORKER-REPORT" status="pending" verification="V-M-WORKER-REPORT">Extract report generation through cglm into the report worker.</step-1>
-      <step-2 module="M-WORKER-DEEP-RESEARCH" status="pending" verification="V-M-WORKER-DEEP-RESEARCH">Extract deep-research pipeline into the dedicated worker.</step-2>
+      <step-1 module="M-WORKER-REPORT" status="done" verification="V-M-WORKER-REPORT">Extract report generation through cglm into the report worker.</step-1>
+      <step-2 module="M-WORKER-DEEP-RESEARCH" status="done" verification="V-M-WORKER-DEEP-RESEARCH">Extract deep-research pipeline into the dedicated worker.</step-2>
     </Phase-4>
 
     <Phase-5 name="Adapter And UI Cutover" status="done">
@@ -1691,9 +1700,9 @@
       <step-3 module="M-MCP-ADAPTER" status="done" verification="V-M-MCP-ADAPTER">Expose the same core operations through MCP.</step-3>
     </Phase-5>
 
-    <Phase-6 name="Compose Hardening And Final Cutover" status="pending">
+    <Phase-6 name="Compose Hardening And Final Cutover" status="in_progress">
       <goal>Validate the full local stack, enforce health gates, and remove the old single-process entrypoint.</goal>
-      <step-1 module="M-INFRA-COMPOSE" status="pending" verification="V-M-INFRA-COMPOSE">Harden compose startup order, healthchecks, volumes, and smoke scripts.</step-1>
+      <step-1 module="M-INFRA-COMPOSE" status="done" verification="V-M-INFRA-COMPOSE">Harden compose startup order, healthchecks, volumes, and smoke scripts.</step-1>
       <step-2 module="M-API-HTTP" status="pending" verification="V-M-API-HTTP">Verify full-stack parity against the frozen acceptance matrix before deleting the old runtime path.</step-2>
     </Phase-6>
   </ImplementationOrder>
