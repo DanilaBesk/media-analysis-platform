@@ -68,6 +68,7 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/env/telegram-bot.env.example"
   require_file "${ROOT_DIR}/infra/env/mcp-server.env.example"
   require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
+  require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
 
   for service in \
     postgres \
@@ -108,6 +109,8 @@ validate_static_contract() {
   require_service_block_snippet "minio-init" "volumes:"
   require_service_block_snippet "minio-init" "./init/minio:/init:ro"
   require_service_block_snippet "minio-init" "/init/bootstrap-buckets.sh"
+  require_service_block_snippet "worker-transcription" "dockerfile: infra/images/worker-transcription/Dockerfile"
+  require_service_block_snippet "worker-transcription" "image: telegram-transcriber-worker-transcription:local"
   require_service_block_snippet "web" '${WEB_HOST_PORT:-3000}:3000'
   require_compose_snippet 'condition: service_healthy'
   require_compose_snippet 'condition: service_completed_successfully'

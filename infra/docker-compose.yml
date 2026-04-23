@@ -111,7 +111,10 @@ services:
       - retained-log-volume:/var/log/platform
 
   worker-transcription:
-    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    build:
+      context: ..
+      dockerfile: infra/images/worker-transcription/Dockerfile
+    image: telegram-transcriber-worker-transcription:local
     restart: unless-stopped
     environment:
       WORKER_WORKSPACE_ROOT: /tmp/runtime/transcription
