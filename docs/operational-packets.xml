@@ -1588,7 +1588,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
       <module-id>M-API-HTTP</module-id>
       <module-name>ApiHttp</module-name>
       <purpose>Close the cutover wave by proving full-stack API parity against the frozen acceptance matrix and keeping any final HTTP-layer changes limited to route-level gaps surfaced by evidence.</purpose>
-      <packet-state>next-open</packet-state>
+      <packet-state>http-parity-verified-downstream-gates-open</packet-state>
       <entry-condition>Start only after M-INFRA-COMPOSE-wave-6 is completed and compose live-smoke health convergence is proven.</entry-condition>
       <write-scope>
         <file-1>apps/api/internal/api/*_test.go</file-1>
@@ -1671,7 +1671,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
         <field-4>follow-up-checks: legacy path removal remains blocked on explicit cutover evidence, not on assumptions.</field-4>
       </expected-verification-delta-fields>
       <open-cutover-gates>
-        <gate-1 id="CUTOVER-PARITY-HTTP">Run live-stack route regression for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes.</gate-1>
+        <gate-1 id="CUTOVER-PARITY-HTTP" status="verified" verified-at="2026-04-23">Live-stack route regression passed for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes; no M-API-HTTP route-level patch was required.</gate-1>
         <gate-2 id="CUTOVER-WORKER-E2E">Prove worker execution against real MinIO and API claim/finalize paths for transcription, report, and deep-research jobs.</gate-2>
         <gate-3 id="CUTOVER-ADAPTER-PARITY">Replay Web UI browser smoke, Telegram UX, and MCP tool-level live API integration against the same stack.</gate-3>
         <gate-4 id="CUTOVER-FAILURE-PATHS">Close storage, queue, webhook, and WebSocket failure-path smokes that remain open in verification-plan.xml.</gate-4>
