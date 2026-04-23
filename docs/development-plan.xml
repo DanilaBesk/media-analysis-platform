@@ -1444,10 +1444,12 @@
       </contract>
       <interface>
         <export-composeStack PURPOSE="Start and verify the local platform stack." />
+        <export-deterministicHostHarness PURPOSE="Provide a bounded host-harness command for worker bridge smoke verification without hard-coding one external CLI." />
       </interface>
       <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
       <target>
         <source>infra/docker-compose.yml</source>
+        <source>infra/host-tools/*.py</source>
         <tests>compose smoke scripts</tests>
       </target>
       <observability>

@@ -186,6 +186,7 @@
       <verification-ref>V-M-INFRA-COMPOSE</verification-ref>
       <annotations>
         <export-composeStack PURPOSE="Bring up the full local stack with deterministic service boundaries." />
+        <export-deterministicHostHarness PURPOSE="Bounded host-side harness command used to prove report and deep-research worker bridge smoke paths through API and MinIO." />
       </annotations>
     </M-INFRA-COMPOSE>
 
