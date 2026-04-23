@@ -1,170 +1,42 @@
+# FILE: src/telegram_transcriber_bot/documents.py
+# VERSION: 1.0.0
+# START_MODULE_CONTRACT
+# PURPOSE: Preserve the existing bot-facing document helper imports while worker-common owns the reusable implementation.
+# SCOPE: Compatibility bootstrap for the worker-common path plus re-export of the current document-rendering helpers.
+# DEPENDS: M-WORKER-COMMON
+# LINKS: M-WORKER-COMMON, V-M-WORKER-TRANSCRIPTION, V-M-WORKER-REPORT
+# ROLE: BARREL
+# MAP_MODE: SUMMARY
+# END_MODULE_CONTRACT
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.0.0 - Converted the legacy document module into a compatibility re-export over worker-common.
+# END_CHANGE_SUMMARY
+#
+# START_MODULE_MAP
+#   document-exports - Re-export the shared document helpers without changing the legacy import path.
+# END_MODULE_MAP
+
 from __future__ import annotations
 
-import re
+import sys
 from pathlib import Path
 
-from docx import Document
 
-from telegram_transcriber_bot.domain import TranscriptResult
-from telegram_transcriber_bot.source_labels import humanize_source_label, is_human_readable_title, looks_like_machine_file_name
-
-
-def build_transcript_markdown(transcript: TranscriptResult) -> str:
-    title = build_transcript_title(transcript)
-    source_label = build_source_label(transcript)
-    lines = [
-        f"# {title}",
-        "",
-        f"- Источник: {source_label}",
-        f"- Язык: {transcript.language}",
-        "",
-        "## Сегменты",
-        "",
-    ]
-
-    for segment in transcript.segments:
-        speaker = segment.speaker or "Фрагмент"
-        lines.append(
-            f"[{format_timestamp(segment.start_seconds)} - {format_timestamp(segment.end_seconds)}] "
-            f"{speaker}: {segment.text.strip()}"
-        )
-
-    lines.extend(["", "## Полный текст", "", transcript.raw_text.strip()])
-    return "\n".join(lines).strip() + "\n"
+def _ensure_worker_common_path() -> None:
+    worker_common_src = Path(__file__).resolve().parents[2] / "workers" / "common" / "src"
+    if worker_common_src.exists():
+        worker_common_src_str = str(worker_common_src)
+        if worker_common_src_str not in sys.path:
+            sys.path.insert(0, worker_common_src_str)
 
 
-def write_transcript_docx(output_path: Path, transcript: TranscriptResult) -> None:
-    document = Document()
-    document.add_heading(build_transcript_title(transcript), level=0)
-    document.add_paragraph(f"Источник: {build_source_label(transcript)}")
-    document.add_paragraph(f"Язык: {transcript.language}")
+# START_BLOCK_BLOCK_BOOTSTRAP_WORKER_COMMON_IMPORTS
+try:
+    from transcriber_workers_common import documents as _worker_common_documents
+except ModuleNotFoundError:
+    _ensure_worker_common_path()
+    from transcriber_workers_common import documents as _worker_common_documents
 
-    document.add_heading("Сегменты", level=1)
-    for segment in transcript.segments:
-        speaker = segment.speaker or "Фрагмент"
-        document.add_paragraph(
-            f"[{format_timestamp(segment.start_seconds)} - {format_timestamp(segment.end_seconds)}] "
-            f"{speaker}: {segment.text.strip()}"
-        )
-
-    document.add_heading("Полный текст", level=1)
-    document.add_paragraph(transcript.raw_text.strip())
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(output_path)
-
-
-def write_report_docx(output_path: Path, markdown_content: str) -> None:
-    normalized_content = normalize_report_markdown(markdown_content)
-    document = Document()
-    for raw_line in normalized_content.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("# "):
-            document.add_heading(_strip_inline_markdown(line[2:].strip()), level=0)
-            continue
-        if line.startswith("## "):
-            document.add_heading(_strip_inline_markdown(line[3:].strip()), level=1)
-            continue
-        if line.startswith("### "):
-            document.add_heading(_strip_inline_markdown(line[4:].strip()), level=2)
-            continue
-        if line.startswith("- "):
-            paragraph = document.add_paragraph(style="List Bullet")
-            _append_inline_markdown(paragraph, line[2:].strip())
-            continue
-        ordered_match = re.match(r"^(\d+)\.\s+(.*)$", line)
-        if ordered_match:
-            paragraph = document.add_paragraph(style="List Number")
-            _append_inline_markdown(paragraph, ordered_match.group(2).strip())
-            continue
-        paragraph = document.add_paragraph()
-        _append_inline_markdown(paragraph, line)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(output_path)
-
-
-def format_timestamp(total_seconds: float) -> str:
-    rounded = max(0, int(total_seconds))
-    minutes, seconds = divmod(rounded, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes:02d}:{seconds:02d}"
-
-
-def build_transcript_title(transcript: TranscriptResult) -> str:
-    explicit_title = transcript.title.strip()
-    if _is_human_readable_title(explicit_title):
-        return explicit_title
-
-    source_label = transcript.source_label.strip()
-    if source_label.startswith("YouTube:"):
-        return "Транскрибация YouTube-видео"
-    if source_label.startswith("Audio:"):
-        return "Транскрибация аудио"
-    if source_label.startswith("Video:"):
-        return "Транскрибация видео"
-    return "Транскрибация"
-
-
-def build_source_label(transcript: TranscriptResult) -> str:
-    return humanize_source_label(transcript.source_label)
-
-
-def _is_human_readable_title(value: str) -> bool:
-    return is_human_readable_title(value)
-
-
-def _looks_like_machine_file_name(value: str) -> bool:
-    return looks_like_machine_file_name(value)
-
-
-def normalize_report_markdown(markdown_content: str) -> str:
-    cleaned_lines: list[str] = []
-    saw_heading = False
-    pending_blank = False
-
-    for raw_line in markdown_content.splitlines():
-        line = raw_line.strip()
-        if not line:
-            if cleaned_lines:
-                pending_blank = True
-            continue
-        if _is_report_boilerplate(line):
-            continue
-        if pending_blank and cleaned_lines:
-            cleaned_lines.append("")
-            pending_blank = False
-        if line.startswith("# "):
-            saw_heading = True
-        cleaned_lines.append(line)
-
-    if not cleaned_lines:
-        return "# Исследовательский отчёт\n"
-    if not saw_heading:
-        cleaned_lines.insert(0, "# Исследовательский отчёт")
-        cleaned_lines.insert(1, "")
-    return "\n".join(cleaned_lines).strip() + "\n"
-
-
-def _is_report_boilerplate(line: str) -> bool:
-    normalized = line.casefold()
-    return normalized in {"---", "—"} or normalized.startswith("вот исследовательский отч")
-
-
-def _strip_inline_markdown(text: str) -> str:
-    return re.sub(r"\*\*(.+?)\*\*", r"\1", text)
-
-
-def _append_inline_markdown(paragraph, text: str) -> None:
-    cursor = 0
-    for match in re.finditer(r"\*\*(.+?)\*\*", text):
-        if match.start() > cursor:
-            paragraph.add_run(text[cursor:match.start()])
-        bold_run = paragraph.add_run(match.group(1))
-        bold_run.bold = True
-        cursor = match.end()
-    if cursor < len(text):
-        paragraph.add_run(text[cursor:])
+sys.modules[__name__] = _worker_common_documents
+# END_BLOCK_BLOCK_BOOTSTRAP_WORKER_COMMON_IMPORTS

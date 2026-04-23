@@ -2,10 +2,13 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -30,7 +33,9 @@ const (
 var (
 	ErrStorageUnavailable = errors.New("storage_unavailable")
 	ErrArtifactNotFound   = errors.New("artifact_not_found")
+	ErrJobNotFound        = errors.New("job_not_found")
 	ErrContractViolation  = errors.New("storage_contract_violation")
+	ErrExecutionNotFound  = errors.New("execution_not_found")
 )
 
 type Logger interface {
@@ -47,6 +52,20 @@ type StateStore interface {
 	PersistJobBundle(ctx context.Context, bundle PersistedJobBundle) error
 	PersistArtifacts(ctx context.Context, artifacts []ArtifactRecord) error
 	LookupArtifact(ctx context.Context, artifactID string) (ArtifactRecord, error)
+	FindSubmission(ctx context.Context, submissionKind, idempotencyKey string) (*JobSubmission, error)
+	ListJobsBySubmission(ctx context.Context, submissionID string) ([]JobRecord, error)
+	SaveSubmissionGraph(ctx context.Context, submission JobSubmission, sources []SourceRecord, sourceSets []SourceSetRecord, jobs []JobRecord) error
+	GetJob(ctx context.Context, jobID string) (JobRecord, error)
+	CreateJob(ctx context.Context, job JobRecord) error
+	UpdateJob(ctx context.Context, job JobRecord) error
+	FindCanonicalChild(ctx context.Context, parentJobID, jobType string) (*JobRecord, error)
+	FindArtifactByKind(ctx context.Context, jobID, artifactKind string) (*ArtifactRecord, error)
+	AppendJobEvent(ctx context.Context, event JobEvent) error
+	CreateWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error
+	UpdateWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error
+	ClaimJobExecution(ctx context.Context, req ClaimJobExecutionRequest) (ClaimJobExecutionResult, error)
+	GetActiveJobExecution(ctx context.Context, jobID, executionID string) (JobExecutionRecord, error)
+	FinishJobExecution(ctx context.Context, req FinishJobExecutionRequest) (JobExecutionRecord, error)
 }
 
 type Repository struct {
@@ -54,6 +73,7 @@ type Repository struct {
 	objects    ObjectStore
 	logger     Logger
 	now        func() time.Time
+	nextID     func() string
 	presignTTL time.Duration
 }
 
@@ -68,6 +88,12 @@ func WithLogger(logger Logger) Option {
 func WithClock(now func() time.Time) Option {
 	return func(r *Repository) {
 		r.now = now
+	}
+}
+
+func WithIDGenerator(nextID func() string) Option {
+	return func(r *Repository) {
+		r.nextID = nextID
 	}
 }
 
@@ -89,6 +115,7 @@ func NewRepository(state StateStore, objects ObjectStore, opts ...Option) (*Repo
 		state:      state,
 		objects:    objects,
 		now:        time.Now().UTC,
+		nextID:     uuid.NewString,
 		presignTTL: 15 * time.Minute,
 	}
 
@@ -200,6 +227,37 @@ type WebhookDelivery struct {
 	CreatedAt      time.Time
 }
 
+type JobExecutionRecord struct {
+	ExecutionID string
+	JobID       string
+	WorkerKind  string
+	TaskType    string
+	ClaimedAt   time.Time
+	FinishedAt  *time.Time
+	Outcome     string
+}
+
+type ClaimJobExecutionRequest struct {
+	JobID       string
+	WorkerKind  string
+	TaskType    string
+	ClaimedAt   time.Time
+	ExecutionID string
+}
+
+type ClaimJobExecutionResult struct {
+	Job       JobRecord
+	Execution *JobExecutionRecord
+	Claimed   bool
+}
+
+type FinishJobExecutionRequest struct {
+	JobID       string
+	ExecutionID string
+	Outcome     string
+	FinishedAt  time.Time
+}
+
 type PersistedJobBundle struct {
 	Submission      *JobSubmission
 	Sources         []SourceRecord
@@ -240,6 +298,52 @@ type ArtifactResolution struct {
 	SizeBytes    int64
 	CreatedAt    time.Time
 	Download     DownloadDescriptor
+}
+
+type JobListFilter struct {
+	Status    string
+	JobType   string
+	RootJobID string
+	Limit     int
+	Offset    int
+}
+
+type JobListPage struct {
+	Jobs    []JobRecord
+	HasMore bool
+}
+
+type OrderedSource struct {
+	Position int
+	Source   SourceRecord
+}
+
+type runtimeJobLister interface {
+	ListJobs(ctx context.Context, filter JobListFilter) (JobListPage, error)
+}
+
+type runtimeSourceSetGetter interface {
+	GetSourceSet(ctx context.Context, sourceSetID string) (SourceSetRecord, error)
+}
+
+type runtimeOrderedSourceLister interface {
+	ListOrderedSources(ctx context.Context, sourceSetID string) ([]OrderedSource, error)
+}
+
+type runtimeArtifactLister interface {
+	ListArtifactsByJob(ctx context.Context, jobID string) ([]ArtifactRecord, error)
+}
+
+type runtimeChildJobLister interface {
+	ListChildJobs(ctx context.Context, parentJobID string) ([]JobRecord, error)
+}
+
+type runtimeEventLister interface {
+	ListJobEvents(ctx context.Context, jobID string) ([]JobEvent, error)
+}
+
+type runtimeArtifactUpserter interface {
+	UpsertArtifacts(ctx context.Context, artifacts []ArtifactRecord) error
 }
 
 func (r *Repository) PersistSource(ctx context.Context, source SourceRecord) (SourceRecord, error) {
@@ -335,6 +439,343 @@ func (r *Repository) ResolveArtifact(ctx context.Context, artifactID string) (Ar
 			ExpiresAt: expiresAt,
 		},
 	}, nil
+}
+
+func (r *Repository) FindSubmission(ctx context.Context, submissionKind, idempotencyKey string) (*JobSubmission, error) {
+	if strings.TrimSpace(submissionKind) == "" || strings.TrimSpace(idempotencyKey) == "" {
+		return nil, fmt.Errorf("%w: submission kind and idempotency key are required", ErrContractViolation)
+	}
+
+	submission, err := r.state.FindSubmission(ctx, submissionKind, idempotencyKey)
+	if err != nil {
+		return nil, fmt.Errorf("%w: lookup submission: %v", ErrStorageUnavailable, err)
+	}
+	return submission, nil
+}
+
+func (r *Repository) ListJobsBySubmission(ctx context.Context, submissionID string) ([]JobRecord, error) {
+	if strings.TrimSpace(submissionID) == "" {
+		return nil, fmt.Errorf("%w: submission id is required", ErrContractViolation)
+	}
+
+	jobs, err := r.state.ListJobsBySubmission(ctx, submissionID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list submission jobs: %v", ErrStorageUnavailable, err)
+	}
+	return jobs, nil
+}
+
+func (r *Repository) SaveSubmissionGraph(ctx context.Context, submission JobSubmission, sources []SourceRecord, sourceSets []SourceSetRecord, jobs []JobRecord) error {
+	submission = *ensureSubmissionDefaults(&submission, r.now)
+	if err := validateSubmission(submission); err != nil {
+		return err
+	}
+	if len(sources) == 0 || len(sourceSets) == 0 || len(jobs) == 0 {
+		return fmt.Errorf("%w: submission graph requires sources, source sets, and jobs", ErrContractViolation)
+	}
+
+	normalizedSources := make([]SourceRecord, 0, len(sources))
+	for _, source := range sources {
+		source = ensureSourceDefaults(source, r.now)
+		if err := validateSource(source); err != nil {
+			return err
+		}
+		normalizedSources = append(normalizedSources, source)
+	}
+
+	for _, source := range normalizedSources {
+		if requiresSourceObject(source.SourceKind) {
+			if err := r.objects.PutObject(ctx, SourcesBucket, source.ObjectKey, source.MIMEType, source.ObjectBody); err != nil {
+				return fmt.Errorf("%w: persist source object: %v", ErrStorageUnavailable, err)
+			}
+		}
+	}
+
+	normalizedSourceSets := make([]SourceSetRecord, 0, len(sourceSets))
+	for _, sourceSet := range sourceSets {
+		sourceSet = ensureSourceSetDefaults(sourceSet, r.now)
+		if err := validateSourceSet(sourceSet, normalizedSources); err != nil {
+			return err
+		}
+		normalizedSourceSets = append(normalizedSourceSets, sourceSet)
+	}
+
+	normalizedJobs := make([]JobRecord, 0, len(jobs))
+	for _, job := range jobs {
+		job = ensureJobDefaults(job, r.now)
+		var matchedSourceSet *SourceSetRecord
+		for idx := range normalizedSourceSets {
+			if normalizedSourceSets[idx].ID == job.SourceSetID {
+				matchedSourceSet = &normalizedSourceSets[idx]
+				break
+			}
+		}
+		if matchedSourceSet == nil {
+			return fmt.Errorf("%w: job source_set_id must reference one of the persisted source sets", ErrContractViolation)
+		}
+		if err := validateJob(job, *matchedSourceSet); err != nil {
+			return err
+		}
+		normalizedJobs = append(normalizedJobs, job)
+	}
+
+	if err := r.state.SaveSubmissionGraph(ctx, submission, withoutSourceBodies(normalizedSources), normalizedSourceSets, normalizedJobs); err != nil {
+		return fmt.Errorf("%w: save submission graph: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) GetJob(ctx context.Context, jobID string) (JobRecord, error) {
+	if strings.TrimSpace(jobID) == "" {
+		return JobRecord{}, fmt.Errorf("%w: job id is required", ErrContractViolation)
+	}
+
+	job, err := r.state.GetJob(ctx, jobID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrJobNotFound) {
+			return JobRecord{}, ErrJobNotFound
+		}
+		return JobRecord{}, fmt.Errorf("%w: get job: %v", ErrStorageUnavailable, err)
+	}
+	return job, nil
+}
+
+func (r *Repository) CreateJob(ctx context.Context, job JobRecord) error {
+	job = ensureJobDefaults(job, r.now)
+	if strings.TrimSpace(job.SourceSetID) == "" {
+		return fmt.Errorf("%w: create job requires source_set_id", ErrContractViolation)
+	}
+	if err := r.state.CreateJob(ctx, job); err != nil {
+		return fmt.Errorf("%w: create job: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) UpdateJob(ctx context.Context, job JobRecord) error {
+	job = ensureJobDefaults(job, r.now)
+	if strings.TrimSpace(job.ID) == "" {
+		return fmt.Errorf("%w: update job requires id", ErrContractViolation)
+	}
+	if err := r.state.UpdateJob(ctx, job); err != nil {
+		return fmt.Errorf("%w: update job: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) FindCanonicalChild(ctx context.Context, parentJobID, jobType string) (*JobRecord, error) {
+	if strings.TrimSpace(parentJobID) == "" || strings.TrimSpace(jobType) == "" {
+		return nil, fmt.Errorf("%w: parent job id and child job type are required", ErrContractViolation)
+	}
+
+	child, err := r.state.FindCanonicalChild(ctx, parentJobID, jobType)
+	if err != nil {
+		return nil, fmt.Errorf("%w: find canonical child: %v", ErrStorageUnavailable, err)
+	}
+	return child, nil
+}
+
+func (r *Repository) FindArtifactByKind(ctx context.Context, jobID, artifactKind string) (*ArtifactRecord, error) {
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(artifactKind) == "" {
+		return nil, fmt.Errorf("%w: job id and artifact kind are required", ErrContractViolation)
+	}
+
+	artifact, err := r.state.FindArtifactByKind(ctx, jobID, artifactKind)
+	if err != nil {
+		return nil, fmt.Errorf("%w: lookup artifact by kind: %v", ErrStorageUnavailable, err)
+	}
+	return artifact, nil
+}
+
+func (r *Repository) AppendJobEvent(ctx context.Context, event JobEvent) error {
+	event = ensureEventDefaults(event, JobRecord{ID: event.JobID, RootJobID: event.RootJobID, Version: event.Version}, r.now)
+	if strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.JobID) == "" || strings.TrimSpace(event.RootJobID) == "" {
+		return fmt.Errorf("%w: append event requires ids and lineage", ErrContractViolation)
+	}
+	if err := r.state.AppendJobEvent(ctx, event); err != nil {
+		return fmt.Errorf("%w: append job event: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) CreateWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error {
+	delivery = *ensureWebhookDefaults(&delivery, JobEvent{ID: delivery.JobEventID, JobID: delivery.JobID}, r.now)
+	if strings.TrimSpace(delivery.ID) == "" || strings.TrimSpace(delivery.JobEventID) == "" || strings.TrimSpace(delivery.JobID) == "" || strings.TrimSpace(delivery.TargetURL) == "" {
+		return fmt.Errorf("%w: webhook delivery requires ids and target url", ErrContractViolation)
+	}
+	if err := r.state.CreateWebhookDelivery(ctx, delivery); err != nil {
+		return fmt.Errorf("%w: create webhook delivery: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) UpdateWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error {
+	delivery = *ensureWebhookDefaults(&delivery, JobEvent{ID: delivery.JobEventID, JobID: delivery.JobID}, r.now)
+	if strings.TrimSpace(delivery.ID) == "" {
+		return fmt.Errorf("%w: webhook delivery id is required", ErrContractViolation)
+	}
+	if err := r.state.UpdateWebhookDelivery(ctx, delivery); err != nil {
+		return fmt.Errorf("%w: update webhook delivery: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) ListJobs(ctx context.Context, filter JobListFilter) (JobListPage, error) {
+	lister, ok := r.state.(runtimeJobLister)
+	if !ok {
+		return JobListPage{}, fmt.Errorf("%w: list jobs query is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if filter.Limit <= 0 {
+		return JobListPage{}, fmt.Errorf("%w: list jobs requires a positive limit", ErrContractViolation)
+	}
+	if filter.Offset < 0 {
+		return JobListPage{}, fmt.Errorf("%w: list jobs offset must be non-negative", ErrContractViolation)
+	}
+	page, err := lister.ListJobs(ctx, filter)
+	if err != nil {
+		return JobListPage{}, fmt.Errorf("%w: list jobs: %v", ErrStorageUnavailable, err)
+	}
+	return page, nil
+}
+
+func (r *Repository) GetSourceSet(ctx context.Context, sourceSetID string) (SourceSetRecord, error) {
+	getter, ok := r.state.(runtimeSourceSetGetter)
+	if !ok {
+		return SourceSetRecord{}, fmt.Errorf("%w: source set query is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if strings.TrimSpace(sourceSetID) == "" {
+		return SourceSetRecord{}, fmt.Errorf("%w: source set id is required", ErrContractViolation)
+	}
+	sourceSet, err := getter.GetSourceSet(ctx, sourceSetID)
+	if err != nil {
+		return SourceSetRecord{}, fmt.Errorf("%w: get source set: %v", ErrStorageUnavailable, err)
+	}
+	return sourceSet, nil
+}
+
+func (r *Repository) ListOrderedSources(ctx context.Context, sourceSetID string) ([]OrderedSource, error) {
+	lister, ok := r.state.(runtimeOrderedSourceLister)
+	if !ok {
+		return nil, fmt.Errorf("%w: ordered-source query is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if strings.TrimSpace(sourceSetID) == "" {
+		return nil, fmt.Errorf("%w: source set id is required", ErrContractViolation)
+	}
+	ordered, err := lister.ListOrderedSources(ctx, sourceSetID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list ordered sources: %v", ErrStorageUnavailable, err)
+	}
+	return ordered, nil
+}
+
+func (r *Repository) ListArtifactsByJob(ctx context.Context, jobID string) ([]ArtifactRecord, error) {
+	lister, ok := r.state.(runtimeArtifactLister)
+	if !ok {
+		return nil, fmt.Errorf("%w: artifact listing is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("%w: job id is required", ErrContractViolation)
+	}
+	artifacts, err := lister.ListArtifactsByJob(ctx, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list job artifacts: %v", ErrStorageUnavailable, err)
+	}
+	return artifacts, nil
+}
+
+func (r *Repository) ListChildJobs(ctx context.Context, parentJobID string) ([]JobRecord, error) {
+	lister, ok := r.state.(runtimeChildJobLister)
+	if !ok {
+		return nil, fmt.Errorf("%w: child-job listing is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if strings.TrimSpace(parentJobID) == "" {
+		return nil, fmt.Errorf("%w: parent job id is required", ErrContractViolation)
+	}
+	children, err := lister.ListChildJobs(ctx, parentJobID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list child jobs: %v", ErrStorageUnavailable, err)
+	}
+	return children, nil
+}
+
+func (r *Repository) ListJobEvents(ctx context.Context, jobID string) ([]JobEvent, error) {
+	lister, ok := r.state.(runtimeEventLister)
+	if !ok {
+		return nil, fmt.Errorf("%w: job-event listing is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if strings.TrimSpace(jobID) == "" {
+		return nil, fmt.Errorf("%w: job id is required", ErrContractViolation)
+	}
+	events, err := lister.ListJobEvents(ctx, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list job events: %v", ErrStorageUnavailable, err)
+	}
+	return events, nil
+}
+
+func (r *Repository) ClaimJobExecution(ctx context.Context, req ClaimJobExecutionRequest) (ClaimJobExecutionResult, error) {
+	req = ensureClaimJobExecutionDefaults(req, r.now, r.nextID)
+	if err := validateClaimJobExecutionRequest(req); err != nil {
+		return ClaimJobExecutionResult{}, err
+	}
+
+	result, err := r.state.ClaimJobExecution(ctx, req)
+	if err != nil {
+		return ClaimJobExecutionResult{}, fmt.Errorf("%w: claim job execution: %v", ErrStorageUnavailable, err)
+	}
+	if result.Claimed && result.Execution == nil {
+		return ClaimJobExecutionResult{}, fmt.Errorf("%w: claimed execution result requires execution metadata", ErrContractViolation)
+	}
+	return result, nil
+}
+
+func (r *Repository) GetActiveJobExecution(ctx context.Context, jobID, executionID string) (JobExecutionRecord, error) {
+	if err := validateActiveJobExecutionLookup(jobID, executionID); err != nil {
+		return JobExecutionRecord{}, err
+	}
+
+	execution, err := r.state.GetActiveJobExecution(ctx, jobID, executionID)
+	if err != nil {
+		if errors.Is(err, ErrExecutionNotFound) {
+			return JobExecutionRecord{}, err
+		}
+		return JobExecutionRecord{}, fmt.Errorf("%w: get active job execution: %v", ErrStorageUnavailable, err)
+	}
+	return execution, nil
+}
+
+func (r *Repository) FinishJobExecution(ctx context.Context, req FinishJobExecutionRequest) (JobExecutionRecord, error) {
+	req = ensureFinishJobExecutionDefaults(req, r.now)
+	if err := validateFinishJobExecutionRequest(req); err != nil {
+		return JobExecutionRecord{}, err
+	}
+
+	execution, err := r.state.FinishJobExecution(ctx, req)
+	if err != nil {
+		if errors.Is(err, ErrExecutionNotFound) {
+			return JobExecutionRecord{}, err
+		}
+		return JobExecutionRecord{}, fmt.Errorf("%w: finish job execution: %v", ErrStorageUnavailable, err)
+	}
+	return execution, nil
+}
+
+func (r *Repository) UpsertArtifacts(ctx context.Context, artifacts []ArtifactRecord) error {
+	upserter, ok := r.state.(runtimeArtifactUpserter)
+	if !ok {
+		return fmt.Errorf("%w: artifact upsert is not supported by the configured state store", ErrStorageUnavailable)
+	}
+	if len(artifacts) == 0 {
+		return fmt.Errorf("%w: at least one artifact is required", ErrContractViolation)
+	}
+	for _, artifact := range artifacts {
+		if err := validateArtifactMetadata(artifact); err != nil {
+			return err
+		}
+	}
+	if err := upserter.UpsertArtifacts(ctx, artifacts); err != nil {
+		return fmt.Errorf("%w: upsert artifacts: %v", ErrStorageUnavailable, err)
+	}
+	return nil
 }
 
 func (r *Repository) preparePersistJob(req PersistJobRequest) (PersistedJobBundle, []ArtifactRecord, error) {
@@ -441,6 +882,23 @@ func ensureJobDefaults(job JobRecord, now func() time.Time) JobRecord {
 		job.ParamsJSON = []byte("{}")
 	}
 	return job
+}
+
+func ensureClaimJobExecutionDefaults(req ClaimJobExecutionRequest, now func() time.Time, nextID func() string) ClaimJobExecutionRequest {
+	if req.ClaimedAt.IsZero() {
+		req.ClaimedAt = now()
+	}
+	if strings.TrimSpace(req.ExecutionID) == "" && nextID != nil {
+		req.ExecutionID = nextID()
+	}
+	return req
+}
+
+func ensureFinishJobExecutionDefaults(req FinishJobExecutionRequest, now func() time.Time) FinishJobExecutionRequest {
+	if req.FinishedAt.IsZero() {
+		req.FinishedAt = now()
+	}
+	return req
 }
 
 func ensureEventDefaults(event JobEvent, job JobRecord, now func() time.Time) JobEvent {
@@ -627,6 +1085,38 @@ func validateEvent(event JobEvent, job JobRecord) error {
 	return nil
 }
 
+func validateClaimJobExecutionRequest(req ClaimJobExecutionRequest) error {
+	if strings.TrimSpace(req.JobID) == "" || strings.TrimSpace(req.WorkerKind) == "" || strings.TrimSpace(req.TaskType) == "" || strings.TrimSpace(req.ExecutionID) == "" {
+		return fmt.Errorf("%w: claim execution requires job id, worker kind, task type, and execution id", ErrContractViolation)
+	}
+	if req.ClaimedAt.IsZero() {
+		return fmt.Errorf("%w: claim execution requires claimed_at", ErrContractViolation)
+	}
+	return nil
+}
+
+func validateActiveJobExecutionLookup(jobID, executionID string) error {
+	if strings.TrimSpace(jobID) == "" || strings.TrimSpace(executionID) == "" {
+		return fmt.Errorf("%w: active execution lookup requires job id and execution id", ErrContractViolation)
+	}
+	return nil
+}
+
+func validateFinishJobExecutionRequest(req FinishJobExecutionRequest) error {
+	if err := validateActiveJobExecutionLookup(req.JobID, req.ExecutionID); err != nil {
+		return err
+	}
+	if req.FinishedAt.IsZero() {
+		return fmt.Errorf("%w: finish execution requires finished_at", ErrContractViolation)
+	}
+	switch req.Outcome {
+	case "succeeded", "failed", "canceled":
+		return nil
+	default:
+		return fmt.Errorf("%w: unsupported execution outcome %q", ErrContractViolation, req.Outcome)
+	}
+}
+
 func validateWebhookDelivery(delivery *WebhookDelivery, job JobRecord, event JobEvent) error {
 	if job.Delivery.Strategy == DeliveryStrategyPolling {
 		if delivery != nil {
@@ -661,6 +1151,13 @@ func validateArtifact(artifact ArtifactRecord) error {
 	return nil
 }
 
+func validateArtifactMetadata(artifact ArtifactRecord) error {
+	if strings.TrimSpace(artifact.ID) == "" || strings.TrimSpace(artifact.JobID) == "" || strings.TrimSpace(artifact.ArtifactKind) == "" || strings.TrimSpace(artifact.Filename) == "" || strings.TrimSpace(artifact.MIMEType) == "" || strings.TrimSpace(artifact.ObjectKey) == "" {
+		return fmt.Errorf("%w: artifact metadata requires ids, kind, filename, mime type, and object key", ErrContractViolation)
+	}
+	return nil
+}
+
 func requiresSourceObject(sourceKind string) bool {
 	return sourceKind == SourceKindUploadedFile || sourceKind == SourceKindTelegramUpload
 }
@@ -677,6 +1174,14 @@ func (bundle PersistedJobBundle) withoutSourceBodies() PersistedJobBundle {
 func (source SourceRecord) withoutObjectBody() SourceRecord {
 	source.ObjectBody = nil
 	return source
+}
+
+func withoutSourceBodies(sources []SourceRecord) []SourceRecord {
+	stripped := make([]SourceRecord, 0, len(sources))
+	for _, source := range sources {
+		stripped = append(stripped, source.withoutObjectBody())
+	}
+	return stripped
 }
 
 func (artifact ArtifactRecord) withoutBody() ArtifactRecord {

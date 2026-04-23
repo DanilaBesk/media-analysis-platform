@@ -367,3 +367,7 @@ def test_broken_model_cache_error_detection_is_specific() -> None:
     assert _is_broken_model_cache_error(RuntimeError("Unable to open file 'model.bin' in model cache"))
     assert _is_broken_model_cache_error(RuntimeError("No such file or directory"))
     assert not _is_broken_model_cache_error(RuntimeError("Some other error"))
+
+
+from workers.common.tests.test_api import *  # noqa: F401,F403,E402
+from workers.common.tests.test_api_transport import *  # noqa: F401,F403,E402

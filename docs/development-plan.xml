@@ -144,17 +144,15 @@
       <entry path="apps/api/internal/api" />
       <entry path="apps/api/internal/jobs" />
       <entry path="apps/api/internal/storage" />
+      <entry path="apps/api/internal/storage/migrations" />
       <entry path="apps/api/internal/queue" />
       <entry path="apps/api/internal/ws" />
       <entry path="apps/api/internal/db" />
-      <entry path="apps/api/migrations" />
       <entry path="apps/web/src/app" />
-      <entry path="apps/web/src/pages" />
-      <entry path="apps/web/src/components" />
       <entry path="apps/web/src/features/jobs" />
       <entry path="apps/web/src/features/artifacts" />
       <entry path="apps/web/src/lib/api" />
-      <entry path="apps/telegram-bot/src/telegram_transcriber_bot_client" />
+      <entry path="apps/telegram-bot/src/telegram_adapter" />
       <entry path="apps/mcp-server/src" />
       <entry path="workers/common/src/transcriber_workers_common" />
       <entry path="workers/transcription/src" />
@@ -167,7 +165,7 @@
       <entry path="packages/sdk-py" />
       <entry path="infra/docker-compose.yml" />
       <entry path="infra/env" />
-      <entry path="infra/minio" />
+      <entry path="infra/init/minio" />
       <entry path="infra/init" />
     </layout>
     <notes>
@@ -732,6 +730,11 @@
         <response>cancel_requested, status, cancel_requested_at</response>
       </endpoint>
     </InternalEndpoints>
+    <ExecutionAuthority>
+      <rule-1>`execution_id` is authoritative control-plane state carried across claim, progress, artifact, finalize, and cancel-check calls.</rule-1>
+      <rule-2>This state must be storage-backed; `jobs.started_at`, queue payloads, and worker memory are insufficient as the sole ownership signal.</rule-2>
+      <rule-3>M-API-STORAGE owns the persistence boundary that makes this lifecycle reproducible for M-API-JOBS and M-API-HTTP.</rule-3>
+    </ExecutionAuthority>
     <NotInV1>
       <item>heartbeat endpoint</item>
       <item>lease renewal endpoint</item>
@@ -974,7 +977,7 @@
     <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" LAYER="0" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Own PostgreSQL persistence, MinIO access, presigned URL resolution, and durable webhook-delivery records.</purpose>
-        <scope>SQL persistence, MinIO object IO, presigned URL generation, source and artifact lifecycle checks, and durable delivery bookkeeping.</scope>
+        <scope>SQL persistence, authoritative execution-claim state, MinIO object IO, presigned URL generation, source and artifact lifecycle checks, and durable delivery bookkeeping.</scope>
         <inputs>
           <param name="db-queries" type="sqlc-generated-queries" />
           <param name="object-store-client" type="minio-client" />
@@ -991,6 +994,16 @@
       <interface>
         <export-persistSource PURPOSE="Write source metadata and MinIO object references." />
         <export-persistJob PURPOSE="Create and transition jobs with versioned state." />
+        <export-listJobs PURPOSE="List authoritative job rows for polling, UI, and adapter reads." />
+        <export-getSourceSet PURPOSE="Read the persisted source-set shell for job snapshot shaping." />
+        <export-listOrderedSources PURPOSE="Resolve the stable ordered source inputs bound to a source set." />
+        <export-listArtifactsByJob PURPOSE="Read canonical artifact metadata for one job." />
+        <export-listChildJobs PURPOSE="Read canonical child jobs for lineage-aware snapshot shaping." />
+        <export-listJobEvents PURPOSE="Read the append-only timeline rows for one job." />
+        <export-upsertArtifacts PURPOSE="Register worker-produced artifact metadata after object persistence succeeds." />
+        <export-claimJobExecution PURPOSE="Create the authoritative execution_id row and atomically claim queued work." />
+        <export-getActiveJobExecution PURPOSE="Validate active execution ownership for progress, artifact, finalize, and cancel-check flows." />
+        <export-finishJobExecution PURPOSE="Close authoritative execution ownership when a worker reaches a terminal outcome." />
         <export-resolveArtifact PURPOSE="Return artifact metadata plus a fresh presigned URL." />
       </interface>
       <depends>M-CONTRACTS</depends>
@@ -1005,6 +1018,7 @@
       <verification-ref>V-M-API-STORAGE</verification-ref>
       <notes>
         <note-1>job_submissions and webhook_deliveries are mandatory early tables, not optional polish.</note-1>
+        <note-2>The storage boundary also owns authoritative execution-claim state for `execution_id`; routes and workers must not infer that state from `started_at`, queue payloads, or process-local memory.</note-2>
       </notes>
     </M-API-STORAGE>
 
@@ -1113,6 +1127,7 @@
       <verification-ref>V-M-API-JOBS</verification-ref>
       <notes>
         <note-1>Workers must never bypass this module’s transition rules.</note-1>
+        <note-2>Internal worker claim and finalize logic must consume storage-backed execution authority rather than reconstructing ownership from route-local state.</note-2>
       </notes>
     </M-API-JOBS>
 
@@ -1136,6 +1151,7 @@
         <export-registerRoutes PURPOSE="Bind external and internal routes." />
         <export-validateRequest PURPOSE="Apply request validation and canonical error shaping." />
         <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
+        <export-buildRuntimeDependencies PURPOSE="Assemble concrete public and internal worker services for the executable API runtime." />
       </interface>
       <depends>M-CONTRACTS, M-API-JOBS, M-API-STORAGE, M-API-EVENTS</depends>
       <target>
@@ -1149,6 +1165,7 @@
       <verification-ref>V-M-API-HTTP</verification-ref>
       <notes>
         <note-1>Public routes and internal worker routes should remain explicit rather than merged by convention.</note-1>
+        <note-2>Internal worker routes are only contract-complete when `execution_id` is validated against authoritative control-plane state instead of request-local assumptions.</note-2>
       </notes>
     </M-API-HTTP>
 
@@ -1206,7 +1223,7 @@
       <interface>
         <export-runTranscription PURPOSE="Execute one claimed transcription job." />
       </interface>
-      <depends>M-WORKER-COMMON</depends>
+      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <target>
         <source>workers/transcription</source>
         <tests>workers/transcription/tests</tests>
@@ -1240,7 +1257,7 @@
       <interface>
         <export-runReport PURPOSE="Execute one claimed report job." />
       </interface>
-      <depends>M-WORKER-COMMON</depends>
+      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <target>
         <source>workers/report</source>
         <tests>workers/report/tests</tests>
@@ -1273,7 +1290,7 @@
       <interface>
         <export-runDeepResearch PURPOSE="Execute one claimed deep-research job." />
       </interface>
-      <depends>M-WORKER-COMMON</depends>
+      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <target>
         <source>workers/deep-research</source>
         <tests>workers/deep-research/tests</tests>
@@ -1288,7 +1305,7 @@
       </notes>
     </M-WORKER-DEEP-RESEARCH>
 
-    <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" LAYER="4" ORDER="1" STATUS="planned">
+    <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" LAYER="4" ORDER="1" STATUS="implemented">
       <contract>
         <purpose>Expose the local browser UI for submission, monitoring, artifact download, and late-wave admin operations.</purpose>
         <scope>Jobs list, job details, uploads, URL submission, artifact resolution, polling and WS reconciliation, and late-wave admin actions.</scope>
@@ -1305,13 +1322,13 @@
         </errors>
       </contract>
       <interface>
-        <export-jobsList PURPOSE="List and filter jobs." />
-        <export-jobDetails PURPOSE="Show lineage, status, artifacts, and admin actions." />
+        <export-jobsPage PURPOSE="List and filter jobs." />
+        <export-jobDetailsPage PURPOSE="Show lineage, status, artifacts, and admin actions." />
       </interface>
-      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <depends>M-CONTRACTS, M-API-HTTP, M-API-EVENTS</depends>
       <target>
         <source>apps/web</source>
-        <tests>apps/web tests</tests>
+        <tests>apps/web/tests</tests>
       </target>
       <observability>
         <log-prefix>[WebUi]</log-prefix>
@@ -1320,10 +1337,12 @@
       <verification-ref>V-M-WEB-UI</verification-ref>
       <notes>
         <note-1>Polling is the truth path; WebSocket is only the latency optimization path.</note-1>
+        <note-2>If `apps/web` does not exist yet, Phase-5 starts with a bounded app-shell unblock step before jobs or artifact features are implemented.</note-2>
+        <note-3>The scaffold step must cover route and layout shell, env contract, and packet-local API client wiring so feature packets do not stall on missing frontend plumbing.</note-3>
       </notes>
     </M-WEB-UI>
 
-    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="2" STATUS="planned">
+    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Preserve Telegram UX while delegating all business logic to the API.</purpose>
         <scope>Telegram update parsing, temporary media download, API submission, polling wait flow, callback mapping, and artifact sending.</scope>
@@ -1339,7 +1358,9 @@
         </errors>
       </contract>
       <interface>
-        <export-handleMedia PURPOSE="Upload Telegram media to the API and send resulting artifacts back." />
+        <export-handleIncomingMedia PURPOSE="Download Telegram media temporarily and submit it to the API." />
+        <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, and segmented-artifact actions." />
+        <export-submitCombinedMedia PURPOSE="Submit Telegram media groups or buffered sequential media as one combined transcription job." />
       </interface>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <target>
@@ -1353,10 +1374,12 @@
       <verification-ref>V-M-TELEGRAM-ADAPTER</verification-ref>
       <notes>
         <note-1>Default delivery strategy is polling for Telegram flows.</note-1>
+        <note-2>If `apps/telegram-bot` is absent, materialize it inside the adapter packet while using the current `bot.py` and Telegram tests as the migration source; no separate shell packet is required.</note-2>
+        <note-3>If `packages/sdk-py` is still absent during Phase-5, keep a thin packet-local API client under the Telegram adapter boundary and defer shared SDK extraction.</note-3>
       </notes>
     </M-TELEGRAM-ADAPTER>
 
-    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="3" STATUS="planned">
+    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="3" STATUS="implemented">
       <contract>
         <purpose>Expose the platform as an MCP surface over the same typed HTTP API client.</purpose>
         <scope>MCP tool definitions, API request mapping, result shaping, and tool-level read or write parity with the HTTP API.</scope>
@@ -1373,12 +1396,12 @@
       </contract>
       <interface>
         <export-createTranscriptionJob PURPOSE="Create jobs through MCP." />
-        <export-readJob PURPOSE="Inspect jobs, artifacts, and event timelines through MCP." />
+        <export-inspectJob PURPOSE="Inspect jobs, artifacts, and event timelines through MCP." />
       </interface>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <target>
         <source>apps/mcp-server</source>
-        <tests>apps/mcp-server tests</tests>
+        <tests>apps/mcp-server/tests</tests>
       </target>
       <observability>
         <log-prefix>[McpAdapter]</log-prefix>
@@ -1387,6 +1410,8 @@
       <verification-ref>V-M-MCP-ADAPTER</verification-ref>
       <notes>
         <note-1>MCP remains a thin adapter and must not gain direct DB, queue, or MinIO access.</note-1>
+        <note-2>If `apps/mcp-server` does not exist yet, Phase-5 starts with a bounded MCP app-shell unblock step before tool-mapping work begins.</note-2>
+        <note-3>The scaffold step must cover server bootstrap, tool-registry shell, env contract, and packet-local API client wiring so the tool-mapping packet does not stall on missing adapter plumbing.</note-3>
       </notes>
     </M-MCP-ADAPTER>
 
@@ -1497,7 +1522,7 @@
       <Phase-0-4>Freeze newly accepted architectural decisions including asynq, polling plus webhook strategy model, MinIO presigned downloads, multi-file upload, no legacy compatibility track, and late-wave admin operations.</Phase-0-4>
     </Wave-0>
 
-    <Wave-1 name="Monorepo Bootstrap And Contracts" status="pending">
+    <Wave-1 name="Monorepo Bootstrap And Contracts" status="done">
       <goal>Create the monorepo structure and contract package before implementation spreads.</goal>
       <files>
         <file>Create apps/api</file>
@@ -1524,11 +1549,12 @@
         <file>Create apps/api/internal/jobs</file>
         <file>Create apps/api/internal/queue</file>
         <file>Create apps/api/internal/storage</file>
+        <file>Create apps/api/internal/storage/migrations sql files</file>
         <file>Create apps/api/internal/ws</file>
-        <file>Create apps/api/migrations sql files</file>
         <file>Create infra/env/api.env.example</file>
       </files>
       <Phase-2-1>Add PostgreSQL migrations for sources, source_sets, source_set_items, jobs, job_artifacts, job_events, job_submissions, and webhook_deliveries.</Phase-2-1>
+      <Phase-2-1a>Materialize authoritative execution-claim persistence backing `execution_id` across claim, progress, artifact, finalize, and cancel-check paths.</Phase-2-1a>
       <Phase-2-2>Add MinIO integration and bucket bootstrap assumptions.</Phase-2-2>
       <Phase-2-3>Add Redis queue producer through asynq by job type.</Phase-2-3>
       <Phase-2-4>Add REST endpoints as stubs first and then as persistence-backed handlers.</Phase-2-4>
@@ -1571,7 +1597,7 @@
       <Phase-5-3>Implement cooperative cancellation around each phase and subprocess execution.</Phase-5-3>
     </Wave-5>
 
-    <Wave-6 name="Web UI Delivery" status="pending">
+    <Wave-6 name="Web UI Delivery" status="done">
       <goal>Deliver a simple operational React UI over the live API.</goal>
       <files>
         <file>Create apps/web/src/app</file>
@@ -1589,7 +1615,7 @@
       <Phase-6-8>Add late-wave admin operations on job details page: delete job, delete artifacts, refresh expired artifact download link, explicit manual retry actions.</Phase-6-8>
     </Wave-6>
 
-    <Wave-7 name="Telegram Bot Migration" status="pending">
+    <Wave-7 name="Telegram Bot Migration" status="done">
       <goal>Replace direct execution in Telegram bot with API calls.</goal>
       <files>
         <file>Create apps/telegram-bot/src</file>
@@ -1601,7 +1627,7 @@
       <Phase-7-4>Remove execution coupling so the bot no longer imports execution core directly.</Phase-7-4>
     </Wave-7>
 
-    <Wave-8 name="MCP Server Delivery" status="pending">
+    <Wave-8 name="MCP Server Delivery" status="done">
       <goal>Expose the platform to MCP as a clean adapter.</goal>
       <files>
         <file>Create apps/mcp-server/src/index.ts</file>
@@ -1637,7 +1663,7 @@
 
     <Phase-2 name="Control Plane Foundation" status="done">
       <goal>Build the minimum Go control plane that can persist jobs, enqueue work, and expose contract-compliant HTTP routes.</goal>
-      <step-1 module="M-API-STORAGE" status="done" verification="V-M-API-STORAGE">Add PostgreSQL migrations and MinIO integration.</step-1>
+      <step-1 module="M-API-STORAGE" status="done" verification="V-M-API-STORAGE">Add PostgreSQL migrations, MinIO integration, and authoritative execution-claim persistence.</step-1>
       <step-2 module="M-API-QUEUE" status="done" verification="V-M-API-QUEUE">Add asynq task publishing and retry policy wiring.</step-2>
       <step-3 module="M-API-JOBS" status="done" verification="V-M-API-JOBS">Implement job creation, child reuse, cancel, retry, and lineage rules.</step-3>
       <step-4 module="M-API-EVENTS" status="done" verification="V-M-API-EVENTS">Implement job events, WebSocket fanout, and persisted webhook delivery scheduling.</step-4>
@@ -1656,11 +1682,13 @@
       <step-2 module="M-WORKER-DEEP-RESEARCH" status="pending" verification="V-M-WORKER-DEEP-RESEARCH">Extract deep-research pipeline into the dedicated worker.</step-2>
     </Phase-4>
 
-    <Phase-5 name="Adapter And UI Cutover" status="pending">
+    <Phase-5 name="Adapter And UI Cutover" status="done">
       <goal>Move all user-facing entrypoints to thin adapters over the API.</goal>
-      <step-1 module="M-WEB-UI" status="pending" verification="V-M-WEB-UI">Implement local job submission, monitoring, artifact download, and admin details pages.</step-1>
-      <step-2 module="M-TELEGRAM-ADAPTER" status="pending" verification="V-M-TELEGRAM-ADAPTER">Replace bot-side orchestration with API calls while preserving Telegram UX.</step-2>
-      <step-3 module="M-MCP-ADAPTER" status="pending" verification="V-M-MCP-ADAPTER">Expose the same core operations through MCP.</step-3>
+      <step-0 module="M-WEB-UI" status="done" verification="V-M-WEB-UI">Create the minimal `apps/web` scaffold, env contract, route or layout shell, packet-local API client boundary, and app-local test harness required before Web UI feature work begins.</step-0>
+      <step-0b module="M-MCP-ADAPTER" status="done" verification="V-M-MCP-ADAPTER">Create the minimal `apps/mcp-server` scaffold, env contract, server or tool-registry shell, packet-local API client boundary, and app-local test harness required before MCP tool-mapping work begins.</step-0b>
+      <step-1 module="M-WEB-UI" status="done" verification="V-M-WEB-UI">Implement local job submission, monitoring, artifact download, and admin details pages.</step-1>
+      <step-2 module="M-TELEGRAM-ADAPTER" status="done" verification="V-M-TELEGRAM-ADAPTER">Replace bot-side orchestration with API calls while preserving Telegram UX.</step-2>
+      <step-3 module="M-MCP-ADAPTER" status="done" verification="V-M-MCP-ADAPTER">Expose the same core operations through MCP.</step-3>
     </Phase-5>
 
     <Phase-6 name="Compose Hardening And Final Cutover" status="pending">

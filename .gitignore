@@ -1,11 +1,14 @@
 .env
 .coverage
+.cache/
 .codex/
+.playwright-mcp/
 .venv/
 .pytest_cache/
 .data/
 .beads/
 logs/
+node_modules/
 __pycache__/
 *.pyc
 

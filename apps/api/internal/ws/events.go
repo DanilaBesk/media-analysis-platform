@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 )
 
@@ -84,7 +86,7 @@ func NewService(store Store, broadcaster Broadcaster, dispatcher Dispatcher, opt
 		broadcaster: broadcaster,
 		dispatcher:  dispatcher,
 		now:         time.Now().UTC,
-		nextID:      func() string { return fmt.Sprintf("event-%d", time.Now().UTC().UnixNano()) },
+		nextID:      uuid.NewString,
 	}
 	for _, opt := range opts {
 		opt(service)

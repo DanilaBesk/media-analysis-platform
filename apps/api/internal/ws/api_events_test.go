@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 )
 
@@ -76,6 +78,56 @@ func TestApiEventsEmitPersistsBroadcastsAndSchedulesWebhook(t *testing.T) {
 	}
 	if _, ok := payload["version"]; !ok {
 		t.Fatalf("stored payload missing version: %#v", payload)
+	}
+}
+
+func TestApiEventsDefaultIDGeneratorUsesUUIDs(t *testing.T) {
+	t.Parallel()
+
+	store := newEventMemoryStore()
+	service, err := NewService(
+		store,
+		nil,
+		nil,
+		WithClock(func() time.Time { return time.Date(2026, 4, 23, 9, 30, 0, 0, time.UTC) }),
+	)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	result, err := service.EmitJobEvent(context.Background(), EmitRequest{
+		Job: storage.JobRecord{
+			ID:        uuid.NewString(),
+			RootJobID: uuid.NewString(),
+			JobType:   "transcription",
+			Status:    "queued",
+			Version:   1,
+			Delivery: storage.Delivery{
+				Strategy:   storage.DeliveryStrategyWebhook,
+				WebhookURL: "https://example.com/hook",
+			},
+		},
+		EventType: "job.created",
+		JobURL:    "/v1/jobs/test",
+		Payload: EventPayload{
+			Status: "queued",
+		},
+	})
+	if err != nil {
+		t.Fatalf("EmitJobEvent() error = %v", err)
+	}
+	if result.WebhookDelivery == nil {
+		t.Fatal("expected webhook delivery to be created")
+	}
+
+	for label, value := range map[string]string{
+		"event_id":            result.Event.ID,
+		"envelope_event_id":   result.Envelope.EventID,
+		"webhook_delivery_id": result.WebhookDelivery.ID,
+	} {
+		if _, err := uuid.Parse(value); err != nil {
+			t.Fatalf("%s = %q, want UUID: %v", label, value, err)
+		}
 	}
 }
 

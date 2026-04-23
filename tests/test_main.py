@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -57,3 +59,14 @@ def test_main_uses_asyncio_run(monkeypatch) -> None:
     main_module.main()
 
     assert len(calls) == 1
+
+
+def test_app_local_telegram_adapter_client_defaults_to_polling() -> None:
+    adapter_src = Path(__file__).resolve().parents[1] / "apps" / "telegram-bot" / "src"
+    sys.path.insert(0, str(adapter_src))
+    try:
+        from telegram_adapter.api_client import build_delivery_payload
+
+        assert build_delivery_payload() == {"strategy": "polling"}
+    finally:
+        sys.path.pop(0)

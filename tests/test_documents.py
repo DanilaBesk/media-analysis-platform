@@ -185,3 +185,6 @@ def test_machine_name_heuristics_stay_strict() -> None:
     assert _looks_like_machine_file_name("plain text.mp3") is False
     assert _is_human_readable_title("meeting_notes.ogg") is True
     assert _is_human_readable_title("") is False
+
+
+from workers.common.tests.test_artifacts import *  # noqa: F401,F403,E402

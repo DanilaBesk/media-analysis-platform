@@ -31,14 +31,14 @@ build-backend = "hatchling.build"
 packages = ["src/telegram_transcriber_bot"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["workers/common/src", "src"]
 testpaths = ["tests"]
 addopts = [
   "-ra",
   "--strict-config",
   "--strict-markers",
-  "--cov=src/telegram_transcriber_bot",
+  "--cov=transcriber_workers_common",
   "--cov-branch",
   "--cov-report=term-missing",
-  "--cov-fail-under=90",
+  "--cov-fail-under=95",
 ]

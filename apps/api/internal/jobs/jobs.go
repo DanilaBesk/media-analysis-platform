@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 )
@@ -98,7 +100,7 @@ func NewService(store Store, enqueuer Enqueuer, opts ...Option) (*Service, error
 		store:  store,
 		queue:  enqueuer,
 		now:    time.Now().UTC,
-		nextID: func() string { return fmt.Sprintf("job-%d", time.Now().UTC().UnixNano()) },
+		nextID: uuid.NewString,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -321,7 +323,7 @@ func (s *Service) CancelJob(ctx context.Context, jobID string) (storage.JobRecor
 	if err := s.store.UpdateJob(ctx, job); err != nil {
 		return storage.JobRecord{}, err
 	}
-	if err := s.emit(ctx, Event{JobID: job.ID, EventType: "job.updated", ToStatus: job.Status, Version: job.Version, OccurredAt: cancelAt}); err != nil {
+	if err := s.emit(ctx, Event{JobID: job.ID, EventType: eventTypeForStatus(job.Status), ToStatus: job.Status, Version: job.Version, OccurredAt: cancelAt}); err != nil {
 		return storage.JobRecord{}, err
 	}
 	return job, nil
@@ -402,7 +404,7 @@ func (s *Service) TransitionJob(ctx context.Context, req TransitionRequest) (sto
 	if err := s.store.UpdateJob(ctx, job); err != nil {
 		return storage.JobRecord{}, err
 	}
-	if err := s.emit(ctx, Event{JobID: job.ID, EventType: "job.updated", ToStatus: job.Status, Version: job.Version, OccurredAt: now}); err != nil {
+	if err := s.emit(ctx, Event{JobID: job.ID, EventType: eventTypeForStatus(job.Status), ToStatus: job.Status, Version: job.Version, OccurredAt: now}); err != nil {
 		return storage.JobRecord{}, err
 	}
 	return job, nil
@@ -501,6 +503,19 @@ func newRootJob(jobID, submissionID, sourceSetID, clientRef string, delivery sto
 
 func isTerminal(status string) bool {
 	return status == "succeeded" || status == "failed" || status == "canceled"
+}
+
+func eventTypeForStatus(status string) string {
+	switch status {
+	case "succeeded":
+		return "job.completed"
+	case "failed":
+		return "job.failed"
+	case "canceled":
+		return "job.canceled"
+	default:
+		return "job.updated"
+	}
 }
 
 func isAllowedTransition(from, to string) bool {

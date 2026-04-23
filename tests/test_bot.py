@@ -8,6 +8,7 @@ import pytest
 
 from telegram_transcriber_bot.bot import (
     CandidateSelectionStore,
+    HANDLE_MEDIA_MARKER,
     TelegramTranscriberApp,
     _extract_attachments,
     _guess_suffix,
@@ -73,6 +74,7 @@ class FakeProcessingService:
     def __init__(self, tmp_path: Path) -> None:
         self.tmp_path = tmp_path
         self.processed_sources: list[SourceCandidate] = []
+        self.processed_groups: list[list[SourceCandidate]] = []
         self.loaded_job_id: str | None = None
         self.report_job_id: str | None = None
         self.deep_research_job_id: str | None = None
@@ -86,6 +88,10 @@ class FakeProcessingService:
 
     def process_source(self, source: SourceCandidate) -> ProcessedJob:
         self.processed_sources.append(source)
+        return self.job
+
+    def process_source_group(self, sources: list[SourceCandidate]) -> ProcessedJob:
+        self.processed_groups.append(sources)
         return self.job
 
     def load_job(self, job_id: str) -> ProcessedJob:
@@ -261,6 +267,32 @@ async def test_start_processing_downloads_attachment_and_updates_status(tmp_path
     keyboard = document_entry["reply_markup"]
     assert keyboard.inline_keyboard[0][0].text == "Получить по сегментам"
     assert keyboard.inline_keyboard[1][0].text == "Создать исследовательский отчет"
+
+
+@pytest.mark.asyncio
+async def test_start_processing_emits_required_adapter_marker(tmp_path: Path, monkeypatch) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    candidate = SourceCandidate(
+        source_id="src-1",
+        kind="youtube_url",
+        display_name="YouTube: demo",
+        url="https://youtu.be/demo",
+        telegram_file_id=None,
+        mime_type=None,
+        file_name=None,
+    )
+    logs: list[str] = []
+
+    monkeypatch.setattr(
+        "telegram_transcriber_bot.bot.LOGGER",
+        SimpleNamespace(info=lambda message, *args: logs.append(message % args if args else message)),
+    )
+
+    await app._start_processing(chat_id=10, candidate=candidate)
+
+    assert logs == [f"{HANDLE_MEDIA_MARKER} mode=single source_kind=youtube_url"]
 
 
 @pytest.mark.asyncio
@@ -513,6 +545,43 @@ async def test_process_candidate_set_starts_processing_for_single_source(tmp_pat
     await app._process_candidate_set(chat_id=10, user_id=11, text="https://youtu.be/demo", attachments=[])
 
     assert started[0].display_name == "YouTube: demo"
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_set_routes_multiple_attachments_to_combined_submission(tmp_path: Path, monkeypatch) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    grouped: list[list[SourceCandidate]] = []
+
+    async def fake_start_processing_group(chat_id: int, candidates: list[SourceCandidate]) -> None:
+        grouped.append(candidates)
+
+    monkeypatch.setattr(app, "_start_processing_group", fake_start_processing_group)
+
+    await app._process_candidate_set(
+        chat_id=10,
+        user_id=11,
+        text="",
+        attachments=[
+            SimpleNamespace(
+                telegram_file_id="voice-1",
+                kind="telegram_audio",
+                file_name="voice-1.ogg",
+                mime_type="audio/ogg",
+                file_unique_id="uniq-1",
+            ),
+            SimpleNamespace(
+                telegram_file_id="voice-2",
+                kind="telegram_audio",
+                file_name="voice-2.ogg",
+                mime_type="audio/ogg",
+                file_unique_id="uniq-2",
+            ),
+        ],
+    )
+
+    assert len(grouped) == 1
+    assert [candidate.telegram_file_id for candidate in grouped[0]] == ["voice-1", "voice-2"]
 
 
 @pytest.mark.asyncio

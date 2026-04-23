@@ -2,13 +2,22 @@ package storage
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+)
+
+var (
+	semanticMigrationNamePattern = regexp.MustCompile(`^\d{4}_[a-z0-9]+(?:_[a-z0-9]+)*\.sql$`)
+	phaseOnlyMigrationPattern    = regexp.MustCompile(`^\d{4}_phase\d`)
 )
 
 func TestApiStoragePersistJobPreservesCombinedSourceSetAndWebhookDelivery(t *testing.T) {
@@ -267,7 +276,23 @@ func TestApiStorageRejectsInvalidSourceContract(t *testing.T) {
 func TestApiStorageMigrationContract(t *testing.T) {
 	t.Parallel()
 
-	migrationPath := filepath.Join("migrations", "0001_phase2_storage.sql")
+	migrationPaths, err := filepath.Glob(filepath.Join("migrations", "*.sql"))
+	if err != nil {
+		t.Fatalf("Glob(migrations/*.sql) error = %v", err)
+	}
+	if got, want := len(migrationPaths), 1; got != want {
+		t.Fatalf("migration file count = %d, want %d", got, want)
+	}
+
+	migrationPath := migrationPaths[0]
+	migrationName := filepath.Base(migrationPath)
+	if !semanticMigrationNamePattern.MatchString(migrationName) {
+		t.Fatalf("migration name %q must match zero-padded semantic snake_case rule", migrationName)
+	}
+	if phaseOnlyMigrationPattern.MatchString(migrationName) {
+		t.Fatalf("migration name %q must be semantic, not phase-only", migrationName)
+	}
+
 	migrationBytes, err := os.ReadFile(migrationPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%s) error = %v", migrationPath, err)
@@ -282,6 +307,421 @@ func TestApiStorageMigrationContract(t *testing.T) {
 
 	if !strings.Contains(migration, "-- +goose Up") || !strings.Contains(migration, "-- +goose Down") {
 		t.Fatalf("migration must expose goose up/down sections")
+	}
+}
+
+func TestApiStorageInsertSourceSetItemsUsesUUIDIDs(t *testing.T) {
+	t.Parallel()
+
+	execer := &recordingExecer{}
+	sourceSet := SourceSetRecord{
+		ID:        uuid.NewString(),
+		InputKind: SourceSetInputCombinedUpload,
+		Items: []SourceSetItem{
+			{Position: 0, SourceID: uuid.NewString()},
+			{Position: 1, SourceID: uuid.NewString()},
+		},
+		CreatedAt: time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC),
+	}
+
+	if err := insertSourceSetItems(context.Background(), execer, sourceSet); err != nil {
+		t.Fatalf("insertSourceSetItems() error = %v", err)
+	}
+	if got, want := len(execer.calls), 2; got != want {
+		t.Fatalf("insertSourceSetItems() call count = %d, want %d", got, want)
+	}
+
+	seen := map[string]struct{}{}
+	for idx, call := range execer.calls {
+		if got, want := len(call.args), 5; got != want {
+			t.Fatalf("call %d arg count = %d, want %d", idx, got, want)
+		}
+		itemID, ok := call.args[0].(string)
+		if !ok {
+			t.Fatalf("call %d arg[0] type = %T, want string", idx, call.args[0])
+		}
+		if _, err := uuid.Parse(itemID); err != nil {
+			t.Fatalf("call %d item id = %q, want UUID: %v", idx, itemID, err)
+		}
+		if _, exists := seen[itemID]; exists {
+			t.Fatalf("call %d item id = %q, want unique UUID per row", idx, itemID)
+		}
+		seen[itemID] = struct{}{}
+	}
+}
+
+func TestApiStorageClaimJobExecutionPersistsAuthoritativeExecution(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	seedJob(state, JobRecord{
+		ID:          "job-claim-1",
+		RootJobID:   "job-claim-1",
+		SourceSetID: "source-set-1",
+		JobType:     "transcription",
+		Status:      "queued",
+		Version:     1,
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+		ProgressStage: "queued",
+		ParamsJSON:    []byte("{}"),
+	})
+
+	claimedAt := time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC)
+	repo, err := NewRepository(
+		state,
+		newFakeObjectStore(),
+		WithClock(func() time.Time { return claimedAt }),
+		WithIDGenerator(func() string { return "execution-1" }),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	result, err := repo.ClaimJobExecution(context.Background(), ClaimJobExecutionRequest{
+		JobID:      "job-claim-1",
+		WorkerKind: "worker-transcription",
+		TaskType:   "transcription",
+	})
+	if err != nil {
+		t.Fatalf("ClaimJobExecution() error = %v", err)
+	}
+
+	if !result.Claimed {
+		t.Fatal("expected claim to succeed")
+	}
+	if result.Execution == nil {
+		t.Fatal("expected execution metadata on successful claim")
+	}
+	if result.Execution.ExecutionID != "execution-1" {
+		t.Fatalf("execution id = %q, want execution-1", result.Execution.ExecutionID)
+	}
+	if result.Job.Status != "running" {
+		t.Fatalf("job status = %q, want running", result.Job.Status)
+	}
+	if result.Job.Version != 2 {
+		t.Fatalf("job version = %d, want 2", result.Job.Version)
+	}
+	if result.Job.StartedAt == nil || !result.Job.StartedAt.Equal(claimedAt) {
+		t.Fatalf("job started_at = %v, want %v", result.Job.StartedAt, claimedAt)
+	}
+
+	execution, err := repo.GetActiveJobExecution(context.Background(), "job-claim-1", "execution-1")
+	if err != nil {
+		t.Fatalf("GetActiveJobExecution() error = %v", err)
+	}
+	if execution.WorkerKind != "worker-transcription" || execution.TaskType != "transcription" {
+		t.Fatalf("execution = %#v, want worker/task metadata", execution)
+	}
+}
+
+func TestApiStorageClaimJobExecutionRejectsSecondActiveClaim(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	seedJob(state, JobRecord{
+		ID:          "job-claim-2",
+		RootJobID:   "job-claim-2",
+		SourceSetID: "source-set-1",
+		JobType:     "transcription",
+		Status:      "queued",
+		Version:     1,
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+		ProgressStage: "queued",
+		ParamsJSON:    []byte("{}"),
+	})
+
+	repo, err := NewRepository(state, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	first, err := repo.ClaimJobExecution(context.Background(), ClaimJobExecutionRequest{
+		JobID:       "job-claim-2",
+		WorkerKind:  "worker-transcription",
+		TaskType:    "transcription",
+		ExecutionID: "execution-1",
+		ClaimedAt:   time.Date(2026, 4, 23, 11, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("first ClaimJobExecution() error = %v", err)
+	}
+	if !first.Claimed {
+		t.Fatal("expected first claim to succeed")
+	}
+
+	second, err := repo.ClaimJobExecution(context.Background(), ClaimJobExecutionRequest{
+		JobID:       "job-claim-2",
+		WorkerKind:  "worker-transcription",
+		TaskType:    "transcription",
+		ExecutionID: "execution-2",
+		ClaimedAt:   time.Date(2026, 4, 23, 11, 1, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("second ClaimJobExecution() error = %v", err)
+	}
+	if second.Claimed {
+		t.Fatal("expected second claim to be rejected while the first execution is active")
+	}
+	if second.Execution != nil {
+		t.Fatalf("second claim execution = %#v, want nil", second.Execution)
+	}
+
+	active, err := repo.GetActiveJobExecution(context.Background(), "job-claim-2", "execution-1")
+	if err != nil {
+		t.Fatalf("GetActiveJobExecution() error = %v", err)
+	}
+	if active.ExecutionID != "execution-1" {
+		t.Fatalf("active execution id = %q, want execution-1", active.ExecutionID)
+	}
+}
+
+func TestApiStorageFinishJobExecutionExpiresAuthority(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	seedJob(state, JobRecord{
+		ID:          "job-claim-3",
+		RootJobID:   "job-claim-3",
+		SourceSetID: "source-set-1",
+		JobType:     "report",
+		Status:      "queued",
+		Version:     1,
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+		ProgressStage: "queued",
+		ParamsJSON:    []byte("{}"),
+	})
+
+	repo, err := NewRepository(state, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	_, err = repo.ClaimJobExecution(context.Background(), ClaimJobExecutionRequest{
+		JobID:       "job-claim-3",
+		WorkerKind:  "worker-report",
+		TaskType:    "report",
+		ExecutionID: "execution-3",
+		ClaimedAt:   time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("ClaimJobExecution() error = %v", err)
+	}
+
+	finishedAt := time.Date(2026, 4, 23, 12, 30, 0, 0, time.UTC)
+	execution, err := repo.FinishJobExecution(context.Background(), FinishJobExecutionRequest{
+		JobID:       "job-claim-3",
+		ExecutionID: "execution-3",
+		Outcome:     "succeeded",
+		FinishedAt:  finishedAt,
+	})
+	if err != nil {
+		t.Fatalf("FinishJobExecution() error = %v", err)
+	}
+	if execution.FinishedAt == nil || !execution.FinishedAt.Equal(finishedAt) {
+		t.Fatalf("finished_at = %v, want %v", execution.FinishedAt, finishedAt)
+	}
+	if execution.Outcome != "succeeded" {
+		t.Fatalf("outcome = %q, want succeeded", execution.Outcome)
+	}
+
+	_, err = repo.GetActiveJobExecution(context.Background(), "job-claim-3", "execution-3")
+	if !errors.Is(err, ErrExecutionNotFound) {
+		t.Fatalf("GetActiveJobExecution() error = %v, want ErrExecutionNotFound", err)
+	}
+	_, err = repo.FinishJobExecution(context.Background(), FinishJobExecutionRequest{
+		JobID:       "job-claim-3",
+		ExecutionID: "execution-3",
+		Outcome:     "succeeded",
+		FinishedAt:  finishedAt.Add(time.Minute),
+	})
+	if !errors.Is(err, ErrExecutionNotFound) {
+		t.Fatalf("second FinishJobExecution() error = %v, want ErrExecutionNotFound", err)
+	}
+}
+
+func TestApiStorageRepositoryDelegatesSubmissionAndJobQueries(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	objects := newFakeObjectStore()
+	repo, err := NewRepository(state, objects)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	submission := JobSubmission{
+		ID:                 "submission-1",
+		SubmissionKind:     "transcription_upload",
+		IdempotencyKey:     "idem-1",
+		RequestFingerprint: "fp-1",
+	}
+	sources := []SourceRecord{
+		{
+			ID:          "source-1",
+			SourceKind:  SourceKindUploadedFile,
+			DisplayName: "voice",
+			MIMEType:    "audio/ogg",
+			ObjectKey:   "sources/source-1/original/voice.ogg",
+			ObjectBody:  []byte("ogg"),
+		},
+	}
+	sourceSet := SourceSetRecord{
+		ID:        "source-set-1",
+		InputKind: SourceSetInputSingleSource,
+		Items: []SourceSetItem{
+			{Position: 0, SourceID: "source-1"},
+		},
+	}
+	root := JobRecord{
+		ID:           "job-root",
+		SubmissionID: submission.ID,
+		RootJobID:    "job-root",
+		SourceSetID:  sourceSet.ID,
+		JobType:      "transcription",
+		Status:       "queued",
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+	}
+	child := JobRecord{
+		ID:          "job-child",
+		RootJobID:   "job-root",
+		ParentJobID: "job-root",
+		SourceSetID: sourceSet.ID,
+		JobType:     "report",
+		Status:      "succeeded",
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+	}
+
+	if err := repo.SaveSubmissionGraph(context.Background(), submission, sources, []SourceSetRecord{sourceSet}, []JobRecord{root, child}); err != nil {
+		t.Fatalf("SaveSubmissionGraph() error = %v", err)
+	}
+
+	gotSubmission, err := repo.FindSubmission(context.Background(), submission.SubmissionKind, submission.IdempotencyKey)
+	if err != nil {
+		t.Fatalf("FindSubmission() error = %v", err)
+	}
+	if gotSubmission == nil || gotSubmission.ID != submission.ID {
+		t.Fatalf("FindSubmission() = %#v, want submission %q", gotSubmission, submission.ID)
+	}
+
+	jobs, err := repo.ListJobsBySubmission(context.Background(), submission.ID)
+	if err != nil {
+		t.Fatalf("ListJobsBySubmission() error = %v", err)
+	}
+	if got, want := len(jobs), 1; got != want {
+		t.Fatalf("ListJobsBySubmission() count = %d, want %d", got, want)
+	}
+	if jobs[0].ID != root.ID {
+		t.Fatalf("ListJobsBySubmission() root job = %q, want %q", jobs[0].ID, root.ID)
+	}
+
+	gotRoot, err := repo.GetJob(context.Background(), root.ID)
+	if err != nil {
+		t.Fatalf("GetJob() error = %v", err)
+	}
+	if gotRoot.ID != root.ID {
+		t.Fatalf("GetJob() id = %q, want %q", gotRoot.ID, root.ID)
+	}
+
+	reportChild, err := repo.FindCanonicalChild(context.Background(), root.ID, "report")
+	if err != nil {
+		t.Fatalf("FindCanonicalChild() error = %v", err)
+	}
+	if reportChild == nil || reportChild.ID != child.ID {
+		t.Fatalf("FindCanonicalChild() = %#v, want child %q", reportChild, child.ID)
+	}
+}
+
+func TestApiStorageRepositoryDelegatesArtifactsAndWebhookState(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	repo, err := NewRepository(state, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	job := JobRecord{
+		ID:          "job-1",
+		RootJobID:   "job-1",
+		SourceSetID: "source-set-1",
+		JobType:     "transcription",
+		Status:      "queued",
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+	}
+
+	if err := repo.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("CreateJob() error = %v", err)
+	}
+	job.Status = "running"
+	if err := repo.UpdateJob(context.Background(), job); err != nil {
+		t.Fatalf("UpdateJob() error = %v", err)
+	}
+
+	state.persistedArtifacts["artifact-1"] = ArtifactRecord{
+		ID:           "artifact-1",
+		JobID:        job.ID,
+		ArtifactKind: "transcript_plain",
+		Filename:     "transcript.txt",
+		MIMEType:     "text/plain",
+		ObjectKey:    "artifacts/job-1/transcript/plain/transcript.txt",
+	}
+
+	artifact, err := repo.FindArtifactByKind(context.Background(), job.ID, "transcript_plain")
+	if err != nil {
+		t.Fatalf("FindArtifactByKind() error = %v", err)
+	}
+	if artifact == nil || artifact.ID != "artifact-1" {
+		t.Fatalf("FindArtifactByKind() = %#v, want artifact-1", artifact)
+	}
+
+	event := JobEvent{
+		ID:        "event-1",
+		JobID:     job.ID,
+		RootJobID: job.RootJobID,
+		EventType: "job.updated",
+		Version:   2,
+		Payload:   []byte(`{"status":"running"}`),
+	}
+	if err := repo.AppendJobEvent(context.Background(), event); err != nil {
+		t.Fatalf("AppendJobEvent() error = %v", err)
+	}
+
+	delivery := WebhookDelivery{
+		ID:         "delivery-1",
+		JobEventID: event.ID,
+		JobID:      job.ID,
+		TargetURL:  "https://example.com/hook",
+		Payload:    []byte(`{"status":"running"}`),
+	}
+	if err := repo.CreateWebhookDelivery(context.Background(), delivery); err != nil {
+		t.Fatalf("CreateWebhookDelivery() error = %v", err)
+	}
+
+	delivery.State = WebhookStateDelivered
+	if err := repo.UpdateWebhookDelivery(context.Background(), delivery); err != nil {
+		t.Fatalf("UpdateWebhookDelivery() error = %v", err)
+	}
+
+	if got, want := len(state.events), 1; got != want {
+		t.Fatalf("persisted events = %d, want %d", got, want)
+	}
+	if got, want := len(state.deliveries), 1; got != want {
+		t.Fatalf("persisted deliveries = %d, want %d", got, want)
+	}
+	if state.deliveries[0].State != WebhookStateDelivered {
+		t.Fatalf("delivery state = %q, want %q", state.deliveries[0].State, WebhookStateDelivered)
 	}
 }
 
@@ -305,17 +745,69 @@ func requiredMigrationSnippets(t *testing.T) []string {
 	return fragments
 }
 
+func seedJob(state *memoryStateStore, job JobRecord) {
+	state.jobs[job.ID] = job
+	state.jobOrder = append(state.jobOrder, job.ID)
+}
+
 type memoryStateStore struct {
 	bundle               PersistedJobBundle
 	sources              []SourceRecord
+	sourceSets           []SourceSetRecord
+	submissions          map[string]*JobSubmission
+	jobs                 map[string]JobRecord
+	jobOrder             []string
+	executions           map[string]JobExecutionRecord
+	activeExecutionByJob map[string]string
 	persistedArtifacts   map[string]ArtifactRecord
 	artifactPersistCalls int
+	events               []JobEvent
+	deliveries           []WebhookDelivery
 }
 
 func newMemoryStateStore() *memoryStateStore {
 	return &memoryStateStore{
-		persistedArtifacts: map[string]ArtifactRecord{},
+		submissions:          map[string]*JobSubmission{},
+		jobs:                 map[string]JobRecord{},
+		executions:           map[string]JobExecutionRecord{},
+		activeExecutionByJob: map[string]string{},
+		persistedArtifacts:   map[string]ArtifactRecord{},
 	}
+}
+
+type recordingExecCall struct {
+	query string
+	args  []any
+}
+
+type recordingExecer struct {
+	calls []recordingExecCall
+}
+
+func (e *recordingExecer) ExecContext(_ context.Context, query string, args ...any) (sql.Result, error) {
+	e.calls = append(e.calls, recordingExecCall{
+		query: query,
+		args:  append([]any(nil), args...),
+	})
+	return recordingSQLResult{}, nil
+}
+
+func (e *recordingExecer) QueryContext(_ context.Context, _ string, _ ...any) (*sql.Rows, error) {
+	return nil, fmt.Errorf("QueryContext should not be called in this test")
+}
+
+func (e *recordingExecer) QueryRowContext(_ context.Context, _ string, _ ...any) *sql.Row {
+	panic("QueryRowContext should not be called in this test")
+}
+
+type recordingSQLResult struct{}
+
+func (recordingSQLResult) LastInsertId() (int64, error) {
+	return 0, nil
+}
+
+func (recordingSQLResult) RowsAffected() (int64, error) {
+	return 1, nil
 }
 
 func (m *memoryStateStore) PersistSource(_ context.Context, source SourceRecord) error {
@@ -325,6 +817,17 @@ func (m *memoryStateStore) PersistSource(_ context.Context, source SourceRecord)
 
 func (m *memoryStateStore) PersistJobBundle(_ context.Context, bundle PersistedJobBundle) error {
 	m.bundle = bundle
+	if bundle.Submission != nil {
+		copySubmission := *bundle.Submission
+		m.submissions[bundle.Submission.SubmissionKind+"::"+bundle.Submission.IdempotencyKey] = &copySubmission
+	}
+	m.sources = append(m.sources, bundle.Sources...)
+	m.sourceSets = append(m.sourceSets, bundle.SourceSet)
+	m.jobs[bundle.Job.ID] = bundle.Job
+	m.jobOrder = append(m.jobOrder, bundle.Job.ID)
+	if bundle.WebhookDelivery != nil {
+		m.deliveries = append(m.deliveries, *bundle.WebhookDelivery)
+	}
 	return nil
 }
 
@@ -342,6 +845,156 @@ func (m *memoryStateStore) LookupArtifact(_ context.Context, artifactID string) 
 		return ArtifactRecord{}, ErrArtifactNotFound
 	}
 	return artifact, nil
+}
+
+func (m *memoryStateStore) FindSubmission(_ context.Context, submissionKind, idempotencyKey string) (*JobSubmission, error) {
+	return m.submissions[submissionKind+"::"+idempotencyKey], nil
+}
+
+func (m *memoryStateStore) ListJobsBySubmission(_ context.Context, submissionID string) ([]JobRecord, error) {
+	jobs := make([]JobRecord, 0, len(m.jobOrder))
+	for _, jobID := range m.jobOrder {
+		job := m.jobs[jobID]
+		if job.SubmissionID == submissionID {
+			jobs = append(jobs, job)
+		}
+	}
+	return jobs, nil
+}
+
+func (m *memoryStateStore) SaveSubmissionGraph(_ context.Context, submission JobSubmission, sources []SourceRecord, sourceSets []SourceSetRecord, jobs []JobRecord) error {
+	copySubmission := submission
+	m.submissions[submission.SubmissionKind+"::"+submission.IdempotencyKey] = &copySubmission
+	m.sources = append(m.sources, sources...)
+	m.sourceSets = append(m.sourceSets, sourceSets...)
+	for _, job := range jobs {
+		m.jobs[job.ID] = job
+		m.jobOrder = append(m.jobOrder, job.ID)
+	}
+	return nil
+}
+
+func (m *memoryStateStore) GetJob(_ context.Context, jobID string) (JobRecord, error) {
+	job, ok := m.jobs[jobID]
+	if !ok {
+		return JobRecord{}, errors.New("job_not_found")
+	}
+	return job, nil
+}
+
+func (m *memoryStateStore) CreateJob(_ context.Context, job JobRecord) error {
+	m.jobs[job.ID] = job
+	m.jobOrder = append(m.jobOrder, job.ID)
+	return nil
+}
+
+func (m *memoryStateStore) UpdateJob(_ context.Context, job JobRecord) error {
+	m.jobs[job.ID] = job
+	return nil
+}
+
+func (m *memoryStateStore) FindCanonicalChild(_ context.Context, parentJobID, jobType string) (*JobRecord, error) {
+	for _, jobID := range m.jobOrder {
+		job := m.jobs[jobID]
+		if job.ParentJobID == parentJobID && job.JobType == jobType && job.RetryOfJobID == "" {
+			copyJob := job
+			return &copyJob, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *memoryStateStore) FindArtifactByKind(_ context.Context, jobID, artifactKind string) (*ArtifactRecord, error) {
+	for _, artifact := range m.persistedArtifacts {
+		if artifact.JobID == jobID && artifact.ArtifactKind == artifactKind {
+			copyArtifact := artifact
+			return &copyArtifact, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *memoryStateStore) AppendJobEvent(_ context.Context, event JobEvent) error {
+	m.events = append(m.events, event)
+	return nil
+}
+
+func (m *memoryStateStore) CreateWebhookDelivery(_ context.Context, delivery WebhookDelivery) error {
+	m.deliveries = append(m.deliveries, delivery)
+	return nil
+}
+
+func (m *memoryStateStore) UpdateWebhookDelivery(_ context.Context, delivery WebhookDelivery) error {
+	for idx := range m.deliveries {
+		if m.deliveries[idx].ID == delivery.ID {
+			m.deliveries[idx] = delivery
+			return nil
+		}
+	}
+	m.deliveries = append(m.deliveries, delivery)
+	return nil
+}
+
+func (m *memoryStateStore) ClaimJobExecution(_ context.Context, req ClaimJobExecutionRequest) (ClaimJobExecutionResult, error) {
+	job, ok := m.jobs[req.JobID]
+	if !ok {
+		return ClaimJobExecutionResult{}, errors.New("job_not_found")
+	}
+	if _, ok := m.activeExecutionByJob[req.JobID]; ok {
+		return ClaimJobExecutionResult{Job: job, Claimed: false}, nil
+	}
+	if job.Status != "queued" {
+		return ClaimJobExecutionResult{Job: job, Claimed: false}, nil
+	}
+
+	execution := JobExecutionRecord{
+		ExecutionID: req.ExecutionID,
+		JobID:       req.JobID,
+		WorkerKind:  req.WorkerKind,
+		TaskType:    req.TaskType,
+		ClaimedAt:   req.ClaimedAt,
+	}
+	m.executions[execution.ExecutionID] = execution
+	m.activeExecutionByJob[req.JobID] = execution.ExecutionID
+
+	startedAt := req.ClaimedAt
+	job.Status = "running"
+	job.Version++
+	job.ProgressStage = "running"
+	job.ProgressMessage = ""
+	job.StartedAt = &startedAt
+	m.jobs[job.ID] = job
+
+	return ClaimJobExecutionResult{
+		Job:       job,
+		Execution: &execution,
+		Claimed:   true,
+	}, nil
+}
+
+func (m *memoryStateStore) GetActiveJobExecution(_ context.Context, jobID, executionID string) (JobExecutionRecord, error) {
+	activeExecutionID, ok := m.activeExecutionByJob[jobID]
+	if !ok || activeExecutionID != executionID {
+		return JobExecutionRecord{}, ErrExecutionNotFound
+	}
+	execution, ok := m.executions[executionID]
+	if !ok || execution.FinishedAt != nil {
+		return JobExecutionRecord{}, ErrExecutionNotFound
+	}
+	return execution, nil
+}
+
+func (m *memoryStateStore) FinishJobExecution(_ context.Context, req FinishJobExecutionRequest) (JobExecutionRecord, error) {
+	execution, ok := m.executions[req.ExecutionID]
+	if !ok || execution.JobID != req.JobID || execution.FinishedAt != nil {
+		return JobExecutionRecord{}, ErrExecutionNotFound
+	}
+	finishedAt := req.FinishedAt
+	execution.FinishedAt = &finishedAt
+	execution.Outcome = req.Outcome
+	m.executions[req.ExecutionID] = execution
+	delete(m.activeExecutionByJob, req.JobID)
+	return execution, nil
 }
 
 type putCall struct {

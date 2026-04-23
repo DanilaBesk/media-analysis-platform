@@ -5,6 +5,15 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 COMPOSE_FILE="${ROOT_DIR}/infra/docker-compose.yml"
 MARKER='[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]'
+RUNTIME_SERVICES=(
+  api
+  worker-transcription
+  worker-report
+  worker-deep-research
+  web
+  telegram-bot
+  mcp-server
+)
 
 fail() {
   printf '%s %s\n' "${MARKER}" "$1" >&2
@@ -26,18 +35,23 @@ require_service() {
   grep -Eq "^  ${service}:" "${COMPOSE_FILE}" || fail "missing service definition: ${service}"
 }
 
+service_block_from_content() {
+  local service="$1"
+  local content="$2"
+
+  printf '%s\n' "${content}" | sed -n "/^  ${service}:/,/^  [a-z0-9][a-z0-9-]*:/p" | sed '$d'
+}
+
 require_service_block_snippet() {
   local service="$1"
   local snippet="$2"
   local block
 
-  block=$(sed -n "/^  ${service}:/,/^  [a-z0-9][a-z0-9-]*:/p" "${COMPOSE_FILE}" | sed '$d')
+  block=$(service_block_from_content "${service}" "$(cat "${COMPOSE_FILE}")")
   grep -F -- "${snippet}" <<<"${block}" >/dev/null || fail "service ${service} is missing snippet: ${snippet}"
 }
 
-run_check_config() {
-  printf '%s validating compose config and topology scaffolding\n' "${MARKER}"
-
+validate_static_contract() {
   command -v docker >/dev/null || fail "docker is required for compose validation"
 
   require_file "${COMPOSE_FILE}"
@@ -53,6 +67,7 @@ run_check_config() {
   require_file "${ROOT_DIR}/infra/env/web.env.example"
   require_file "${ROOT_DIR}/infra/env/telegram-bot.env.example"
   require_file "${ROOT_DIR}/infra/env/mcp-server.env.example"
+  require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
 
   for service in \
     postgres \
@@ -90,32 +105,65 @@ run_check_config() {
   require_service_block_snippet "postgres" "healthcheck:"
   require_service_block_snippet "redis" "healthcheck:"
   require_service_block_snippet "minio" "healthcheck:"
-  require_compose_snippet "x-placeholder-service:"
-  require_compose_snippet "test -f /tmp/service-ready"
-  require_compose_snippet "x-runtime-infra-depends:"
-  require_compose_snippet "minio-init:"
-  require_service_block_snippet "api" "<<: *placeholder-service"
-  require_service_block_snippet "worker-transcription" "<<: *placeholder-service"
-  require_service_block_snippet "worker-report" "<<: *placeholder-service"
-  require_service_block_snippet "worker-deep-research" "<<: *placeholder-service"
-  require_service_block_snippet "web" "<<: *placeholder-service"
-  require_service_block_snippet "telegram-bot" "<<: *placeholder-service"
-  require_service_block_snippet "mcp-server" "<<: *placeholder-service"
-
-  require_service_block_snippet "api" "depends_on: *runtime-infra-depends"
-  require_service_block_snippet "worker-transcription" "api:"
-  require_service_block_snippet "worker-report" "api:"
-  require_service_block_snippet "worker-deep-research" "api:"
-  require_service_block_snippet "web" "api:"
-  require_service_block_snippet "telegram-bot" "api:"
-  require_service_block_snippet "mcp-server" "api:"
-
+  require_service_block_snippet "minio-init" "volumes:"
+  require_service_block_snippet "minio-init" "./init/minio:/init:ro"
+  require_service_block_snippet "minio-init" "/init/bootstrap-buckets.sh"
   require_compose_snippet 'condition: service_healthy'
   require_compose_snippet 'condition: service_completed_successfully'
-  require_compose_snippet 'future-runtime'
   require_compose_snippet 'driver: bridge'
+}
 
+run_check_config() {
+  printf '%s validating compose config and topology scaffolding\n' "${MARKER}"
+
+  validate_static_contract
   printf '%s compose topology scaffolding is internally consistent\n' "${MARKER}"
+}
+
+require_default_runtime_services_enabled() {
+  local services="$1"
+  local service
+
+  for service in "${RUNTIME_SERVICES[@]}"; do
+    grep -Fx -- "${service}" <<<"${services}" >/dev/null || fail \
+      "default compose stack excludes runtime service ${service}; first divergent block is profile-gated or missing runtime wiring"
+  done
+}
+
+require_materialized_runtime_service() {
+  local service="$1"
+  local rendered_compose="$2"
+  local block
+
+  block=$(service_block_from_content "${service}" "${rendered_compose}")
+  [[ -n "${block}" ]] || fail "rendered compose config is missing runtime service block: ${service}"
+  grep -F -- "image: busybox:1.36" <<<"${block}" >/dev/null && fail \
+    "runtime service ${service} still uses the phase-1 busybox placeholder"
+  grep -F -- "phase-1 placeholder runtime slot" <<<"${block}" >/dev/null && fail \
+    "runtime service ${service} still uses the phase-1 placeholder command"
+  return 0
+}
+
+run_live_smoke() {
+  local default_services
+  local rendered_compose
+  local service
+
+  printf '%s validating compose live-stack readiness\n' "${MARKER}"
+
+  validate_static_contract
+
+  default_services=$(docker compose -f "${COMPOSE_FILE}" config --services)
+  require_default_runtime_services_enabled "${default_services}"
+
+  rendered_compose=$(docker compose -f "${COMPOSE_FILE}" config)
+  for service in "${RUNTIME_SERVICES[@]}"; do
+    require_materialized_runtime_service "${service}" "${rendered_compose}"
+  done
+
+  printf '%s starting compose stack and waiting for health convergence\n' "${MARKER}"
+  docker compose -f "${COMPOSE_FILE}" up -d --wait >/dev/null
+  printf '%s compose live smoke completed successfully\n' "${MARKER}"
 }
 
 main() {
@@ -123,8 +171,11 @@ main() {
     --check-config)
       run_check_config
       ;;
+    --live-smoke)
+      run_live_smoke
+      ;;
     *)
-      fail "unsupported mode: ${1:-<none>} (expected --check-config)"
+      fail "unsupported mode: ${1:-<none>} (expected --check-config or --live-smoke)"
       ;;
   esac
 }

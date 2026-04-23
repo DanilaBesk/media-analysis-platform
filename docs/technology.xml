@@ -30,11 +30,11 @@
     <area path="apps/api/internal/api">HTTP route binding</area>
     <area path="apps/api/internal/jobs">API-owned business orchestration and state transitions</area>
     <area path="apps/api/internal/storage">PostgreSQL and MinIO access</area>
+    <area path="apps/api/internal/storage/migrations">Goose SQL migrations</area>
     <area path="apps/api/internal/queue">asynq producer integration</area>
     <area path="apps/api/internal/ws">WebSocket and webhook delivery subsystems</area>
-    <area path="apps/api/migrations">Goose SQL migrations</area>
-    <area path="apps/web/src">React application shell, pages, components, job features, and API client wiring</area>
-    <area path="apps/telegram-bot/src/telegram_transcriber_bot_client">Thin Telegram adapter package</area>
+    <area path="apps/web/src">React application shell, job features, and API client wiring</area>
+    <area path="apps/telegram-bot/src/telegram_adapter">Thin Telegram adapter package</area>
     <area path="apps/mcp-server/src">TypeScript MCP server entrypoints and tools</area>
     <area path="workers/common/src/transcriber_workers_common">Shared Python worker utilities</area>
     <area path="workers/transcription/src">Transcription worker implementation</area>
@@ -44,12 +44,17 @@
     <area path="packages/contracts/schemas">Shared JSON schemas and enums</area>
     <area path="packages/contracts/ws">WebSocket and webhook envelopes</area>
     <area path="infra/env">Compose environment templates</area>
-    <area path="infra/minio">MinIO bootstrap assets</area>
     <area path="infra/init">Init scripts and local bootstrap</area>
+    <area path="infra/init/minio">MinIO bootstrap assets</area>
   </MonorepoLayout>
 
+  <MigrationConventions>
+    <location>Goose SQL migrations live under `apps/api/internal/storage/migrations`.</location>
+    <naming-rule>Use a zero-padded numeric prefix plus a semantic snake_case suffix such as `0001_job_control_plane_foundation.sql`; phase-only filenames are not accepted.</naming-rule>
+  </MigrationConventions>
+
   <RuntimeTopology>
-    <service name="postgres" role="Persistent system of record for jobs, artifacts, events, submissions, and webhook deliveries" />
+    <service name="postgres" role="Persistent system of record for jobs, execution claims, artifacts, events, submissions, and webhook deliveries" />
     <service name="redis" role="Backing store for asynq task queues only" />
     <service name="minio" role="Object store for uploaded sources and produced artifacts" />
     <service name="minio-init" role="Bucket bootstrap for sources and artifacts buckets" />
@@ -100,7 +105,7 @@
   </VersionConstraints>
 
   <StorageAndQueueContracts>
-    <postgres>Persistent authority for submissions, sources, source sets, jobs, job artifacts, job events, and webhook deliveries.</postgres>
+    <postgres>Persistent authority for submissions, sources, source sets, jobs, worker execution claims, job artifacts, job events, and webhook deliveries.</postgres>
     <redis>Ephemeral infrastructure for asynq only; never authoritative job state and not used as an application event bus in v1.</redis>
     <minio>Object storage for uploaded source files and produced artifacts; clients do not upload directly in v1.</minio>
     <asynq>

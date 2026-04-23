@@ -4,6 +4,7 @@ CREATE TABLE sources
 CREATE TABLE source_sets
 CREATE TABLE source_set_items
 CREATE TABLE jobs
+CREATE TABLE job_executions
 CREATE TABLE job_artifacts
 CREATE TABLE job_events
 CREATE TABLE webhook_deliveries
@@ -14,5 +15,8 @@ delivery_strategy = 'webhook'
 delivery_strategy = 'polling'
 status <> 'cancel_requested'
 status IN ('queued', 'running', 'cancel_requested', 'succeeded')
+finished_at IS NULL AND outcome IS NULL
+finished_at IS NOT NULL AND outcome IN ('succeeded', 'failed', 'canceled')
 job_event_id uuid NOT NULL UNIQUE REFERENCES job_events(id) ON DELETE CASCADE
 CREATE UNIQUE INDEX jobs_canonical_child_unique_idx
+CREATE UNIQUE INDEX job_executions_active_job_unique_idx

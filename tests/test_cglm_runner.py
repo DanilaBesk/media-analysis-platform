@@ -2,6 +2,13 @@ from pathlib import Path
 
 import telegram_transcriber_bot.cglm_runner as cglm_runner
 from telegram_transcriber_bot.cglm_runner import build_cglm_command, generate_report
+from workers.common.tests.test_api import *  # noqa: F401,F403
+from workers.common.tests.test_api_transport import *  # noqa: F401,F403
+from workers.common.tests.test_artifacts import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_documents import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_documents_rendering import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_transcribers import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_transcribers_runtime import *  # noqa: F401,F403
 
 
 def test_build_cglm_command_uses_print_mode_prompt_separator_and_file_access(tmp_path: Path, monkeypatch) -> None:

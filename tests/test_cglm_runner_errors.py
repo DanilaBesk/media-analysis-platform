@@ -53,3 +53,13 @@ def test_run_command_raises_on_timeout(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="timed out"):
         _run_command(["cglm", "-p"])
+
+
+def test_run_command_raises_when_binary_path_is_missing(monkeypatch) -> None:
+    def fake_run(*args, **kwargs):
+        raise FileNotFoundError("missing")
+
+    monkeypatch.setattr(cglm_runner.subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="executable not found"):
+        _run_command(["/custom/bin/cglm", "-p"])

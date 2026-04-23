@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import replace
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from aiogram import Bot, Dispatcher, Router
@@ -12,11 +14,25 @@ from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardMarkup, Mess
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from telegram_transcriber_bot.config import Settings
-from telegram_transcriber_bot.domain import MediaAttachment, SourceCandidate
+from telegram_transcriber_bot.domain import MediaAttachment, ProcessedJob, SourceCandidate
 from telegram_transcriber_bot.media_groups import MediaGroupAccumulator
-from telegram_transcriber_bot.service import ProcessingService
 from telegram_transcriber_bot.source_labels import humanize_source_label
 from telegram_transcriber_bot.source_extractor import extract_sources
+
+LOGGER = logging.getLogger(__name__)
+HANDLE_MEDIA_MARKER = "[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]"
+
+
+class TelegramProcessingGateway(Protocol):
+    def process_source(self, source: SourceCandidate) -> ProcessedJob: ...
+
+    def process_source_group(self, sources: list[SourceCandidate]) -> ProcessedJob: ...
+
+    def load_job(self, job_id: str) -> ProcessedJob: ...
+
+    def ensure_report(self, job_id: str, report_prompt_suffix: str = "") -> ProcessedJob: ...
+
+    def ensure_deep_research(self, job_id: str) -> Path: ...
 
 
 class CandidateSelectionStore:
@@ -43,7 +59,7 @@ class CandidateSelectionStore:
 
 
 class TelegramTranscriberApp:
-    def __init__(self, settings: Settings, processing_service: ProcessingService, bot: Bot | None = None) -> None:
+    def __init__(self, settings: Settings, processing_service: TelegramProcessingGateway, bot: Bot | None = None) -> None:
         self.settings = settings
         self.processing_service = processing_service
         self.bot = bot or Bot(settings.telegram_bot_token)
@@ -151,6 +167,10 @@ class TelegramTranscriberApp:
             await self.bot.send_message(chat_id, message)
             return
 
+        if attachments and len(attachments) > 1 and not any(candidate.kind == "youtube_url" for candidate in result.candidates):
+            await self._start_processing_group(chat_id, result.candidates)
+            return
+
         if len(result.candidates) == 1:
             await self._start_processing(chat_id, result.candidates[0])
             return
@@ -192,9 +212,27 @@ class TelegramTranscriberApp:
         status_message = await self.bot.send_message(chat_id, _build_processing_status_text(candidate))
         try:
             prepared_candidate = await self._download_attachment_if_needed(candidate)
+            LOGGER.info("%s mode=single source_kind=%s", HANDLE_MEDIA_MARKER, prepared_candidate.kind)
             job = await asyncio.to_thread(self.processing_service.process_source, prepared_candidate)
         except Exception as exc:
             await status_message.edit_text(f"Не удалось обработать источник: {exc}")
+            return
+
+        await status_message.edit_text("Транскрибация готова.")
+        await status_message.answer_document(
+            FSInputFile(job.transcript.text_path),
+            caption="Готовая цельная транскрибация без сегментов.",
+            reply_markup=_build_result_keyboard(job.job_id),
+        )
+
+    async def _start_processing_group(self, chat_id: int, candidates: list[SourceCandidate]) -> None:
+        status_message = await self.bot.send_message(chat_id, _build_group_processing_status_text(candidates))
+        try:
+            prepared_candidates = [await self._download_attachment_if_needed(candidate) for candidate in candidates]
+            LOGGER.info("%s mode=combined source_count=%s", HANDLE_MEDIA_MARKER, len(prepared_candidates))
+            job = await asyncio.to_thread(self.processing_service.process_source_group, prepared_candidates)
+        except Exception as exc:
+            await status_message.edit_text(f"Не удалось обработать источники: {exc}")
             return
 
         await status_message.edit_text("Транскрибация готова.")
@@ -374,6 +412,14 @@ def _build_deep_research_keyboard(job_id: str) -> InlineKeyboardMarkup:
     builder.button(text="Запустить глубокое исследование", callback_data=f"deep:{job_id}")
     builder.adjust(1)
     return builder.as_markup()
+
+
+def _build_group_processing_status_text(candidates: list[SourceCandidate]) -> str:
+    attachment_count = len(candidates)
+    return (
+        f"Обрабатываю {attachment_count} файла(ов) как одну общую транскрибацию.\n\n"
+        "Скачиваю файлы из Telegram и отправляю их в общий API-запрос. Это может занять несколько минут."
+    )
 
 
 def _extract_attachments(message: Message) -> list[MediaAttachment]:

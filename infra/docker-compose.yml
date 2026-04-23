@@ -8,26 +8,6 @@ x-runtime-infra-depends: &runtime-infra-depends
   minio-init:
     condition: service_completed_successfully
 
-x-placeholder-service: &placeholder-service
-  image: busybox:1.36
-  profiles:
-    - future-runtime
-  restart: unless-stopped
-  networks:
-    - platform
-  command:
-    - /bin/sh
-    - -c
-    - echo "[$$SERVICE_ROLE] phase-1 placeholder runtime slot" && touch /tmp/service-ready && sleep infinity
-  healthcheck:
-    test:
-      - CMD-SHELL
-      - test -f /tmp/service-ready
-    interval: 10s
-    timeout: 5s
-    retries: 3
-    start_period: 5s
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -104,108 +84,171 @@ services:
         condition: service_healthy
     networks:
       - platform
+    volumes:
+      - ./init/minio:/init:ro
     entrypoint:
       - /bin/sh
-      - -c
-    command: >-
-      mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
-      mc mb --ignore-existing local/"$$MINIO_BUCKET_SOURCES" &&
-      mc mb --ignore-existing local/"$$MINIO_BUCKET_ARTIFACTS"
+      - /init/bootstrap-buckets.sh
 
   api:
-    <<: *placeholder-service
-    environment:
-      SERVICE_ROLE: api
+    image: golang:1.26
+    restart: unless-stopped
     env_file:
       - ./env/shared.env.example
       - ./env/api.env.example
     depends_on: *runtime-infra-depends
+    working_dir: /workspace/apps/api
+    command:
+      - /usr/local/go/bin/go
+      - run
+      - ./cmd/api
+    networks:
+      - platform
     ports:
       - "8080:8080"
     volumes:
+      - ..:/workspace
       - retained-log-volume:/var/log/platform
 
   worker-transcription:
-    <<: *placeholder-service
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    restart: unless-stopped
     environment:
-      SERVICE_ROLE: worker-transcription
+      WORKER_WORKSPACE_ROOT: /tmp/runtime/transcription
     env_file:
       - ./env/shared.env.example
       - ./env/worker-transcription.env.example
     depends_on:
       <<: *runtime-infra-depends
       api:
-        condition: service_healthy
+        condition: service_started
+    working_dir: /workspace
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace
+      - python
+      - /workspace/workers/transcription/src/transcriber_worker_transcription_main.py
+    networks:
+      - platform
     volumes:
+      - ..:/workspace
       - whisper-model-cache:/var/cache/whisper
       - retained-log-volume:/var/log/platform
 
   worker-report:
-    <<: *placeholder-service
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    restart: unless-stopped
     environment:
-      SERVICE_ROLE: worker-report
+      WORKER_WORKSPACE_ROOT: /tmp/runtime/report
     env_file:
       - ./env/shared.env.example
       - ./env/worker-report.env.example
     depends_on:
       <<: *runtime-infra-depends
       api:
-        condition: service_healthy
+        condition: service_started
+    working_dir: /workspace
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace
+      - python
+      - /workspace/workers/report/src/transcriber_worker_report_main.py
+    networks:
+      - platform
     volumes:
+      - ..:/workspace
       - report-and-deep-research-temp-space:/tmp/runtime
       - retained-log-volume:/var/log/platform
 
   worker-deep-research:
-    <<: *placeholder-service
+    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+    restart: unless-stopped
     environment:
-      SERVICE_ROLE: worker-deep-research
+      WORKER_WORKSPACE_ROOT: /tmp/runtime/deep-research
     env_file:
       - ./env/shared.env.example
       - ./env/worker-deep-research.env.example
     depends_on:
       <<: *runtime-infra-depends
       api:
-        condition: service_healthy
+        condition: service_started
+    working_dir: /workspace
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace
+      - python
+      - /workspace/workers/deep-research/src/transcriber_worker_deep_research_main.py
+    networks:
+      - platform
     volumes:
+      - ..:/workspace
       - report-and-deep-research-temp-space:/tmp/runtime
       - retained-log-volume:/var/log/platform
 
   web:
-    <<: *placeholder-service
-    environment:
-      SERVICE_ROLE: web
+    image: node:22-alpine
+    restart: unless-stopped
     env_file:
       - ./env/web.env.example
     depends_on:
       api:
-        condition: service_healthy
+        condition: service_started
+    working_dir: /workspace/apps/web
+    command:
+      - node
+      - /workspace/apps/web/src/serve-dist.mjs
+    networks:
+      - platform
     ports:
       - "3000:3000"
     volumes:
+      - ..:/workspace
       - retained-log-volume:/var/log/platform
 
   telegram-bot:
-    <<: *placeholder-service
+    image: python:3.12-alpine
+    restart: unless-stopped
     environment:
-      SERVICE_ROLE: telegram-bot
+      PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/src
     env_file:
       - ./env/telegram-bot.env.example
     depends_on:
       api:
-        condition: service_healthy
+        condition: service_started
+    working_dir: /workspace/apps/telegram-bot
+    command:
+      - python
+      - -m
+      - telegram_adapter
+    networks:
+      - platform
     volumes:
+      - ..:/workspace
       - retained-log-volume:/var/log/platform
 
   mcp-server:
-    <<: *placeholder-service
-    environment:
-      SERVICE_ROLE: mcp-server
+    image: node:22-alpine
+    restart: unless-stopped
     env_file:
       - ./env/mcp-server.env.example
     depends_on:
       api:
-        condition: service_healthy
+        condition: service_started
+    working_dir: /workspace/apps/mcp-server
+    command:
+      - node
+      - --experimental-strip-types
+      - /workspace/apps/mcp-server/src/main.ts
+    networks:
+      - platform
     volumes:
+      - ..:/workspace
       - retained-log-volume:/var/log/platform
 
 networks:

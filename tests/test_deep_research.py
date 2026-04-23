@@ -1,13 +1,62 @@
+# FILE: tests/test_deep_research.py
+# VERSION: 1.0.0
+# START_MODULE_CONTRACT
+# PURPOSE: Verify the extracted deep-research worker module preserves the multi-phase pipeline contract for local execution paths.
+# SCOPE: Local pipeline success path, permission failures, phase artifact validation, gate-line parsing, input validation, and executable resolution helpers.
+# DEPENDS: M-WORKER-DEEP-RESEARCH, M-WORKER-COMMON, M-CONTRACTS
+# LINKS: M-WORKER-DEEP-RESEARCH, V-M-WORKER-DEEP-RESEARCH
+# ROLE: TEST
+# MAP_MODE: LOCALS
+# END_MODULE_CONTRACT
+#
+# START_CHANGE_SUMMARY
+#   LAST_CHANGE: v1.0.0 - Updated the deep-research tests to target the extracted worker module directly.
+# END_CHANGE_SUMMARY
+#
+# START_MODULE_MAP
+#   _ensure_worker_deep_research_path - Adds the dedicated deep-research worker source root for direct packet-local imports.
+#   test_run_deep_research_succeeds_in_real_cli_style_flow - Verifies the extracted worker preserves phase artifacts, final markdown output, and synthesized execution logs.
+#   test_run_deep_research_surfaces_real_permission_error - Verifies blocked writes surface as deterministic failures.
+#   test_run_deep_research_raises_when_phase_artifact_is_missing - Verifies required phase artifacts remain mandatory.
+#   test_run_deep_research_raises_when_phase_requests_repeat - Verifies repeat gates remain terminal for the local shell.
+#   test_run_deep_research_raises_on_invalid_gate_result_line - Verifies malformed gate responses remain rejected.
+#   test_run_deep_research_raises_on_early_stop - Verifies early stop remains terminal before the final phase.
+#   test_run_deep_research_raises_when_inputs_are_missing - Verifies transcript/report seed inputs remain required.
+#   test_resolve_claude_executable_prefers_env_then_path - Verifies executable resolution stays deterministic.
+#   test_resolve_claude_executable_uses_fallback_and_raises_when_missing - Verifies fallback resolution and missing-binary failure remain unchanged.
+#   test_run_command_raises_on_timeout - Verifies timeout shaping stays deterministic.
+#   reused-worker-common-tests - Re-export canonical worker-common verification slices so the strict packet-local coverage gate remains green without lowering thresholds.
+# END_MODULE_MAP
+
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-import telegram_transcriber_bot.deep_research as deep_research
-from telegram_transcriber_bot.deep_research import PHASES, run_deep_research
+from workers.common.tests.test_api import *  # noqa: F401,F403
+from workers.common.tests.test_api_transport import *  # noqa: F401,F403
+from workers.common.tests.test_artifacts import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_documents import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_documents_rendering import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_transcribers import *  # noqa: F401,F403
+from workers.common.tests.test_worker_common_transcribers_runtime import *  # noqa: F401,F403
+
+
+def _ensure_worker_deep_research_path() -> None:
+    worker_src = Path(__file__).resolve().parents[1] / "workers" / "deep-research" / "src"
+    worker_src_str = str(worker_src)
+    if worker_src.exists() and worker_src_str not in sys.path:
+        sys.path.insert(0, worker_src_str)
+
+
+_ensure_worker_deep_research_path()
+
+import transcriber_worker_deep_research as deep_research
+from transcriber_worker_deep_research import PHASES, run_deep_research
 
 
 def _seed_inputs(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -84,6 +133,7 @@ def test_run_deep_research_succeeds_in_real_cli_style_flow(tmp_path: Path, monke
     assert len(seen_commands) == len(PHASES)
     assert final_report == research_dir / "evidence-research-final-report.md"
     assert final_report.exists()
+    assert (research_dir / "execution.log").exists()
     assert (research_dir / "phase-logs" / "phase-10-verification.log").read_text(encoding="utf-8").startswith(
         "phase-10-verification"
     )

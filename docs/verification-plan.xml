@@ -238,14 +238,16 @@
         <scenario-1 kind="success">Source rows, jobs, artifacts, events, and webhook deliveries persist with correct lineage and constraints.</scenario-1>
         <scenario-2 kind="failure">Artifact resolution fails cleanly when object store or DB is unavailable.</scenario-2>
         <scenario-3 kind="success">Combined transcription persistence creates one source_set, ordered source_set_items, and one job bound to that source set.</scenario-3>
+        <scenario-4 kind="failure">Internal worker execution ids remain authoritative and storage-backed rather than being inferred from route-local or in-memory claim state.</scenario-4>
       </scenarios>
       <required-log-markers>
         <marker-1>[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]</marker-1>
       </required-log-markers>
       <required-trace-assertions>
         <assertion-1>Successful artifact uploads must create DB rows only after object persistence succeeds.</assertion-1>
+        <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check flows must rely on authoritative execution-claim state instead of reconstructing ownership from `started_at` or process-local memory.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Run migration application and rollback smoke checks against a real PostgreSQL service.</wave-follow-up>
+      <wave-follow-up>Run migration application and rollback smoke checks against a real PostgreSQL service, including the authoritative execution-claim path.</wave-follow-up>
       <phase-follow-up>Validate presigned artifact URLs against a real MinIO container.</phase-follow-up>
     </V-M-API-STORAGE>
 
@@ -305,14 +307,16 @@
         <scenario-1 kind="success">Public endpoints shape accepted requests and responses according to the canonical contract.</scenario-1>
         <scenario-2 kind="failure">Invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.</scenario-2>
         <scenario-3 kind="success">Combined multipart upload is validated independently from the per-file upload endpoint and returns one job envelope.</scenario-3>
+        <scenario-4 kind="failure">Internal worker routes reject missing or stale execution ids instead of accepting request-local ownership assumptions.</scenario-4>
       </scenarios>
       <required-log-markers>
         <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
       </required-log-markers>
       <required-trace-assertions>
         <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
+        <assertion-2>Internal worker routes validate `execution_id` against authoritative control-plane state rather than route-local memory.</assertion-2>
       </required-trace-assertions>
-      <wave-follow-up>Multipart and JSON handler fixtures now live under apps/api/internal/api/api_test.go; remaining follow-up is live-server curl smoke once an executable API binary is wired.</wave-follow-up>
+      <wave-follow-up>Multipart and JSON handler fixtures now live under apps/api/internal/api/api_test.go; remaining follow-up is live-server curl smoke once an executable API binary and authoritative execution-claim backing are wired.</wave-follow-up>
       <phase-follow-up>Full route regression against generated SDKs and manual curl smoke checks.</phase-follow-up>
     </V-M-API-HTTP>
 
@@ -346,12 +350,14 @@
       </module-checks>
       <scenarios>
         <scenario-1 kind="success">Shared worker API client and artifact helpers produce valid internal control-plane payloads.</scenario-1>
+        <scenario-2 kind="failure">Internal API unavailability or malformed artifact payloads fail deterministically before worker-specific execution continues.</scenario-2>
       </scenarios>
       <required-log-markers>
         <marker-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</marker-1>
       </required-log-markers>
       <required-trace-assertions>
         <assertion-1>Workers must not bypass internal control-plane contracts.</assertion-1>
+        <assertion-2>Artifact helper output must remain compatible with the canonical worker finalize and artifact-registration DTOs.</assertion-2>
       </required-trace-assertions>
       <wave-follow-up>Reuse these helpers across all worker implementations before diverging code paths appear.</wave-follow-up>
       <phase-follow-up>Inspect DTO drift whenever contracts change.</phase-follow-up>
@@ -429,11 +435,16 @@
 
     <V-M-WEB-UI MODULE="M-WEB-UI" PRIORITY="medium">
       <test-files>
-        <file>apps/web tests</file>
+        <file>apps/web/tests</file>
       </test-files>
       <module-checks>
-        <check-1>pnpm test</check-1>
+        <check-1>pnpm --dir apps/web test</check-1>
       </module-checks>
+      <execution-prerequisites>
+        <prerequisite-1>If `apps/web` is absent, first materialize the scoped app shell and test harness so the module check is runnable before UI feature work starts.</prerequisite-1>
+        <prerequisite-2>The shell packet should leave behind route or layout wiring, `VITE_API_BASE_URL` and `VITE_WS_URL` env contract coverage, and a mockable API client boundary under `apps/web/src/lib/api`.</prerequisite-2>
+        <prerequisite-3>If `packages/sdk-ts` is still absent, keep a thin packet-local client under `apps/web/src/lib/api` instead of blocking the feature packet on a separate SDK extraction.</prerequisite-3>
+      </execution-prerequisites>
       <scenarios>
         <scenario-1 kind="success">UI creates jobs, reconciles polling and WebSocket state, and resolves artifacts via API.</scenario-1>
         <scenario-2 kind="failure">Expired links and unsupported admin operations fail through API responses rather than client-side guesswork.</scenario-2>
@@ -457,6 +468,10 @@
       <module-checks>
         <check-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py tests/test_main.py</check-1>
       </module-checks>
+      <execution-prerequisites>
+        <prerequisite-1>If `apps/telegram-bot` is absent, materialize the minimal adapter root inside the packet together with package metadata and env contract files needed for the adapter to run.</prerequisite-1>
+        <prerequisite-2>If `packages/sdk-py` is still absent, keep a thin packet-local API client under the Telegram adapter boundary instead of blocking the packet on a separate SDK extraction.</prerequisite-2>
+      </execution-prerequisites>
       <scenarios>
         <scenario-1 kind="success">Telegram adapter uploads media to the API and returns resulting artifacts while preserving current UX.</scenario-1>
         <scenario-2 kind="failure">Telegram callback flows do not bypass API lineage and child-job rules.</scenario-2>
@@ -474,13 +489,19 @@
 
     <V-M-MCP-ADAPTER MODULE="M-MCP-ADAPTER" PRIORITY="medium">
       <test-files>
-        <file>apps/mcp-server tests</file>
+        <file>apps/mcp-server/tests</file>
       </test-files>
       <module-checks>
-        <check-1>pnpm test</check-1>
+        <check-1>pnpm --dir apps/mcp-server test</check-1>
       </module-checks>
+      <execution-prerequisites>
+        <prerequisite-1>If `apps/mcp-server` is absent, first materialize the scoped MCP app shell and test harness so the module check is runnable before tool-mapping work starts.</prerequisite-1>
+        <prerequisite-2>The shell packet should leave behind `API_BASE_URL` env contract coverage, server or tool-registry bootstrap, and a mockable local API client boundary under the MCP adapter scope.</prerequisite-2>
+        <prerequisite-3>If `packages/sdk-ts` is still absent, keep a thin packet-local client under `apps/mcp-server/src` instead of blocking the packet on a separate SDK extraction.</prerequisite-3>
+      </execution-prerequisites>
       <scenarios>
         <scenario-1 kind="success">MCP tools map cleanly onto API operations without hidden business logic.</scenario-1>
+        <scenario-2 kind="failure">Adapter-level validation and error propagation stay contract-shaped and do not fall back to direct storage or queue access.</scenario-2>
       </scenarios>
       <required-log-markers>
         <marker-1>[McpAdapter][mapToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]</marker-1>
@@ -505,12 +526,14 @@
       <scenarios>
         <scenario-1 kind="success">Compose topology defines the required services, env-file contracts, healthchecks, volumes, and startup ordering before runtime modules are implemented.</scenario-1>
         <scenario-2 kind="failure">Missing services, env contracts, or invalid compose wiring fail fast through config validation and smoke-script checks.</scenario-2>
+        <scenario-3 kind="success">Once runtime modules exist, compose smoke verification proves healthcheck convergence, startup order, and persistent volume wiring before cutover.</scenario-3>
       </scenarios>
       <required-log-markers>
         <marker-1>[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]</marker-1>
       </required-log-markers>
       <required-trace-assertions>
         <assertion-1>Phase-1 validates topology shape only; full stack boot remains a later phase gate after service modules exist.</assertion-1>
+        <assertion-2>Phase-6 hardening must prove clean stack startup and smoke-script success before the old single-process runtime path is removed.</assertion-2>
       </required-trace-assertions>
       <wave-follow-up>Exercise healthchecks and startup ordering under clean local state once API and worker entrypoints exist.</wave-follow-up>
       <phase-follow-up>Run full smoke matrix before deleting the old single-process runtime path.</phase-follow-up>
@@ -609,14 +632,14 @@
     <ModuleReadiness module="M-WORKER-DEEP-RESEARCH" level="caution">
       <reason>Phase-driven pipelines are brittle under contract drift; prioritize deterministic artifact checks and strong failure packets.</reason>
     </ModuleReadiness>
-    <ModuleReadiness module="M-WEB-UI" level="ready-after-api-contract-lock">
-      <reason>Safe once polling, WS, and artifact-resolve contracts are frozen.</reason>
+    <ModuleReadiness module="M-WEB-UI" level="ready-after-api-contract-lock-and-app-shell">
+      <reason>Safe once polling, WS, and artifact-resolve contracts are frozen and the app-local shell makes `pnpm --dir apps/web test` runnable.</reason>
     </ModuleReadiness>
     <ModuleReadiness module="M-TELEGRAM-ADAPTER" level="ready-after-api-and-worker-parity">
       <reason>Adapter work should start only after the API and transcription flow are already trustworthy.</reason>
     </ModuleReadiness>
-    <ModuleReadiness module="M-MCP-ADAPTER" level="ready-after-api-contract-lock">
-      <reason>Thin adapter, low business risk if API contract is already stable.</reason>
+    <ModuleReadiness module="M-MCP-ADAPTER" level="ready-after-api-contract-lock-and-app-shell">
+      <reason>Thin adapter, low business risk once the API contract is stable and the app-local shell makes `pnpm --dir apps/mcp-server test` runnable.</reason>
     </ModuleReadiness>
     <ModuleReadiness module="M-INFRA-COMPOSE" level="review-heavy">
       <reason>Compose and health gates affect every runtime surface and should be reviewed with full-stack smoke evidence.</reason>
@@ -643,6 +666,7 @@
       <required-evidence>
         <evidence-1>DB migrations apply cleanly and core routes return canonical envelopes.</evidence-1>
         <evidence-2>WebSocket and webhook delivery persistence are wired from versioned events.</evidence-2>
+        <evidence-3>Internal worker claim, progress, artifact, finalize, and cancel-check flows are backed by authoritative `execution_id` state rather than request-local or in-memory shortcuts.</evidence-3>
       </required-evidence>
     </Gate-Phase-2>
 
@@ -670,10 +694,13 @@
       <goal>All user-facing entrypoints are thin adapters over the API.</goal>
       <commands>
         <command-1>.venv/bin/python -m pytest tests/test_bot.py tests/test_media_groups.py</command-1>
-        <command-2>pnpm test</command-2>
+        <command-2>pnpm --dir apps/web test</command-2>
+        <command-3>pnpm --dir apps/mcp-server test</command-3>
       </commands>
       <required-evidence>
         <evidence-1>Telegram, Web UI, and MCP all consume the same API contracts and do not own business logic.</evidence-1>
+        <evidence-2>`apps/web` and `apps/mcp-server` both exist with env contracts, app-shell bootstrap, and runnable app-local tests before the feature packets start.</evidence-2>
+        <evidence-3>SDK absence is resolved inside packet scope through thin local clients rather than by broadening Phase-5 into unplanned shared-SDK work.</evidence-3>
       </required-evidence>
     </Gate-Phase-5>
 

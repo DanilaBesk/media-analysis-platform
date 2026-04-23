@@ -994,10 +994,14 @@ func classifyError(err error) apiError {
 		return apiError{status: http.StatusBadRequest, code: "required_artifact_missing", message: "required artifact is missing for this operation"}
 	case errors.Is(err, jobs.ErrJobNotFound):
 		return apiError{status: http.StatusNotFound, code: "job_not_found", message: "job was not found"}
+	case errors.Is(err, storage.ErrJobNotFound):
+		return apiError{status: http.StatusNotFound, code: "job_not_found", message: "job was not found"}
 	case errors.Is(err, jobs.ErrInvalidJobState):
 		return apiError{status: http.StatusBadRequest, code: "invalid_job_state", message: "job state does not allow this operation"}
 	case errors.Is(err, storage.ErrArtifactNotFound):
 		return apiError{status: http.StatusNotFound, code: "artifact_not_found", message: "artifact was not found"}
+	case errors.Is(err, storage.ErrExecutionNotFound):
+		return apiError{status: http.StatusConflict, code: "execution_not_found", message: "execution_id is not active for this job"}
 	case errors.Is(err, storage.ErrStorageUnavailable):
 		return apiError{status: http.StatusServiceUnavailable, code: "storage_unavailable", message: "storage dependency is unavailable"}
 	default:

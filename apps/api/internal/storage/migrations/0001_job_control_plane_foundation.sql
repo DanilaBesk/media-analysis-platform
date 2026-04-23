@@ -89,6 +89,25 @@ CREATE UNIQUE INDEX jobs_canonical_child_unique_idx
       AND retry_of_job_id IS NULL
       AND status IN ('queued', 'running', 'cancel_requested', 'succeeded');
 
+CREATE TABLE job_executions (
+    id uuid PRIMARY KEY,
+    job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    worker_kind text NOT NULL,
+    task_type text NOT NULL,
+    claimed_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz NULL,
+    outcome text NULL,
+    CONSTRAINT job_executions_outcome_requires_finish_chk CHECK (
+        (finished_at IS NULL AND outcome IS NULL) OR
+        (finished_at IS NOT NULL AND outcome IN ('succeeded', 'failed', 'canceled'))
+    )
+);
+
+CREATE UNIQUE INDEX job_executions_active_job_unique_idx
+    ON job_executions (job_id)
+    WHERE finished_at IS NULL;
+CREATE INDEX job_executions_job_id_claimed_at_desc_idx ON job_executions (job_id, claimed_at DESC);
+
 CREATE TABLE job_artifacts (
     id uuid PRIMARY KEY,
     job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -143,6 +162,7 @@ CREATE INDEX webhook_deliveries_job_id_created_at_idx ON webhook_deliveries (job
 DROP TABLE IF EXISTS webhook_deliveries;
 DROP TABLE IF EXISTS job_events;
 DROP TABLE IF EXISTS job_artifacts;
+DROP TABLE IF EXISTS job_executions;
 DROP TABLE IF EXISTS jobs;
 DROP TABLE IF EXISTS source_set_items;
 DROP TABLE IF EXISTS source_sets;

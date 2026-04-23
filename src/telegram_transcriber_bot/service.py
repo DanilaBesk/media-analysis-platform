@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-import shutil
-from dataclasses import replace
+import sys
 from pathlib import Path
 from typing import Callable, Protocol
 from uuid import uuid4
 
 from telegram_transcriber_bot.cglm_runner import generate_report
-from telegram_transcriber_bot.deep_research import run_deep_research
-from telegram_transcriber_bot.documents import build_transcript_markdown, write_report_docx, write_transcript_docx
+from telegram_transcriber_bot.documents import write_report_docx
 from telegram_transcriber_bot.domain import (
     ProcessedJob,
     ReportArtifacts,
@@ -17,6 +15,42 @@ from telegram_transcriber_bot.domain import (
     TranscriptArtifacts,
     TranscriptResult,
 )
+
+
+def _ensure_worker_transcription_path() -> None:
+    worker_transcription_src = Path(__file__).resolve().parents[2] / "workers" / "transcription" / "src"
+    if worker_transcription_src.exists():
+        worker_transcription_src_str = str(worker_transcription_src)
+        if worker_transcription_src_str not in sys.path:
+            sys.path.insert(0, worker_transcription_src_str)
+
+
+def _ensure_worker_deep_research_path() -> None:
+    worker_deep_research_src = Path(__file__).resolve().parents[2] / "workers" / "deep-research" / "src"
+    if worker_deep_research_src.exists():
+        worker_deep_research_src_str = str(worker_deep_research_src)
+        if worker_deep_research_src_str not in sys.path:
+            sys.path.insert(0, worker_deep_research_src_str)
+
+
+try:
+    from transcriber_worker_transcription import (
+        materialize_local_source as _materialize_local_source_worker,
+        process_local_transcription as _process_local_transcription,
+    )
+except ModuleNotFoundError:
+    _ensure_worker_transcription_path()
+    from transcriber_worker_transcription import (
+        materialize_local_source as _materialize_local_source_worker,
+        process_local_transcription as _process_local_transcription,
+    )
+
+
+try:
+    from transcriber_worker_deep_research import run_deep_research as _run_deep_research_worker
+except ModuleNotFoundError:
+    _ensure_worker_deep_research_path()
+    from transcriber_worker_deep_research import run_deep_research as _run_deep_research_worker
 
 
 class Transcriber(Protocol):
@@ -32,7 +66,7 @@ class ProcessingService:
         self,
         storage_dir: Path,
         transcriber: Transcriber,
-        deep_research_runner: DeepResearchRunner = run_deep_research,
+        deep_research_runner: DeepResearchRunner = _run_deep_research_worker,
     ) -> None:
         self.storage_dir = Path(storage_dir)
         self.jobs_dir = self.storage_dir / "jobs"
@@ -48,27 +82,17 @@ class ProcessingService:
         job_id = uuid4().hex[:12]
         workspace_dir = self.jobs_dir / job_id
         workspace_dir.mkdir(parents=True, exist_ok=True)
-        materialized_source = self._materialize_local_source(source, workspace_dir)
-        transcript_result = self.transcriber.transcribe(materialized_source, workspace_dir)
-
-        transcript_markdown = build_transcript_markdown(transcript_result)
-        transcript_markdown_path = workspace_dir / "transcript.md"
-        transcript_text_path = workspace_dir / "transcript.txt"
-        transcript_docx_path = workspace_dir / "transcript.docx"
-
-        transcript_markdown_path.write_text(transcript_markdown, encoding="utf-8")
-        transcript_text_path.write_text(transcript_result.raw_text.strip() + "\n", encoding="utf-8")
-        write_transcript_docx(transcript_docx_path, transcript_result)
+        materialized_source, _transcript_result, transcript_artifacts = _process_local_transcription(
+            source,
+            workspace_dir=workspace_dir,
+            transcriber=self.transcriber,
+        )
 
         job = ProcessedJob(
             job_id=job_id,
             source=materialized_source,
             workspace_dir=workspace_dir,
-            transcript=TranscriptArtifacts(
-                markdown_path=transcript_markdown_path,
-                docx_path=transcript_docx_path,
-                text_path=transcript_text_path,
-            ),
+            transcript=transcript_artifacts,
             metadata_path=workspace_dir / "job.json",
         )
         self._save_job(job)
@@ -148,13 +172,7 @@ class ProcessingService:
         )
 
     def _materialize_local_source(self, source: SourceCandidate, workspace_dir: Path) -> SourceCandidate:
-        if not source.local_path:
-            return source
-
-        destination = workspace_dir / f"source{source.local_path.suffix or '.bin'}"
-        if source.local_path.resolve() != destination.resolve():
-            shutil.copy2(source.local_path, destination)
-        return replace(source, local_path=destination)
+        return _materialize_local_source_worker(source, workspace_dir)
 
     def _find_existing_job_for_source(self, source: SourceCandidate) -> ProcessedJob | None:
         if not source.file_unique_id:

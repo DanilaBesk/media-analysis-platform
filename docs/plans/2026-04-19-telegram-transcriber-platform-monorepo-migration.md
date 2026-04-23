@@ -196,17 +196,15 @@ Recommended repository shape:
 │   │   │   ├── queue
 │   │   │   ├── ws
 │   │   │   └── db
-│   │   └── migrations
+│   │   └── internal/storage/migrations
 │   ├── web
 │   │   ├── src
 │   │   │   ├── app
-│   │   │   ├── pages
-│   │   │   ├── components
 │   │   │   ├── features/jobs
 │   │   │   ├── features/artifacts
 │   │   │   └── lib/api
 │   ├── telegram-bot
-│   │   ├── src/telegram_transcriber_bot_client
+│   │   ├── src/telegram_adapter
 │   │   └── tests
 │   └── mcp-server
 │       ├── src
@@ -1223,6 +1221,8 @@ Workers should not read queue payload and execute blindly. They should perform a
 
 Workers must not own arbitrary business state transitions through direct ad hoc SQL writes. They should use the API-owned contract or an internal control-plane library that enforces the same transition rules.
 
+`execution_id` must be backed by authoritative control-plane persistence. It is not safe to infer worker ownership only from `jobs.started_at`, queue payloads, or in-memory route state.
+
 Recommended status transitions:
 
 ```text
@@ -1898,8 +1898,8 @@ Define:
 - Create: `apps/api/internal/jobs/...`
 - Create: `apps/api/internal/queue/...`
 - Create: `apps/api/internal/storage/...`
+- Create: `apps/api/internal/storage/migrations/*.sql`
 - Create: `apps/api/internal/ws/...`
-- Create: `apps/api/migrations/*.sql`
 - Create: `infra/docker-compose.yml`
 - Create: `infra/env/api.env.example`
 

@@ -30,6 +30,7 @@
         <export-registerRoutes PURPOSE="Bind public and internal HTTP routes." />
         <export-validateRequest PURPOSE="Apply request validation and idempotency rules." />
         <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
+        <export-buildRuntimeDependencies PURPOSE="Assemble the concrete API runtime over jobs, storage, queue, and events." />
       </annotations>
     </M-API-HTTP>
 
@@ -51,14 +52,25 @@
     </M-API-JOBS>
 
     <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="implemented">
-      <purpose>Persist source metadata, jobs, artifacts, events, and webhook-delivery records while generating presigned artifact links.</purpose>
+      <purpose>Persist source metadata, jobs, execution claims, artifacts, events, and webhook-delivery records while generating presigned artifact links.</purpose>
       <path>apps/api/internal/storage</path>
       <depends>M-CONTRACTS</depends>
       <verification-ref>V-M-API-STORAGE</verification-ref>
       <annotations>
         <export-persistSource PURPOSE="Write source metadata and MinIO object references." />
+        <export-listJobs PURPOSE="List authoritative job rows for polling, UI, and adapter reads." />
+        <export-getSourceSet PURPOSE="Read the persisted source-set shell for snapshot shaping." />
+        <export-listOrderedSources PURPOSE="Resolve stable ordered source metadata bound to a source set." />
+        <export-listArtifactsByJob PURPOSE="Read canonical artifact metadata for one job." />
+        <export-listChildJobs PURPOSE="Read canonical child jobs for lineage-aware snapshots." />
+        <export-listJobEvents PURPOSE="Read append-only timeline rows for one job." />
+        <export-upsertArtifacts PURPOSE="Register worker-produced artifact metadata after object persistence succeeds." />
+        <export-claimJobExecution PURPOSE="Create authoritative execution ownership rows for queued work." />
+        <export-getActiveJobExecution PURPOSE="Validate active execution ownership across worker lifecycle calls." />
+        <export-finishJobExecution PURPOSE="Persist terminal execution completion for authoritative ownership release." />
         <export-resolveArtifact PURPOSE="Return artifact metadata plus presigned URL." />
         <type-JobSubmission PURPOSE="Idempotent create-request persistence including multi-file upload normalization." />
+        <type-JobExecutionRecord PURPOSE="Storage-backed execution_id ownership record shared across claim, progress, artifact, finalize, and cancel-check flows." />
         <type-WebhookDelivery PURPOSE="Durable webhook retry state across API restarts." />
         <type-SourceSetRecord PURPOSE="Persistent ordered source set reused by single-file and combined transcription jobs." />
       </annotations>
@@ -127,7 +139,7 @@
       </annotations>
     </M-WORKER-DEEP-RESEARCH>
 
-    <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" STATUS="planned">
+    <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" STATUS="implemented">
       <purpose>Provide local file/url submission, monitoring, artifact download, and late-wave admin operations.</purpose>
       <path>apps/web</path>
       <depends>M-CONTRACTS, M-API-HTTP, M-API-EVENTS</depends>
@@ -138,7 +150,7 @@
       </annotations>
     </M-WEB-UI>
 
-    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" STATUS="planned">
+    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Act as a thin Telegram transport client over the HTTP API while preserving current user-visible bot flows.</purpose>
       <path>apps/telegram-bot</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
@@ -150,7 +162,7 @@
       </annotations>
     </M-TELEGRAM-ADAPTER>
 
-    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="INTEGRATION" STATUS="planned">
+    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Expose the same platform capabilities to MCP consumers through a thin adapter over the HTTP API.</purpose>
       <path>apps/mcp-server</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
@@ -183,12 +195,20 @@
     <CrossLink from="M-API-EVENTS" to="M-API-JOBS" relation="observes-transitions-from" />
     <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-API-HTTP" relation="claims-and-finalizes-through" />
     <CrossLink from="M-API-HTTP" to="M-WORKER-TRANSCRIPTION" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WORKER-COMMON" to="M-WORKER-TRANSCRIPTION" relation="provides-shared-worker-runtime-to" />
+    <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
     <CrossLink from="M-WORKER-REPORT" to="M-API-HTTP" relation="claims-and-finalizes-through" />
     <CrossLink from="M-API-HTTP" to="M-WORKER-REPORT" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WORKER-COMMON" to="M-WORKER-REPORT" relation="provides-shared-worker-runtime-to" />
+    <CrossLink from="M-WORKER-REPORT" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
     <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-API-HTTP" relation="claims-and-finalizes-through" />
     <CrossLink from="M-API-HTTP" to="M-WORKER-DEEP-RESEARCH" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WORKER-COMMON" to="M-WORKER-DEEP-RESEARCH" relation="provides-shared-worker-runtime-to" />
+    <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
     <CrossLink from="M-WEB-UI" to="M-API-HTTP" relation="consumes" />
     <CrossLink from="M-API-HTTP" to="M-WEB-UI" relation="serves-data-to" />
+    <CrossLink from="M-WEB-UI" to="M-API-EVENTS" relation="subscribes-to" />
+    <CrossLink from="M-API-EVENTS" to="M-WEB-UI" relation="streams-events-to" />
     <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="consumes" />
     <CrossLink from="M-API-HTTP" to="M-TELEGRAM-ADAPTER" relation="serves-data-to" />
     <CrossLink from="M-MCP-ADAPTER" to="M-API-HTTP" relation="consumes" />

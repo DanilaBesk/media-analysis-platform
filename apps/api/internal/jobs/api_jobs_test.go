@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
 	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
 )
@@ -104,6 +106,47 @@ func TestApiJobsCreateCombinedTranscriptionJobPreservesOneJobSemantics(t *testin
 	}
 	if got, want := len(enqueuer.requests), 1; got != want {
 		t.Fatalf("combined create enqueue count = %d, want 1", got)
+	}
+}
+
+func TestApiJobsDefaultIDGeneratorUsesUUIDs(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service, err := NewService(store, enqueuer, WithClock(func() time.Time {
+		return time.Date(2026, 4, 23, 9, 0, 0, 0, time.UTC)
+	}))
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	result, err := service.CreateTranscriptionJobs(context.Background(), CreateTranscriptionRequest{
+		SubmissionKind:     "transcription_upload",
+		IdempotencyKey:     "idem-uuid",
+		RequestFingerprint: "upload-manifest-uuid",
+		Sources:            []storage.SourceRecord{source("source-uuid")},
+		Delivery:           storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("CreateTranscriptionJobs() error = %v", err)
+	}
+	if got, want := len(result.Jobs), 1; got != want {
+		t.Fatalf("created jobs = %d, want %d", got, want)
+	}
+	if got, want := len(store.sourceSets), 1; got != want {
+		t.Fatalf("source sets = %d, want %d", got, want)
+	}
+
+	for label, value := range map[string]string{
+		"submission_id": store.lastSubmissionID,
+		"source_set_id": store.sourceSets[0].ID,
+		"job_id":        result.Jobs[0].ID,
+		"root_job_id":   result.Jobs[0].RootJobID,
+	} {
+		if _, err := uuid.Parse(value); err != nil {
+			t.Fatalf("%s = %q, want UUID: %v", label, value, err)
+		}
 	}
 }
 
@@ -251,6 +294,11 @@ func TestApiJobsCancelAndTransitionRules(t *testing.T) {
 	}
 	if got, want := len(emitter.events), 3; got != want {
 		t.Fatalf("emitted events = %d, want %d", got, want)
+	}
+	for idx, want := range []string{"job.canceled", "job.updated", "job.failed"} {
+		if got := emitter.events[idx].EventType; got != want {
+			t.Fatalf("emitted event %d type = %q, want %q", idx, got, want)
+		}
 	}
 
 	_, err = service.TransitionJob(context.Background(), TransitionRequest{
