@@ -70,6 +70,51 @@ func TestApiJobsCreateTranscriptionJobsSupportsIdempotentReplay(t *testing.T) {
 	}
 }
 
+func TestApiJobsCreateTranscriptionJobsWithoutIdempotencyKeyCreatesIndependentSubmissions(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	request := CreateTranscriptionRequest{
+		SubmissionKind:     "transcription_upload",
+		RequestFingerprint: "upload-manifest-a",
+		Sources:            []storage.SourceRecord{source("source-1")},
+		Delivery:           storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+		ClientRef:          "client-1",
+	}
+
+	first, err := service.CreateTranscriptionJobs(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateTranscriptionJobs(first) error = %v", err)
+	}
+	second, err := service.CreateTranscriptionJobs(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateTranscriptionJobs(second) error = %v", err)
+	}
+	if first.Reused || second.Reused {
+		t.Fatalf("non-idempotent creates must not replay: first=%v second=%v", first.Reused, second.Reused)
+	}
+	if first.Jobs[0].ID == second.Jobs[0].ID {
+		t.Fatalf("non-idempotent creates reused job id %q", first.Jobs[0].ID)
+	}
+	if got, want := len(store.submissions), 2; got != want {
+		t.Fatalf("stored submissions = %d, want %d", got, want)
+	}
+	for key, submission := range store.submissions {
+		if strings.Contains(key, "::<nil>") || strings.HasSuffix(key, "::") {
+			t.Fatalf("stored empty idempotency key in submission index: %q", key)
+		}
+		if !strings.HasPrefix(submission.IdempotencyKey, "non-idempotent:") {
+			t.Fatalf("submission idempotency key = %q, want non-idempotent internal key", submission.IdempotencyKey)
+		}
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("enqueue count = %d, want %d", got, want)
+	}
+}
+
 func TestApiJobsCreateCombinedTranscriptionJobPreservesOneJobSemantics(t *testing.T) {
 	t.Parallel()
 
@@ -106,6 +151,51 @@ func TestApiJobsCreateCombinedTranscriptionJobPreservesOneJobSemantics(t *testin
 	}
 	if got, want := len(enqueuer.requests), 1; got != want {
 		t.Fatalf("combined create enqueue count = %d, want 1", got)
+	}
+}
+
+func TestApiJobsCreateCombinedTranscriptionJobWithoutIdempotencyKeyCreatesIndependentSubmissions(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	request := CreateCombinedTranscriptionRequest{
+		SubmissionKind:     "transcription_upload",
+		RequestFingerprint: "combined-manifest",
+		Sources: []storage.SourceRecord{
+			source("source-a"),
+			source("source-b"),
+		},
+		Delivery:    storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+		DisplayName: "combined-job",
+	}
+
+	first, err := service.CreateCombinedTranscriptionJob(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateCombinedTranscriptionJob(first) error = %v", err)
+	}
+	second, err := service.CreateCombinedTranscriptionJob(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateCombinedTranscriptionJob(second) error = %v", err)
+	}
+	if first.Reused || second.Reused {
+		t.Fatalf("non-idempotent combined creates must not replay: first=%v second=%v", first.Reused, second.Reused)
+	}
+	if first.Job.ID == second.Job.ID {
+		t.Fatalf("non-idempotent combined creates reused job id %q", first.Job.ID)
+	}
+	if got, want := len(store.submissions), 2; got != want {
+		t.Fatalf("stored submissions = %d, want %d", got, want)
+	}
+	for _, submission := range store.submissions {
+		if !strings.HasPrefix(submission.IdempotencyKey, "non-idempotent:") {
+			t.Fatalf("submission idempotency key = %q, want non-idempotent internal key", submission.IdempotencyKey)
+		}
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("enqueue count = %d, want %d", got, want)
 	}
 }
 
@@ -256,8 +346,10 @@ func TestApiJobsCancelAndTransitionRules(t *testing.T) {
 
 	queued := storage.JobRecord{ID: "queued-job", RootJobID: "queued-job", SourceSetID: "ss-1", JobType: queue.JobTypeTranscription, Status: "queued", Delivery: storage.Delivery{Strategy: storage.DeliveryStrategyPolling}, Version: 1}
 	running := storage.JobRecord{ID: "running-job", RootJobID: "running-job", SourceSetID: "ss-2", JobType: queue.JobTypeTranscription, Status: "running", Delivery: storage.Delivery{Strategy: storage.DeliveryStrategyPolling}, Version: 2}
+	failed := storage.JobRecord{ID: "failed-job", RootJobID: "failed-job", SourceSetID: "ss-3", JobType: queue.JobTypeTranscription, Status: "failed", Delivery: storage.Delivery{Strategy: storage.DeliveryStrategyPolling}, Version: 4, FinishedAt: ptrTime(time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC))}
 	store.jobs[queued.ID] = queued
 	store.jobs[running.ID] = running
+	store.jobs[failed.ID] = failed
 
 	canceled, err := service.CancelJob(context.Background(), queued.ID)
 	if err != nil {
@@ -273,6 +365,17 @@ func TestApiJobsCancelAndTransitionRules(t *testing.T) {
 	}
 	if cancelRequested.Status != "cancel_requested" || cancelRequested.CancelRequestedAt == nil {
 		t.Fatalf("running cancel result = %#v", cancelRequested)
+	}
+
+	unchangedTerminal, err := service.CancelJob(context.Background(), failed.ID)
+	if err != nil {
+		t.Fatalf("CancelJob(failed) error = %v", err)
+	}
+	if unchangedTerminal.CancelRequestedAt != nil {
+		t.Fatalf("terminal cancel response mutated cancel_requested_at: %#v", unchangedTerminal)
+	}
+	if stored := store.jobs[failed.ID]; stored.CancelRequestedAt != nil {
+		t.Fatalf("terminal cancel persisted cancel_requested_at: %#v", stored)
 	}
 
 	transitioned, err := service.TransitionJob(context.Background(), TransitionRequest{
@@ -373,6 +476,10 @@ func source(id string) storage.SourceRecord {
 		ObjectBody:  []byte("payload"),
 		MIMEType:    "audio/mpeg",
 	}
+}
+
+func ptrTime(value time.Time) *time.Time {
+	return &value
 }
 
 type memoryStore struct {

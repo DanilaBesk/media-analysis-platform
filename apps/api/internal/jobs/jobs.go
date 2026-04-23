@@ -164,10 +164,11 @@ func (s *Service) CreateTranscriptionJobs(ctx context.Context, req CreateTranscr
 		return reused, err
 	}
 
+	submissionID := s.nextID()
 	submission := storage.JobSubmission{
-		ID:                 s.nextID(),
+		ID:                 submissionID,
 		SubmissionKind:     req.SubmissionKind,
-		IdempotencyKey:     req.IdempotencyKey,
+		IdempotencyKey:     submissionIdempotencyKey(req.IdempotencyKey, submissionID),
 		RequestFingerprint: req.RequestFingerprint,
 		CreatedAt:          s.now(),
 	}
@@ -219,10 +220,11 @@ func (s *Service) CreateCombinedTranscriptionJob(ctx context.Context, req Create
 		return ChildResult{Job: reused.Jobs[0], Reused: true}, nil
 	}
 
+	submissionID := s.nextID()
 	submission := storage.JobSubmission{
-		ID:                 s.nextID(),
+		ID:                 submissionID,
 		SubmissionKind:     req.SubmissionKind,
-		IdempotencyKey:     req.IdempotencyKey,
+		IdempotencyKey:     submissionIdempotencyKey(req.IdempotencyKey, submissionID),
 		RequestFingerprint: req.RequestFingerprint,
 		CreatedAt:          s.now(),
 	}
@@ -303,12 +305,15 @@ func (s *Service) CancelJob(ctx context.Context, jobID string) (storage.JobRecor
 		return storage.JobRecord{}, err
 	}
 
+	switch job.Status {
+	case "succeeded", "failed", "canceled":
+		return job, nil
+	}
+
 	cancelAt := s.now()
 	job.CancelRequestedAt = &cancelAt
 
 	switch job.Status {
-	case "succeeded", "failed", "canceled":
-		return job, nil
 	case "queued":
 		job.Status = "canceled"
 		job.FinishedAt = &cancelAt
@@ -449,6 +454,14 @@ func (s *Service) replaySubmissionIfPresent(ctx context.Context, submissionKind,
 		return CreateJobsResult{}, err
 	}
 	return CreateJobsResult{Jobs: jobs, Reused: true}, nil
+}
+
+func submissionIdempotencyKey(idempotencyKey, submissionID string) string {
+	key := strings.TrimSpace(idempotencyKey)
+	if key != "" {
+		return key
+	}
+	return "non-idempotent:" + submissionID
 }
 
 func validateChildRequest(parent storage.JobRecord, childJobType string) error {
