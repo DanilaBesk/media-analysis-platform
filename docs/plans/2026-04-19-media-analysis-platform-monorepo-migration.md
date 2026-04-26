@@ -1,8 +1,8 @@
-# Telegram Transcriber Platform Monorepo Migration Implementation Plan
+# Media Analysis Platform Monorepo Migration Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
 
-**Goal:** Migrate the current single-process `telegram-transcriber-bot` into a local-first monorepo platform with a Go API control plane, Python execution workers, React web UI, thin Telegram bot, separate MCP server, PostgreSQL state, MinIO artifact storage, Docker Compose orchestration, and first-class polling, WebSocket, webhook, retry, and cancellation contracts.
+**Goal:** Preserve the migration record from the former single-process transcription bot into `media-analysis-platform`: a local-first monorepo platform with a Go API control plane, Python execution workers, React web UI, thin Telegram adapter, separate MCP server, PostgreSQL state, MinIO artifact storage, Docker Compose orchestration, and first-class polling, WebSocket, webhook, retry, and cancellation contracts.
 
 **Architecture:** The target system separates orchestration from execution. The Go API server owns job creation, state transitions, artifact metadata, job graph relationships, polling/WS/webhook status delivery, idempotency, and cancel/retry semantics. Python workers own heavy execution for transcription, report generation, and deep research by reusing the existing Python pipeline. Telegram bot, web UI, and MCP become thin adapters over the same HTTP API.
 
@@ -31,22 +31,20 @@ This document intentionally includes both design and execution detail. It is not
 
 The current repository is a compose-owned local platform with one host-side cutover entrypoint:
 
-- [src/telegram_transcriber_bot/__main__.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/__main__.py:1)
+- [src/media_analysis_platform/__main__.py](/Users/danila/work/my/media-analysis-platform/src/media_analysis_platform/__main__.py:1)
 
 The current logic is distributed as follows:
 
-- [src/telegram_transcriber_bot/bot.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/bot.py:1)
+- [src/media_analysis_platform/bot.py](/Users/danila/work/my/media-analysis-platform/src/media_analysis_platform/bot.py:1)
   Telegram runtime, source extraction orchestration, attachment download, media group buffering, callback handlers, status messages, and result delivery.
-- [workers/transcription/src/transcriber_worker_transcription.py](/Users/danila/work/my/telegram-transcriber-bot/workers/transcription/src/transcriber_worker_transcription.py:1)
+- [workers/transcription/src/transcriber_worker_transcription.py](/Users/danila/work/my/media-analysis-platform/workers/transcription/src/transcriber_worker_transcription.py:1)
   Transcription worker runtime, local source materialization, ordered input handling, and transcript artifact persistence.
-- [workers/common/src/transcriber_workers_common/transcribers.py](/Users/danila/work/my/telegram-transcriber-bot/workers/common/src/transcriber_workers_common/transcribers.py:1)
+- [workers/common/src/transcriber_workers_common/transcribers.py](/Users/danila/work/my/media-analysis-platform/workers/common/src/transcriber_workers_common/transcribers.py:1)
   Shared YouTube transcript fast path and Whisper fallback.
-- [workers/common/src/transcriber_workers_common/documents.py](/Users/danila/work/my/telegram-transcriber-bot/workers/common/src/transcriber_workers_common/documents.py:1)
+- [workers/common/src/transcriber_workers_common/documents.py](/Users/danila/work/my/media-analysis-platform/workers/common/src/transcriber_workers_common/documents.py:1)
   Transcript/report markdown normalization and DOCX artifact rendering.
-- [workers/report/src/transcriber_worker_report.py](/Users/danila/work/my/telegram-transcriber-bot/workers/report/src/transcriber_worker_report.py:1)
-  Report worker runtime and report harness execution.
-- [workers/deep-research/src](/Users/danila/work/my/telegram-transcriber-bot/workers/deep-research/src:1)
-  Deep research multi-phase pipeline.
+- [workers/agent-runner/src/transcriber_worker_agent_runner.py](/Users/danila/work/my/media-analysis-platform/workers/agent-runner/src/transcriber_worker_agent_runner.py:1)
+  Generic `agent_run` worker runtime for report and deep-research execution.
 
 Current storage and runtime model:
 
@@ -55,7 +53,7 @@ Current storage and runtime model:
 - Redis backs asynq queues only
 - Go HTTP API owns orchestration and delivery semantics
 - React Web UI, Telegram adapter, and MCP adapter consume the API boundary
-- host-side `uv run telegram-transcriber-bot` is only a cutover pointer, not the old execution path
+- host-side `uv run media-analysis-platform` is only a cutover pointer, not the old execution path
 
 Current user-visible capabilities to preserve:
 
@@ -1709,14 +1707,14 @@ For local deployment:
 
 This section maps the current code into future destinations.
 
-### 23.1 `src/telegram_transcriber_bot/transcribers.py`
+### 23.1 `src/media_analysis_platform/transcribers.py`
 
 Move into:
 
 - `workers/common/src/transcriber_workers_common/transcribers.py`
 - `workers/transcription/src/...`
 
-### 23.2 `src/telegram_transcriber_bot/documents.py`
+### 23.2 `src/media_analysis_platform/documents.py`
 
 Move into:
 
@@ -1728,13 +1726,13 @@ Move into:
 
 - `workers/report/src/...`
 
-### 23.4 `src/telegram_transcriber_bot/deep_research.py`
+### 23.4 `src/media_analysis_platform/deep_research.py`
 
 Move into:
 
 - `workers/deep-research/src/...`
 
-### 23.5 Former `src/telegram_transcriber_bot/service.py` local shell
+### 23.5 Former `src/media_analysis_platform/service.py` local shell
 
 Was split into:
 
@@ -1742,7 +1740,7 @@ Was split into:
 - job orchestration semantics into Go API service layer;
 - metadata persistence logic replaced by PostgreSQL + MinIO + Redis integration.
 
-### 23.6 `src/telegram_transcriber_bot/bot.py`
+### 23.6 `src/media_analysis_platform/bot.py`
 
 Keep only Telegram adapter concerns:
 
@@ -2116,7 +2114,7 @@ Implement on job details page:
 
 - Create: `apps/telegram-bot/src/...`
 - Create: `packages/sdk-py/...`
-- Retire logic that had lived in `src/telegram_transcriber_bot/service.py`
+- Retire logic that had lived in `src/media_analysis_platform/service.py`
 
 **Phases:**
 

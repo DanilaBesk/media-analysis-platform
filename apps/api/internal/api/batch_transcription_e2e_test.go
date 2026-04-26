@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/jobs"
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
+	"github.com/danila/media-analysis-platform/apps/api/internal/jobs"
+	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
 func TestApiBatchTranscriptionE2EWithLivePostgresControlPlane(t *testing.T) {

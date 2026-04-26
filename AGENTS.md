@@ -10,8 +10,8 @@
 ## Working Rules
 
 - Keep `AGENTS.md` short. Put longer process notes in `README.md` or docs instead of expanding this file.
-- `bd init` bootstrapped a local git repository here. No remote is configured right now, so do not assume branch or PR workflows exist yet.
-- Until a git remote is configured, treat the Beads push-to-remote checklist as conditional rather than immediately runnable in this repo.
+- Git remote is configured for the public GitHub repository `DanilaBesk/media-analysis-platform`.
+- Beads/Dolt still has no configured Dolt remote; do not invent one. Treat `bd dolt push` as blocked until a real Dolt remote URL is provided.
 - When you discover follow-up work, record it in Beads instead of ad-hoc markdown notes.
 
 ## GRACE Protocol
@@ -24,7 +24,7 @@
   - `docs/knowledge-graph.xml`
   - `docs/operational-packets.xml`
 - For architecture or implementation work, update GRACE artifacts before or alongside code changes rather than letting design drift live only in chat or ad-hoc markdown.
-- The current large migration brief in `docs/plans/2026-04-19-telegram-transcriber-platform-monorepo-migration.md` remains the detailed architecture baseline, but the GRACE XML docs are now the canonical structure for future planning, execution packets, verification, and graph updates.
+- The current large migration brief in `docs/plans/2026-04-19-media-analysis-platform-monorepo-migration.md` remains the detailed architecture baseline, but the GRACE XML docs are now the canonical structure for future planning, execution packets, verification, and graph updates.
 - New modules should carry GRACE-style module contracts and stable semantic/log anchors when they are implemented.
 - For implementation from this point forward, default to GRACE packet-driven execution rather than freeform refactoring.
 - Compose cutover packets are already reflected in GRACE docs; use `bd ready --json` plus `docs/operational-packets.xml` to find the remaining approved execution slice instead of restarting early waves.
@@ -37,16 +37,18 @@
 ## Repo Basics
 
 - Primary runtime: Docker Compose local stack with Python `3.12` components managed inside the compose topology.
-- Local cutover entrypoint: `uv run telegram-transcriber-bot`
+- Local cutover entrypoint: `uv run media-analysis-platform`
 - Tests: `uv run pytest`
 - Required local tools: `docker compose`, `uv`; `ffmpeg` is still needed when media-processing paths are exercised on the host.
 - Required env setup: copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN`
 
 ## Code Map
 
-- `src/telegram_transcriber_bot/bot.py` - Telegram runtime and handlers
+- `apps/api` - Go API control plane
+- `src/media_analysis_platform/bot.py` - legacy Telegram adapter runtime and handlers
+- `apps/telegram-bot/src/telegram_adapter` - compose-owned Telegram adapter over the API
 - `workers/transcription/src/transcriber_worker_transcription.py` - transcription worker runtime and local source materialization
-- `workers/report/src/transcriber_worker_report.py` - report worker runtime and harness execution
+- `workers/agent-runner/src/transcriber_worker_agent_runner.py` - report/deep-research agent_run worker runtime
 - `workers/common/src/transcriber_workers_common/transcribers.py` - shared YouTube/subtitles/Whisper helpers
 - `workers/common/src/transcriber_workers_common/documents.py` - transcript/report document rendering helpers
 
@@ -82,7 +84,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - Mandatory only when a git remote is configured:
    ```bash
    git pull --rebase
-   bd dolt push
+   bd dolt push  # only if a Beads/Dolt remote is configured
    git push
    git status  # MUST show "up to date with origin"
    ```

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from telegram_transcriber_bot.config import load_settings
+from media_analysis_platform.config import load_settings
 
 
 def test_load_settings_reads_env_file_and_defaults(tmp_path: Path, monkeypatch) -> None:

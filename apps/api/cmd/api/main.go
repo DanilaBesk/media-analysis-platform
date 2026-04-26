@@ -17,10 +17,10 @@ import (
 
 	"github.com/hibiken/asynq"
 
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/api"
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/ws"
+	"github.com/danila/media-analysis-platform/apps/api/internal/api"
+	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
+	"github.com/danila/media-analysis-platform/apps/api/internal/ws"
 )
 
 const (

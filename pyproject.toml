@@ -1,7 +1,7 @@
 [project]
-name = "telegram-transcriber-bot"
+name = "media-analysis-platform"
 version = "0.1.0"
-description = "Telegram bot platform that transcribes links and uploaded media, then generates research reports through the compose-owned worker stack."
+description = "Local-first media and source analysis platform with API-owned transcription, reporting, deep research, and thin adapters."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -21,14 +21,14 @@ dev = [
 ]
 
 [project.scripts]
-telegram-transcriber-bot = "telegram_transcriber_bot.__main__:main"
+media-analysis-platform = "media_analysis_platform.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/telegram_transcriber_bot"]
+packages = ["src/media_analysis_platform"]
 
 [tool.pytest.ini_options]
 pythonpath = ["workers/common/src", "src"]

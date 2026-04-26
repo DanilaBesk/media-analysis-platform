@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://telegram-transcriber.local/contracts/schemas/common/error-envelope.schema.json",
+  "$id": "https://media-analysis.local/contracts/schemas/common/error-envelope.schema.json",
   "title": "ErrorEnvelope",
   "type": "object",
   "required": [

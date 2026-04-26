@@ -32,7 +32,7 @@ export function AppShell({ children }: PropsWithChildren): JSX.Element {
       <header className="app-shell__header">
         <div>
           <p className="app-shell__eyebrow">M-WEB-UI-wave-5</p>
-          <h1>Telegram Transcriber Web UI</h1>
+          <h1>Media Analysis Web UI</h1>
           <p className="app-shell__copy">
             This packet consumes the API and event surfaces for create, monitor, artifact, and lineage
             flows while keeping polling authoritative and WebSocket limited to low-latency refresh

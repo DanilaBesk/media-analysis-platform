@@ -114,7 +114,7 @@ services:
     build:
       context: ..
       dockerfile: infra/images/worker-transcription/Dockerfile
-    image: telegram-transcriber-worker-transcription:local
+    image: media-analysis-worker-transcription:local
     restart: unless-stopped
     environment:
       PYTHONPATH: /workspace/workers/transcription/src:/workspace/workers/common/src
@@ -147,7 +147,7 @@ services:
     build:
       context: ..
       dockerfile: infra/images/worker-agent-runner/Dockerfile
-    image: telegram-transcriber-worker-agent-runner:local
+    image: media-analysis-worker-agent-runner:local
     restart: unless-stopped
     environment:
       PYTHONPATH: /workspace/workers/agent-runner/src:/workspace/workers/common/src
@@ -202,7 +202,7 @@ services:
     build:
       context: ..
       dockerfile: infra/images/telegram-bot/Dockerfile
-    image: telegram-transcriber-telegram-bot:local
+    image: media-analysis-telegram-bot:local
     restart: unless-stopped
     environment:
       PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/workers/common/src:/workspace/src

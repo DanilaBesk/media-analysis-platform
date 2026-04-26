@@ -1,5 +1,5 @@
 [project]
-name = "telegram-transcriber-telegram-adapter"
+name = "media-analysis-telegram-adapter"
 version = "0.1.0"
 description = "Thin Telegram adapter over the platform HTTP API."
 requires-python = ">=3.12"

@@ -207,7 +207,7 @@ describe("createWebUiRoutes", () => {
   it("renders the jobs route and submits the url create flow through the API boundary", async () => {
     const runtime = renderRoute("/");
 
-    expect(await screen.findByRole("heading", { name: "Telegram Transcriber Web UI" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Media Analysis Web UI" })).toBeVisible();
     expect(await screen.findByText("Example transcription")).toBeVisible();
     expect(screen.getByRole("option", { name: "Agent run" })).toBeVisible();
 

@@ -548,7 +548,7 @@ wheels = [
 ]
 
 [[package]]
-name = "telegram-transcriber-telegram-adapter"
+name = "media-analysis-telegram-adapter"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

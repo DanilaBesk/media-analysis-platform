@@ -1,4 +1,4 @@
-module github.com/danila/telegram-transcriber-bot/apps/api
+module github.com/danila/media-analysis-platform/apps/api
 
 go 1.26
 

@@ -13,7 +13,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import BotCommand, CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from telegram_transcriber_bot.config import Settings
+from media_analysis_platform.config import Settings
 from transcriber_workers_common.domain import MediaAttachment, ProcessedJob, SourceCandidate
 from transcriber_workers_common.media_groups import MediaGroupAccumulator
 from transcriber_workers_common.source_labels import humanize_source_label

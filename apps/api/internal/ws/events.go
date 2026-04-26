@@ -13,7 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
 const (

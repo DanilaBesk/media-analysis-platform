@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://telegram-transcriber.local/contracts/schemas/internal/worker-control.schema.json",
+  "$id": "https://media-analysis.local/contracts/schemas/internal/worker-control.schema.json",
   "title": "WorkerControl",
   "$defs": {
     "claimRequest": {

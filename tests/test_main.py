@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import telegram_transcriber_bot.__main__ as main_module
+import media_analysis_platform.__main__ as main_module
 
 
 def test_main_returns_fail_fast_exit_code(capsys) -> None:

@@ -1359,7 +1359,7 @@ wheels = [
 ]
 
 [[package]]
-name = "telegram-transcriber-bot"
+name = "media-analysis-platform"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

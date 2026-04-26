@@ -1,26 +1,27 @@
-# Telegram Transcriber Bot
+# Media Analysis Platform
 
-Telegram-бот для расшифровки YouTube-ссылок и загруженных через Telegram аудио/видео. После транскрибации бот отдаёт документ с расшифровкой и умеет строить исследовательский отчёт через настроенный LLM provider.
+Local-first платформа для сборки источников, транскрибации медиа/ссылок, генерации отчетов и deep research через API-owned control plane и worker stack. Telegram теперь только один из thin adapters: он собирает пользовательский ввод и передает операции в API, но не владеет бизнес-логикой.
 
 ## Что умеет
 
-- принимает:
+- принимает через API и адаптеры:
   - одну YouTube-ссылку;
   - текст с одной или несколькими ссылками;
-  - аудио/видео/voice/video note/document с media mime type из Telegram;
-  - media group из нескольких файлов;
-- извлекает все поддерживаемые источники и даёт выбор через inline keyboard, если кандидатов несколько;
+  - аудио/видео/voice/video note/document с media mime type;
+  - batch/source set из нескольких файлов и ссылок;
+- сохраняет границы источников и stable source labels в итоговых artifact metadata;
+- извлекает все поддерживаемые источники и даёт adapter-level выбор, если кандидатов несколько;
 - для YouTube сначала пытается взять готовые субтитры;
 - если субтитров нет, либо источник пришёл как файл, делает транскрибацию через `faster-whisper`;
-- после завершения показывает кнопки:
+- Telegram adapter после завершения показывает кнопки:
   - `Получить`
   - `Создать исследовательский отчет`
 - по `Получить` отдаёт `.docx` с транскрибацией;
-- по `Создать исследовательский отчет` создаёт дочернюю report/deep-research цепочку и отправляет `.docx` с исследовательским отчётом.
+- по `Создать исследовательский отчет` создаёт API-owned report/deep-research цепочку через `agent_run` / `worker-agent-runner`.
 
 ## Ограничения MVP
 
-- Поддерживаемый URL-источник сейчас только YouTube.
+- Поддерживаемый URL-источник сейчас сфокусирован на YouTube.
 - Явная diarization не обещается всегда. Speaker labels сохраняются только если их можно честно извлечь из исходного transcript. Иначе сегменты идут без фиктивных спикеров.
 - Первый запуск Whisper fallback может скачать модель.
 
@@ -49,7 +50,7 @@ docs/architecture/cutover-checklist.md
 docs/architecture/runtime-ops.md
 ```
 
-`uv run telegram-transcriber-bot` больше не запускает прежний локальный runtime и теперь только указывает на compose cutover path.
+`uv run media-analysis-platform` больше не запускает прежний локальный runtime и теперь только указывает на compose cutover path.
 
 ## Переменные окружения
 
@@ -70,7 +71,9 @@ docs/architecture/runtime-ops.md
 
 ## Архитектура
 
-- `src/telegram_transcriber_bot/bot.py` — aiogram runtime, inline keyboards, media group buffer, callback handlers.
+- `apps/api` — Go control plane для jobs, source/source_set lineage, artifacts, retry/cancel/progress и child operations.
+- `src/media_analysis_platform/bot.py` — legacy Telegram adapter runtime, inline keyboards, media group buffer, callback handlers.
+- `apps/telegram-bot/src/telegram_adapter` — compose-owned Telegram adapter boundary over the API.
 - `workers/transcription/src/transcriber_worker_transcription.py` — transcription worker runtime, local source materialization, combined input handling, and transcript artifact persistence.
 - `workers/common/src/transcriber_workers_common/transcribers.py` — shared YouTube/subtitles/Whisper helpers consumed by the transcription worker.
 - `workers/agent-runner/src` — единый AI-model worker runtime для report/deep-research execution.
@@ -91,4 +94,4 @@ docs/architecture/runtime-ops.md
 - media group accumulation;
 - transcript/report document rendering;
 - worker-local source materialization и transcript artifact generation;
-- thin Telegram adapter callbacks и artifact delivery.
+- thin adapter callbacks и artifact delivery.

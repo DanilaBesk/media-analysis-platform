@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-deep-research.schema.json",
+  "$id": "https://media-analysis.local/contracts/schemas/http/create-deep-research.schema.json",
   "title": "CreateDeepResearchRequest",
   "description": "Compatibility request for creating a deep-research operation. The control plane accepts a report-backed agent_run parent with report_markdown and creates or reuses an agent_run job with harness_name=claude-code and operation=deep_research in the private request envelope.",
   "type": "object",

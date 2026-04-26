@@ -27,8 +27,8 @@ from collections.abc import Mapping
 
 from telegram_adapter.api_client import TelegramApiClient
 from telegram_adapter.gateway import TelegramApiProcessingGateway
-from telegram_transcriber_bot.bot import TelegramTranscriberApp
-from telegram_transcriber_bot.config import load_settings
+from media_analysis_platform.bot import TelegramTranscriberApp
+from media_analysis_platform.config import load_settings
 
 
 _LOGGER = logging.getLogger(__name__)

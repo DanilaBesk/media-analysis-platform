@@ -1,5 +1,5 @@
 {
-  "name": "@telegram-transcriber-bot/mcp-server",
+  "name": "@media-analysis-platform/mcp-server",
   "version": "0.1.0",
   "private": true,
   "type": "module",

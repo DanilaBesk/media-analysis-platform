@@ -1,6 +1,6 @@
 <RequirementsAnalysis VERSION="0.3.0">
   <Project>
-    <name>telegram-transcriber-bot</name>
+    <name>media-analysis-platform</name>
     <annotation>Lossless GRACE requirements surface for the completed migration from the former single-process Telegram transcription bot into a local-first monorepo platform with a Go control plane, Python workers, React UI, thin Telegram adapter, thin MCP adapter, PostgreSQL, Redis plus asynq, MinIO, WebSocket, webhook, retry, and cooperative cancellation.</annotation>
     <keywords>telegram, transcription, whisper, faster-whisper, reports, deep research, go api, python workers, react ui, mcp, minio, postgres, redis, asynq, polling, webhook, docker compose, monorepo</keywords>
   </Project>
@@ -12,10 +12,10 @@
   </Purpose>
 
   <CurrentState>
-    <runtime-entrypoint>src/telegram_transcriber_bot/__main__.py</runtime-entrypoint>
-    <current-shape>compose-owned local platform with a Go control plane, Python workers, and thin adapters; the legacy telegram_transcriber_bot package bootstrap is removed from the normal runtime.</current-shape>
+    <runtime-entrypoint>src/media_analysis_platform/__main__.py</runtime-entrypoint>
+    <current-shape>compose-owned local platform with a Go control plane, Python workers, and thin adapters; the host-side media_analysis_platform CLI bootstrap only points operators to the compose runtime.</current-shape>
     <current-modules>
-      <module path="src/telegram_transcriber_bot/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
+      <module path="src/media_analysis_platform/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
       <module path="workers/transcription/src/transcriber_worker_transcription.py" role="Transcription worker runtime, per-source transcription execution, batch aggregate merging, source-manifest diagnostics, and transcript artifact persistence" />
       <module path="workers/common/src/transcriber_workers_common/transcribers.py" role="YouTube transcript fast path and Whisper fallback shared by the transcription worker" />
       <module path="workers/common/src/transcriber_workers_common/documents.py" role="Transcript/report markdown normalization and DOCX artifact rendering" />

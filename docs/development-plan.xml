@@ -41,9 +41,9 @@
   </PreservationMap>
 
   <MigrationContext>
-    <current-entrypoint>src/telegram_transcriber_bot/__main__.py</current-entrypoint>
+    <current-entrypoint>src/media_analysis_platform/__main__.py</current-entrypoint>
     <current-files>
-      <file path="src/telegram_transcriber_bot/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
+      <file path="src/media_analysis_platform/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
       <file path="workers/transcription/src/transcriber_worker_transcription.py" role="Transcription worker runtime, local source materialization, per-source execution, batch aggregate merging, and transcript artifact persistence" />
       <file path="workers/common/src/transcriber_workers_common/transcribers.py" role="YouTube transcript fast path and Whisper fallback shared by the transcription worker" />
       <file path="workers/common/src/transcriber_workers_common/documents.py" role="Transcript/report markdown normalization and DOCX artifact rendering" />
@@ -949,11 +949,11 @@
   </EnvironmentContracts>
 
   <MigrationMapping>
-    <Map from="src/telegram_transcriber_bot/transcribers.py" to="workers/common/src/transcriber_workers_common/transcribers.py and workers/transcription/src" />
+    <Map from="src/media_analysis_platform/transcribers.py" to="workers/common/src/transcriber_workers_common/transcribers.py and workers/transcription/src" />
     <Map from="workers/common/src/transcriber_workers_common/documents.py" to="workers/common/src/transcriber_workers_common/documents.py" />
     <Map from="retired workers/report and workers/deep-research dedicated runtimes" to="workers/agent-runner/src operation envelopes and artifact persistence" />
-    <Map from="former src/telegram_transcriber_bot/service.py local shell" to="execution-specific code into Python workers; orchestration semantics into Go API; metadata persistence replaced by PostgreSQL, MinIO, and Redis integration" />
-    <Map from="src/telegram_transcriber_bot/bot.py" to="message parsing, Telegram downloads, client-side polling or wait flow, result delivery, and callback-to-API mapping only" />
+    <Map from="former src/media_analysis_platform/service.py local shell" to="execution-specific code into Python workers; orchestration semantics into Go API; metadata persistence replaced by PostgreSQL, MinIO, and Redis integration" />
+    <Map from="src/media_analysis_platform/bot.py" to="message parsing, Telegram downloads, client-side polling or wait flow, result delivery, and callback-to-API mapping only" />
     <MovedOutFromBot>direct execution, local job state persistence, direct report generation, deep research execution</MovedOutFromBot>
   </MigrationMapping>
 

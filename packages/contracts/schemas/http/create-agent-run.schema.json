@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-agent-run.schema.json",
+  "$id": "https://media-analysis.local/contracts/schemas/http/create-agent-run.schema.json",
   "title": "CreateAgentRunRequest",
   "type": "object",
   "required": [

@@ -34,7 +34,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - Mandatory only when a git remote is configured:
    ```bash
    git pull --rebase
-   bd dolt push
+   bd dolt push  # only if a Beads/Dolt remote is configured
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -53,22 +53,24 @@ bd close <id>         # Complete work
 ## Build & Test
 
 ```bash
-uv run telegram-transcriber-bot
+uv run media-analysis-platform
 uv run pytest
 ```
 
 ## Architecture Overview
 
-- `src/telegram_transcriber_bot/bot.py` contains the aiogram runtime, handlers, callbacks, and media-group flow.
+- `apps/api` contains the Go control plane for jobs, source/source_set lineage, artifacts, retry/cancel/progress, and child operations.
+- `src/media_analysis_platform/bot.py` contains the legacy Telegram adapter runtime, handlers, callbacks, and media-group flow.
+- `apps/telegram-bot/src/telegram_adapter` contains the compose-owned Telegram adapter boundary over the API.
 - `workers/transcription/src/transcriber_worker_transcription.py` owns transcription worker execution, local source materialization, and transcript artifact persistence.
 - `workers/common/src/transcriber_workers_common/transcribers.py` handles transcript acquisition via YouTube subtitles first, then Whisper fallback.
-- `workers/report/src/transcriber_worker_report.py` executes report jobs through the configured report harness.
+- `workers/agent-runner/src/transcriber_worker_agent_runner.py` executes report/deep-research `agent_run` jobs through the configured provider or fixture harness.
 - `workers/common/src/transcriber_workers_common/documents.py` renders transcript/report outputs.
 
 ## Conventions & Patterns
 
 - Use `bd` for task tracking; do not keep parallel markdown TODO lists.
 - Keep `AGENTS.md` short and repo-specific.
-- Primary runtime is the compose stack; `uv run telegram-transcriber-bot` is only a cutover pointer, and `ffmpeg` is still required for local media-processing flows exercised on the host.
+- Primary runtime is the compose stack; `uv run media-analysis-platform` is only a cutover pointer, and `ffmpeg` is still required for local media-processing flows exercised on the host.
 - `.env` stays local; configure the bot via `.env.example` and `TELEGRAM_BOT_TOKEN`.
-- This repository currently has no configured git remote, so push-related checklist items apply only after remote setup.
+- Git remote is configured for `DanilaBesk/media-analysis-platform`. Beads/Dolt has no Dolt remote, so do not run `bd dolt push` until a real Dolt remote URL is provided.

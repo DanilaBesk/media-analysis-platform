@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/queue"
-	"github.com/danila/telegram-transcriber-bot/apps/api/internal/storage"
+	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
 const TransitionMarker = "[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]"

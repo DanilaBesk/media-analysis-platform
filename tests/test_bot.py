@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from telegram_transcriber_bot.bot import (
+from media_analysis_platform.bot import (
     BatchModeStore,
     BasketStore,
     CandidateSelectionStore,
@@ -17,7 +17,7 @@ from telegram_transcriber_bot.bot import (
     _guess_suffix,
     _with_stable_source_id,
 )
-from telegram_transcriber_bot.config import Settings
+from media_analysis_platform.config import Settings
 from transcriber_workers_common.domain import (
     ProcessedJob,
     ReportArtifacts,
@@ -468,7 +468,7 @@ async def test_start_processing_emits_required_adapter_marker(tmp_path: Path, mo
     logs: list[str] = []
 
     monkeypatch.setattr(
-        "telegram_transcriber_bot.bot.LOGGER",
+        "media_analysis_platform.bot.LOGGER",
         SimpleNamespace(info=lambda message, *args: logs.append(message % args if args else message)),
     )
 
@@ -667,7 +667,7 @@ async def test_handle_message_buffers_media_group_and_cancels_previous_task(tmp_
         coro.close()
         return scheduled
 
-    monkeypatch.setattr("telegram_transcriber_bot.bot.asyncio.create_task", fake_create_task)
+    monkeypatch.setattr("media_analysis_platform.bot.asyncio.create_task", fake_create_task)
     message = SimpleNamespace(
         text=None,
         caption="caption text",
@@ -723,7 +723,7 @@ async def test_flush_media_group_forwards_buffered_payload(tmp_path: Path, monke
         return None
 
     monkeypatch.setattr(app, "_process_candidate_set", fake_process_candidate_set)
-    monkeypatch.setattr("telegram_transcriber_bot.bot.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("media_analysis_platform.bot.asyncio.sleep", fake_sleep)
 
     await app._flush_media_group(chat_id=10, user_id=11, media_group_id="group-1")
 
@@ -753,7 +753,7 @@ async def test_flush_media_group_stops_on_cancellation(tmp_path: Path, monkeypat
         raise asyncio.CancelledError
 
     monkeypatch.setattr(app, "_process_candidate_set", fake_process_candidate_set)
-    monkeypatch.setattr("telegram_transcriber_bot.bot.asyncio.sleep", cancelled_sleep)
+    monkeypatch.setattr("media_analysis_platform.bot.asyncio.sleep", cancelled_sleep)
 
     await app._flush_media_group(chat_id=10, user_id=11, media_group_id="group-1")
 
@@ -1081,7 +1081,7 @@ async def test_safe_callback_answer_ignores_stale_query_and_still_sends_report(t
         async def answer(self, text: str, show_alert: bool = False) -> None:
             raise RuntimeError("query is too old and response timeout expired")
 
-    monkeypatch.setattr("telegram_transcriber_bot.bot.TelegramBadRequest", RuntimeError)
+    monkeypatch.setattr("media_analysis_platform.bot.TelegramBadRequest", RuntimeError)
     callback = StaleCallback(data="report:job-123", message=callback_message)
 
     await app._handle_generate_report(callback)  # type: ignore[arg-type]

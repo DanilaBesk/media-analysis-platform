@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Telegram Transcriber Platform API",
+    "title": "Media Analysis Platform API",
     "version": "1.0.0",
     "description": "Frozen Phase-1 contract surface for the Go control plane, Python workers, Web UI, Telegram adapter, and MCP adapter."
   },

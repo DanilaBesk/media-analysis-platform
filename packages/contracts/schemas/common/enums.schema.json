@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://telegram-transcriber.local/contracts/schemas/common/enums.schema.json",
+  "$id": "https://media-analysis.local/contracts/schemas/common/enums.schema.json",
   "title": "Shared enum surface",
   "$defs": {
     "uuid": {

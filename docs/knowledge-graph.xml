@@ -1,5 +1,5 @@
 <KnowledgeGraph>
-  <Project NAME="telegram-transcriber-bot" VERSION="0.3.0">
+  <Project NAME="media-analysis-platform" VERSION="0.3.0">
     <keywords>telegram, transcription, whisper, faster-whisper, reports, deep research, go api, python workers, react ui, mcp, minio, postgres, redis, asynq, polling, webhook, docker compose</keywords>
     <annotation>GRACE baseline for migrating the current Telegram transcription bot into a local-first monorepo platform with one Go control plane and multiple thin adapters.</annotation>
 

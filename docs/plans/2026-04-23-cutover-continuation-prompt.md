@@ -1,9 +1,9 @@
 # Next Session Prompt: Cutover Parity
 
-Use this prompt for a fresh Codex session in `/Users/danila/work/my/telegram-transcriber-bot`.
+Use this prompt for a fresh Codex session in `/Users/danila/work/my/media-analysis-platform`.
 
 ```text
-Продолжи telegram-transcriber-bot строго по GRACE XML и Beads.
+Продолжи media-analysis-platform строго по GRACE XML и Beads.
 
 Preflight:
 1. Run `bd context`.
@@ -20,14 +20,14 @@ Current state:
 - `M-INFRA-COMPOSE-wave-6` step 1 is complete: `bash infra/scripts/compose-smoke.sh --live-smoke` passed with all runtime services healthy.
 - The next open execution packet is `M-API-HTTP-wave-6`.
 - Beads follow-up issues:
-  - `telegram-transcriber-bot-1t4`: Run M-API-HTTP-wave-6 cutover parity replay.
-  - `telegram-transcriber-bot-j3u`: Prove worker E2E against live MinIO and API control plane.
-  - `telegram-transcriber-bot-8l5`: Replay Web UI Telegram and MCP parity on live stack.
-  - `telegram-transcriber-bot-pkn`: Close storage queue events failure-path smokes before legacy removal.
-  - `telegram-transcriber-bot-dgf`: Remove legacy single-process runtime after cutover evidence. This one is blocked and must not be started first.
+  - `media-1t4`: Run M-API-HTTP-wave-6 cutover parity replay.
+  - `media-j3u`: Prove worker E2E against live MinIO and API control plane.
+  - `media-8l5`: Replay Web UI Telegram and MCP parity on live stack.
+  - `media-pkn`: Close storage queue events failure-path smokes before legacy removal.
+  - `media-dgf`: Remove legacy single-process runtime after cutover evidence. This one is blocked and must not be started first.
 
 Primary task:
-Claim and execute `telegram-transcriber-bot-1t4` / `M-API-HTTP-wave-6`.
+Claim and execute `media-1t4` / `M-API-HTTP-wave-6`.
 Run live-stack route regression for:
 - multipart upload;
 - combined upload;
