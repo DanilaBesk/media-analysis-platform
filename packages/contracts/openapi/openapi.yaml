@@ -145,6 +145,97 @@
         }
       }
     },
+    "/v1/transcription-jobs/batch": {
+      "post": {
+        "operationId": "createBatchTranscriptionJob",
+        "summary": "Create one batch transcription root from a mixed source basket.",
+        "description": "The public API owns the batch basket, source manifest, file parts, and URLs. It creates a root/group transcription job with per-source transcription children and a worker-transcription aggregate task. The accepted root job remains the report/deep_research handoff target through the existing agent_run compatibility surfaces.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "../schemas/http/create-transcription-batch.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns the root/group transcription job snapshot for the batch basket.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/agent-runs": {
+      "post": {
+        "operationId": "createAgentRun",
+        "summary": "Create a generic agent-run root job without provider-specific worker binding.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/create-agent-run.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns one generic agent-run job snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/job-control.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
     "/v1/jobs/{job_id}": {
       "get": {
         "operationId": "getJob",
@@ -239,7 +330,8 @@
     "/v1/transcription-jobs/{job_id}/report-jobs": {
       "post": {
         "operationId": "createReportJob",
-        "summary": "Create or reuse the canonical report child job.",
+        "summary": "Create or reuse the canonical report operation as an agent_run job.",
+        "description": "Compatibility orchestration surface. The API creates or reuses an agent_run job using harness_name=claude-code with operation=report in the private request envelope.",
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
@@ -266,7 +358,7 @@
         },
         "responses": {
           "202": {
-            "description": "Accepted. Returns the canonical report child job snapshot.",
+            "description": "Accepted. Returns the canonical agent_run job snapshot for the report operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -284,7 +376,8 @@
     "/v1/report-jobs/{job_id}/deep-research-jobs": {
       "post": {
         "operationId": "createDeepResearchJob",
-        "summary": "Create or reuse the canonical deep-research child job.",
+        "summary": "Create or reuse the canonical deep-research operation as an agent_run job.",
+        "description": "Compatibility orchestration surface. The API accepts a report-backed agent_run parent with a report_markdown artifact and creates or reuses an agent_run job using harness_name=claude-code with operation=deep_research in the private request envelope.",
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
@@ -311,7 +404,7 @@
         },
         "responses": {
           "202": {
-            "description": "Accepted. Returns the canonical deep-research child job snapshot.",
+            "description": "Accepted. Returns the canonical agent_run job snapshot for the deep-research operation.",
             "content": {
               "application/json": {
                 "schema": {
@@ -594,6 +687,37 @@
           }
         }
       }
+    },
+    "/internal/v1/jobs/{job_id}/request-access": {
+      "get": {
+        "operationId": "resolveAgentRunRequestAccess",
+        "summary": "Resolve short-lived private request access for an active claimed agent_run execution.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/JobId"
+          },
+          {
+            "name": "execution_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Short-lived private request access for the claimed agent_run execution.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/agentRunRequestAccessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -635,6 +759,9 @@
       "TranscriptionFromUrlRequest": {
         "$ref": "../schemas/http/create-transcription-from-url.schema.json"
       },
+      "BatchTranscriptionRequest": {
+        "$ref": "../schemas/http/create-transcription-batch.schema.json"
+      },
       "CreateReportRequest": {
         "$ref": "../schemas/http/create-report.schema.json"
       },
@@ -652,6 +779,9 @@
       },
       "WorkerFinalizeRequest": {
         "$ref": "../schemas/internal/worker-control.schema.json#/$defs/finalizeRequest"
+      },
+      "AgentRunRequestAccessResponse": {
+        "$ref": "../schemas/internal/worker-control.schema.json#/$defs/agentRunRequestAccessResponse"
       },
       "JobEvent": {
         "$ref": "../schemas/ws/job-event.schema.json"

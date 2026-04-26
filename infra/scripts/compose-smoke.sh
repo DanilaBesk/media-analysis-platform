@@ -7,12 +7,19 @@ COMPOSE_FILE="${ROOT_DIR}/infra/docker-compose.yml"
 MARKER='[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]'
 RUNTIME_SERVICES=(
   api
-  worker-transcription
-  worker-report
-  worker-deep-research
   web
   telegram-bot
   mcp-server
+  worker-transcription
+  worker-agent-runner
+  postgres
+  redis
+  minio
+  minio-init
+)
+FORBIDDEN_SERVICES=(
+  worker-report
+  worker-deep-research
 )
 
 fail() {
@@ -25,14 +32,44 @@ require_file() {
   [[ -f "${path}" ]] || fail "missing required file: ${path#${ROOT_DIR}/}"
 }
 
+require_file_snippet() {
+  local path="$1"
+  local snippet="$2"
+  require_file "${path}"
+  grep -F -- "${snippet}" "${path}" >/dev/null || fail "file ${path#${ROOT_DIR}/} is missing snippet: ${snippet}"
+}
+
+reject_file_snippet() {
+  local path="$1"
+  local snippet="$2"
+  require_file "${path}"
+  if grep -F -- "${snippet}" "${path}" >/dev/null; then
+    fail "file ${path#${ROOT_DIR}/} still contains forbidden snippet: ${snippet}"
+  fi
+}
+
 require_compose_snippet() {
   local snippet="$1"
   grep -F -- "${snippet}" "${COMPOSE_FILE}" >/dev/null || fail "missing compose snippet: ${snippet}"
 }
 
+reject_compose_snippet() {
+  local snippet="$1"
+  if grep -F -- "${snippet}" "${COMPOSE_FILE}" >/dev/null; then
+    fail "compose still contains forbidden snippet: ${snippet}"
+  fi
+}
+
 require_service() {
   local service="$1"
   grep -Eq "^  ${service}:" "${COMPOSE_FILE}" || fail "missing service definition: ${service}"
+}
+
+reject_service() {
+  local service="$1"
+  if grep -Eq "^  ${service}:" "${COMPOSE_FILE}"; then
+    fail "forbidden service definition still exists: ${service}"
+  fi
 }
 
 service_block_from_content() {
@@ -52,6 +89,8 @@ require_service_block_snippet() {
 }
 
 validate_static_contract() {
+  local service
+
   command -v docker >/dev/null || fail "docker is required for compose validation"
 
   require_file "${COMPOSE_FILE}"
@@ -62,31 +101,19 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/env/shared.env.example"
   require_file "${ROOT_DIR}/infra/env/api.env.example"
   require_file "${ROOT_DIR}/infra/env/worker-transcription.env.example"
-  require_file "${ROOT_DIR}/infra/env/worker-report.env.example"
-  require_file "${ROOT_DIR}/infra/env/worker-deep-research.env.example"
-  require_file "${ROOT_DIR}/infra/env/host-harness.env.example"
+  require_file "${ROOT_DIR}/infra/env/worker-agent-runner.env.example"
   require_file "${ROOT_DIR}/infra/env/web.env.example"
   require_file "${ROOT_DIR}/infra/env/telegram-bot.env.example"
   require_file "${ROOT_DIR}/infra/env/mcp-server.env.example"
   require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
   require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
-  require_file "${ROOT_DIR}/infra/host-tools/host-harness-client.py"
-  require_file "${ROOT_DIR}/infra/host-tools/host-harness-server.py"
+  require_file "${ROOT_DIR}/infra/images/worker-agent-runner/Dockerfile"
 
-  for service in \
-    postgres \
-    redis \
-    minio \
-    minio-init \
-    api \
-    worker-transcription \
-    worker-report \
-    worker-deep-research \
-    web \
-    telegram-bot \
-    mcp-server
-  do
+  for service in "${RUNTIME_SERVICES[@]}"; do
     require_service "${service}"
+  done
+  for service in "${FORBIDDEN_SERVICES[@]}"; do
+    reject_service "${service}"
   done
 
   require_compose_snippet "- ./env/postgres.env.example"
@@ -94,17 +121,25 @@ validate_static_contract() {
   require_compose_snippet "- ./env/shared.env.example"
   require_compose_snippet "- ./env/api.env.example"
   require_compose_snippet "- ./env/worker-transcription.env.example"
-  require_compose_snippet "- ./env/worker-report.env.example"
-  require_compose_snippet "- ./env/worker-deep-research.env.example"
+  require_compose_snippet "- ./env/worker-agent-runner.env.example"
   require_compose_snippet "- ./env/web.env.example"
   require_compose_snippet "- ./env/telegram-bot.env.example"
   require_compose_snippet "- ./env/mcp-server.env.example"
+  reject_compose_snippet "- ./env/worker-report.env.example"
+  reject_compose_snippet "- ./env/worker-deep-research.env.example"
+  reject_compose_snippet "infra/images/worker-report/Dockerfile"
+  reject_compose_snippet "infra/images/worker-deep-research/Dockerfile"
 
   require_compose_snippet "postgres-data:"
   require_compose_snippet "minio-data:"
   require_compose_snippet "whisper-model-cache:"
-  require_compose_snippet "report-and-deep-research-temp-space:"
+  require_compose_snippet "agent-runner-runtime:"
   require_compose_snippet "retained-log-volume:"
+  reject_compose_snippet "report-and-deep-research-temp-space:"
+  reject_compose_snippet "report-llm-cache:"
+  reject_compose_snippet "report-llm-config:"
+  reject_compose_snippet "deep-research-llm-cache:"
+  reject_compose_snippet "deep-research-llm-config:"
 
   require_service_block_snippet "postgres" "healthcheck:"
   require_service_block_snippet "redis" "healthcheck:"
@@ -114,11 +149,24 @@ validate_static_contract() {
   require_service_block_snippet "minio-init" "/init/bootstrap-buckets.sh"
   require_service_block_snippet "worker-transcription" "dockerfile: infra/images/worker-transcription/Dockerfile"
   require_service_block_snippet "worker-transcription" "image: telegram-transcriber-worker-transcription:local"
-  require_service_block_snippet "worker-report" '${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/report'
-  require_service_block_snippet "worker-report" '${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}'
-  require_service_block_snippet "worker-deep-research" '${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/deep-research'
-  require_service_block_snippet "worker-deep-research" '${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}'
-  require_service_block_snippet "web" '${WEB_HOST_PORT:-3000}:3000'
+  require_service_block_snippet "worker-transcription" "PYTHONPATH: /workspace/workers/transcription/src:/workspace/workers/common/src"
+  require_service_block_snippet "worker-transcription" "- transcriber_worker_transcription_main"
+  require_service_block_snippet "worker-agent-runner" "dockerfile: infra/images/worker-agent-runner/Dockerfile"
+  require_service_block_snippet "worker-agent-runner" "image: telegram-transcriber-worker-agent-runner:local"
+  require_service_block_snippet "worker-agent-runner" "PYTHONPATH: /workspace/workers/agent-runner/src:/workspace/workers/common/src"
+  require_service_block_snippet "worker-agent-runner" "WORKER_WORKSPACE_ROOT: /tmp/runtime/agent-runner"
+  require_service_block_snippet "worker-agent-runner" "./env/worker-agent-runner.env.example"
+  require_service_block_snippet "worker-agent-runner" "- transcriber_worker_agent_runner_main"
+  require_file_snippet "${ROOT_DIR}/infra/env/worker-agent-runner.env.example" "AGENT_RUNNER_HARNESS_CONCURRENCY=fixture=1,test_fixture=1,claude-code=1"
+  require_file_snippet "${ROOT_DIR}/infra/env/worker-agent-runner.env.example" "AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY_FILE="
+  require_file_snippet "${ROOT_DIR}/infra/env/worker-agent-runner.env.example" "AGENT_RUNNER_CLAUDE_CODE_BASE_URL=https://api.z.ai/api/anthropic"
+  require_service_block_snippet "web" '${WEB_HOST_PORT:-3201}:3201'
+  reject_file_snippet "${ROOT_DIR}/workers/transcription/src/transcriber_worker_transcription.py" "_ensure_worker_dependency_paths"
+  reject_file_snippet "${ROOT_DIR}/workers/transcription/src/transcriber_worker_transcription.py" "sys.path.insert"
+  reject_file_snippet "${ROOT_DIR}/workers/transcription/src/transcriber_worker_transcription_main.py" "_ensure_worker_dependency_paths"
+  reject_file_snippet "${ROOT_DIR}/workers/transcription/src/transcriber_worker_transcription_main.py" "sys.path.insert"
+  reject_file_snippet "${ROOT_DIR}/workers/agent-runner/src/transcriber_worker_agent_runner_main.py" "_ensure_worker_dependency_paths"
+  reject_file_snippet "${ROOT_DIR}/workers/agent-runner/src/transcriber_worker_agent_runner_main.py" "sys.path.insert"
   require_compose_snippet 'condition: service_healthy'
   require_compose_snippet 'condition: service_completed_successfully'
   require_compose_snippet 'driver: bridge'

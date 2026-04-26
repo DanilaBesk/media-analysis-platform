@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -255,6 +256,46 @@ func TestApiStorageResolveArtifactReturnsFreshPresignedURL(t *testing.T) {
 	}
 }
 
+func TestApiStorageResolveAgentRunRequestAccessUsesInternalPresignedURL(t *testing.T) {
+	t.Parallel()
+
+	objects := newFakeObjectStore()
+	objects.presignedURL = "https://public-minio.local/presigned/request.json"
+	objects.internalPresignedURL = "https://minio:9000/presigned/request.json"
+	now := func() time.Time { return time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC) }
+	objects.presignBaseTime = now()
+
+	repo, err := NewRepository(newMemoryStateStore(), objects, WithClock(now), WithPresignTTL(30*time.Minute))
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	access, err := repo.ResolveAgentRunRequestAccess(context.Background(), JobRecord{
+		ID: "job-agent-run",
+		ParamsJSON: []byte(`{
+			"request_ref": "agentreq_123",
+			"request_digest_sha256": "sha256digest",
+			"request_bytes": 42
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("ResolveAgentRunRequestAccess() error = %v", err)
+	}
+
+	if access.URL != objects.internalPresignedURL {
+		t.Fatalf("request access url = %q, want internal %q", access.URL, objects.internalPresignedURL)
+	}
+	if objects.internalPresignCalls != 1 {
+		t.Fatalf("internal presign calls = %d, want 1", objects.internalPresignCalls)
+	}
+	if objects.publicPresignCalls != 0 {
+		t.Fatalf("public presign calls = %d, want 0", objects.publicPresignCalls)
+	}
+	if access.RequestRef != "agentreq_123" || access.RequestDigestSHA256 != "sha256digest" || access.RequestBytes != 42 {
+		t.Fatalf("request access metadata = %#v", access)
+	}
+}
+
 func TestApiStorageMinioObjectStoreUsesPublicPresignEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -291,6 +332,42 @@ func TestApiStorageMinioObjectStoreUsesPublicPresignEndpoint(t *testing.T) {
 	}
 }
 
+func TestApiStorageMinioObjectStoreUsesInternalEndpointForInternalPresign(t *testing.T) {
+	t.Parallel()
+
+	internalClient, err := NewMinioClient("http://minio:9000", "minioadmin", "minioadmin")
+	if err != nil {
+		t.Fatalf("NewMinioClient(internal) error = %v", err)
+	}
+	publicClient, err := NewMinioClient("http://localhost:9000", "minioadmin", "minioadmin")
+	if err != nil {
+		t.Fatalf("NewMinioClient(public) error = %v", err)
+	}
+	objects, err := NewMinioObjectStoreWithPresignClient(internalClient, publicClient)
+	if err != nil {
+		t.Fatalf("NewMinioObjectStoreWithPresignClient() error = %v", err)
+	}
+
+	rawURL, expiresAt, err := objects.PresignInternalGetObject(context.Background(), ArtifactsBucket, "private/agent-runs/agentreq_123/request.json", 10*time.Minute)
+	if err != nil {
+		t.Fatalf("PresignInternalGetObject() error = %v", err)
+	}
+	parsedURL, err := neturl.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse presigned url: %v", err)
+	}
+
+	if parsedURL.Host != "minio:9000" {
+		t.Fatalf("internal presigned host = %q, want minio:9000; url=%s", parsedURL.Host, rawURL)
+	}
+	if parsedURL.Query().Get("X-Amz-Signature") == "" {
+		t.Fatalf("internal presigned url missing X-Amz-Signature: %s", rawURL)
+	}
+	if !expiresAt.After(time.Now().UTC()) {
+		t.Fatalf("expires_at = %v, want future timestamp", expiresAt)
+	}
+}
+
 func TestApiStorageRejectsInvalidSourceContract(t *testing.T) {
 	t.Parallel()
 
@@ -310,6 +387,319 @@ func TestApiStorageRejectsInvalidSourceContract(t *testing.T) {
 	}
 }
 
+func TestApiStorageAllowsEmptySourceSetOnlyForAgentRun(t *testing.T) {
+	t.Parallel()
+
+	if err := validateSourceSet(SourceSetRecord{
+		ID:        "source-set-agent",
+		InputKind: SourceSetInputAgentRun,
+	}, nil); err != nil {
+		t.Fatalf("agent_run source set should allow empty items: %v", err)
+	}
+
+	err := validateSourceSet(SourceSetRecord{
+		ID:        "source-set-single",
+		InputKind: SourceSetInputSingleSource,
+	}, nil)
+	if !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("single_source empty source set error = %v, want ErrContractViolation", err)
+	}
+
+	err = validateSourceSet(SourceSetRecord{
+		ID:        "source-set-agent-with-item",
+		InputKind: SourceSetInputAgentRun,
+		Items: []SourceSetItem{
+			{Position: 0, SourceID: "source-1"},
+		},
+	}, []SourceRecord{{ID: "source-1"}})
+	if !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("agent_run with source items error = %v, want ErrContractViolation", err)
+	}
+}
+
+func TestApiStorageSaveSubmissionGraphAllowsAgentRunWithoutSources(t *testing.T) {
+	t.Parallel()
+
+	repo, err := NewRepository(newMemoryStateStore(), newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	submission := JobSubmission{
+		ID:                 "submission-agent",
+		SubmissionKind:     "agent_run_create",
+		IdempotencyKey:     "agent-idem",
+		RequestFingerprint: "agent-fingerprint",
+	}
+	sourceSet := SourceSetRecord{
+		ID:        "source-set-agent",
+		InputKind: SourceSetInputAgentRun,
+	}
+	job := JobRecord{
+		ID:           "job-agent",
+		SubmissionID: submission.ID,
+		RootJobID:    "job-agent",
+		SourceSetID:  sourceSet.ID,
+		JobType:      "agent_run",
+		Status:       "queued",
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+	}
+
+	if err := repo.SaveSubmissionGraph(context.Background(), submission, nil, []SourceSetRecord{sourceSet}, []JobRecord{job}); err != nil {
+		t.Fatalf("SaveSubmissionGraph() error = %v", err)
+	}
+}
+
+func TestApiStorageSaveSubmissionGraphStillRejectsNonAgentRunWithoutSources(t *testing.T) {
+	t.Parallel()
+
+	repo, err := NewRepository(newMemoryStateStore(), newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	submission := JobSubmission{
+		ID:                 "submission-upload",
+		SubmissionKind:     "transcription_upload",
+		IdempotencyKey:     "upload-idem",
+		RequestFingerprint: "upload-fingerprint",
+	}
+	sourceSet := SourceSetRecord{
+		ID:        "source-set-upload",
+		InputKind: SourceSetInputSingleSource,
+		Items: []SourceSetItem{
+			{Position: 0, SourceID: "missing-source"},
+		},
+	}
+	job := JobRecord{
+		ID:           "job-upload",
+		SubmissionID: submission.ID,
+		RootJobID:    "job-upload",
+		SourceSetID:  sourceSet.ID,
+		JobType:      "transcription",
+		Status:       "queued",
+		Delivery: Delivery{
+			Strategy: DeliveryStrategyPolling,
+		},
+	}
+
+	err = repo.SaveSubmissionGraph(context.Background(), submission, nil, []SourceSetRecord{sourceSet}, []JobRecord{job})
+	if !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("SaveSubmissionGraph() error = %v, want ErrContractViolation", err)
+	}
+}
+
+func TestApiStorageSaveSubmissionGraphPreservesBatchSourceLineage(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	repo, err := NewRepository(state, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	submission := JobSubmission{
+		ID:                 "submission-batch",
+		SubmissionKind:     "transcription_upload",
+		IdempotencyKey:     "batch-idem",
+		RequestFingerprint: "batch-fingerprint",
+	}
+	sources := []SourceRecord{
+		{
+			ID:          "source-a",
+			SourceKind:  SourceKindUploadedFile,
+			DisplayName: "voice-a",
+			MIMEType:    "audio/ogg",
+			ObjectKey:   "sources/source-a/original/voice-a.ogg",
+			ObjectBody:  []byte("voice-a"),
+		},
+		{
+			ID:          "source-b",
+			SourceKind:  SourceKindYouTubeURL,
+			DisplayName: "video-b",
+			SourceURL:   "https://youtube.example/watch?v=video-b",
+		},
+	}
+	sourceSet := SourceSetRecord{
+		ID:        "source-set-batch",
+		InputKind: SourceSetInputBatchTranscription,
+		Items: []SourceSetItem{
+			{
+				Position:           0,
+				SourceID:           "source-a",
+				SourceLabel:        "voice_a",
+				SourceLabelVersion: "batch-transcription.v1",
+				MetadataJSON:       []byte(`{"file_part":"files[0]","sha256":"sha-a"}`),
+				LineageJSON:        []byte(`{"root_job_id":"job-root","child_job_id":"job-child-a"}`),
+			},
+			{
+				Position:           1,
+				SourceID:           "source-b",
+				SourceLabel:        "video_b",
+				SourceLabelVersion: "batch-transcription.v1",
+				MetadataJSON:       []byte(`{"url":"https://youtube.example/watch?v=video-b"}`),
+				LineageJSON:        []byte(`{"root_job_id":"job-root","child_job_id":"job-child-b"}`),
+			},
+		},
+	}
+	jobs := []JobRecord{
+		{
+			ID:           "job-root",
+			SubmissionID: submission.ID,
+			RootJobID:    "job-root",
+			SourceSetID:  sourceSet.ID,
+			JobType:      "transcription",
+			Status:       "queued",
+			Delivery: Delivery{
+				Strategy: DeliveryStrategyPolling,
+			},
+		},
+		{
+			ID:          "job-child-a",
+			RootJobID:   "job-root",
+			ParentJobID: "job-root",
+			SourceSetID: sourceSet.ID,
+			JobType:     "transcription",
+			Status:      "queued",
+			Delivery: Delivery{
+				Strategy: DeliveryStrategyPolling,
+			},
+		},
+		{
+			ID:          "job-child-b",
+			RootJobID:   "job-root",
+			ParentJobID: "job-root",
+			SourceSetID: sourceSet.ID,
+			JobType:     "transcription",
+			Status:      "queued",
+			Delivery: Delivery{
+				Strategy: DeliveryStrategyPolling,
+			},
+		},
+	}
+
+	if err := repo.SaveSubmissionGraph(context.Background(), submission, sources, []SourceSetRecord{sourceSet}, jobs); err != nil {
+		t.Fatalf("SaveSubmissionGraph() error = %v", err)
+	}
+
+	if got, want := len(state.sourceSets), 1; got != want {
+		t.Fatalf("source sets = %d, want %d", got, want)
+	}
+	items := state.sourceSets[0].Items
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("source set items = %d, want %d", got, want)
+	}
+	if items[0].SourceLabel != "voice_a" || items[1].SourceLabel != "video_b" {
+		t.Fatalf("source labels = %q, %q; want voice_a, video_b", items[0].SourceLabel, items[1].SourceLabel)
+	}
+	if items[0].SourceLabelVersion != "batch-transcription.v1" || items[1].SourceLabelVersion != "batch-transcription.v1" {
+		t.Fatalf("source label versions = %q, %q", items[0].SourceLabelVersion, items[1].SourceLabelVersion)
+	}
+	if string(items[0].MetadataJSON) != `{"file_part":"files[0]","sha256":"sha-a"}` {
+		t.Fatalf("first metadata json = %s", items[0].MetadataJSON)
+	}
+	if string(items[1].LineageJSON) != `{"root_job_id":"job-root","child_job_id":"job-child-b"}` {
+		t.Fatalf("second lineage json = %s", items[1].LineageJSON)
+	}
+}
+
+func TestApiStorageRejectsDuplicateBatchSourceLabels(t *testing.T) {
+	t.Parallel()
+
+	err := validateSourceSet(SourceSetRecord{
+		ID:        "source-set-batch",
+		InputKind: SourceSetInputBatchTranscription,
+		Items: []SourceSetItem{
+			{Position: 0, SourceID: "source-a", SourceLabel: "same_label", SourceLabelVersion: "batch-transcription.v1"},
+			{Position: 1, SourceID: "source-b", SourceLabel: "same_label", SourceLabelVersion: "batch-transcription.v1"},
+		},
+	}, []SourceRecord{{ID: "source-a"}, {ID: "source-b"}})
+	if !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("duplicate source label error = %v, want ErrContractViolation", err)
+	}
+}
+
+func TestApiStoragePersistsBatchManifestAndDiagnosticsArtifacts(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	repo, err := NewRepository(state, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	req := PersistJobRequest{
+		Sources: []SourceRecord{
+			{
+				ID:          "source-a",
+				SourceKind:  SourceKindUploadedFile,
+				DisplayName: "voice-a",
+				MIMEType:    "audio/ogg",
+				ObjectKey:   "sources/source-a/original/voice-a.ogg",
+				ObjectBody:  []byte("voice-a"),
+			},
+		},
+		SourceSet: SourceSetRecord{
+			ID:        "source-set-batch-artifacts",
+			InputKind: SourceSetInputBatchTranscription,
+			Items: []SourceSetItem{
+				{Position: 0, SourceID: "source-a", SourceLabel: "voice_a", SourceLabelVersion: "batch-transcription.v1"},
+			},
+		},
+		Job: JobRecord{
+			ID:          "job-batch-artifacts",
+			RootJobID:   "job-batch-artifacts",
+			SourceSetID: "source-set-batch-artifacts",
+			JobType:     "transcription",
+			Status:      "queued",
+			Delivery: Delivery{
+				Strategy: DeliveryStrategyPolling,
+			},
+		},
+		Event: JobEvent{
+			ID:        "event-batch-artifacts",
+			EventType: "job.created",
+			Payload:   []byte(`{"status":"queued"}`),
+		},
+		Artifacts: []ArtifactRecord{
+			{
+				ID:           "artifact-manifest",
+				ArtifactKind: "source_manifest_json",
+				Filename:     "source-manifest.json",
+				Format:       "json",
+				MIMEType:     "application/json",
+				ObjectKey:    "artifacts/job-batch-artifacts/source-manifest.json",
+				Body:         []byte(`{"manifest_version":"batch-transcription.v1"}`),
+			},
+			{
+				ID:           "artifact-diagnostics",
+				ArtifactKind: "batch_diagnostics_json",
+				Filename:     "batch-diagnostics.json",
+				Format:       "json",
+				MIMEType:     "application/json",
+				ObjectKey:    "artifacts/job-batch-artifacts/batch-diagnostics.json",
+				Body:         []byte(`{"sources":[]}`),
+			},
+		},
+	}
+
+	result, err := repo.PersistJob(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PersistJob() error = %v", err)
+	}
+	if got, want := len(result.Artifacts), 2; got != want {
+		t.Fatalf("persisted artifacts = %d, want %d", got, want)
+	}
+	if _, ok := state.persistedArtifacts["artifact-manifest"]; !ok {
+		t.Fatal("source_manifest_json artifact was not persisted")
+	}
+	if _, ok := state.persistedArtifacts["artifact-diagnostics"]; !ok {
+		t.Fatal("batch_diagnostics_json artifact was not persisted")
+	}
+}
+
 func TestApiStorageMigrationContract(t *testing.T) {
 	t.Parallel()
 
@@ -317,33 +707,39 @@ func TestApiStorageMigrationContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Glob(migrations/*.sql) error = %v", err)
 	}
-	if got, want := len(migrationPaths), 1; got != want {
-		t.Fatalf("migration file count = %d, want %d", got, want)
+	if len(migrationPaths) == 0 {
+		t.Fatalf("migration file count = 0, want at least 1")
 	}
+	sort.Strings(migrationPaths)
 
-	migrationPath := migrationPaths[0]
-	migrationName := filepath.Base(migrationPath)
-	if !semanticMigrationNamePattern.MatchString(migrationName) {
-		t.Fatalf("migration name %q must match zero-padded semantic snake_case rule", migrationName)
-	}
-	if phaseOnlyMigrationPattern.MatchString(migrationName) {
-		t.Fatalf("migration name %q must be semantic, not phase-only", migrationName)
-	}
+	var combined strings.Builder
+	for _, migrationPath := range migrationPaths {
+		migrationName := filepath.Base(migrationPath)
+		if !semanticMigrationNamePattern.MatchString(migrationName) {
+			t.Fatalf("migration name %q must match zero-padded semantic snake_case rule", migrationName)
+		}
+		if phaseOnlyMigrationPattern.MatchString(migrationName) {
+			t.Fatalf("migration name %q must be semantic, not phase-only", migrationName)
+		}
 
-	migrationBytes, err := os.ReadFile(migrationPath)
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", migrationPath, err)
-	}
+		migrationBytes, err := os.ReadFile(migrationPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", migrationPath, err)
+		}
 
-	migration := string(migrationBytes)
-	for _, snippet := range requiredMigrationSnippets(t) {
-		if !strings.Contains(migration, snippet) {
-			t.Fatalf("migration is missing required snippet %q", snippet)
+		migration := string(migrationBytes)
+		combined.WriteString(migration)
+		combined.WriteString("\n")
+		if !strings.Contains(migration, "-- +goose Up") || !strings.Contains(migration, "-- +goose Down") {
+			t.Fatalf("migration %q must expose goose up/down sections", migrationName)
 		}
 	}
 
-	if !strings.Contains(migration, "-- +goose Up") || !strings.Contains(migration, "-- +goose Down") {
-		t.Fatalf("migration must expose goose up/down sections")
+	combinedMigration := combined.String()
+	for _, snippet := range requiredMigrationSnippets(t) {
+		if !strings.Contains(combinedMigration, snippet) {
+			t.Fatalf("migration set is missing required snippet %q", snippet)
+		}
 	}
 }
 
@@ -413,8 +809,22 @@ func TestApiStorageInsertSourceSetItemsUsesUUIDIDs(t *testing.T) {
 		ID:        uuid.NewString(),
 		InputKind: SourceSetInputCombinedUpload,
 		Items: []SourceSetItem{
-			{Position: 0, SourceID: uuid.NewString()},
-			{Position: 1, SourceID: uuid.NewString()},
+			{
+				Position:           0,
+				SourceID:           uuid.NewString(),
+				SourceLabel:        "first_source",
+				SourceLabelVersion: "batch-transcription.v1",
+				MetadataJSON:       []byte(`{"sha256":"sha-first"}`),
+				LineageJSON:        []byte(`{"child_job_id":"job-child-first"}`),
+			},
+			{
+				Position:           1,
+				SourceID:           uuid.NewString(),
+				SourceLabel:        "second_source",
+				SourceLabelVersion: "batch-transcription.v1",
+				MetadataJSON:       []byte(`{"sha256":"sha-second"}`),
+				LineageJSON:        []byte(`{"child_job_id":"job-child-second"}`),
+			},
 		},
 		CreatedAt: time.Date(2026, 4, 23, 10, 0, 0, 0, time.UTC),
 	}
@@ -428,7 +838,7 @@ func TestApiStorageInsertSourceSetItemsUsesUUIDIDs(t *testing.T) {
 
 	seen := map[string]struct{}{}
 	for idx, call := range execer.calls {
-		if got, want := len(call.args), 5; got != want {
+		if got, want := len(call.args), 9; got != want {
 			t.Fatalf("call %d arg count = %d, want %d", idx, got, want)
 		}
 		itemID, ok := call.args[0].(string)
@@ -442,6 +852,26 @@ func TestApiStorageInsertSourceSetItemsUsesUUIDIDs(t *testing.T) {
 			t.Fatalf("call %d item id = %q, want unique UUID per row", idx, itemID)
 		}
 		seen[itemID] = struct{}{}
+		sourceLabel, ok := call.args[4].(sql.NullString)
+		if !ok {
+			t.Fatalf("call %d source label arg type = %T, want sql.NullString", idx, call.args[4])
+		}
+		if got, want := sourceLabel.String, sourceSet.Items[idx].SourceLabel; !sourceLabel.Valid || got != want {
+			t.Fatalf("call %d source label arg = %#v, want %q", idx, sourceLabel, want)
+		}
+		sourceLabelVersion, ok := call.args[5].(sql.NullString)
+		if !ok {
+			t.Fatalf("call %d source label version arg type = %T, want sql.NullString", idx, call.args[5])
+		}
+		if got, want := sourceLabelVersion.String, sourceSet.Items[idx].SourceLabelVersion; !sourceLabelVersion.Valid || got != want {
+			t.Fatalf("call %d source label version arg = %#v, want %q", idx, sourceLabelVersion, want)
+		}
+		if got, want := string(call.args[6].([]byte)), string(sourceSet.Items[idx].MetadataJSON); got != want {
+			t.Fatalf("call %d metadata arg = %s, want %s", idx, got, want)
+		}
+		if got, want := string(call.args[7].([]byte)), string(sourceSet.Items[idx].LineageJSON); got != want {
+			t.Fatalf("call %d lineage arg = %s, want %s", idx, got, want)
+		}
 	}
 }
 
@@ -843,21 +1273,32 @@ func requiredMigrationSnippets(t *testing.T) []string {
 func migrationSections(t *testing.T) (string, string) {
 	t.Helper()
 
-	migrationBytes, err := os.ReadFile(filepath.Join("migrations", "0001_job_control_plane_foundation.sql"))
+	migrationPaths, err := filepath.Glob(filepath.Join("migrations", "*.sql"))
 	if err != nil {
-		t.Fatalf("ReadFile(migration) error = %v", err)
+		t.Fatalf("Glob(migrations/*.sql) error = %v", err)
 	}
+	sort.Strings(migrationPaths)
 
-	parts := strings.Split(string(migrationBytes), "-- +goose Down")
-	if len(parts) != 2 {
-		t.Fatalf("migration must contain exactly one goose Down marker")
+	upParts := make([]string, 0, len(migrationPaths))
+	downParts := make([]string, 0, len(migrationPaths))
+	for _, migrationPath := range migrationPaths {
+		migrationBytes, err := os.ReadFile(migrationPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", migrationPath, err)
+		}
+		parts := strings.Split(string(migrationBytes), "-- +goose Down")
+		if len(parts) != 2 {
+			t.Fatalf("migration %s must contain exactly one goose Down marker", filepath.Base(migrationPath))
+		}
+		upSQL := strings.TrimSpace(strings.Replace(parts[0], "-- +goose Up", "", 1))
+		downSQL := strings.TrimSpace(parts[1])
+		if upSQL == "" || downSQL == "" {
+			t.Fatalf("migration %s up/down sections must both be non-empty", filepath.Base(migrationPath))
+		}
+		upParts = append(upParts, upSQL)
+		downParts = append([]string{downSQL}, downParts...)
 	}
-	upSQL := strings.TrimSpace(strings.Replace(parts[0], "-- +goose Up", "", 1))
-	downSQL := strings.TrimSpace(parts[1])
-	if upSQL == "" || downSQL == "" {
-		t.Fatalf("migration up/down sections must both be non-empty")
-	}
-	return upSQL, downSQL
+	return strings.Join(upParts, "\n\n"), strings.Join(downParts, "\n\n")
 }
 
 func postgresDSNWithDatabase(rawDSN, database string) (string, error) {
@@ -1163,17 +1604,21 @@ type putCall struct {
 }
 
 type fakeObjectStore struct {
-	puts            []putCall
-	failPutFor      map[string]error
-	presignedURL    string
-	presignBaseTime time.Time
+	puts                 []putCall
+	failPutFor           map[string]error
+	presignedURL         string
+	internalPresignedURL string
+	presignBaseTime      time.Time
+	publicPresignCalls   int
+	internalPresignCalls int
 }
 
 func newFakeObjectStore() *fakeObjectStore {
 	return &fakeObjectStore{
-		failPutFor:      map[string]error{},
-		presignedURL:    "https://minio.local/presigned/default",
-		presignBaseTime: time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
+		failPutFor:           map[string]error{},
+		presignedURL:         "https://minio.local/presigned/default",
+		internalPresignedURL: "https://minio.internal/presigned/default",
+		presignBaseTime:      time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -1187,7 +1632,13 @@ func (f *fakeObjectStore) PutObject(_ context.Context, bucket, objectKey, _ stri
 }
 
 func (f *fakeObjectStore) PresignGetObject(_ context.Context, _, _ string, expiry time.Duration) (string, time.Time, error) {
+	f.publicPresignCalls++
 	return f.presignedURL, f.presignBaseTime.Add(expiry), nil
+}
+
+func (f *fakeObjectStore) PresignInternalGetObject(_ context.Context, _, _ string, expiry time.Duration) (string, time.Time, error) {
+	f.internalPresignCalls++
+	return f.internalPresignedURL, f.presignBaseTime.Add(expiry), nil
 }
 
 type bufferLogger struct {

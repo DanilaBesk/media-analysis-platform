@@ -2,8 +2,13 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	neturl "net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,15 +25,23 @@ import (
 const (
 	submissionKindTranscriptionUpload = "transcription_upload"
 	submissionKindTranscriptionURL    = "transcription_url"
+	submissionKindTranscriptionBatch  = "transcription_batch"
+	submissionKindAgentRunCreate      = "agent_run_create"
+	agentRunHarnessClaudeCode         = "claude-code"
+	agentRunOperationReport           = "report"
+	agentRunOperationDeepResearch     = "deep_research"
 )
 
 type runtimeJobsService interface {
 	CreateTranscriptionJobs(ctx context.Context, req jobs.CreateTranscriptionRequest) (jobs.CreateJobsResult, error)
 	CreateCombinedTranscriptionJob(ctx context.Context, req jobs.CreateCombinedTranscriptionRequest) (jobs.ChildResult, error)
+	CreateBatchTranscriptionJob(ctx context.Context, req jobs.CreateBatchTranscriptionRequest) (jobs.ChildResult, error)
+	CreateAgentRun(ctx context.Context, req jobs.CreateAgentRunRequest) (jobs.ChildResult, error)
 	CreateChildJob(ctx context.Context, req jobs.CreateChildRequest) (jobs.ChildResult, error)
 	CancelJob(ctx context.Context, jobID string) (storage.JobRecord, error)
 	RetryJob(ctx context.Context, jobID string) (jobs.RetryResult, error)
 	TransitionJob(ctx context.Context, req jobs.TransitionRequest) (storage.JobRecord, error)
+	ScheduleBatchAggregateIfReady(ctx context.Context, rootJobID string) (bool, error)
 }
 
 type runtimeStorageService interface {
@@ -46,6 +59,8 @@ type runtimeStorageService interface {
 	UpsertArtifacts(ctx context.Context, artifacts []storage.ArtifactRecord) error
 	UpdateJob(ctx context.Context, job storage.JobRecord) error
 	FindArtifactByKind(ctx context.Context, jobID, artifactKind string) (*storage.ArtifactRecord, error)
+	PersistAgentRunRequest(ctx context.Context, requestRef string, body []byte) error
+	ResolveAgentRunRequestAccess(ctx context.Context, job storage.JobRecord) (storage.AgentRunRequestAccess, error)
 }
 
 type runtimeEventsService interface {
@@ -167,6 +182,34 @@ func (s *publicRuntimeService) CreateCombined(ctx context.Context, req UploadCom
 	return s.snapshotByID(ctx, result.Job.ID)
 }
 
+func (s *publicRuntimeService) CreateBatch(ctx context.Context, req BatchCommand) (JobSnapshot, error) {
+	sources, labels, err := buildBatchSources(req)
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	result, err := s.jobs.CreateBatchTranscriptionJob(ctx, jobs.CreateBatchTranscriptionRequest{
+		SubmissionKind:     submissionKindTranscriptionBatch,
+		IdempotencyKey:     req.IdempotencyKey,
+		RequestFingerprint: fingerprintBatchCommand(req),
+		Sources:            sources,
+		SourceLabels:       labels,
+		CompletionPolicy:   req.Manifest.CompletionPolicy,
+		ManifestJSON:       req.ManifestJSON,
+		Delivery:           deliveryConfigToStorage(req.Delivery),
+		ClientRef:          strings.TrimSpace(req.ClientRef),
+		DisplayName:        strings.TrimSpace(req.DisplayName),
+	})
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	if !result.Reused {
+		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
+			return JobSnapshot{}, err
+		}
+	}
+	return s.snapshotByID(ctx, result.Job.ID)
+}
+
 func (s *publicRuntimeService) CreateFromURL(ctx context.Context, req URLCommand) (JobSnapshot, error) {
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
@@ -200,6 +243,39 @@ func (s *publicRuntimeService) CreateFromURL(ctx context.Context, req URLCommand
 		}
 	}
 	return s.snapshotByID(ctx, result.Jobs[0].ID)
+}
+
+func (s *publicRuntimeService) CreateAgentRun(ctx context.Context, req AgentRunCommand) (JobSnapshot, error) {
+	envelopeJSON, requestRef, requestDigestSHA256, requestBytes, err := agentRunEnvelopeJSON(req)
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	if err := s.store.PersistAgentRunRequest(ctx, requestRef, envelopeJSON); err != nil {
+		return JobSnapshot{}, err
+	}
+	paramsJSON, err := agentRunParamsJSON(req, requestRef, requestDigestSHA256, requestBytes)
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	result, err := s.jobs.CreateAgentRun(ctx, jobs.CreateAgentRunRequest{
+		SubmissionKind:     submissionKindAgentRunCreate,
+		IdempotencyKey:     req.IdempotencyKey,
+		RequestFingerprint: fingerprintAgentRunCommand(req),
+		HarnessName:        strings.TrimSpace(req.HarnessName),
+		ParamsJSON:         paramsJSON,
+		ParentJobID:        strings.TrimSpace(req.ParentJobID),
+		Delivery:           deliveryConfigToStorage(req.Delivery),
+		ClientRef:          strings.TrimSpace(req.ClientRef),
+	})
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	if !result.Reused {
+		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
+			return JobSnapshot{}, err
+		}
+	}
+	return s.snapshotByID(ctx, result.Job.ID)
 }
 
 func (s *publicRuntimeService) GetJob(ctx context.Context, jobID string) (JobSnapshot, error) {
@@ -237,36 +313,57 @@ func (s *publicRuntimeService) ListJobs(ctx context.Context, filter ListJobsFilt
 	return response, nil
 }
 
-func (s *publicRuntimeService) CreateReport(ctx context.Context, jobID string, _ ChildCreateRequest) (JobSnapshot, error) {
-	result, err := s.jobs.CreateChildJob(ctx, jobs.CreateChildRequest{
-		ParentJobID:  jobID,
-		ChildJobType: queue.JobTypeReport,
+func (s *publicRuntimeService) CreateReport(ctx context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
+	parent, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	if parent.JobType != queue.JobTypeTranscription || parent.Status != "succeeded" || strings.TrimSpace(parent.ParentJobID) != "" {
+		return JobSnapshot{}, fmt.Errorf("%w: report operation requires a succeeded transcription root parent", jobs.ErrInvalidJobState)
+	}
+	if snapshot, ok, err := s.canonicalAgentRunChildSnapshot(ctx, parent.ID); err != nil || ok {
+		return snapshot, err
+	}
+	transcript, err := s.findFirstArtifactByKind(ctx, parent.ID, "transcript_segmented_markdown", "transcript_plain")
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	command, err := agentRunOperationCommand(req, parent, agentRunOperationReport, []string{"report_markdown", "report_docx"}, []operationInputArtifact{
+		{Role: "transcript", Artifact: transcript},
 	})
 	if err != nil {
 		return JobSnapshot{}, err
 	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return s.snapshotByID(ctx, result.Job.ID)
+	return s.CreateAgentRun(ctx, command)
 }
 
-func (s *publicRuntimeService) CreateDeepResearch(ctx context.Context, jobID string, _ ChildCreateRequest) (JobSnapshot, error) {
-	result, err := s.jobs.CreateChildJob(ctx, jobs.CreateChildRequest{
-		ParentJobID:  jobID,
-		ChildJobType: queue.JobTypeDeepResearch,
+func (s *publicRuntimeService) CreateDeepResearch(ctx context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
+	reportJob, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	if reportJob.JobType != queue.JobTypeAgentRun || reportJob.Status != "succeeded" || strings.TrimSpace(reportJob.ParentJobID) == "" {
+		return JobSnapshot{}, fmt.Errorf("%w: deep_research operation requires a succeeded report-backed agent_run parent", jobs.ErrInvalidJobState)
+	}
+	if snapshot, ok, err := s.canonicalAgentRunChildSnapshot(ctx, reportJob.ID); err != nil || ok {
+		return snapshot, err
+	}
+	transcript, err := s.findFirstArtifactByKind(ctx, reportJob.ParentJobID, "transcript_segmented_markdown", "transcript_plain")
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	report, err := s.findFirstArtifactByKind(ctx, reportJob.ID, "report_markdown")
+	if err != nil {
+		return JobSnapshot{}, err
+	}
+	command, err := agentRunOperationCommand(req, reportJob, agentRunOperationDeepResearch, []string{"deep_research_markdown"}, []operationInputArtifact{
+		{Role: "transcript", Artifact: transcript},
+		{Role: "report", Artifact: report},
 	})
 	if err != nil {
 		return JobSnapshot{}, err
 	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return s.snapshotByID(ctx, result.Job.ID)
+	return s.CreateAgentRun(ctx, command)
 }
 
 func (s *publicRuntimeService) CancelJob(ctx context.Context, jobID string) (JobSnapshot, error) {
@@ -352,6 +449,33 @@ func (s *publicRuntimeService) emitJobEvent(ctx context.Context, job storage.Job
 		},
 	})
 	return err
+}
+
+func (s *publicRuntimeService) canonicalAgentRunChildSnapshot(ctx context.Context, parentJobID string) (JobSnapshot, bool, error) {
+	children, err := s.store.ListChildJobs(ctx, parentJobID)
+	if err != nil {
+		return JobSnapshot{}, false, err
+	}
+	for _, child := range children {
+		if child.JobType == queue.JobTypeAgentRun && child.RetryOfJobID == "" && isCanonicalReusableStatus(child.Status) {
+			snapshot, err := s.snapshotByID(ctx, child.ID)
+			return snapshot, true, err
+		}
+	}
+	return JobSnapshot{}, false, nil
+}
+
+func (s *publicRuntimeService) findFirstArtifactByKind(ctx context.Context, jobID string, artifactKinds ...string) (storage.ArtifactRecord, error) {
+	for _, artifactKind := range artifactKinds {
+		artifact, err := s.store.FindArtifactByKind(ctx, jobID, artifactKind)
+		if err != nil {
+			return storage.ArtifactRecord{}, err
+		}
+		if artifact != nil {
+			return *artifact, nil
+		}
+	}
+	return storage.ArtifactRecord{}, fmt.Errorf("%w: required operation input artifact missing", jobs.ErrMissingArtifact)
 }
 
 func (s *workerRuntimeService) Claim(ctx context.Context, jobID string, req ClaimRequest) (ClaimResponse, error) {
@@ -468,6 +592,11 @@ func (s *workerRuntimeService) Finalize(ctx context.Context, jobID string, req F
 	}); err != nil {
 		return JobSnapshot{}, mapExecutionLookupError(err)
 	}
+	if transitionedJob.JobType == queue.JobTypeTranscription && strings.TrimSpace(transitionedJob.ParentJobID) != "" {
+		if _, err := s.jobs.ScheduleBatchAggregateIfReady(ctx, transitionedJob.ParentJobID); err != nil {
+			return JobSnapshot{}, err
+		}
+	}
 	return newPublicRuntimeService(s.jobs, s.store, s.events).snapshotFromJob(ctx, transitionedJob)
 }
 
@@ -484,6 +613,27 @@ func (s *workerRuntimeService) CancelCheck(ctx context.Context, jobID, execution
 		Status:            job.Status,
 		CancelRequestedAt: job.CancelRequestedAt,
 	}, nil
+}
+
+func (s *workerRuntimeService) ResolveAgentRunRequestAccess(ctx context.Context, jobID, executionID string) (storage.AgentRunRequestAccess, error) {
+	if _, err := s.store.GetActiveJobExecution(ctx, jobID, executionID); err != nil {
+		return storage.AgentRunRequestAccess{}, mapExecutionLookupError(err)
+	}
+	job, err := s.store.GetJob(ctx, jobID)
+	if err != nil {
+		return storage.AgentRunRequestAccess{}, err
+	}
+	if strings.TrimSpace(job.JobType) != queue.JobTypeAgentRun {
+		return storage.AgentRunRequestAccess{}, apiError{status: 409, code: "agent_request_access_unavailable", message: "agent_run request access is only available for agent_run jobs"}
+	}
+	access, err := s.store.ResolveAgentRunRequestAccess(ctx, job)
+	if err != nil {
+		if errors.Is(err, storage.ErrAgentRunRequestRef) {
+			return storage.AgentRunRequestAccess{}, apiError{status: 409, code: "agent_request_access_unavailable", message: "agent_run request access is unavailable"}
+		}
+		return storage.AgentRunRequestAccess{}, err
+	}
+	return access, nil
 }
 
 func (s *workerRuntimeService) claimResponseFromJob(ctx context.Context, job storage.JobRecord, execution storage.JobExecutionRecord) (ClaimResponse, error) {
@@ -554,6 +704,8 @@ func (s *workerRuntimeService) claimInputsForJob(ctx context.Context, job storag
 			orderedInputFromArtifact(0, "Transcript", transcriptArtifact),
 			orderedInputFromArtifact(1, "Report", reportArtifact),
 		}, nil
+	case queue.JobTypeAgentRun:
+		return []OrderedInput{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported claim job type %q", job.JobType)
 	}
@@ -653,6 +805,52 @@ func buildUploadedSources(req UploadCommand) []storage.SourceRecord {
 	return sources
 }
 
+func buildBatchSources(req BatchCommand) ([]storage.SourceRecord, []string, error) {
+	filesByPart := map[string]BatchUploadFile{}
+	for _, file := range req.Files {
+		filesByPart[file.PartName] = file
+	}
+
+	sources := make([]storage.SourceRecord, 0, len(req.Manifest.OrderedSourceLabels))
+	labels := make([]string, 0, len(req.Manifest.OrderedSourceLabels))
+	for idx, label := range req.Manifest.OrderedSourceLabels {
+		sourceSpec := req.Manifest.Sources[label]
+		sourceID := uuid.NewString()
+		displayName := strings.TrimSpace(sourceSpec.DisplayName)
+		if displayName == "" {
+			displayName = label
+		}
+		record := storage.SourceRecord{
+			ID:          sourceID,
+			SourceKind:  sourceSpec.SourceKind,
+			DisplayName: displayName,
+		}
+		switch sourceSpec.SourceKind {
+		case storage.SourceKindUploadedFile, storage.SourceKindTelegramUpload:
+			file, ok := filesByPart[sourceSpec.FilePart]
+			if !ok {
+				return nil, nil, apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "uploaded batch source references missing multipart file_part"}
+			}
+			originalFilename := strings.TrimSpace(sourceSpec.OriginalFilename)
+			if originalFilename == "" {
+				originalFilename = file.Filename
+			}
+			record.OriginalFilename = filepath.Base(originalFilename)
+			record.MIMEType = strings.TrimSpace(file.ContentType)
+			record.ObjectKey = sourceObjectKey(sourceID, file.Filename)
+			record.SizeBytes = file.SizeBytes
+			record.ObjectBody = file.Body
+		case storage.SourceKindYouTubeURL:
+			record.SourceURL = strings.TrimSpace(sourceSpec.URL)
+		default:
+			return nil, nil, apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: fmt.Sprintf("unsupported batch source_kind at position %d", idx)}
+		}
+		sources = append(sources, record)
+		labels = append(labels, label)
+	}
+	return sources, labels, nil
+}
+
 func deliveryConfigToStorage(cfg DeliveryConfig) storage.Delivery {
 	return storage.Delivery{
 		Strategy:   strings.TrimSpace(cfg.Strategy),
@@ -710,6 +908,322 @@ func fingerprintURLCommand(req URLCommand) string {
 	}
 	encoded, _ := json.Marshal(payload)
 	return checksum(encoded)
+}
+
+func fingerprintBatchCommand(req BatchCommand) string {
+	type fileFingerprint struct {
+		PartName    string `json:"part_name"`
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type"`
+		SizeBytes   int64  `json:"size_bytes"`
+		SHA256      string `json:"sha256"`
+	}
+	payload := struct {
+		Kind        string              `json:"kind"`
+		DisplayName string              `json:"display_name,omitempty"`
+		ClientRef   string              `json:"client_ref,omitempty"`
+		Delivery    DeliveryConfig      `json:"delivery"`
+		Manifest    BatchSourceManifest `json:"source_manifest"`
+		Files       []fileFingerprint   `json:"files"`
+	}{
+		Kind:        submissionKindTranscriptionBatch,
+		DisplayName: strings.TrimSpace(req.DisplayName),
+		ClientRef:   strings.TrimSpace(req.ClientRef),
+		Delivery:    req.Delivery,
+		Manifest:    req.Manifest,
+		Files:       make([]fileFingerprint, 0, len(req.Files)),
+	}
+	for _, file := range req.Files {
+		payload.Files = append(payload.Files, fileFingerprint{
+			PartName:    strings.TrimSpace(file.PartName),
+			Filename:    filepath.Base(strings.TrimSpace(file.Filename)),
+			ContentType: strings.TrimSpace(file.ContentType),
+			SizeBytes:   file.SizeBytes,
+			SHA256:      strings.TrimSpace(file.SHA256),
+		})
+	}
+	encoded, _ := json.Marshal(payload)
+	return checksum(encoded)
+}
+
+func fingerprintAgentRunCommand(req AgentRunCommand) string {
+	payload := struct {
+		Kind        string          `json:"kind"`
+		HarnessName string          `json:"harness_name"`
+		ParentJobID string          `json:"parent_job_id,omitempty"`
+		ClientRef   string          `json:"client_ref,omitempty"`
+		Delivery    DeliveryConfig  `json:"delivery"`
+		Request     AgentRunRequest `json:"request"`
+	}{
+		Kind:        submissionKindAgentRunCreate,
+		HarnessName: strings.TrimSpace(req.HarnessName),
+		ParentJobID: strings.TrimSpace(req.ParentJobID),
+		ClientRef:   strings.TrimSpace(req.ClientRef),
+		Delivery:    req.Delivery,
+		Request:     normalizeAgentRunRequest(req.Request),
+	}
+	encoded, _ := json.Marshal(payload)
+	return checksum(encoded)
+}
+
+type operationInputArtifact struct {
+	Role     string
+	Artifact storage.ArtifactRecord
+}
+
+func agentRunOperationCommand(req ChildCreateRequest, parent storage.JobRecord, operation string, expectedOutputArtifacts []string, inputs []operationInputArtifact) (AgentRunCommand, error) {
+	inputRefs := make([]AgentRunInputArtifact, 0, len(inputs))
+	payloadInputs := make([]map[string]any, 0, len(inputs))
+	for _, input := range inputs {
+		inputRefs = append(inputRefs, agentRunInputArtifactFromRecord(input.Artifact))
+		payloadInputs = append(payloadInputs, map[string]any{
+			"role":          strings.TrimSpace(input.Role),
+			"artifact_id":   input.Artifact.ID,
+			"artifact_kind": input.Artifact.ArtifactKind,
+		})
+	}
+	rootJobID := parent.RootJobID
+	if strings.TrimSpace(rootJobID) == "" {
+		rootJobID = parent.ID
+	}
+	payload := map[string]any{
+		"operation":                 strings.TrimSpace(operation),
+		"parent_job_id":             parent.ID,
+		"root_job_id":               rootJobID,
+		"expected_output_artifacts": expectedOutputArtifacts,
+		"input_artifact_refs":       payloadInputs,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return AgentRunCommand{}, fmt.Errorf("encode %s agent_run payload: %w", operation, err)
+	}
+	return AgentRunCommand{
+		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
+		ParentJobID:    parent.ID,
+		HarnessName:    agentRunHarnessClaudeCode,
+		ClientRef:      childClientRef(req, parent),
+		Delivery:       childDelivery(req, parent),
+		Request: AgentRunRequest{
+			Prompt:         operationPrompt(operation),
+			Payload:        payloadJSON,
+			InputArtifacts: inputRefs,
+		},
+	}, nil
+}
+
+func agentRunInputArtifactFromRecord(artifact storage.ArtifactRecord) AgentRunInputArtifact {
+	return AgentRunInputArtifact{
+		ArtifactID:   artifact.ID,
+		ArtifactKind: artifact.ArtifactKind,
+		ObjectKey:    artifact.ObjectKey,
+		Filename:     artifact.Filename,
+	}
+}
+
+func operationPrompt(operation string) string {
+	switch operation {
+	case agentRunOperationReport:
+		return "Create report_markdown and report_docx artifacts from the transcript input."
+	case agentRunOperationDeepResearch:
+		return "Create deep_research_markdown from the transcript and report inputs."
+	default:
+		return "Run the requested transcript operation and persist the expected artifacts."
+	}
+}
+
+func childClientRef(req ChildCreateRequest, parent storage.JobRecord) string {
+	if value := strings.TrimSpace(req.ClientRef); value != "" {
+		return value
+	}
+	return strings.TrimSpace(parent.ClientRef)
+}
+
+func childDelivery(req ChildCreateRequest, parent storage.JobRecord) DeliveryConfig {
+	if strings.TrimSpace(req.Delivery.Strategy) == storage.DeliveryStrategyWebhook || strings.TrimSpace(req.Delivery.WebhookURL) != "" {
+		return req.Delivery
+	}
+	return deliveryConfigFromStorage(parent.Delivery)
+}
+
+func isCanonicalReusableStatus(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "queued", "running", "cancel_requested", "succeeded":
+		return true
+	default:
+		return false
+	}
+}
+
+func agentRunParamsJSON(req AgentRunCommand, requestRef, requestDigestSHA256 string, requestBytes int64) ([]byte, error) {
+	params := map[string]any{
+		"harness_name":          strings.TrimSpace(req.HarnessName),
+		"request_ref":           strings.TrimSpace(requestRef),
+		"request_digest_sha256": strings.TrimSpace(requestDigestSHA256),
+		"request_bytes":         requestBytes,
+		"request":               normalizedAgentRunRequestMetadata(req.Request),
+	}
+	encoded, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("encode agent_run params: %w", err)
+	}
+	return encoded, nil
+}
+
+func agentRunEnvelopeJSON(req AgentRunCommand) ([]byte, string, string, int64, error) {
+	envelope := map[string]any{
+		"schema_version": "agent_run_request_envelope/v1",
+		"harness_name":   strings.TrimSpace(req.HarnessName),
+		"request":        normalizedAgentRunEnvelopeRequest(req.Request),
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, "", "", 0, fmt.Errorf("encode agent_run envelope: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	requestDigestSHA256 := hex.EncodeToString(digest[:])
+	return encoded, "agentreq_" + requestDigestSHA256, requestDigestSHA256, int64(len(encoded)), nil
+}
+
+func normalizedAgentRunEnvelopeRequest(req AgentRunRequest) map[string]any {
+	normalized := normalizeAgentRunRequest(req)
+	request := map[string]any{}
+	if normalized.Prompt != "" {
+		request["prompt"] = normalized.Prompt
+	}
+	if len(normalized.Payload) > 0 {
+		var payload any
+		if err := json.Unmarshal(normalized.Payload, &payload); err == nil {
+			request["payload"] = payload
+		} else {
+			request["payload"] = json.RawMessage(normalized.Payload)
+		}
+	}
+	if len(normalized.InputArtifacts) > 0 {
+		artifacts := make([]map[string]any, 0, len(normalized.InputArtifacts))
+		for _, artifact := range normalized.InputArtifacts {
+			item := map[string]any{}
+			if artifact.ArtifactID != "" {
+				item["artifact_id"] = artifact.ArtifactID
+			}
+			if artifact.ArtifactKind != "" {
+				item["artifact_kind"] = artifact.ArtifactKind
+			}
+			if artifact.ObjectKey != "" {
+				item["object_key"] = artifact.ObjectKey
+			}
+			if artifact.URI != "" {
+				item["uri"] = artifact.URI
+			}
+			if artifact.Filename != "" {
+				item["filename"] = artifact.Filename
+			}
+			artifacts = append(artifacts, item)
+		}
+		request["input_artifacts"] = artifacts
+	}
+	return request
+}
+
+func normalizedAgentRunRequestMetadata(req AgentRunRequest) map[string]any {
+	metadata := map[string]any{}
+	if prompt := strings.TrimSpace(req.Prompt); prompt != "" {
+		metadata["prompt_sha256"] = checksum([]byte(prompt))
+		metadata["prompt_bytes"] = len([]byte(prompt))
+		metadata["prompt_runes"] = len([]rune(prompt))
+	}
+	if len(req.Payload) > 0 {
+		metadata["payload"] = agentRunPayloadMetadata(req.Payload)
+	}
+	if len(req.InputArtifacts) > 0 {
+		artifacts := make([]map[string]any, 0, len(req.InputArtifacts))
+		for _, artifact := range req.InputArtifacts {
+			item := map[string]any{}
+			if value := strings.TrimSpace(artifact.ArtifactID); value != "" {
+				item["artifact_id"] = value
+			}
+			if value := strings.TrimSpace(artifact.ArtifactKind); value != "" {
+				item["artifact_kind"] = value
+			}
+			if value := strings.TrimSpace(artifact.ObjectKey); value != "" {
+				item["object_key_sha256"] = checksum([]byte(value))
+			}
+			if value := strings.TrimSpace(artifact.URI); value != "" {
+				item["uri"] = agentRunURIMetadata(value)
+			}
+			if value := strings.TrimSpace(artifact.Filename); value != "" {
+				base := filepath.Base(value)
+				item["filename_sha256"] = checksum([]byte(base))
+				if ext := filepath.Ext(base); ext != "" {
+					item["filename_extension"] = ext
+				}
+			}
+			artifacts = append(artifacts, item)
+		}
+		metadata["input_artifacts"] = artifacts
+	}
+	return metadata
+}
+
+func normalizeAgentRunRequest(req AgentRunRequest) AgentRunRequest {
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	if len(req.Payload) == 0 {
+		req.Payload = nil
+	}
+	for idx := range req.InputArtifacts {
+		req.InputArtifacts[idx].ArtifactID = strings.TrimSpace(req.InputArtifacts[idx].ArtifactID)
+		req.InputArtifacts[idx].ArtifactKind = strings.TrimSpace(req.InputArtifacts[idx].ArtifactKind)
+		req.InputArtifacts[idx].ObjectKey = strings.TrimSpace(req.InputArtifacts[idx].ObjectKey)
+		req.InputArtifacts[idx].URI = strings.TrimSpace(req.InputArtifacts[idx].URI)
+		req.InputArtifacts[idx].Filename = filepath.Base(strings.TrimSpace(req.InputArtifacts[idx].Filename))
+	}
+	return req
+}
+
+func agentRunPayloadMetadata(raw json.RawMessage) map[string]any {
+	var decoded any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return map[string]any{"invalid": true}
+	}
+	return map[string]any{
+		"json_type": jsonValueType(decoded),
+		"sha256":    checksum(raw),
+		"bytes":     len(raw),
+	}
+}
+
+func agentRunURIMetadata(value string) map[string]any {
+	metadata := map[string]any{
+		"sha256": checksum([]byte(value)),
+	}
+	if parsed, err := neturl.Parse(value); err == nil && parsed != nil {
+		if parsed.Scheme != "" {
+			metadata["scheme"] = parsed.Scheme
+		}
+		if parsed.Host != "" {
+			metadata["host"] = parsed.Host
+		}
+	}
+	return metadata
+}
+
+func jsonValueType(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	default:
+		if typed == nil {
+			return "null"
+		}
+		return "unknown"
+	}
 }
 
 func sourceObjectKey(sourceID, filename string) string {
@@ -770,7 +1284,8 @@ func sourceSetViewFromRecords(sourceSet storage.SourceSetRecord, orderedSources 
 	}
 	for _, ordered := range orderedSources {
 		view.Items = append(view.Items, SourceSetItem{
-			Position: ordered.Position,
+			Position:    ordered.Position,
+			SourceLabel: stringPtr(ordered.SourceLabel),
 			Source: SourceReference{
 				SourceID:         ordered.Source.ID,
 				SourceKind:       ordered.Source.SourceKind,
@@ -921,6 +1436,8 @@ func requiredArtifactKinds(jobType string) []string {
 		return []string{"report_markdown", "report_docx"}
 	case queue.JobTypeDeepResearch:
 		return []string{"deep_research_markdown"}
+	case queue.JobTypeAgentRun:
+		return []string{"execution_log", "agent_result_json"}
 	default:
 		return nil
 	}

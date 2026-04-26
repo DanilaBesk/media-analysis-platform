@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -197,41 +198,165 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 }
 
 func ensureSchema(ctx context.Context, db *sql.DB) error {
-	var relation sql.NullString
-	if err := db.QueryRowContext(ctx, `SELECT to_regclass('public.job_submissions')`).Scan(&relation); err != nil {
-		return fmt.Errorf("check schema state: %w", err)
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    name text PRIMARY KEY,
+    applied_at timestamptz NOT NULL DEFAULT now()
+)
+`); err != nil {
+		return fmt.Errorf("ensure schema_migrations table: %w", err)
 	}
-	if relation.Valid {
-		return nil
-	}
-
-	upMigration, err := loadUpMigration()
+	migrations, err := loadMigrations()
 	if err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, upMigration); err != nil {
-		return fmt.Errorf("apply schema bootstrap: %w", err)
+	applied, err := loadAppliedMigrations(ctx, db)
+	if err != nil {
+		return err
+	}
+	if len(migrations) > 0 {
+		hasBootstrapSchema, err := schemaRelationExists(ctx, db, "public.job_submissions")
+		if err != nil {
+			return err
+		}
+		if hasBootstrapSchema {
+			baseline := migrations[0].Name
+			if _, ok := applied[baseline]; !ok {
+				if err := recordAppliedMigration(ctx, db, baseline); err != nil {
+					return err
+				}
+				applied[baseline] = struct{}{}
+			}
+		}
+	}
+	for _, migration := range migrations {
+		if _, ok := applied[migration.Name]; ok {
+			continue
+		}
+		if err := applyMigration(ctx, db, migration); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func loadUpMigration() (string, error) {
+type migrationSpec struct {
+	Name string
+	Up   string
+	Down string
+}
+
+func loadMigrations() ([]migrationSpec, error) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
-		return "", fmt.Errorf("resolve runtime migration path")
+		return nil, fmt.Errorf("resolve runtime migration path")
 	}
-	path := filepath.Join(filepath.Dir(currentFile), "..", "..", "internal", "storage", "migrations", "0001_job_control_plane_foundation.sql")
-	content, err := os.ReadFile(path)
+	pattern := filepath.Join(filepath.Dir(currentFile), "..", "..", "internal", "storage", "migrations", "*.sql")
+	paths, err := filepath.Glob(pattern)
 	if err != nil {
-		return "", fmt.Errorf("read migration file: %w", err)
+		return nil, fmt.Errorf("glob migration files: %w", err)
 	}
-	upSection := strings.Split(string(content), "-- +goose Down")[0]
-	upSection = strings.Replace(upSection, "-- +goose Up", "", 1)
-	upSection = strings.TrimSpace(upSection)
-	if upSection == "" {
-		return "", fmt.Errorf("migration up section is empty")
+	sort.Strings(paths)
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no migration files found")
 	}
-	return upSection, nil
+	migrations := make([]migrationSpec, 0, len(paths))
+	for _, path := range paths {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read migration file %s: %w", path, err)
+		}
+		upSection, downSection, err := parseMigrationSections(string(content))
+		if err != nil {
+			return nil, fmt.Errorf("parse migration %s: %w", path, err)
+		}
+		migrations = append(migrations, migrationSpec{
+			Name: filepath.Base(path),
+			Up:   upSection,
+			Down: downSection,
+		})
+	}
+	return migrations, nil
+}
+
+func parseMigrationSections(content string) (string, string, error) {
+	parts := strings.Split(content, "-- +goose Down")
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("migration must contain exactly one goose Down marker")
+	}
+	upSection := strings.TrimSpace(strings.Replace(parts[0], "-- +goose Up", "", 1))
+	downSection := strings.TrimSpace(parts[1])
+	if upSection == "" || downSection == "" {
+		return "", "", fmt.Errorf("migration up/down sections must both be non-empty")
+	}
+	return upSection, downSection, nil
+}
+
+func loadAppliedMigrations(ctx context.Context, db *sql.DB) (map[string]struct{}, error) {
+	rows, err := db.QueryContext(ctx, `SELECT name FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("list applied migrations: %w", err)
+	}
+	defer rows.Close()
+
+	applied := map[string]struct{}{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan applied migration: %w", err)
+		}
+		applied[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate applied migrations: %w", err)
+	}
+	return applied, nil
+}
+
+func schemaRelationExists(ctx context.Context, db *sql.DB, relationName string) (bool, error) {
+	var relation sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass($1)`, relationName).Scan(&relation); err != nil {
+		return false, fmt.Errorf("check schema state: %w", err)
+	}
+	return relation.Valid, nil
+}
+
+func recordAppliedMigration(ctx context.Context, db *sql.DB, migrationName string) error {
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO schema_migrations (name)
+VALUES ($1)
+ON CONFLICT (name) DO NOTHING
+`, migrationName); err != nil {
+		return fmt.Errorf("record baseline migration %s: %w", migrationName, err)
+	}
+	return nil
+}
+
+func applyMigration(ctx context.Context, db *sql.DB, migration migrationSpec) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %s: %w", migration.Name, err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	if _, err := tx.ExecContext(ctx, migration.Up); err != nil {
+		return fmt.Errorf("apply migration %s: %w", migration.Name, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO schema_migrations (name)
+VALUES ($1)
+ON CONFLICT (name) DO NOTHING
+`, migration.Name); err != nil {
+		return fmt.Errorf("record migration %s: %w", migration.Name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %s: %w", migration.Name, err)
+	}
+	tx = nil
+	return nil
 }
 
 func parseRedisClientOpt(raw string) (asynq.RedisClientOpt, error) {

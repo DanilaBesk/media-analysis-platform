@@ -2,7 +2,7 @@
 // VERSION: 1.0.0
 // START_MODULE_CONTRACT
 // PURPOSE: Provide a thin, mockable HTTP and WebSocket boundary for the Web UI while preserving API-owned business logic and polling truth.
-// SCOPE: Normalize request URLs, send job or artifact actions to the API, subscribe to event updates, and reconcile contract drift only at the boundary.
+// SCOPE: Normalize request URLs, send job or artifact actions to the API, subscribe to event updates, and reconcile transport state only at the boundary.
 // DEPENDS: M-WEB-UI, M-API-HTTP, M-API-EVENTS, M-CONTRACTS
 // LINKS: M-WEB-UI, V-M-WEB-UI
 // ROLE: RUNTIME
@@ -10,11 +10,11 @@
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
-//   LAST_CHANGE: v1.0.0 - Expanded the packet-local boundary to cover job actions, artifact resolve, and websocket reconciliation helpers.
+//   LAST_CHANGE: v1.0.0 - Expanded the packet-local boundary to cover job actions, artifact resolve, and websocket event reconciliation helpers.
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
-//   normalize-transport-targets - Resolve REST and WebSocket targets, including legacy local WS path shims, only inside the client boundary.
+//   normalize-transport-targets - Resolve REST request targets and preserve the declared WebSocket event endpoint inside the client boundary.
 //   send-api-requests - Execute submission, read, action, and artifact requests while preserving API error envelopes.
 //   subscribe-to-events - Parse websocket event messages into packet-local DTOs for polling-truth reconciliation.
 // END_MODULE_MAP
@@ -95,14 +95,6 @@ function toRequestUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
   return new URL(normalizedPath, normalizedBaseUrl);
-}
-
-function toWebSocketUrl(rawWsUrl: string): string {
-  const url = new URL(rawWsUrl);
-  if (url.pathname === "/events" || url.pathname === "/ws") {
-    url.pathname = "/v1/ws";
-  }
-  return url.toString();
 }
 
 function buildDeliveryFields(delivery: DeliveryDraft): Record<string, string> {
@@ -344,7 +336,7 @@ export function createWebUiApiClient({
     },
 
     subscribeToJobEvents(options) {
-      const socket = webSocketFactory(toWebSocketUrl(wsUrl));
+      const socket = webSocketFactory(wsUrl);
 
       socket.onopen = (event) => {
         options.onOpen?.();

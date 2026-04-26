@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-agent-run.schema.json",
+  "title": "CreateAgentRunRequest",
+  "type": "object",
+  "required": [
+    "harness_name",
+    "request"
+  ],
+  "properties": {
+    "harness_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "client_ref": {
+      "type": "string"
+    },
+    "delivery": {
+      "$ref": "create-transcription-upload.schema.json#/$defs/deliveryRequest"
+    },
+    "request": {
+      "$ref": "#/$defs/agentRunRequest"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "agentRunRequest": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "input_artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/inputArtifactRef"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "prompt"
+          ]
+        },
+        {
+          "required": [
+            "payload"
+          ]
+        },
+        {
+          "required": [
+            "input_artifacts"
+          ]
+        }
+      ]
+    },
+    "inputArtifactRef": {
+      "type": "object",
+      "properties": {
+        "artifact_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "artifact_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactKind"
+        },
+        "object_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "uri": {
+          "type": "string",
+          "format": "uri"
+        },
+        "filename": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "artifact_id"
+          ]
+        },
+        {
+          "required": [
+            "object_key"
+          ]
+        },
+        {
+          "required": [
+            "uri"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -117,7 +117,9 @@ services:
     image: telegram-transcriber-worker-transcription:local
     restart: unless-stopped
     environment:
+      PYTHONPATH: /workspace/workers/transcription/src:/workspace/workers/common/src
       WORKER_WORKSPACE_ROOT: /tmp/runtime/transcription
+      UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
     env_file:
       - ./env/shared.env.example
       - ./env/worker-transcription.env.example
@@ -132,7 +134,8 @@ services:
       - --project
       - /workspace
       - python
-      - /workspace/workers/transcription/src/transcriber_worker_transcription_main.py
+      - -m
+      - transcriber_worker_transcription_main
     networks:
       - platform
     volumes:
@@ -140,14 +143,19 @@ services:
       - whisper-model-cache:/var/cache/whisper
       - retained-log-volume:/var/log/platform
 
-  worker-report:
-    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  worker-agent-runner:
+    build:
+      context: ..
+      dockerfile: infra/images/worker-agent-runner/Dockerfile
+    image: telegram-transcriber-worker-agent-runner:local
     restart: unless-stopped
     environment:
-      WORKER_WORKSPACE_ROOT: ${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/report
+      PYTHONPATH: /workspace/workers/agent-runner/src:/workspace/workers/common/src
+      WORKER_WORKSPACE_ROOT: /tmp/runtime/agent-runner
+      UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
     env_file:
       - ./env/shared.env.example
-      - ./env/worker-report.env.example
+      - ./env/worker-agent-runner.env.example
     depends_on:
       <<: *runtime-infra-depends
       api:
@@ -159,41 +167,13 @@ services:
       - --project
       - /workspace
       - python
-      - /workspace/workers/report/src/transcriber_worker_report_main.py
+      - -m
+      - transcriber_worker_agent_runner_main
     networks:
       - platform
     volumes:
       - ..:/workspace
-      - ${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}
-      - report-and-deep-research-temp-space:/tmp/runtime
-      - retained-log-volume:/var/log/platform
-
-  worker-deep-research:
-    image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
-    restart: unless-stopped
-    environment:
-      WORKER_WORKSPACE_ROOT: ${HOST_WORKSPACE_ROOT:-/workspace}/.data/runtime/deep-research
-    env_file:
-      - ./env/shared.env.example
-      - ./env/worker-deep-research.env.example
-    depends_on:
-      <<: *runtime-infra-depends
-      api:
-        condition: service_started
-    working_dir: /workspace
-    command:
-      - uv
-      - run
-      - --project
-      - /workspace
-      - python
-      - /workspace/workers/deep-research/src/transcriber_worker_deep_research_main.py
-    networks:
-      - platform
-    volumes:
-      - ..:/workspace
-      - ${HOST_WORKSPACE_ROOT:-..}:${HOST_WORKSPACE_ROOT:-/workspace}
-      - report-and-deep-research-temp-space:/tmp/runtime
+      - agent-runner-runtime:/tmp/runtime
       - retained-log-volume:/var/log/platform
 
   web:
@@ -208,26 +188,38 @@ services:
     command:
       - node
       - /workspace/apps/web/src/serve-dist.mjs
+    environment:
+      PORT: "3201"
     networks:
       - platform
     ports:
-      - "${WEB_HOST_PORT:-3000}:3000"
+      - "${WEB_HOST_PORT:-3201}:3201"
     volumes:
       - ..:/workspace
       - retained-log-volume:/var/log/platform
 
   telegram-bot:
-    image: python:3.12-alpine
+    build:
+      context: ..
+      dockerfile: infra/images/telegram-bot/Dockerfile
+    image: telegram-transcriber-telegram-bot:local
     restart: unless-stopped
     environment:
-      PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/src
+      PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/workers/common/src:/workspace/src
+      DATA_DIR: /tmp/runtime/telegram-bot
+      UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
     env_file:
       - ./env/telegram-bot.env.example
+      - ../.env
     depends_on:
       api:
         condition: service_started
     working_dir: /workspace/apps/telegram-bot
     command:
+      - uv
+      - run
+      - --project
+      - /workspace/apps/telegram-bot
       - python
       - -m
       - telegram_adapter
@@ -235,6 +227,7 @@ services:
       - platform
     volumes:
       - ..:/workspace
+      - telegram-bot-runtime:/tmp/runtime
       - retained-log-volume:/var/log/platform
 
   mcp-server:
@@ -264,5 +257,6 @@ volumes:
   postgres-data:
   minio-data:
   whisper-model-cache:
-  report-and-deep-research-temp-space:
+  agent-runner-runtime:
+  telegram-bot-runtime:
   retained-log-volume:

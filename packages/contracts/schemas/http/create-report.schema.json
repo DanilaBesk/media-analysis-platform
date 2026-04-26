@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-report.schema.json",
   "title": "CreateReportRequest",
+  "description": "Compatibility request for creating a report operation. The control plane creates or reuses an agent_run job with harness_name=claude-code and stores operation=report plus expected report artifacts in the private request envelope.",
   "type": "object",
   "properties": {
     "client_ref": {

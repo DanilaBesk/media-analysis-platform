@@ -209,6 +209,7 @@ describe("createWebUiRoutes", () => {
 
     expect(await screen.findByRole("heading", { name: "Telegram Transcriber Web UI" })).toBeVisible();
     expect(await screen.findByText("Example transcription")).toBeVisible();
+    expect(screen.getByRole("option", { name: "Agent run" })).toBeVisible();
 
     fireEvent.change(screen.getByLabelText("Submission mode"), {
       target: { value: "url" },
@@ -250,6 +251,44 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create report job" }));
     await waitFor(() => {
       expect(runtime.apiClient.createReport).toHaveBeenCalled();
+    });
+  });
+
+  it("allows deep research from an agent_run report job with a report markdown artifact", async () => {
+    const runtime = renderRoute("/jobs/agent-report-1", {
+      getJob: vi.fn().mockResolvedValue(
+        makeJob({
+          job_id: "agent-report-1",
+          root_job_id: "11111111-1111-1111-1111-111111111111",
+          parent_job_id: "11111111-1111-1111-1111-111111111111",
+          job_type: "agent_run",
+          status: "succeeded",
+          display_name: "Report agent run",
+          artifacts: [
+            {
+              artifact_id: "report-md-1",
+              artifact_kind: "report_markdown",
+              filename: "report.md",
+              mime_type: "text/markdown",
+              size_bytes: 1024,
+              created_at: "2026-04-23T00:00:00Z",
+            },
+          ],
+          children: [],
+        }),
+      ),
+    });
+
+    expect(await screen.findByRole("heading", { name: "Job details" })).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create deep research job" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.createDeepResearch).toHaveBeenCalledWith(
+        "agent-report-1",
+        expect.objectContaining({
+          delivery: expect.objectContaining({ strategy: "polling" }),
+        }),
+      );
     });
   });
   // END_BLOCK_BLOCK_VERIFY_JOB_DETAILS_ROUTE_SHELL

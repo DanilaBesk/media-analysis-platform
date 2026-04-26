@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,22 +13,25 @@ import (
 )
 
 const (
-	LogPrefix                    = "[ApiStorage]"
-	PersistJobArtifactMarker     = "[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]"
-	SourcesBucket                = "sources"
-	ArtifactsBucket              = "artifacts"
-	DownloadProviderMinIO        = "minio_presigned_url"
-	DeliveryStrategyPolling      = "polling"
-	DeliveryStrategyWebhook      = "webhook"
-	SourceKindUploadedFile       = "uploaded_file"
-	SourceKindTelegramUpload     = "telegram_upload"
-	SourceKindYouTubeURL         = "youtube_url"
-	SourceSetInputSingleSource   = "single_source"
-	SourceSetInputCombinedUpload = "combined_upload"
-	SourceSetInputCombinedTG     = "combined_telegram"
-	WebhookStatePending          = "pending"
-	WebhookStateDelivered        = "delivered"
-	WebhookStateDead             = "dead"
+	LogPrefix                        = "[ApiStorage]"
+	PersistJobArtifactMarker         = "[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]"
+	SourcesBucket                    = "sources"
+	ArtifactsBucket                  = "artifacts"
+	DownloadProviderMinIO            = "minio_presigned_url"
+	AgentRunRequestProviderMinIO     = "minio_presigned_url"
+	DeliveryStrategyPolling          = "polling"
+	DeliveryStrategyWebhook          = "webhook"
+	SourceKindUploadedFile           = "uploaded_file"
+	SourceKindTelegramUpload         = "telegram_upload"
+	SourceKindYouTubeURL             = "youtube_url"
+	SourceSetInputSingleSource       = "single_source"
+	SourceSetInputCombinedUpload     = "combined_upload"
+	SourceSetInputCombinedTG         = "combined_telegram"
+	SourceSetInputBatchTranscription = "batch_transcription"
+	SourceSetInputAgentRun           = "agent_run"
+	WebhookStatePending              = "pending"
+	WebhookStateDelivered            = "delivered"
+	WebhookStateDead                 = "dead"
 )
 
 var (
@@ -36,6 +40,7 @@ var (
 	ErrJobNotFound        = errors.New("job_not_found")
 	ErrContractViolation  = errors.New("storage_contract_violation")
 	ErrExecutionNotFound  = errors.New("execution_not_found")
+	ErrAgentRunRequestRef = errors.New("agent_run_request_unavailable")
 )
 
 type Logger interface {
@@ -45,6 +50,10 @@ type Logger interface {
 type ObjectStore interface {
 	PutObject(ctx context.Context, bucket, objectKey, contentType string, body []byte) error
 	PresignGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error)
+}
+
+type internalObjectPresigner interface {
+	PresignInternalGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error)
 }
 
 type StateStore interface {
@@ -154,8 +163,12 @@ type SourceRecord struct {
 }
 
 type SourceSetItem struct {
-	Position int
-	SourceID string
+	Position           int
+	SourceID           string
+	SourceLabel        string
+	SourceLabelVersion string
+	MetadataJSON       []byte
+	LineageJSON        []byte
 }
 
 type SourceSetRecord struct {
@@ -301,6 +314,15 @@ type ArtifactResolution struct {
 	Download     DownloadDescriptor
 }
 
+type AgentRunRequestAccess struct {
+	Provider            string
+	URL                 string
+	ExpiresAt           time.Time
+	RequestRef          string
+	RequestDigestSHA256 string
+	RequestBytes        int64
+}
+
 type JobListFilter struct {
 	Status    string
 	JobType   string
@@ -315,8 +337,12 @@ type JobListPage struct {
 }
 
 type OrderedSource struct {
-	Position int
-	Source   SourceRecord
+	Position           int
+	Source             SourceRecord
+	SourceLabel        string
+	SourceLabelVersion string
+	MetadataJSON       []byte
+	LineageJSON        []byte
 }
 
 type runtimeJobLister interface {
@@ -442,6 +468,45 @@ func (r *Repository) ResolveArtifact(ctx context.Context, artifactID string) (Ar
 	}, nil
 }
 
+func (r *Repository) PersistAgentRunRequest(ctx context.Context, requestRef string, body []byte) error {
+	requestRef = strings.TrimSpace(requestRef)
+	if requestRef == "" {
+		return fmt.Errorf("%w: request_ref is required", ErrContractViolation)
+	}
+	if len(body) == 0 {
+		return fmt.Errorf("%w: agent_run request body is required", ErrContractViolation)
+	}
+	if err := r.objects.PutObject(ctx, ArtifactsBucket, agentRunRequestObjectKey(requestRef), "application/json", body); err != nil {
+		return fmt.Errorf("%w: persist agent_run request object: %v", ErrStorageUnavailable, err)
+	}
+	return nil
+}
+
+func (r *Repository) ResolveAgentRunRequestAccess(ctx context.Context, job JobRecord) (AgentRunRequestAccess, error) {
+	requestRef, requestDigestSHA256, requestBytes, err := parseAgentRunRequestPointer(job.ParamsJSON)
+	if err != nil {
+		return AgentRunRequestAccess{}, err
+	}
+	var url string
+	var expiresAt time.Time
+	if internalPresigner, ok := r.objects.(internalObjectPresigner); ok {
+		url, expiresAt, err = internalPresigner.PresignInternalGetObject(ctx, ArtifactsBucket, agentRunRequestObjectKey(requestRef), r.presignTTL)
+	} else {
+		url, expiresAt, err = r.objects.PresignGetObject(ctx, ArtifactsBucket, agentRunRequestObjectKey(requestRef), r.presignTTL)
+	}
+	if err != nil {
+		return AgentRunRequestAccess{}, fmt.Errorf("%w: presign agent_run request: %v", ErrStorageUnavailable, err)
+	}
+	return AgentRunRequestAccess{
+		Provider:            AgentRunRequestProviderMinIO,
+		URL:                 url,
+		ExpiresAt:           expiresAt,
+		RequestRef:          requestRef,
+		RequestDigestSHA256: requestDigestSHA256,
+		RequestBytes:        requestBytes,
+	}, nil
+}
+
 func (r *Repository) FindSubmission(ctx context.Context, submissionKind, idempotencyKey string) (*JobSubmission, error) {
 	if strings.TrimSpace(submissionKind) == "" || strings.TrimSpace(idempotencyKey) == "" {
 		return nil, fmt.Errorf("%w: submission kind and idempotency key are required", ErrContractViolation)
@@ -471,7 +536,10 @@ func (r *Repository) SaveSubmissionGraph(ctx context.Context, submission JobSubm
 	if err := validateSubmission(submission); err != nil {
 		return err
 	}
-	if len(sources) == 0 || len(sourceSets) == 0 || len(jobs) == 0 {
+	if len(sourceSets) == 0 || len(jobs) == 0 {
+		return fmt.Errorf("%w: submission graph requires sources, source sets, and jobs", ErrContractViolation)
+	}
+	if len(sources) == 0 && !allowsEmptySubmissionSources(sourceSets) {
 		return fmt.Errorf("%w: submission graph requires sources, source sets, and jobs", ErrContractViolation)
 	}
 
@@ -524,6 +592,18 @@ func (r *Repository) SaveSubmissionGraph(ctx context.Context, submission JobSubm
 		return fmt.Errorf("%w: save submission graph: %v", ErrStorageUnavailable, err)
 	}
 	return nil
+}
+
+func allowsEmptySubmissionSources(sourceSets []SourceSetRecord) bool {
+	if len(sourceSets) == 0 {
+		return false
+	}
+	for _, sourceSet := range sourceSets {
+		if strings.TrimSpace(sourceSet.InputKind) != SourceSetInputAgentRun {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Repository) GetJob(ctx context.Context, jobID string) (JobRecord, error) {
@@ -802,13 +882,12 @@ func (r *Repository) preparePersistJob(req PersistJobRequest) (PersistedJobBundl
 		}
 		sources = append(sources, source)
 	}
-	if len(sources) == 0 {
-		return PersistedJobBundle{}, nil, fmt.Errorf("%w: at least one source is required", ErrContractViolation)
-	}
-
 	sourceSet := ensureSourceSetDefaults(req.SourceSet, r.now)
 	if err := validateSourceSet(sourceSet, sources); err != nil {
 		return PersistedJobBundle{}, nil, err
+	}
+	if len(sources) == 0 && sourceSet.InputKind != SourceSetInputAgentRun {
+		return PersistedJobBundle{}, nil, fmt.Errorf("%w: at least one source is required", ErrContractViolation)
 	}
 
 	job := ensureJobDefaults(req.Job, r.now)
@@ -880,6 +959,14 @@ func ensureSourceSetDefaults(sourceSet SourceSetRecord, now func() time.Time) So
 	if sourceSet.CreatedAt.IsZero() {
 		sourceSet.CreatedAt = now()
 	}
+	for idx := range sourceSet.Items {
+		if len(sourceSet.Items[idx].MetadataJSON) == 0 {
+			sourceSet.Items[idx].MetadataJSON = []byte("{}")
+		}
+		if len(sourceSet.Items[idx].LineageJSON) == 0 {
+			sourceSet.Items[idx].LineageJSON = []byte("{}")
+		}
+	}
 	return sourceSet
 }
 
@@ -907,6 +994,34 @@ func ensureClaimJobExecutionDefaults(req ClaimJobExecutionRequest, now func() ti
 		req.ExecutionID = nextID()
 	}
 	return req
+}
+
+func agentRunRequestObjectKey(requestRef string) string {
+	return fmt.Sprintf("private/agent-runs/%s/request.json", strings.TrimSpace(requestRef))
+}
+
+func parseAgentRunRequestPointer(paramsJSON []byte) (string, string, int64, error) {
+	if len(paramsJSON) == 0 {
+		return "", "", 0, fmt.Errorf("%w: params json is empty", ErrAgentRunRequestRef)
+	}
+	var params struct {
+		RequestRef          string `json:"request_ref"`
+		RequestDigestSHA256 string `json:"request_digest_sha256"`
+		RequestBytes        int64  `json:"request_bytes"`
+	}
+	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+		return "", "", 0, fmt.Errorf("%w: decode agent_run params: %v", ErrAgentRunRequestRef, err)
+	}
+	if strings.TrimSpace(params.RequestRef) == "" {
+		return "", "", 0, fmt.Errorf("%w: request_ref is missing", ErrAgentRunRequestRef)
+	}
+	if strings.TrimSpace(params.RequestDigestSHA256) == "" {
+		return "", "", 0, fmt.Errorf("%w: request digest is missing", ErrAgentRunRequestRef)
+	}
+	if params.RequestBytes <= 0 {
+		return "", "", 0, fmt.Errorf("%w: request_bytes must be positive", ErrAgentRunRequestRef)
+	}
+	return strings.TrimSpace(params.RequestRef), strings.TrimSpace(params.RequestDigestSHA256), params.RequestBytes, nil
 }
 
 func ensureFinishJobExecutionDefaults(req FinishJobExecutionRequest, now func() time.Time) FinishJobExecutionRequest {
@@ -1006,6 +1121,12 @@ func validateSourceSet(sourceSet SourceSetRecord, sources []SourceRecord) error 
 	if strings.TrimSpace(sourceSet.ID) == "" || strings.TrimSpace(sourceSet.InputKind) == "" {
 		return fmt.Errorf("%w: source set requires id and input kind", ErrContractViolation)
 	}
+	if sourceSet.InputKind == SourceSetInputAgentRun {
+		if len(sourceSet.Items) != 0 {
+			return fmt.Errorf("%w: agent_run source set must not contain source items", ErrContractViolation)
+		}
+		return nil
+	}
 	if len(sourceSet.Items) == 0 {
 		return fmt.Errorf("%w: source set requires at least one item", ErrContractViolation)
 	}
@@ -1017,6 +1138,7 @@ func validateSourceSet(sourceSet SourceSetRecord, sources []SourceRecord) error 
 
 	positions := map[int]struct{}{}
 	seenSourceIDs := map[string]struct{}{}
+	seenSourceLabels := map[string]struct{}{}
 	for _, item := range sourceSet.Items {
 		if item.Position < 0 {
 			return fmt.Errorf("%w: source set position must be non-negative", ErrContractViolation)
@@ -1032,6 +1154,29 @@ func validateSourceSet(sourceSet SourceSetRecord, sources []SourceRecord) error 
 		if _, ok := sourceIDs[item.SourceID]; !ok {
 			return fmt.Errorf("%w: source set references unknown source %q", ErrContractViolation, item.SourceID)
 		}
+		sourceLabel := strings.TrimSpace(item.SourceLabel)
+		sourceLabelVersion := strings.TrimSpace(item.SourceLabelVersion)
+		if sourceLabel != "" {
+			if !validSourceLabel(sourceLabel) {
+				return fmt.Errorf("%w: source_label %q is invalid", ErrContractViolation, sourceLabel)
+			}
+			if sourceLabelVersion == "" {
+				return fmt.Errorf("%w: source_label_version is required when source_label is set", ErrContractViolation)
+			}
+			if _, ok := seenSourceLabels[sourceLabel]; ok {
+				return fmt.Errorf("%w: source labels must be unique within one source set", ErrContractViolation)
+			}
+			seenSourceLabels[sourceLabel] = struct{}{}
+		}
+		if sourceLabel == "" && sourceLabelVersion != "" {
+			return fmt.Errorf("%w: source_label is required when source_label_version is set", ErrContractViolation)
+		}
+		if len(item.MetadataJSON) > 0 && !json.Valid(item.MetadataJSON) {
+			return fmt.Errorf("%w: source metadata must be valid json", ErrContractViolation)
+		}
+		if len(item.LineageJSON) > 0 && !json.Valid(item.LineageJSON) {
+			return fmt.Errorf("%w: source lineage must be valid json", ErrContractViolation)
+		}
 	}
 
 	switch sourceSet.InputKind {
@@ -1042,6 +1187,15 @@ func validateSourceSet(sourceSet SourceSetRecord, sources []SourceRecord) error 
 	case SourceSetInputCombinedUpload, SourceSetInputCombinedTG:
 		if len(sourceSet.Items) < 2 {
 			return fmt.Errorf("%w: combined source sets require at least two items", ErrContractViolation)
+		}
+	case SourceSetInputBatchTranscription:
+		if len(sourceSet.Items) < 1 {
+			return fmt.Errorf("%w: batch_transcription source set requires at least one item", ErrContractViolation)
+		}
+		for _, item := range sourceSet.Items {
+			if strings.TrimSpace(item.SourceLabel) == "" || strings.TrimSpace(item.SourceLabelVersion) == "" {
+				return fmt.Errorf("%w: batch_transcription items require source_label and source_label_version", ErrContractViolation)
+			}
 		}
 	default:
 		return fmt.Errorf("%w: unsupported source set input kind %q", ErrContractViolation, sourceSet.InputKind)
@@ -1054,6 +1208,22 @@ func validateSourceSet(sourceSet SourceSetRecord, sources []SourceRecord) error 
 	}
 
 	return nil
+}
+
+func validSourceLabel(label string) bool {
+	if len(label) == 0 || len(label) > 64 {
+		return false
+	}
+	for idx, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case idx > 0 && r >= '0' && r <= '9':
+		case idx > 0 && (r == '_' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func validateJob(job JobRecord, sourceSet SourceSetRecord) error {

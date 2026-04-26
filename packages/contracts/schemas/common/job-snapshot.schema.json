@@ -130,6 +130,12 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "sourceLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
     "delivery": {
       "type": "object",
       "required": [
@@ -165,13 +171,40 @@
         },
         "items": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "$ref": "#/$defs/sourceSetItem"
           }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "input_kind": {
+                "const": "agent_run"
+              }
+            },
+            "required": [
+              "input_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "items": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "items": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
     },
     "sourceSetItem": {
       "type": "object",
@@ -183,6 +216,9 @@
         "position": {
           "type": "integer",
           "minimum": 0
+        },
+        "source_label": {
+          "$ref": "#/$defs/sourceLabel"
         },
         "source": {
           "$ref": "#/$defs/sourceReference"
@@ -308,6 +344,37 @@
         "stage": {
           "type": "string",
           "minLength": 1
+        },
+        "total_sources": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "completed_sources": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "failed_sources": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "current_source_label": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sourceLabel"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "message": {
           "type": [

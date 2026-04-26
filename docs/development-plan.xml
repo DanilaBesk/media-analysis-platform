@@ -44,21 +44,17 @@
     <current-entrypoint>src/telegram_transcriber_bot/__main__.py</current-entrypoint>
     <current-files>
       <file path="src/telegram_transcriber_bot/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
-      <file path="src/telegram_transcriber_bot/service.py" role="Current application service for processing sources, writing job metadata, generating report artifacts, and running deep research" />
-      <file path="src/telegram_transcriber_bot/transcribers.py" role="YouTube transcript fast path and Whisper fallback" />
-      <file path="src/telegram_transcriber_bot/documents.py" role="Markdown and DOCX artifact rendering" />
-      <file path="src/telegram_transcriber_bot/cglm_runner.py" role="Report generation subprocess adapter" />
-      <file path="src/telegram_transcriber_bot/deep_research.py" role="Deep research multi-phase pipeline" />
+      <file path="workers/transcription/src/transcriber_worker_transcription.py" role="Transcription worker runtime, local source materialization, per-source execution, batch aggregate merging, and transcript artifact persistence" />
+      <file path="workers/common/src/transcriber_workers_common/transcribers.py" role="YouTube transcript fast path and Whisper fallback shared by the transcription worker" />
+      <file path="workers/common/src/transcriber_workers_common/documents.py" role="Transcript/report markdown normalization and DOCX artifact rendering" />
+      <file path="workers/agent-runner/src/transcriber_worker_agent_runner.py" role="Single generic AI worker runtime for report and deep-research operations backed by agent_run jobs" />
     </current-files>
     <current-storage>
-      <item>local files under .data/jobs/job_id</item>
-      <item>local metadata JSON per job</item>
-      <item>no external queue</item>
-      <item>no DB</item>
-      <item>no external object storage</item>
-      <item>no HTTP API</item>
-      <item>no Web UI</item>
-      <item>no MCP server</item>
+      <item>PostgreSQL is the system of record for jobs, events, source sets, and artifacts</item>
+      <item>MinIO stores uploaded sources and produced artifacts</item>
+      <item>Redis backs asynq queues only</item>
+      <item>Go HTTP API owns orchestration and delivery semantics</item>
+      <item>Web UI, Telegram adapter, and MCP adapter consume the API boundary</item>
     </current-storage>
     <preserved-capabilities>
       <item>YouTube transcription</item>
@@ -68,7 +64,6 @@
       <item>segmented transcript output</item>
       <item>report generation</item>
       <item>deep research generation</item>
-      <item>artifact reuse inside the current process</item>
     </preserved-capabilities>
   </MigrationContext>
 
@@ -82,7 +77,7 @@
     <decision id="D-007">MCP remains a separate thin adapter rather than being embedded into the API process.</decision>
     <decision id="D-008">Sources are uploaded through the API in v1 rather than via direct MinIO uploads.</decision>
     <decision id="D-009">Initial platform version intentionally drops cross-request dedupe and reuse.</decision>
-    <decision id="D-010">Report and deep research are modeled as distinct child job types, not stages within one mutable row.</decision>
+    <decision id="D-010">Report and deep research remain public operation concepts and child lineage affordances, but their AI execution is modeled as `agent_run` jobs handled by the single worker-agent-runner rather than dedicated worker services.</decision>
     <decision id="D-011">Project remains self-hosted and local-first without quotas.</decision>
     <decision id="D-012">Simple React UI is required and lives as a separate monorepo app.</decision>
     <decision id="D-013">Everything is containerized under Docker Compose including CPU-only Whisper runtime.</decision>
@@ -94,14 +89,14 @@
     <decision id="D-019">Go API module granularity is fixed for the migration horizon as internal/api, internal/jobs, internal/storage, internal/queue, internal/ws, and internal/db.</decision>
     <decision id="D-020">Worker-control contracts remain explicit HTTP routes for the migration and first platform version.</decision>
     <decision id="D-021">Redis is reserved for asynq queueing only; event delivery is driven from persisted job events, WebSocket broadcast, and webhook dispatch inside the API.</decision>
+    <decision id="D-022">Batch transcription supersedes the old concat-first combined flow: the public route is `/v1/transcription-jobs/batch`, the API creates a root aggregate transcription job plus per-source transcription children, and worker-transcription assembles aggregate artifacts through `job:transcription.aggregate`.</decision>
   </DecisionProvenance>
 
   <GuidingArchitecture>
     <HighLevelComponents>
       <component path="apps/api" role="Go HTTP API and WebSocket server" />
       <component path="workers/transcription" role="Python worker for transcription jobs" />
-      <component path="workers/report" role="Python worker for report generation jobs" />
-      <component path="workers/deep-research" role="Python worker for deep-research jobs" />
+      <component path="workers/agent-runner" role="Single Python AI worker for report, deep-research, and future generic agent_run operations" />
       <component path="apps/web" role="React UI for job creation, monitoring, and downloads" />
       <component path="apps/telegram-bot" role="Thin Python bot adapter over the HTTP API" />
       <component path="apps/mcp-server" role="Thin MCP adapter over the HTTP API" />
@@ -128,8 +123,8 @@
       </control-plane-responsibilities>
       <execution-plane-responsibilities>
         <item>execute transcription</item>
-        <item>execute report generation</item>
-        <item>execute deep research generation</item>
+        <item>execute report generation through `agent_run` operation envelopes</item>
+        <item>execute deep research generation through `agent_run` operation envelopes</item>
         <item>upload artifacts to MinIO</item>
         <item>emit progress updates back to the API</item>
         <item>respond to cancellation checks</item>
@@ -156,8 +151,7 @@
       <entry path="apps/mcp-server/src" />
       <entry path="workers/common/src/transcriber_workers_common" />
       <entry path="workers/transcription/src" />
-      <entry path="workers/report/src" />
-      <entry path="workers/deep-research/src" />
+      <entry path="workers/agent-runner/src" />
       <entry path="packages/contracts/openapi" />
       <entry path="packages/contracts/schemas" />
       <entry path="packages/contracts/ws" />
@@ -187,10 +181,12 @@
       <type-transcription>transcription</type-transcription>
       <type-report>report</type-report>
       <type-deep-research>deep_research</type-deep-research>
+      <type-agent-run>agent_run</type-agent-run>
     </JobTypes>
     <InputShapes>
       <shape>single-source transcription job backed by a one-item source set</shape>
-      <shape>combined multi-media transcription job backed by an ordered multi-item source set</shape>
+      <shape>batch transcription root backed by a `batch-transcription.v1` source manifest, stable source labels, per-source transcription children, and a root aggregate task</shape>
+      <shape>generic agent execution job backed by `harness_name`, prompt or request payload, and referenced prior artifacts</shape>
     </InputShapes>
     <JobStatuses>
       <status>queued</status>
@@ -205,10 +201,13 @@
       <kind>transcript_plain</kind>
       <kind>transcript_segmented_markdown</kind>
       <kind>transcript_docx</kind>
+      <kind>source_manifest_json</kind>
+      <kind>batch_diagnostics_json</kind>
       <kind>report_markdown</kind>
       <kind>report_docx</kind>
       <kind>deep_research_markdown</kind>
       <kind>execution_log</kind>
+      <kind>agent_result_json</kind>
     </ArtifactKinds>
     <DeliveryStrategy>
       <strategy>polling</strategy>
@@ -226,11 +225,11 @@
   <PersistentModel>
     <Enums>
       <enum name="source_kind">uploaded_file, telegram_upload, youtube_url</enum>
-      <enum name="job_type">transcription, report, deep_research</enum>
+      <enum name="job_type">transcription, report, deep_research, agent_run</enum>
       <enum name="job_status">queued, running, cancel_requested, succeeded, failed, canceled</enum>
       <enum name="delivery_strategy">polling, webhook</enum>
-      <enum name="artifact_kind">transcript_plain, transcript_segmented_markdown, transcript_docx, report_markdown, report_docx, deep_research_markdown, execution_log</enum>
-      <enum name="submission_kind">transcription_upload, transcription_url, report_create, deep_research_create, job_retry</enum>
+      <enum name="artifact_kind">transcript_plain, transcript_segmented_markdown, transcript_docx, report_markdown, report_docx, deep_research_markdown, execution_log, agent_result_json, source_manifest_json, batch_diagnostics_json</enum>
+      <enum name="submission_kind">transcription_upload, transcription_url, transcription_batch, report_create, deep_research_create, agent_run_create, job_retry</enum>
     </Enums>
     <Table name="job_submissions">
       <purpose>Represent idempotent create requests including multi-file upload cases that cannot be modeled safely on jobs alone.</purpose>
@@ -249,6 +248,8 @@
         <rule>One submission may create many jobs for POST /v1/transcription-jobs.</rule>
         <rule>Same submission key plus same normalized request returns the original accepted response.</rule>
         <rule>Same submission key plus different normalized request returns idempotency_conflict.</rule>
+        <rule>`transcription_batch` creates one root aggregate transcription job plus one per-source transcription child per stable source label.</rule>
+        <rule>`agent_run_create` creates one root `agent_run` job keyed by `harness_name` and normalized request payload.</rule>
       </rules>
     </Table>
     <Table name="sources">
@@ -275,7 +276,7 @@
       </rules>
     </Table>
     <Table name="source_sets">
-      <purpose>Represent ordered input sets for transcription jobs so single-file and combined multi-media flows share one model.</purpose>
+      <purpose>Represent ordered input sets for transcription, batch aggregate roots, batch source children, and request-only agent runs.</purpose>
       <columns>
         <column>id uuid primary key</column>
         <column>input_kind text not null</column>
@@ -283,11 +284,12 @@
         <column>created_at timestamptz not null default now()</column>
       </columns>
       <constraints>
-        <constraint>input_kind is constrained to single_source, combined_upload, or combined_telegram in v1 implementation space</constraint>
+        <constraint>input_kind is constrained to single_source, combined_upload, combined_telegram, batch_transcription, or agent_run in current implementation space</constraint>
       </constraints>
       <rules>
         <rule>Single-file transcription jobs use a one-item source set.</rule>
-        <rule>Combined transcription jobs use a multi-item ordered source set.</rule>
+        <rule>Historical combined transcription jobs use a multi-item ordered source set only as legacy lineage.</rule>
+        <rule>Current batch transcription roots use `input_kind=batch_transcription`; `agent_run` source sets contain no source items.</rule>
       </rules>
     </Table>
     <Table name="source_set_items">
@@ -297,15 +299,19 @@
         <column>source_set_id uuid not null references source_sets on delete cascade</column>
         <column>source_id uuid not null references sources</column>
         <column>position int not null</column>
+        <column>source_label text null</column>
+        <column>source_label_version text null</column>
         <column>created_at timestamptz not null default now()</column>
       </columns>
       <constraints>
         <constraint>unique on source_set_id and position</constraint>
+        <constraint>unique on source_set_id and source_label where source_label is not null</constraint>
         <constraint>index on source_set_id ascending</constraint>
       </constraints>
       <rules>
         <rule>position defines the final transcription order.</rule>
         <rule>The same source may appear in only one position within one source set in normal API flows.</rule>
+        <rule>Batch source labels must match the contract shape, be unique within the source set, and carry `source_label_version=batch-transcription.v1`.</rule>
       </rules>
     </Table>
     <Table name="jobs">
@@ -343,6 +349,9 @@
         <rule>Initial transcription job has root_job_id equal to id, no parent_job_id, and no retry_of_job_id.</rule>
         <rule>Retry jobs keep root_job_id and parent_job_id but set retry_of_job_id.</rule>
         <rule>Report jobs point to transcription parents; deep-research jobs point to report parents.</rule>
+        <rule>Initial `agent_run` jobs are root jobs created by `agent_run_create`; any later child-link variant requires an explicit follow-up packet and must not be inferred implicitly.</rule>
+        <rule>Batch transcription roots are aggregate transcription jobs with root_job_id equal to id; per-source transcription children point to the root through parent_job_id and share the same root_job_id.</rule>
+        <rule>Batch aggregate retries enqueue only the aggregate task for the root lineage; source-child retries remain explicit child retries.</rule>
         <rule>Only one canonical non-retry child per parent and job_type exists in v1; reruns happen through retry rows.</rule>
         <rule>Retries and child jobs reuse the same source_set_id as their parent lineage.</rule>
       </rules>
@@ -368,6 +377,7 @@
         <rule>source_original is not modeled as a job artifact in v1 because uploaded originals already live in sources.</rule>
         <rule>Create rows only after object upload succeeds.</rule>
         <rule>Transcription success requires transcript_plain, transcript_segmented_markdown, and transcript_docx.</rule>
+        <rule>Batch aggregate root success additionally requires source_manifest_json and batch_diagnostics_json.</rule>
         <rule>Report success requires report_markdown and report_docx.</rule>
         <rule>Deep-research success requires deep_research_markdown.</rule>
       </rules>
@@ -423,8 +433,8 @@
   <QueueContract>
     <Queueing>
       <queue name="transcription" task-type="job:transcription.run" max-retry="3" timeout="2h" />
-      <queue name="report" task-type="job:report.run" max-retry="2" timeout="45m" />
-      <queue name="deep_research" task-type="job:deep_research.run" max-retry="2" timeout="2h" />
+      <queue name="transcription" task-type="job:transcription.aggregate" max-retry="3" timeout="2h" />
+      <queue name="agent_run" task-type="job:agent_run.run" max-retry="2" timeout="2h" />
     </Queueing>
     <PayloadShape>Minimal payload is job_id plus attempt number. Full mutable job metadata must not be placed in asynq payloads.</PayloadShape>
     <OwnershipRules>
@@ -451,10 +461,13 @@
       <key>artifacts/job_id/transcript/plain/transcript.txt</key>
       <key>artifacts/job_id/transcript/segmented/transcript.md</key>
       <key>artifacts/job_id/transcript/docx/transcript.docx</key>
+      <key>artifacts/job_id/source-manifest.json</key>
+      <key>artifacts/job_id/batch-diagnostics.json</key>
       <key>artifacts/job_id/report/markdown/report.md</key>
       <key>artifacts/job_id/report/docx/report.docx</key>
       <key>artifacts/job_id/deep-research/markdown/evidence-research-final-report.md</key>
       <key>artifacts/job_id/logs/execution.log</key>
+      <key>artifacts/job_id/agent/result/result.json</key>
     </ObjectKeys>
     <AccessModel>
       <rule-1>Clients do not upload directly to MinIO in v1.</rule-1>
@@ -480,13 +493,13 @@
       <rule-5>Create-child behavior is stronger than idempotency: if a canonical child already exists, return it even without an idempotency key.</rule-5>
       <rule-6>Multipart request normalization includes scalar fields and ordered file manifest with filename, size_bytes, and sha256.</rule-6>
       <rule-7>Recommended first-version maximum request size is 1 GiB.</rule-7>
-      <rule-8>The existing upload endpoint preserves one uploaded file to one transcription job semantics; combined multi-media transcription uses a separate endpoint.</rule-8>
+      <rule-8>The existing upload endpoint preserves one uploaded file to one transcription job semantics; mixed-source batch transcription uses `/v1/transcription-jobs/batch`.</rule-8>
     </CommonRequestRules>
     <SharedEnums>
       <enum name="JobStatus">queued, running, cancel_requested, succeeded, failed, canceled</enum>
-      <enum name="JobType">transcription, report, deep_research</enum>
+      <enum name="JobType">transcription, report, deep_research, agent_run</enum>
       <enum name="SourceKind">uploaded_file, telegram_upload, youtube_url</enum>
-      <enum name="ArtifactKind">transcript_plain, transcript_segmented_markdown, transcript_docx, report_markdown, report_docx, deep_research_markdown, execution_log</enum>
+      <enum name="ArtifactKind">transcript_plain, transcript_segmented_markdown, transcript_docx, report_markdown, report_docx, deep_research_markdown, execution_log, agent_result_json, source_manifest_json, batch_diagnostics_json</enum>
     </SharedEnums>
     <ErrorEnvelope>
       <field>error.code</field>
@@ -510,22 +523,25 @@
         <rule>Reject empty file parts and ambiguous display_name usage for multi-file upload.</rule>
       </behavior>
     </Endpoint>
-    <Endpoint method="POST" path="/v1/transcription-jobs/combined">
-      <purpose>Create one combined transcription job from an ordered set of uploaded media files.</purpose>
+    <Endpoint method="POST" path="/v1/transcription-jobs/batch">
+      <purpose>Create one batch transcription aggregate root from a mixed source basket.</purpose>
       <content-type>multipart/form-data</content-type>
       <fields>
-        <field>files binary required one or more</field>
-        <field>display_name optional combined-operation label</field>
+        <field>source_manifest JSON required with manifest_version batch-transcription.v1</field>
+        <field>files binary optional map of multipart parts referenced by uploaded-file sources</field>
+        <field>display_name optional batch-operation label</field>
         <field>client_ref optional</field>
         <field>delivery_strategy optional default polling</field>
         <field>delivery_webhook_url optional required when delivery_strategy equals webhook</field>
       </fields>
-      <response>202 Accepted returns one job snapshot, not an array.</response>
+      <response>202 Accepted returns the root aggregate job snapshot, not an array.</response>
       <behavior>
-        <rule>API persists each uploaded file as its own source object.</rule>
-        <rule>API creates one ordered source set preserving multipart file order.</rule>
-        <rule>API creates one transcription job bound to that source set.</rule>
-        <rule>Combined flow does not change the semantics of POST /v1/transcription-jobs or the URL flow.</rule>
+        <rule>API validates stable unique ordered_source_labels and source map keys.</rule>
+        <rule>API persists each uploaded-file source as its own source object and validates URL sources without requiring a source object.</rule>
+        <rule>API creates one root aggregate transcription job and one per-source transcription child per manifest source.</rule>
+        <rule>Per-source children are enqueued as `job:transcription.run`; the root is later enqueued as `job:transcription.aggregate` when the completion policy permits aggregation.</rule>
+        <rule>Root aggregate success requires transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, and batch_diagnostics_json.</rule>
+        <rule>Batch flow does not change the semantics of POST /v1/transcription-jobs or the single URL flow.</rule>
       </behavior>
     </Endpoint>
     <Endpoint method="POST" path="/v1/transcription-jobs/from-url">
@@ -744,19 +760,19 @@
     <WorkerSpecifics>
       <TranscriptionWorker>
         <reused-sources>current transcribers.py, transcript rendering in documents.py, source materialization logic from service.py</reused-sources>
-        <outputs>transcript_plain, transcript_segmented_markdown, transcript_docx</outputs>
-        <progress-stages>queued, materializing_source, concatenating_inputs, transcribing, rendering_artifacts, uploading_artifacts, completed, failed, canceled</progress-stages>
+        <outputs>per-source jobs produce transcript_plain, transcript_segmented_markdown, transcript_docx; batch aggregate roots produce transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, batch_diagnostics_json</outputs>
+        <progress-stages>queued, materializing_source, transcribing, rendering_artifacts, uploading_artifacts, aggregate_queued, aggregating_sources, completed, failed, canceled</progress-stages>
       </TranscriptionWorker>
-      <ReportWorker>
-        <reused-sources>current cglm_runner.py and report docx rendering in documents.py</reused-sources>
+      <AgentRunnerReportOperation>
+        <reused-sources>workers/agent-runner/src/transcriber_worker_agent_runner.py and workers/common/src/transcriber_workers_common/documents.py</reused-sources>
         <outputs>report_markdown, report_docx</outputs>
         <progress-stages>queued, loading_transcript, generating_report, rendering_artifacts, uploading_artifacts, completed, failed, canceled</progress-stages>
-      </ReportWorker>
-      <DeepResearchWorker>
-        <reused-sources>current deep_research.py</reused-sources>
+      </AgentRunnerReportOperation>
+      <AgentRunnerDeepResearchOperation>
+        <reused-sources>workers/agent-runner/src/transcriber_worker_agent_runner.py</reused-sources>
         <outputs>deep_research_markdown and optional execution_log</outputs>
         <progress-stages>queued, loading_report, researching, writing_output, uploading_artifacts, completed, failed, canceled</progress-stages>
-      </DeepResearchWorker>
+      </AgentRunnerDeepResearchOperation>
     </WorkerSpecifics>
   </InternalWorkerContract>
 
@@ -775,7 +791,7 @@
       <rule-5>Check cancellation inside loops when processing chunked or long-running work.</rule-5>
     </WorkerRules>
     <SubprocessHandling>
-      <rule-1>cglm and deep research subprocess handles must be tracked.</rule-1>
+      <rule-1>Report-harness and deep-research subprocess handles must be tracked.</rule-1>
       <rule-2>If cancel is observed, worker should terminate subprocess.</rule-2>
       <rule-3>If subprocess termination succeeds, finalize as canceled.</rule-3>
       <rule-4>If subprocess crashes during an authoritative cancel, still report canceled unless corruption requires failed.</rule-4>
@@ -807,7 +823,9 @@
       <item>receive Telegram user input</item>
         <item>download attachments from Telegram when needed</item>
         <item>upload files to the API</item>
-        <item>submit Telegram media groups and explicit combined batches through the combined transcription endpoint</item>
+        <item>submit Telegram media groups and explicit baskets through the batch transcription endpoint</item>
+        <item>register Telegram commands for start, help, batch toggle, basket view, and basket clear</item>
+        <item>expose a batch-mode inline toggle that switches between basket collection and immediate single-source processing</item>
         <item>create URL jobs through the API</item>
       <item>poll for result readiness by default</item>
       <item>send resulting artifacts back to Telegram users</item>
@@ -836,7 +854,7 @@
       <required-capabilities>
         <item>upload file</item>
         <item>upload multiple files in one request</item>
-        <item>create one combined transcription job from multiple files when explicitly selected</item>
+        <item>create one batch transcription root from multiple files or mixed file plus URL sources when explicitly selected</item>
         <item>submit YouTube URL</item>
         <item>observe live state</item>
         <item>view artifact list</item>
@@ -873,7 +891,8 @@
       <recommended-stack>Python, aiogram, packages/sdk-py or thin internal API client</recommended-stack>
       <behavior-mapping>
         <map>upload media to POST /v1/transcription-jobs</map>
-        <map>combined media to POST /v1/transcription-jobs/combined</map>
+        <map>batch basket to POST /v1/transcription-jobs/batch</map>
+        <map>batch toggle command or button to adapter-local mode state without moving orchestration out of the API</map>
         <map>YouTube URL to POST /v1/transcription-jobs/from-url</map>
         <map>plain transcript ready to send plain transcript artifact</map>
         <map>segmented transcript button to resolve and send segmented artifact</map>
@@ -884,7 +903,9 @@
         <rule>Telegram bot does not expose advanced per-job runtime knobs in v1.</rule>
         <rule>Backend service defaults are used.</rule>
         <rule>Bot chooses its delivery strategy explicitly per request and defaults to polling.</rule>
-        <rule>Telegram media groups map automatically to the combined transcription flow; sequential standalone media use the combined flow only after an explicit user action such as Обработать вместе.</rule>
+        <rule>Bot registers `/start`, `/help`, `/batch`, `/basket`, and `/clear` as the public Telegram command menu.</rule>
+        <rule>Batch mode defaults to enabled, can be toggled per chat/user, and when disabled the adapter processes a single source immediately or asks the user to select one source from a multi-source message.</rule>
+        <rule>Telegram media groups and user-curated baskets map to the batch transcription flow; sequential standalone media enter the batch flow only after an explicit user action such as Обработать вместе.</rule>
       </runtime-policy>
     </Telegram>
   </UxRequirements>
@@ -897,8 +918,7 @@
       <service name="minio-init" notes="creates sources and artifacts buckets" />
       <service name="api" notes="depends on postgres, redis, minio; exposes HTTP and WebSocket; owns webhook delivery dispatcher" />
       <service name="worker-transcription" notes="depends on api, redis, minio; includes ffmpeg and faster-whisper" />
-      <service name="worker-report" notes="depends on api, redis, minio" />
-      <service name="worker-deep-research" notes="depends on api, redis, minio" />
+      <service name="worker-agent-runner" notes="depends on api, redis, minio; owns all report and deep-research AI operation execution" />
       <service name="web" notes="depends on api" />
       <service name="telegram-bot" notes="depends on api" />
       <service name="mcp-server" notes="depends on api" />
@@ -907,12 +927,12 @@
       <volume>postgres-data</volume>
       <volume>minio-data</volume>
       <volume>whisper-model-cache</volume>
-      <volume>report-and-deep-research-temp-space</volume>
+      <volume>agent-runner-runtime</volume>
       <volume>retained-log-volume</volume>
     </Volumes>
     <CpuNotes>
       <note-1>Do not start multiple transcription workers by default if CPU is constrained.</note-1>
-      <note-2>Keep report and deep-research workers separate so they do not block the transcription queue.</note-2>
+      <note-2>Keep report and deep-research AI concurrency isolated by `AGENT_RUNNER_HARNESS_CONCURRENCY`, not by separate worker services.</note-2>
       <note-3>Surface long-running progress in API and WebSocket so UI does not appear frozen.</note-3>
     </CpuNotes>
   </ComposeDesign>
@@ -921,9 +941,8 @@
     <SharedInfrastructure>POSTGRES_DSN, REDIS_URL, MINIO_ENDPOINT, MINIO_PUBLIC_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY, MINIO_BUCKET_SOURCES, MINIO_BUCKET_ARTIFACTS</SharedInfrastructure>
     <Api>API_BIND_ADDR, API_BASE_URL, WS_BASE_URL, MAX_UPLOAD_SIZE_BYTES, WEBHOOK_DELIVERY_ENABLED, WEBHOOK_DELIVERY_MAX_ATTEMPTS, WEBHOOK_DELIVERY_BACKOFF_SECONDS</Api>
     <TranscriptionWorker>WHISPER_MODEL, WHISPER_DEVICE equals cpu, WHISPER_COMPUTE_TYPE, FFMPEG_BIN</TranscriptionWorker>
-    <ReportWorker>REPORT_HARNESS_BIN, REPORT_HARNESS_TIMEOUT_SECONDS, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TYPE, HOST_HARNESS_TOKEN, HOST_HARNESS_CLIENT_TIMEOUT_SECONDS, REPORT_PROMPT_SUFFIX</ReportWorker>
-    <DeepResearchWorker>CLAUDE_BIN, DEEP_RESEARCH_BIN, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TYPE, HOST_HARNESS_TOKEN, HOST_HARNESS_CLIENT_TIMEOUT_SECONDS, DEEP_RESEARCH_MODEL</DeepResearchWorker>
-    <HostHarness>HOST_HARNESS_HOST, HOST_HARNESS_PORT, HOST_HARNESS_COMMAND, HOST_HARNESS_TYPE, HOST_HARNESS_TOKEN, HOST_HARNESS_TIMEOUT_SECONDS, HOST_WORKSPACE_ROOT</HostHarness>
+    <AgentRunnerWorker>AGENT_RUNNER_HARNESS_CONCURRENCY, AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY or AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY_FILE, AGENT_RUNNER_CLAUDE_CODE_BASE_URL, AGENT_RUNNER_CLAUDE_CODE_MODEL, AGENT_RUNNER_CLAUDE_CODE_CONFIG_DIR, AGENT_RUNNER_CLAUDE_CODE_RUN_TIMEOUT_SECONDS</AgentRunnerWorker>
+    <AgentRunnerForbidden>HOST_HARNESS_COMMAND, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TOKEN, HOST_WORKSPACE_ROOT, CLAUDE_BIN, DEEP_RESEARCH_BIN, host.docker.internal worker execution, host-side broker execution as primary path, bind-mounted host executable, host path remapping</AgentRunnerForbidden>
     <TelegramBot>TELEGRAM_BOT_TOKEN, API_BASE_URL</TelegramBot>
     <Web>VITE_API_BASE_URL, VITE_WS_URL</Web>
     <McpServer>API_BASE_URL</McpServer>
@@ -931,10 +950,9 @@
 
   <MigrationMapping>
     <Map from="src/telegram_transcriber_bot/transcribers.py" to="workers/common/src/transcriber_workers_common/transcribers.py and workers/transcription/src" />
-    <Map from="src/telegram_transcriber_bot/documents.py" to="workers/common/src/transcriber_workers_common/documents.py" />
-    <Map from="src/telegram_transcriber_bot/cglm_runner.py" to="workers/report/src" />
-    <Map from="src/telegram_transcriber_bot/deep_research.py" to="workers/deep-research/src" />
-    <Map from="src/telegram_transcriber_bot/service.py" to="execution-specific code into Python workers; orchestration semantics into Go API; metadata persistence replaced by PostgreSQL, MinIO, and Redis integration" />
+    <Map from="workers/common/src/transcriber_workers_common/documents.py" to="workers/common/src/transcriber_workers_common/documents.py" />
+    <Map from="retired workers/report and workers/deep-research dedicated runtimes" to="workers/agent-runner/src operation envelopes and artifact persistence" />
+    <Map from="former src/telegram_transcriber_bot/service.py local shell" to="execution-specific code into Python workers; orchestration semantics into Go API; metadata persistence replaced by PostgreSQL, MinIO, and Redis integration" />
     <Map from="src/telegram_transcriber_bot/bot.py" to="message parsing, Telegram downloads, client-side polling or wait flow, result delivery, and callback-to-API mapping only" />
     <MovedOutFromBot>direct execution, local job state persistence, direct report generation, deep research execution</MovedOutFromBot>
   </MigrationMapping>
@@ -1043,7 +1061,7 @@
         </errors>
       </contract>
       <interface>
-        <export-enqueue PURPOSE="Publish job:transcription.run, job:report.run, and job:deep_research.run tasks." />
+        <export-enqueue PURPOSE="Publish job:transcription.run and job:agent_run.run tasks." />
       </interface>
       <depends>M-CONTRACTS</depends>
       <target>
@@ -1114,7 +1132,8 @@
       </contract>
       <interface>
         <export-createTranscriptionJobs PURPOSE="Create one job per uploaded file or one job from a supported URL." />
-        <export-createCombinedTranscriptionJob PURPOSE="Create one transcription job bound to an ordered multi-source input set." />
+        <export-createBatchTranscriptionJob PURPOSE="Create one root aggregate transcription job plus per-source transcription children for a stable source-label manifest." />
+        <export-scheduleBatchAggregate PURPOSE="Schedule the root `job:transcription.aggregate` task after source children satisfy completion policy." />
         <export-createChildJob PURPOSE="Create or reuse canonical report or deep-research child jobs." />
         <export-cancelJob PURPOSE="Apply cooperative cancellation semantics." />
         <export-retryJob PURPOSE="Create a new lineage-linked retry row." />
@@ -1176,8 +1195,8 @@
 
     <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" LAYER="2" ORDER="2" STATUS="implemented">
       <contract>
-        <purpose>Provide shared Python helpers for claim, progress, finalize calls, storage utilities, and execution scaffolding.</purpose>
-        <scope>Internal API client helpers, artifact upload helpers, typed execution context parsing, and common cancellation probes.</scope>
+        <purpose>Provide shared Python helpers for claim, progress, finalize calls, storage utilities, execution scaffolding, and source/domain contracts.</purpose>
+        <scope>Internal API client helpers, artifact upload helpers, typed execution context parsing, common cancellation probes, canonical source dataclasses, and reusable source extraction/label helpers.</scope>
         <inputs>
           <param name="internal-api-config" type="client-config" />
         </inputs>
@@ -1193,6 +1212,8 @@
         <export-jobApiClient PURPOSE="Call internal worker endpoints safely." />
         <export-runWorkerLoop PURPOSE="Poll queued jobs or execute a one-shot job through one shared worker loop." />
         <export-objectStore PURPOSE="Fetch source objects and upload artifact objects through the shared MinIO/S3 adapter." />
+        <export-domainContracts PURPOSE="Expose source, media, transcript, report, and processed-job dataclasses without importing the legacy bot package." />
+        <export-sourceHelpers PURPOSE="Expose shared source extraction, source-label, and media-group helper surfaces." />
       </interface>
       <depends>M-CONTRACTS</depends>
       <target>
@@ -1206,7 +1227,7 @@
       <verification-ref>V-M-WORKER-COMMON</verification-ref>
       <notes>
         <note-1>Keep worker-to-API DTOs stable and versioned through M-CONTRACTS.</note-1>
-        <note-2>Runtime scaffold, API client, object-store adapter, and packet-local tests are implemented; remaining work is live integration evidence, not shared-helper extraction.</note-2>
+        <note-2>Runtime scaffold, API client, object-store adapter, source/domain contracts, and packet-local tests are implemented; remaining work is live integration evidence, not shared-helper extraction.</note-2>
       </notes>
     </M-WORKER-COMMON>
 
@@ -1248,76 +1269,50 @@
       </notes>
     </M-WORKER-TRANSCRIPTION>
 
-    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" LAYER="3" ORDER="2" STATUS="implemented">
+    <M-WORKER-AGENT-RUNNER NAME="AgentRunner" TYPE="CORE_LOGIC" LAYER="3" ORDER="2" STATUS="single-ai-worker-report-deep-research-orchestration-verified">
       <contract>
-        <purpose>Generate markdown and DOCX research reports from transcript artifacts using the configured report harness.</purpose>
-        <scope>Report harness command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.</scope>
+        <purpose>Provide the approved single AI execution worker behind the existing control plane without introducing provider-specific report, deep-research, Claude, or Codex workers.</purpose>
+        <scope>Dispatch by `harness_name`, `agent_run` job-family execution inside the current control plane, report/deep-research operation envelopes, input artifact materialization through worker-only API artifact resolution, persistence through `jobs`, `job_executions`, `job_events`, and `job_artifacts`, normalized result summary plus redacted metadata in DB payloads, artifact-backed full logs or large outputs, explicit per-harness concurrency policy, and first-iteration container-local Claude Code execution through generated Anthropic-compatible settings JSON.</scope>
         <inputs>
-          <param name="report-job" type="claimed-job-execution" />
+          <param name="agent-run-create-request" type="agent_run_create-plus-harness-name" />
+          <param name="harness-runtime-policy" type="per-harness-configured-concurrency-and-launch-policy" />
         </inputs>
         <outputs>
-          <param name="report-markdown" type="artifact" />
-          <param name="report-docx" type="artifact" />
+          <param name="agent-run-result" type="normalized-summary-redacted-metadata-artifacts-and-terminal-status" />
+          <param name="operation-artifacts" type="report_markdown-report_docx-or-deep_research_markdown" />
         </outputs>
-        <links>M-WORKER-REPORT, V-M-WORKER-REPORT, DF-004, DF-006</links>
+        <links>M-WORKER-AGENT-RUNNER, V-M-WORKER-AGENT-RUNNER</links>
         <errors>
-          <error code="report_failed" />
+          <error code="agent_harness_not_supported" />
+          <error code="agent_harness_concurrency_unavailable" />
+          <error code="agent_harness_execution_failed" />
         </errors>
       </contract>
       <interface>
-        <export-runReport PURPOSE="Execute one claimed report job." />
-        <export-launchReportWorker PURPOSE="Start the compose-ready report worker process using WorkerCommon runtime wiring." />
+        <export-runAgentHarness PURPOSE="Dispatch one `agent_run` job to the configured harness implementation selected by `harness_name`." />
+        <export-reserveHarnessLease PURPOSE="Acquire a worker-local per-harness lease before dispatch." />
+        <export-agentClaudeCodeHarness PURPOSE="Generate Claude Code settings JSON from explicit env values, resolve private request access, materialize input artifacts, and execute the container-local Claude Code CLI for `claude-code` harnesses." />
+        <export-persistAgentRunSummary PURPOSE="Persist normalized result summary and redacted metadata to the existing control-plane job model while routing full logs and large outputs into artifacts." />
+        <export-persistOperationArtifacts PURPOSE="Persist report_markdown, report_docx, and deep_research_markdown artifacts when requested by public operation envelopes." />
       </interface>
-      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
+      <depends>M-WORKER-COMMON, M-CONTRACTS, M-API-HTTP</depends>
       <target>
-        <source>workers/report</source>
-        <tests>workers/report/tests</tests>
+        <source>workers/agent-runner</source>
+        <tests>workers/agent-runner/tests and focused workers/common tests verified for the runtime and lease-boundary slices</tests>
       </target>
       <observability>
-        <log-prefix>[WorkerReport]</log-prefix>
-        <critical-block>BLOCK_EXECUTE_REPORT_PIPELINE</critical-block>
+        <log-prefix>[AgentRunner]</log-prefix>
+        <critical-block>BLOCK_DISPATCH_AGENT_HARNESS</critical-block>
       </observability>
-      <verification-ref>V-M-WORKER-REPORT</verification-ref>
+      <verification-ref>V-M-WORKER-AGENT-RUNNER</verification-ref>
       <notes>
-        <note-1>Cancellation must be subprocess-aware because the report harness runs out of process.</note-1>
-        <note-2>Worker extraction and compose launcher are implemented; remaining verification is API-created child reuse plus real control-plane integration.</note-2>
+        <note-1>The approved shape is one generic worker keyed by `harness_name`, not separate workers per provider.</note-1>
+        <note-2>The approved control-plane boundary is `agent_run` plus the existing jobs or executions or events or artifacts persistence model.</note-2>
+        <note-3>For the first provider iteration, Claude Code uses container-local Anthropic-compatible settings generated from the `cglm`-style `AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY`, `AGENT_RUNNER_CLAUDE_CODE_BASE_URL`, and `AGENT_RUNNER_CLAUDE_CODE_MODEL` env values; Codex and Anthropic Claude subscription login are out of scope.</note-3>
+        <note-4>Per-harness concurrency must be configurable independently, for example claude-code=2.</note-4>
+        <note-5>The generic runtime and worker-local lease-boundary slices are implemented with deterministic fixture dispatch, container-local `claude-code` dispatch, private request envelope resolution, generated provider settings, input artifact materialization, operation artifact persistence, and per-harness in-process lease limits. Compose service wiring is implemented through `worker-agent-runner`; live fixture-mode e2e, live external Claude Code provider smoke, and full report/deep-research agent_run orchestration tests are verified through the API, worker-control, Claude Code/GLM, and MinIO artifact flow.</note-5>
       </notes>
-    </M-WORKER-REPORT>
-
-    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" LAYER="3" ORDER="3" STATUS="implemented">
-      <contract>
-        <purpose>Run the evidence-driven deep-research pipeline and persist the final markdown output plus optional execution logs.</purpose>
-        <scope>Phase-driven deep-research execution, required artifact validation, optional log persistence, and terminal finalization.</scope>
-        <inputs>
-          <param name="deep-research-job" type="claimed-job-execution" />
-        </inputs>
-        <outputs>
-          <param name="deep-research-markdown" type="artifact" />
-        </outputs>
-        <links>M-WORKER-DEEP-RESEARCH, V-M-WORKER-DEEP-RESEARCH, DF-005, DF-006</links>
-        <errors>
-          <error code="deep_research_failed" />
-        </errors>
-      </contract>
-      <interface>
-        <export-runDeepResearch PURPOSE="Execute one claimed deep-research job." />
-        <export-launchDeepResearchWorker PURPOSE="Start the compose-ready deep-research worker process using WorkerCommon runtime wiring." />
-      </interface>
-      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
-      <target>
-        <source>workers/deep-research</source>
-        <tests>workers/deep-research/tests</tests>
-      </target>
-      <observability>
-        <log-prefix>[WorkerDeepResearch]</log-prefix>
-        <critical-block>BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE</critical-block>
-      </observability>
-      <verification-ref>V-M-WORKER-DEEP-RESEARCH</verification-ref>
-      <notes>
-        <note-1>Deep-research phase gates and required artifacts must remain deterministic under the new job shell.</note-1>
-        <note-2>Worker extraction and compose launcher are implemented; remaining verification is API-created deep-research child-job integration under the live stack.</note-2>
-      </notes>
-    </M-WORKER-DEEP-RESEARCH>
+    </M-WORKER-AGENT-RUNNER>
 
     <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" LAYER="4" ORDER="1" STATUS="implemented">
       <contract>
@@ -1374,7 +1369,9 @@
       <interface>
         <export-handleIncomingMedia PURPOSE="Download Telegram media temporarily and submit it to the API." />
         <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, and segmented-artifact actions." />
-        <export-submitCombinedMedia PURPOSE="Submit Telegram media groups or buffered sequential media as one combined transcription job." />
+        <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, and URL sources as one API batch basket." />
+        <export-registerCommandMenu PURPOSE="Register `/start`, `/help`, `/batch`, `/basket`, and `/clear` commands for Telegram clients." />
+        <export-toggleBatchMode PURPOSE="Switch per-chat/user batch collection mode between basket submission and immediate single-source processing." />
       </interface>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <target>
@@ -1446,12 +1443,10 @@
       </contract>
       <interface>
         <export-composeStack PURPOSE="Start and verify the local platform stack." />
-        <export-deterministicHostHarness PURPOSE="Provide a bounded host-harness command for worker bridge smoke verification without hard-coding one external CLI." />
       </interface>
-      <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
+      <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
       <target>
         <source>infra/docker-compose.yml</source>
-        <source>infra/host-tools/*.py</source>
         <tests>compose smoke scripts</tests>
       </target>
       <observability>
@@ -1461,6 +1456,7 @@
       <verification-ref>V-M-INFRA-COMPOSE</verification-ref>
       <notes>
         <note-1>Healthchecks are required before cutover because there is no long-lived legacy fallback track.</note-1>
+        <note-2>After April 24 container-native verification, the obsolete `infra/host-tools/host-harness-*`, `infra/env/host-harness.env.example`, and `tests/test_host_harness_bridge.py` bridge residue was removed; the agent-runner path now remains container-local for the first Claude Code provider iteration.</note-2>
       </notes>
     </M-INFRA-COMPOSE>
   </Modules>
@@ -1474,11 +1470,12 @@
       <evidence>V-M-API-JOBS, V-M-API-QUEUE, V-M-WORKER-TRANSCRIPTION, V-M-API-EVENTS</evidence>
     </DF-001>
 
-    <DF-007 NAME="CombinedUploadedMediaTranscription" TRIGGER="combined multipart transcription create request">
-      <step-1>Client uploads one or more files to the combined endpoint with delivery strategy defaulting to polling unless webhook is selected.</step-1>
-      <step-2>API stores each source file in MinIO, persists one ordered source set plus its ordered source_set_items, then creates one transcription job bound to that source set.</step-2>
-      <step-3>Transcription worker claims the job, materializes all ordered inputs, normalizes them to a common audio representation, concatenates them in temp space, runs one transcription pass, renders one artifact set, uploads it, and finalizes the job.</step-3>
-      <step-4>API emits versioned events, exposes one authoritative polling snapshot, and schedules webhook deliveries only when the combined job uses webhook delivery.</step-4>
+    <DF-007 NAME="BatchTranscriptionAggregate" TRIGGER="batch mixed-source transcription create request">
+      <step-1>Client submits `source_manifest=batch-transcription.v1` plus referenced multipart file parts to `/v1/transcription-jobs/batch` with delivery strategy defaulting to polling unless webhook is selected.</step-1>
+      <step-2>API stores uploaded-file sources in MinIO, validates URL sources, persists stable ordered source labels, creates a root aggregate transcription job, and creates one per-source transcription child per manifest source.</step-2>
+      <step-3>Per-source transcription children run independently through `job:transcription.run` and persist their own transcript_plain, transcript_segmented_markdown, and transcript_docx artifacts.</step-3>
+      <step-4>After completion policy permits aggregation, API schedules the root `job:transcription.aggregate` task; worker-transcription merges successful child artifacts in source-label order and writes root transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, and batch_diagnostics_json.</step-4>
+      <step-5>API emits versioned events, exposes one authoritative root polling snapshot with child lineage, and schedules webhook deliveries only when the batch root uses webhook delivery.</step-5>
       <evidence>V-M-CONTRACTS, V-M-API-STORAGE, V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-TELEGRAM-ADAPTER</evidence>
     </DF-007>
 
@@ -1498,29 +1495,29 @@
 
     <DF-004 NAME="TranscriptToReport" TRIGGER="report child job create request">
       <step-1>API validates that the parent transcription job succeeded and contains transcript_plain.</step-1>
-      <step-2>API reuses an existing canonical report child or creates a new report job and enqueues it.</step-2>
-      <step-3>Report worker runs the configured report harness, renders report artifacts, uploads them, and finalizes the report job.</step-3>
-      <evidence>V-M-API-JOBS, V-M-WORKER-REPORT</evidence>
+      <step-2>API reuses an existing canonical report operation child or creates a new `agent_run` child with `operation=report`, `harness_name=claude-code`, transcript input artifact refs, and expected `report_markdown` plus `report_docx` outputs.</step-2>
+      <step-3>Worker-agent-runner resolves private request access, materializes transcript input artifacts, runs the configured container-local Claude Code harness, uploads report artifacts, and finalizes the agent_run job.</step-3>
+      <evidence>V-M-API-JOBS, V-M-WORKER-AGENT-RUNNER</evidence>
     </DF-004>
 
     <DF-005 NAME="ReportToDeepResearch" TRIGGER="deep-research child job create request">
       <step-1>API validates that the parent report job succeeded and contains report_markdown.</step-1>
-      <step-2>API reuses an existing canonical deep-research child or creates a new deep-research job and enqueues it.</step-2>
-      <step-3>Deep-research worker runs the evidence-driven pipeline, uploads final markdown and optional logs, and finalizes the job.</step-3>
-      <evidence>V-M-API-JOBS, V-M-WORKER-DEEP-RESEARCH</evidence>
+      <step-2>API reuses an existing canonical deep-research operation child or creates a new `agent_run` child with `operation=deep_research`, `harness_name=claude-code`, transcript and report input artifact refs, and expected `deep_research_markdown` output.</step-2>
+      <step-3>Worker-agent-runner resolves private request access, materializes transcript and report artifacts, runs the configured container-local Claude Code harness, uploads deep-research markdown and execution logs, and finalizes the agent_run job.</step-3>
+      <evidence>V-M-API-JOBS, V-M-WORKER-AGENT-RUNNER</evidence>
     </DF-005>
 
     <DF-006 NAME="CancelOrRetry" TRIGGER="cancel or retry request">
       <step-1>API validates current job state and either finalizes queued jobs as canceled or marks running jobs as cancel_requested.</step-1>
       <step-2>Workers check cancellation between expensive phases and finalize as canceled when authoritative cancellation is observed.</step-2>
       <step-3>Retry creates a new lineage-linked job row and never mutates historical execution records.</step-3>
-      <evidence>V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-WORKER-REPORT, V-M-WORKER-DEEP-RESEARCH</evidence>
+      <evidence>V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-WORKER-AGENT-RUNNER</evidence>
     </DF-006>
   </DataFlow>
 
   <ImplementationWaves>
-    <Wave-0 name="Baseline Freeze And Acceptance SSOT" status="pending">
-      <goal>Freeze current behavior so the migration has a hard acceptance target.</goal>
+    <Wave-0 name="Baseline Freeze And Acceptance SSOT" status="done">
+      <goal>Freeze current behavior so the migration has a hard acceptance target; the historical baseline is now carried by README, compose cutover runbooks, and verification evidence rather than separate Wave-0 backfill artifacts.</goal>
       <deliverables>
         <item>migration baseline doc</item>
         <item>behavior matrix</item>
@@ -1528,9 +1525,9 @@
         <item>current runtime verification notes</item>
       </deliverables>
       <files>
-        <file>Create docs/architecture/current-system-baseline.md</file>
-        <file>Create docs/architecture/current-behavior-matrix.md</file>
-        <file>Modify README.md</file>
+        <file>README.md</file>
+        <file>docs/architecture/cutover-checklist.md</file>
+        <file>docs/architecture/runtime-ops.md</file>
       </files>
       <Phase-0-1>Record current supported flows: YouTube, Telegram voice, Telegram audio or video or document, media groups, plain transcript, segmented transcript, report, deep research.</Phase-0-1>
       <Phase-0-2>Record current artifacts transcript.txt, transcript.md, transcript.docx, report.md, report.docx, and deep research final report.</Phase-0-2>
@@ -1550,7 +1547,7 @@
       </files>
       <Phase-1-1>Create repository structure and placeholder READMEs.</Phase-1-1>
       <Phase-1-2>Write OpenAPI draft for create transcription job, get job, list jobs, create report job, create deep-research job, cancel, retry, artifact resolve endpoint, idempotency, delivery strategy and webhook fields, and multi-file upload shapes.</Phase-1-2>
-      <Phase-1-2a>Freeze the separate combined transcription endpoint and source-set semantics without changing the existing one-file-to-one-job upload contract.</Phase-1-2a>
+      <Phase-1-2a status="superseded-by-batch">Historical separate combined endpoint freeze; current active contract is `/v1/transcription-jobs/batch` with root aggregate, per-source children, and stable source labels.</Phase-1-2a>
       <Phase-1-3>Write WebSocket schema draft with event envelope and event types.</Phase-1-3>
       <Phase-1-3a>Write webhook schema draft with envelope, retry semantics, lifecycle events, and failure handling.</Phase-1-3a>
       <Phase-1-4>Define shared enums for job types, statuses, artifact kinds, and source kinds.</Phase-1-4>
@@ -1586,27 +1583,27 @@
         <file>Create workers/transcription/tests</file>
       </files>
       <Phase-3-1>Extract reusable Python execution library by moving transcription and document rendering logic into worker-common.</Phase-3-1>
-      <Phase-3-2>Implement worker claim and run loop: receive job_id, fetch ordered input metadata, download one or more sources from MinIO if needed, concatenate ordered media when the source set has multiple items, execute transcription, upload artifacts, publish progress, finalize job through the API-owned control contract.</Phase-3-2>
+      <Phase-3-2>Implement worker claim and run loop: receive job_id, fetch ordered input metadata, execute per-source transcription for source children, and execute batch aggregate root merging through `job:transcription.aggregate` without reintroducing concat-first root transcription.</Phase-3-2>
       <Phase-3-3>Preserve current output formats: plain transcript, segmented markdown transcript, transcript docx.</Phase-3-3>
       <Phase-3-4>Add cancellation integration by checking the cancel flag before and after long work.</Phase-3-4>
     </Wave-3>
 
-    <Wave-4 name="Report Worker Extraction" status="done">
-      <goal>Split report generation into a dedicated job type and worker.</goal>
+    <Wave-4 name="Historical Report Worker Extraction" status="superseded-by-agent-runner">
+      <goal>Historical dedicated report-worker extraction; this topology is retired and current report execution is owned by worker-agent-runner through `agent_run` operation envelopes.</goal>
       <files>
-        <file>Create workers/report/src</file>
-        <file>Create workers/report/tests</file>
+        <file>Retired path: workers/report/src</file>
+        <file>Retired path: workers/report/tests</file>
       </files>
-      <Phase-4-1>Extract report generation package by moving cglm_runner and report DOCX generation into report worker layer.</Phase-4-1>
+      <Phase-4-1>Extract report generation package into the report worker runtime and shared document-rendering layer.</Phase-4-1>
       <Phase-4-2>Implement report job creation in API with validation that parent transcription artifacts exist.</Phase-4-2>
-      <Phase-4-3>Implement report worker lifecycle: claim report job, read transcript artifact, run cglm, upload markdown and docx, finalize.</Phase-4-3>
+      <Phase-4-3>Implement report worker lifecycle: claim report job, read transcript artifact, run the configured report harness, upload markdown and docx, finalize.</Phase-4-3>
     </Wave-4>
 
-    <Wave-5 name="Deep Research Worker Extraction" status="done">
-      <goal>Split deep research into a dedicated job type and worker.</goal>
+    <Wave-5 name="Historical Deep Research Worker Extraction" status="superseded-by-agent-runner">
+      <goal>Historical dedicated deep-research-worker extraction; this topology is retired and current deep-research execution is owned by worker-agent-runner through `agent_run` operation envelopes.</goal>
       <files>
-        <file>Create workers/deep-research/src</file>
-        <file>Create workers/deep-research/tests</file>
+        <file>Retired path: workers/deep-research/src</file>
+        <file>Retired path: workers/deep-research/tests</file>
       </files>
       <Phase-5-1>Extract deep research package with minimal rewrite.</Phase-5-1>
       <Phase-5-2>Implement API deep-research child-job creation with report artifact validation.</Phase-5-2>
@@ -1624,7 +1621,7 @@
       <Phase-6-1>Scaffold app shell with routes, layout, and API client wiring.</Phase-6-1>
       <Phase-6-2>Create jobs list page displaying job type, status, created time, and progress.</Phase-6-2>
       <Phase-6-3>Create job details page showing status, progress, event timeline, artifacts, and child jobs.</Phase-6-3>
-      <Phase-6-4>Add create job form supporting per-file upload, explicit combined multi-media upload, and YouTube URL submission.</Phase-6-4>
+      <Phase-6-4>Add create job form supporting per-file upload, explicit batch transcription, and YouTube URL submission.</Phase-6-4>
       <Phase-6-5>Add polling and WebSocket integration using polling as fallback and WebSocket for fast updates.</Phase-6-5>
       <Phase-6-6>Add actions for report, deep research, cancel, and retry.</Phase-6-6>
       <Phase-6-7>Add delivery strategy controls with default polling, required webhook URL validation, and explicit explanation that each job chooses exactly one strategy: polling or webhook.</Phase-6-7>
@@ -1637,8 +1634,8 @@
         <file>Create apps/telegram-bot/src</file>
         <file>Create packages/sdk-py</file>
       </files>
-      <Phase-7-1>Add typed Python API client supporting create upload job, create combined upload job, create URL job, get job, list jobs, create report job, create deep-research job, cancel, retry, and artifact resolution.</Phase-7-1>
-      <Phase-7-2>Adapt message flow so the bot becomes an input parser, Telegram downloader, HTTP client, and artifact sender. Use explicit delivery strategy per request and default to polling. Map Telegram media groups to the combined endpoint and allow explicit buffered combined submission for sequential media.</Phase-7-2>
+      <Phase-7-1>Add typed Python API client supporting create upload job, create batch job, create URL job, get job, list jobs, create report job, create deep-research job, cancel, retry, and artifact resolution.</Phase-7-1>
+      <Phase-7-2>Adapt message flow so the bot becomes an input parser, Telegram downloader, HTTP client, and artifact sender. Use explicit delivery strategy per request and default to polling. Map Telegram media groups and user-curated baskets to `/v1/transcription-jobs/batch`.</Phase-7-2>
       <Phase-7-3>Preserve current UX: plain transcript immediate delivery, segmented transcript button, report button, deep research button.</Phase-7-3>
       <Phase-7-4>Remove execution coupling so the bot no longer imports execution core directly.</Phase-7-4>
     </Wave-7>
@@ -1655,7 +1652,7 @@
       <Phase-8-3>Add artifact visibility through artifact metadata and download endpoints.</Phase-8-3>
     </Wave-8>
 
-    <Wave-9 name="Compose Hardening And Cutover" status="in_progress">
+    <Wave-9 name="Compose Hardening And Cutover" status="done">
       <goal>Make the new platform the default local runtime.</goal>
       <files>
         <file>Modify infra/docker-compose.yml</file>
@@ -1665,9 +1662,59 @@
       </files>
       <Phase-9-1 status="done">Add persistent volumes and init scripts.</Phase-9-1>
       <Phase-9-2 status="done">Add healthchecks and prove compose live-smoke convergence.</Phase-9-2>
-      <Phase-9-3 status="pending">Add local runbook documenting startup, restart, logs, and common failures.</Phase-9-3>
-      <Phase-9-4 status="blocked-on-cutover-parity">Cut over old single-process entrypoint after compose smoke verification and functional parity checks pass.</Phase-9-4>
+      <Phase-9-3 status="done">Add local runbook documenting startup, restart, logs, and common failures.</Phase-9-3>
+      <Phase-9-4 status="done">Cut over the old single-process entrypoint by replacing it with a compose-only fail-fast message after compose smoke verification and functional parity checks passed.</Phase-9-4>
     </Wave-9>
+
+    <Wave-10 name="Historical Container Native Harness Cutover" status="superseded-by-agent-runner">
+      <goal>Historical bridge-removal packet for dedicated report/deep-research workers; the current topology deletes those workers and preserves container-native provider execution inside worker-agent-runner.</goal>
+      <files>
+        <file>Create workers/common/src/transcriber_workers_common/harness*.py</file>
+        <file>Retired path: workers/report/src/transcriber_worker_report.py</file>
+        <file>Retired path: workers/deep-research/src/*</file>
+        <file>Retired path: infra/images/worker-report/Dockerfile</file>
+        <file>Retired path: infra/images/worker-deep-research/Dockerfile</file>
+        <file>Modify infra/docker-compose.yml</file>
+        <file>Retired path: infra/env/worker-report.env.example</file>
+        <file>Retired path: infra/env/worker-deep-research.env.example</file>
+        <file>Modify infra/scripts/compose-smoke.sh</file>
+        <file>Modify docs/architecture/runtime-ops.md</file>
+        <file>Modify docs/architecture/cutover-checklist.md</file>
+      </files>
+      <Phase-10-1 status="superseded">WorkerHarness contracts and dedicated worker consumption are retired from the active runtime.</Phase-10-1>
+      <Phase-10-2 status="superseded">Report and deep-research execution moved again from dedicated workers to worker-agent-runner operation envelopes.</Phase-10-2>
+      <Phase-10-3 status="superseded">Dedicated report/deep-research images and env files are deleted from the active compose topology.</Phase-10-3>
+      <Phase-10-4 status="superseded">Current acceptance lives in the worker-agent-runner e2e and compose topology gates.</Phase-10-4>
+    </Wave-10>
+
+    <Wave-11 name="Unified AI Agent Worker Architecture Decision Freeze" status="done">
+      <goal>Freeze the approved generic `agent-runner` architecture contract, control-plane persistence boundary, container-local Claude Code provider boundary, and per-harness concurrency policy without starting implementation.</goal>
+      <files>
+        <file>Modify docs/requirements.xml</file>
+        <file>Modify docs/technology.xml</file>
+        <file>Modify docs/development-plan.xml</file>
+        <file>Modify docs/knowledge-graph.xml</file>
+        <file>Modify docs/verification-plan.xml</file>
+        <file>Modify docs/operational-packets.xml</file>
+      </files>
+      <Phase-11-1 status="done">Freeze the `harness_name` dispatch contract, `agent_run` job-family ownership, and the control-plane summary or redaction boundary for generic agent jobs.</Phase-11-1>
+      <Phase-11-2 status="done">Freeze first-iteration Claude Code integration as container-local CLI execution with env-generated Anthropic-compatible settings; Codex and Anthropic Claude subscription login are out of scope.</Phase-11-2>
+      <Phase-11-3 status="done">Freeze per-harness concurrency policy and worker admission control without introducing provider-specific worker processes.</Phase-11-3>
+    </Wave-11>
+
+    <Wave-12 name="Unified AI Agent Worker Implementation" status="done">
+      <goal>Implement the approved `agent-runner` contract, `agent_run` control-plane family, container-local Claude Code provider integration, and policy wiring after the decision-freeze packet is closed.</goal>
+      <files>
+        <file>workers/agent-runner</file>
+        <file>apps/api/internal/jobs</file>
+        <file>apps/api/internal/api</file>
+        <file>apps/api/internal/storage</file>
+        <file>packages/contracts</file>
+      </files>
+      <Phase-12-1 status="done">Add the `agent_run` submission and persistence wiring on top of the existing control-plane model; verified by `cd apps/api &amp;&amp; go test ./...`, `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py`, and `git diff --check -- apps/api/internal/api apps/api/internal/jobs apps/api/internal/queue apps/api/internal/storage packages/contracts` on 2026-04-24.</Phase-12-1>
+      <Phase-12-2 status="done">Implement generic `agent-runner` dispatch by `harness_name` with artifact-backed logs and redacted summary persistence; verified by focused worker tests, contract tests, API tests, XML lint, GRACE lint, and reviewer approval on 2026-04-24.</Phase-12-2>
+      <Phase-12-3 status="done">Implement container-local Claude Code provider settings generation, private request envelope resolution, and per-harness concurrency enforcement; verified by focused `workers/agent-runner` and worker-common tests on 2026-04-26.</Phase-12-3>
+    </Wave-12>
   </ImplementationWaves>
 
   <ImplementationOrder>
@@ -1692,10 +1739,10 @@
       <step-2 module="M-WORKER-TRANSCRIPTION" status="done" verification="V-M-WORKER-TRANSCRIPTION">Move current transcription execution and transcript rendering into worker form.</step-2>
     </Phase-3>
 
-    <Phase-4 name="Report And Deep Research Extraction" status="done">
-      <goal>Split report and deep-research execution into dedicated workers with stable child-job contracts.</goal>
-      <step-1 module="M-WORKER-REPORT" status="done" verification="V-M-WORKER-REPORT">Extract report generation through the configured report harness into the report worker.</step-1>
-      <step-2 module="M-WORKER-DEEP-RESEARCH" status="done" verification="V-M-WORKER-DEEP-RESEARCH">Extract deep-research pipeline into the dedicated worker.</step-2>
+    <Phase-4 name="Historical Report And Deep Research Extraction" status="superseded-by-agent-runner">
+      <goal>Historical dedicated-worker extraction is superseded; stable report/deep-research public contracts now create `agent_run` operation jobs.</goal>
+      <step-1 module="M-WORKER-AGENT-RUNNER" status="superseded" verification="V-M-WORKER-AGENT-RUNNER">Dedicated report-worker execution was retired and replaced by `operation=report` agent_run orchestration.</step-1>
+      <step-2 module="M-WORKER-AGENT-RUNNER" status="superseded" verification="V-M-WORKER-AGENT-RUNNER">Dedicated deep-research-worker execution was retired and replaced by `operation=deep_research` agent_run orchestration.</step-2>
     </Phase-4>
 
     <Phase-5 name="Adapter And UI Cutover" status="done">
@@ -1707,11 +1754,32 @@
       <step-3 module="M-MCP-ADAPTER" status="done" verification="V-M-MCP-ADAPTER">Expose the same core operations through MCP.</step-3>
     </Phase-5>
 
-    <Phase-6 name="Compose Hardening And Final Cutover" status="in_progress">
+    <Phase-6 name="Compose Hardening And Final Cutover" status="done">
       <goal>Validate the full local stack, enforce health gates, and remove the old single-process entrypoint.</goal>
       <step-1 module="M-INFRA-COMPOSE" status="done" verification="V-M-INFRA-COMPOSE">Harden compose startup order, healthchecks, volumes, and smoke scripts.</step-1>
-      <step-2 module="M-API-HTTP" status="pending" verification="V-M-API-HTTP">Verify full-stack parity against the frozen acceptance matrix before deleting the old runtime path.</step-2>
+      <step-2 module="M-API-HTTP" status="done" verification="V-M-API-HTTP">Verify full-stack parity against the frozen acceptance matrix before deleting the old runtime path.</step-2>
     </Phase-6>
+
+    <Phase-7 name="Historical Container Native Harness Cutover" status="superseded-by-agent-runner">
+      <goal>Historical host-harness removal is superseded by deleting the dedicated AI workers and running all AI operation execution in worker-agent-runner.</goal>
+      <step-1 module="M-WORKER-AGENT-RUNNER" status="superseded" verification="V-M-WORKER-AGENT-RUNNER">WorkerHarness was retired from active runtime; worker-agent-runner now owns container-local Claude Code dispatch.</step-1>
+      <step-2 module="M-WORKER-AGENT-RUNNER" status="superseded" verification="V-M-WORKER-AGENT-RUNNER">Report generation now uses worker-agent-runner request-access, input artifact materialization, and operation artifact persistence.</step-2>
+      <step-3 module="M-WORKER-AGENT-RUNNER" status="superseded" verification="V-M-WORKER-AGENT-RUNNER">Deep-research generation now uses worker-agent-runner request-access, input artifact materialization, and operation artifact persistence.</step-3>
+      <step-4 module="M-INFRA-COMPOSE" status="done" verification="V-M-INFRA-COMPOSE">Compose now runs worker-agent-runner and worker-transcription only for worker execution; dedicated AI worker services and env files are removed.</step-4>
+    </Phase-7>
+
+    <Phase-8 name="Unified AI Agent Worker Architecture Decision Freeze" status="done">
+      <goal>Freeze the approved generic `agent-runner` worker contract, `agent_run` persistence boundary, container-local Claude Code provider boundary, and per-harness concurrency policy without implementation work.</goal>
+      <step-1 module="M-WORKER-AGENT-RUNNER" status="done" verification="V-M-WORKER-AGENT-RUNNER">Approve one generic worker keyed by `harness_name`, the `agent_run` control-plane family, redacted-summary persistence boundaries, container-local Claude Code settings-provider execution, and explicit per-harness concurrency policy.</step-1>
+    </Phase-8>
+
+    <Phase-9 name="Unified AI Agent Worker Implementation" status="done">
+      <goal>Implement the already approved `agent-runner` architecture in code and contracts without reopening the frozen decision surfaces.</goal>
+      <step-1 module="M-WORKER-AGENT-RUNNER" status="done" verification="V-M-WORKER-AGENT-RUNNER">Add `agent_run_create` contract/API/storage/jobs/queue control-plane wiring for root `agent_run` jobs keyed by `harness_name`, request-only `source_set` semantics, idempotency reuse or conflict behavior, and redacted request metadata persistence.</step-1>
+      <step-2 module="M-WORKER-AGENT-RUNNER" status="done" verification="V-M-WORKER-AGENT-RUNNER">Implement the generic `workers/agent-runner` runtime that claims `agent_run` jobs, dispatches through `harness_name`, writes `agent_result_json` and `execution_log` artifacts, and finalizes through the existing worker-control API.</step-2>
+      <step-3 module="M-WORKER-AGENT-RUNNER" status="done" verification="V-M-WORKER-AGENT-RUNNER">Implement container-local Claude Code settings-provider execution plus per-harness concurrency enforcement; compose service wiring, live fixture-mode e2e, and live external Claude Code provider smoke are complete.</step-3>
+      <step-4 module="M-WORKER-AGENT-RUNNER" status="done" verification="V-M-WORKER-AGENT-RUNNER">Collapse public report and deep-research creation onto agent_run operation envelopes, materialize input artifacts inside worker-agent-runner, persist report/deep-research operation artifacts, and delete dedicated AI workers from compose.</step-4>
+    </Phase-9>
   </ImplementationOrder>
 
   <RisksAndMitigations>
@@ -1743,7 +1811,7 @@
 
   <DefinitionOfDone>
     <criterion>API server owns all business logic orchestration.</criterion>
-    <criterion>Transcription, report, and deep research run only in workers.</criterion>
+    <criterion>Transcription runs in worker-transcription; report and deep research run only as `agent_run` operations in worker-agent-runner.</criterion>
     <criterion>Telegram bot is a thin API client.</criterion>
     <criterion>MCP server is a thin API client.</criterion>
     <criterion>Web UI can create, observe, and manage jobs.</criterion>

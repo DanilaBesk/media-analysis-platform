@@ -6,15 +6,16 @@
   <ArchitectureShape>
     <goal>Separate orchestration from execution while keeping a single local deployment topology.</goal>
     <control-plane>Go API server owns job creation, state transitions, artifact metadata, job graph relationships, polling and WebSocket and webhook status delivery, idempotency, and cancel or retry semantics.</control-plane>
-    <execution-plane>Python workers own heavy execution for transcription, report generation, and deep research by reusing the existing Python pipeline.</execution-plane>
+    <execution-plane>Python workers own heavy execution through one transcription worker plus one generic agent-runner worker; batch aggregate transcription is handled by worker-transcription, and report generation and deep research are public operations backed by `agent_run`, not dedicated worker services.</execution-plane>
     <adapters>Telegram bot, Web UI, and MCP server remain thin adapters over the same HTTP API.</adapters>
+    <batch-transcription-contract>Mixed-source batch transcription uses `POST /v1/transcription-jobs/batch`, a `batch-transcription.v1` source manifest with stable unique source labels, a root aggregate transcription job, per-source transcription children, and the `job:transcription.aggregate` task type for root artifact assembly.</batch-transcription-contract>
+    <future-agent-execution-contract>Approved architecture contract: autonomous AI-agent execution uses one generic `agent-runner` worker behind the existing control plane, dispatches harness implementations by `harness_name`, persists runs as the `agent_run` job family through the existing job tables, stores only normalized result summary plus redacted metadata and opaque request references in control-plane payloads, keeps full logs and large outputs as artifacts or private objects, supports first-iteration container-local Claude Code execution through generated Anthropic-compatible settings JSON, and exposes concurrency as explicit per-harness policy.</future-agent-execution-contract>
   </ArchitectureShape>
 
   <TargetComponents>
     <component id="apps-api" path="apps/api" role="Go HTTP API and WebSocket server" />
     <component id="workers-transcription" path="workers/transcription" role="Python transcription worker" />
-    <component id="workers-report" path="workers/report" role="Python report worker" />
-    <component id="workers-deep-research" path="workers/deep-research" role="Python deep-research worker" />
+    <component id="workers-agent-runner" path="workers/agent-runner" role="Approved generic AI-agent worker that dispatches harness implementations by `harness_name` through the existing control plane and owns report/deep-research AI operation execution" />
     <component id="apps-web" path="apps/web" role="React UI for job creation, monitoring, downloads, and admin actions" />
     <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Python Telegram adapter over HTTP API" />
     <component id="apps-mcp-server" path="apps/mcp-server" role="Thin MCP adapter over HTTP API" />
@@ -38,8 +39,7 @@
     <area path="apps/mcp-server/src">TypeScript MCP server entrypoints and tools</area>
     <area path="workers/common/src/transcriber_workers_common">Shared Python worker utilities</area>
     <area path="workers/transcription/src">Transcription worker implementation</area>
-    <area path="workers/report/src">Report worker implementation</area>
-    <area path="workers/deep-research/src">Deep-research worker implementation</area>
+    <area path="workers/agent-runner/src">Generic agent-runner implementation for report and deep-research operations</area>
     <area path="packages/contracts/openapi">Canonical HTTP contracts</area>
     <area path="packages/contracts/schemas">Shared JSON schemas and enums</area>
     <area path="packages/contracts/ws">WebSocket and webhook envelopes</area>
@@ -53,6 +53,16 @@
     <naming-rule>Use a zero-padded numeric prefix plus a semantic snake_case suffix such as `0001_job_control_plane_foundation.sql`; phase-only filenames are not accepted.</naming-rule>
   </MigrationConventions>
 
+  <AgentRunnerConfigSurface>
+    <job-family>`agent_run` is the approved control-plane family for generic agent execution and `agent_run_create` is the approved submission kind.</job-family>
+    <control-plane-status>`agent_run_create` is implemented in contracts, HTTP, jobs, storage, and queue policy as a request-only root-job creation surface.</control-plane-status>
+    <worker-runtime-status>`workers/agent-runner` is implemented for the worker-local runtime, lease-policy, and compose-service slices: it claims `agent_run`, dispatches deterministic fixture harnesses by `harness_name`, resolves worker-only short-lived `request_access` for the private request envelope, runs first-iteration `claude-code` inside the container through generated Anthropic-compatible settings, writes `agent_result_json` and `execution_log` artifacts, enforces per-harness in-process lease limits, and finalizes through WorkerCommon. Live fixture-mode compose e2e and live external Claude Code provider smoke are verified.</worker-runtime-status>
+    <dispatch-policy>Workers dispatch harness implementations by `harness_name`; adding Claude Code-only worker services is out of contract, and Codex is not supported in the first container-local provider iteration.</dispatch-policy>
+    <concurrency-policy>Admission control is configured per harness, for example by `harness_name` to max active runs, queue weighting, or lease budget.</concurrency-policy>
+    <claude-code-provider-policy>Claude Code first-iteration provider configuration is container-local and env-driven: `AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY` or its file variant, `AGENT_RUNNER_CLAUDE_CODE_BASE_URL`, and `AGENT_RUNNER_CLAUDE_CODE_MODEL` mirror the existing `cglm` contract and are rendered into Claude Code settings JSON as `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_API_KEY`, `CLAUDE_API_BASE_URL`, and model override env values. `AGENT_RUNNER_CLAUDE_CODE_AUTH_TOKEN` remains a compatibility fallback only. Raw credentials remain worker-local and never enter control-plane payloads.</claude-code-provider-policy>
+    <artifact-boundary>Full logs, prompts, tool traces, and large outputs are stored as artifacts or private request objects; database payloads keep normalized summary fields, redacted metadata, and opaque request references only.</artifact-boundary>
+  </AgentRunnerConfigSurface>
+
   <RuntimeTopology>
     <service name="postgres" role="Persistent system of record for jobs, execution claims, artifacts, events, submissions, and webhook deliveries" />
     <service name="redis" role="Backing store for asynq task queues only" />
@@ -60,8 +70,7 @@
     <service name="minio-init" role="Bucket bootstrap for sources and artifacts buckets" />
     <service name="api" role="Go control plane exposing REST and WebSocket" />
     <service name="worker-transcription" role="Python transcription execution service including ffmpeg and faster-whisper" />
-    <service name="worker-report" role="Python report execution service using the configured report harness" />
-    <service name="worker-deep-research" role="Python deep-research execution service" />
+    <service name="worker-agent-runner" role="Python generic agent execution service for report and deep-research operations using container-local Claude Code provider settings" />
     <service name="web" role="Local React operational UI" />
     <service name="telegram-bot" role="Thin Telegram adapter over the HTTP API" />
     <service name="mcp-server" role="Thin MCP adapter over the HTTP API" />
@@ -69,7 +78,7 @@
       <item>local deployment only</item>
       <item>no auth layer in v1</item>
       <item>services communicate on a private Docker network</item>
-      <item>web is published to localhost with WEB_HOST_PORT override support defaulting to 3000</item>
+      <item>web is published to localhost with WEB_HOST_PORT override support defaulting to 3201 so it does not collide with another local service on 3000</item>
       <item>api is published to localhost</item>
       <item>MinIO S3 endpoint is published to localhost for presigned download use while service-to-service object IO uses Docker-internal DNS</item>
       <item>MinIO admin console is published to localhost</item>
@@ -85,7 +94,7 @@
     <dep name="python-dotenv" version=">=1.1.1" purpose="Local environment loading for Python runtime components." />
     <dep name="youtube-transcript-api" version=">=1.2.3" purpose="Fast subtitle retrieval path for YouTube sources." />
     <dep name="yt-dlp" version=">=2025.1.15" purpose="YouTube media extraction fallback path." />
-    <dep name="report-harness" version="external-cli" purpose="Configurable report generation CLI invoked by the report worker; legacy cglm wrappers remain supported through the harness contract." />
+    <dep name="claude-code" version="container-installed" purpose="Container-local Claude Code CLI used by worker-agent-runner with Anthropic-compatible provider settings for the first AI provider iteration." />
     <dep name="net/http" version="stdlib" purpose="Go HTTP routing layer for the control plane." />
     <dep name="pgx" version="v5.9.2" purpose="Go PostgreSQL access layer through database/sql." />
     <dep name="minio-go" version="v7.0.100" purpose="Go MinIO/S3 artifact and source object access." />
@@ -110,12 +119,13 @@
     <minio>Object storage for uploaded source files and produced artifacts; clients do not upload directly in v1.</minio>
     <asynq>
       <queue name="transcription" task-type="job:transcription.run" max-retry="3" timeout="2h" />
-      <queue name="report" task-type="job:report.run" max-retry="2" timeout="45m" />
-      <queue name="deep_research" task-type="job:deep_research.run" max-retry="2" timeout="2h" />
+      <queue name="transcription" task-type="job:transcription.aggregate" max-retry="3" timeout="2h" />
+      <queue name="agent_run" task-type="job:agent_run.run" max-retry="2" timeout="2h" />
     </asynq>
     <asynq-payload>{"job_id":"uuid","attempt":1}</asynq-payload>
     <asynq-rule>Do not place full mutable job metadata in Redis or queue payloads; workers resolve authoritative state through API-owned contracts.</asynq-rule>
-    <source-set-model>Single-file transcription jobs and combined multi-media transcription jobs both resolve to an ordered source set; single-file jobs use a one-item source set, while combined jobs use a multi-item source set.</source-set-model>
+    <source-set-model>Single-file transcription jobs use one-item source sets; batch transcription roots use `input_kind=batch_transcription` with stable source labels and per-source child source sets; `agent_run` uses a request-only source-set shell with no source items.</source-set-model>
+    <batch-artifact-model>Batch aggregate roots produce the required transcript artifact set plus `source_manifest_json` and `batch_diagnostics_json`; source children produce per-source transcript artifacts that the aggregate task consumes in source-label order.</batch-artifact-model>
   </StorageAndQueueContracts>
 
   <DeliveryModel>
@@ -153,7 +163,6 @@
       <var>WORKER_POLL_INTERVAL_SECONDS</var>
       <var>WORKER_MAX_IDLE_POLLS</var>
       <var>WORKER_MAX_PROCESSED_JOBS</var>
-      <var>HOST_WORKSPACE_ROOT</var>
     </worker-common>
     <transcription-worker>
       <var>WHISPER_MODEL</var>
@@ -161,32 +170,30 @@
       <var>WHISPER_COMPUTE_TYPE</var>
       <var>FFMPEG_BIN</var>
     </transcription-worker>
-    <report-worker>
-      <var>REPORT_HARNESS_BIN</var>
-      <var>REPORT_HARNESS_TIMEOUT_SECONDS</var>
-      <var>HOST_HARNESS_BRIDGE_URL</var>
-      <var>HOST_HARNESS_TYPE</var>
-      <var>HOST_HARNESS_TOKEN</var>
-      <var>HOST_HARNESS_CLIENT_TIMEOUT_SECONDS</var>
-      <var>REPORT_PROMPT_SUFFIX</var>
-    </report-worker>
-    <deep-research-worker>
-      <var>CLAUDE_BIN</var>
-      <var>DEEP_RESEARCH_BIN</var>
-      <var>HOST_HARNESS_BRIDGE_URL</var>
-      <var>HOST_HARNESS_TYPE</var>
-      <var>HOST_HARNESS_TOKEN</var>
-      <var>DEEP_RESEARCH_MODEL</var>
-    </deep-research-worker>
-    <host-harness>
-      <var>HOST_HARNESS_HOST</var>
-      <var>HOST_HARNESS_PORT</var>
-      <var>HOST_HARNESS_COMMAND</var>
-      <var>HOST_HARNESS_TYPE</var>
-      <var>HOST_HARNESS_TOKEN</var>
-      <var>HOST_HARNESS_TIMEOUT_SECONDS</var>
-      <var>HOST_WORKSPACE_ROOT</var>
-    </host-harness>
+    <worker-agent-runner-isolation>
+      <forbidden-var>HOST_HARNESS_COMMAND</forbidden-var>
+      <forbidden-var>HOST_HARNESS_BRIDGE_URL</forbidden-var>
+      <forbidden-var>HOST_HARNESS_TOKEN</forbidden-var>
+      <forbidden-var>HOST_WORKSPACE_ROOT</forbidden-var>
+      <forbidden-var>CLAUDE_BIN</forbidden-var>
+      <forbidden-var>DEEP_RESEARCH_BIN</forbidden-var>
+      <forbidden-contract>host-side broker execution as the primary path</forbidden-contract>
+      <forbidden-contract>host.docker.internal worker execution</forbidden-contract>
+      <forbidden-contract>bind-mounted host executable</forbidden-contract>
+      <forbidden-contract>host path remapping for worker workspaces</forbidden-contract>
+    </worker-agent-runner-isolation>
+    <agent-runner-worker>
+      <var>AGENT_RUNNER_HARNESS_CONCURRENCY</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY_FILE</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_AUTH_TOKEN</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_AUTH_TOKEN_FILE</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_BASE_URL</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_API_TIMEOUT_MS</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_MODEL</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_CONFIG_DIR</var>
+      <var>AGENT_RUNNER_CLAUDE_CODE_RUN_TIMEOUT_SECONDS</var>
+    </agent-runner-worker>
     <telegram-bot>
       <var>TELEGRAM_BOT_TOKEN</var>
       <var>API_BASE_URL</var>
@@ -213,8 +220,8 @@
 
   <Testing>
     <baseline-python>
-      <command>.venv/bin/python -m pytest tests/test_service.py tests/test_transcribers.py tests/test_bot.py</command>
-      <focus>Legacy Python behavior checks that must remain conceptually preserved after worker extraction.</focus>
+      <command>.venv/bin/python -m pytest workers/common/tests/test_worker_common_documents.py workers/common/tests/test_worker_common_documents_rendering.py workers/common/tests/test_worker_common_transcribers.py workers/common/tests/test_worker_common_transcribers_runtime.py workers/transcription/tests/test_transcriber_worker_transcription.py tests/test_bot.py</command>
+      <focus>Host-side regression checks that still matter after the local service shell and compatibility re-exports were removed.</focus>
     </baseline-python>
     <baseline-full>
       <command>.venv/bin/python -m pytest</command>
@@ -237,7 +244,7 @@
 
   <DeliveryShape>
     <shape>Single local deployment with one PostgreSQL instance, one Redis instance, one MinIO instance, one Go API control plane, separate Python workers, one React UI, one Telegram adapter, and one MCP adapter.</shape>
-    <preserved-capabilities>YouTube transcription, Telegram voice or audio or video or document transcription, media groups, plain transcript, segmented transcript, report generation, deep research generation, and combined multi-media transcription as one ordered job.</preserved-capabilities>
+    <preserved-capabilities>YouTube transcription, Telegram voice or audio or video or document transcription, media groups, plain transcript, segmented transcript, report generation, deep research generation, and mixed-source batch transcription through one aggregate root job.</preserved-capabilities>
   </DeliveryShape>
 
   <PreservationPolicy>

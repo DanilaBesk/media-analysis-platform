@@ -199,6 +199,318 @@ func TestApiJobsCreateCombinedTranscriptionJobWithoutIdempotencyKeyCreatesIndepe
 	}
 }
 
+func TestApiJobsCreateBatchTranscriptionGraphAndIdempotency(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	request := CreateBatchTranscriptionRequest{
+		SubmissionKind:     "transcription_batch",
+		IdempotencyKey:     "batch-idem",
+		RequestFingerprint: "batch-fingerprint-a",
+		Sources: []storage.SourceRecord{
+			source("source-a"),
+			{
+				ID:          "source-b",
+				SourceKind:  storage.SourceKindYouTubeURL,
+				DisplayName: "Video",
+				SourceURL:   "https://youtu.be/example",
+			},
+		},
+		SourceLabels:     []string{"voice_a", "video_b"},
+		CompletionPolicy: BatchCompletionPolicyAllSources,
+		ManifestJSON:     []byte(`{"manifest_version":"batch-transcription.v1"}`),
+		Delivery:         storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+		ClientRef:        "client-1",
+		DisplayName:      "Mixed batch",
+	}
+
+	created, err := service.CreateBatchTranscriptionJob(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateBatchTranscriptionJob() error = %v", err)
+	}
+	if created.Reused {
+		t.Fatalf("first batch create should not be reused")
+	}
+	if created.Job.ParentJobID != "" || created.Job.RootJobID != created.Job.ID || created.Job.ProgressStage != "waiting_for_sources" {
+		t.Fatalf("root batch job = %#v", created.Job)
+	}
+	if got, want := len(store.jobsBySubmission(store.lastSubmissionID)), 3; got != want {
+		t.Fatalf("batch graph job count = %d, want root + 2 children", got)
+	}
+	if got, want := len(store.sourceSets), 3; got != want {
+		t.Fatalf("batch source set count = %d, want root + 2 child sets", got)
+	}
+	rootSet := store.sourceSets[0]
+	if rootSet.InputKind != storage.SourceSetInputBatchTranscription || rootSet.DisplayName != "Mixed batch" {
+		t.Fatalf("root source set = %#v", rootSet)
+	}
+	if rootSet.Items[0].SourceLabel != "voice_a" || rootSet.Items[1].SourceLabel != "video_b" {
+		t.Fatalf("root source labels = %#v", rootSet.Items)
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("batch create enqueue count = %d, want only child transcription tasks", got)
+	}
+	for _, req := range enqueuer.requests {
+		if req.JobType != queue.JobTypeTranscription || req.TaskType == queue.TaskTypeTranscriptionAggregate {
+			t.Fatalf("child enqueue request = %#v, want transcription run task", req)
+		}
+	}
+
+	replayed, err := service.CreateBatchTranscriptionJob(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateBatchTranscriptionJob(replay) error = %v", err)
+	}
+	if !replayed.Reused || replayed.Job.ID != created.Job.ID {
+		t.Fatalf("replay = %#v, want reused root %q", replayed, created.Job.ID)
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("replay should not enqueue again, got %d requests", got)
+	}
+
+	conflict := request
+	conflict.RequestFingerprint = "batch-fingerprint-b"
+	_, err = service.CreateBatchTranscriptionJob(context.Background(), conflict)
+	if !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("conflicting batch replay error = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
+func TestApiJobsBatchCancelRetryAndAggregateScheduling(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	created, err := service.CreateBatchTranscriptionJob(context.Background(), CreateBatchTranscriptionRequest{
+		SubmissionKind:     "transcription_batch",
+		RequestFingerprint: "batch-fingerprint",
+		Sources:            []storage.SourceRecord{source("source-a"), source("source-b")},
+		SourceLabels:       []string{"voice_a", "voice_b"},
+		CompletionPolicy:   BatchCompletionPolicyAllSources,
+		ManifestJSON:       []byte(`{"manifest_version":"batch-transcription.v1"}`),
+		Delivery:           storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("CreateBatchTranscriptionJob() error = %v", err)
+	}
+	root := created.Job
+	children := store.childrenOf(root.ID)
+	if got, want := len(children), 2; got != want {
+		t.Fatalf("children = %d, want 2", got)
+	}
+
+	canceled, err := service.CancelJob(context.Background(), root.ID)
+	if err != nil {
+		t.Fatalf("CancelJob(root) error = %v", err)
+	}
+	if canceled.Status != "canceled" {
+		t.Fatalf("root cancel status = %q, want canceled", canceled.Status)
+	}
+	for _, child := range store.childrenOf(root.ID) {
+		if child.Status != "canceled" {
+			t.Fatalf("child %q status = %q, want canceled", child.ID, child.Status)
+		}
+	}
+
+	store.jobs[root.ID] = root
+	for idx, child := range children {
+		child.Status = "succeeded"
+		if idx == 0 {
+			child.Status = "failed"
+		}
+		child.Version++
+		store.jobs[child.ID] = child
+	}
+	retryChild := children[0]
+	retryChild.ID = "retry-child-source-a"
+	retryChild.RetryOfJobID = children[0].ID
+	retryChild.Status = "succeeded"
+	retryChild.Version = 1
+	store.jobs[retryChild.ID] = retryChild
+	store.jobOrder = append(store.jobOrder, retryChild.ID)
+	enqueuer.requests = nil
+
+	scheduled, err := service.ScheduleBatchAggregateIfReady(context.Background(), root.ID)
+	if err != nil {
+		t.Fatalf("ScheduleBatchAggregateIfReady() error = %v", err)
+	}
+	if !scheduled {
+		t.Fatalf("expected aggregate task to be scheduled after all children succeeded")
+	}
+	if got, want := len(enqueuer.requests), 1; got != want {
+		t.Fatalf("aggregate enqueue count = %d, want 1", got)
+	}
+	if enqueuer.requests[0].JobID != root.ID || enqueuer.requests[0].TaskType != queue.TaskTypeTranscriptionAggregate {
+		t.Fatalf("aggregate enqueue request = %#v", enqueuer.requests[0])
+	}
+
+	store.jobs[root.ID] = storage.JobRecord{
+		ID:            root.ID,
+		RootJobID:     root.RootJobID,
+		SourceSetID:   root.SourceSetID,
+		JobType:       root.JobType,
+		Status:        "failed",
+		Delivery:      root.Delivery,
+		Version:       9,
+		ProgressStage: "failed",
+		ParamsJSON:    root.ParamsJSON,
+		CreatedAt:     root.CreatedAt,
+		FinishedAt:    ptrTime(time.Date(2026, 4, 22, 13, 30, 0, 0, time.UTC)),
+	}
+	enqueuer.requests = nil
+	retry, err := service.RetryJob(context.Background(), root.ID)
+	if err != nil {
+		t.Fatalf("RetryJob(root) error = %v", err)
+	}
+	if retry.Job.RetryOfJobID != root.ID || retry.Job.ProgressStage != "aggregate_queued" {
+		t.Fatalf("root retry = %#v, want aggregate retry linked to original", retry.Job)
+	}
+	if got, want := len(store.childrenOf(retry.Job.ID)), 0; got != want {
+		t.Fatalf("root retry should reuse original children, got %d new children", got)
+	}
+	if got, want := len(enqueuer.requests), 1; got != want {
+		t.Fatalf("root retry enqueue count = %d, want aggregate task only", got)
+	}
+}
+
+func TestApiJobsCreateAgentRunSupportsIdempotencyRootLineageRedactedParamsAndQueue(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	request := CreateAgentRunRequest{
+		SubmissionKind:     "agent_run_create",
+		IdempotencyKey:     "agent-idem",
+		RequestFingerprint: "agent-fingerprint-a",
+		HarnessName:        "generic",
+		ParamsJSON:         []byte(`{"harness_name":"generic","request":{"prompt_sha256":"abc","prompt_bytes":5,"prompt_runes":5,"payload":{"json_type":"object","sha256":"def","bytes":24},"input_artifacts":[{"artifact_id":"artifact-1"}]}}`),
+		Delivery:           storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+		ClientRef:          "client-1",
+	}
+
+	created, err := service.CreateAgentRun(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateAgentRun() error = %v", err)
+	}
+	if created.Reused {
+		t.Fatalf("first create should not reuse")
+	}
+	if created.Job.JobType != queue.JobTypeAgentRun {
+		t.Fatalf("job_type = %q, want %q", created.Job.JobType, queue.JobTypeAgentRun)
+	}
+	if created.Job.RootJobID != created.Job.ID || created.Job.ParentJobID != "" || created.Job.RetryOfJobID != "" {
+		t.Fatalf("agent_run root lineage = %#v", created.Job)
+	}
+	if created.Job.ParamsJSON == nil || !json.Valid(created.Job.ParamsJSON) {
+		t.Fatalf("params json invalid: %s", string(created.Job.ParamsJSON))
+	}
+	paramsText := string(created.Job.ParamsJSON)
+	if strings.Contains(paramsText, "raw prompt") || strings.Contains(paramsText, "secret-value") {
+		t.Fatalf("agent_run params leaked raw prompt/secret: %s", paramsText)
+	}
+	if got, want := len(store.sourceSets), 1; got != want {
+		t.Fatalf("source sets = %d, want %d", got, want)
+	}
+	if store.sourceSets[0].InputKind != storage.SourceSetInputAgentRun || len(store.sourceSets[0].Items) != 0 {
+		t.Fatalf("source set = %#v, want empty agent_run source set", store.sourceSets[0])
+	}
+	if got, want := len(enqueuer.requests), 1; got != want {
+		t.Fatalf("enqueue count = %d, want %d", got, want)
+	}
+	if enqueuer.requests[0].JobType != queue.JobTypeAgentRun {
+		t.Fatalf("enqueue job type = %q, want %q", enqueuer.requests[0].JobType, queue.JobTypeAgentRun)
+	}
+
+	replayed, err := service.CreateAgentRun(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateAgentRun(replay) error = %v", err)
+	}
+	if !replayed.Reused || replayed.Job.ID != created.Job.ID {
+		t.Fatalf("replay = %#v, want reused job %q", replayed, created.Job.ID)
+	}
+	if got, want := len(enqueuer.requests), 1; got != want {
+		t.Fatalf("replay should not enqueue again, got %d requests", got)
+	}
+
+	conflict := request
+	conflict.RequestFingerprint = "agent-fingerprint-b"
+	_, err = service.CreateAgentRun(context.Background(), conflict)
+	if !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("conflicting replay error = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
+func TestApiJobsCreateAgentRunChildReusesCanonicalParentLineageAndAgentQueue(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	parent := storage.JobRecord{
+		ID:          "parent-transcription",
+		RootJobID:   "root-transcription",
+		SourceSetID: "source-set-1",
+		JobType:     queue.JobTypeTranscription,
+		Status:      "succeeded",
+		Delivery:    storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+		Version:     3,
+	}
+	store.jobs[parent.ID] = parent
+
+	request := CreateAgentRunRequest{
+		SubmissionKind:     "agent_run_create",
+		IdempotencyKey:     "report-idem",
+		RequestFingerprint: "report-agent-fingerprint",
+		HarnessName:        "claude-code",
+		ParentJobID:        parent.ID,
+		ParamsJSON:         []byte(`{"harness_name":"claude-code","request_ref":"agentreq_x","request_digest_sha256":"digest","request_bytes":123,"request":{"payload":{"json_type":"object","sha256":"abc","bytes":64}}}`),
+		Delivery:           storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+		ClientRef:          "client-1",
+	}
+
+	created, err := service.CreateAgentRun(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateAgentRun(child) error = %v", err)
+	}
+	if created.Job.JobType != queue.JobTypeAgentRun {
+		t.Fatalf("job_type = %q, want agent_run", created.Job.JobType)
+	}
+	if created.Job.ParentJobID != parent.ID || created.Job.RootJobID != parent.RootJobID {
+		t.Fatalf("child lineage = %#v, want parent=%q root=%q", created.Job, parent.ID, parent.RootJobID)
+	}
+	if got, want := len(enqueuer.requests), 1; got != want {
+		t.Fatalf("enqueue count = %d, want %d", got, want)
+	}
+	if enqueuer.requests[0].JobType == queue.JobTypeReport || enqueuer.requests[0].JobType == queue.JobTypeDeepResearch {
+		t.Fatalf("dedicated AI worker job was enqueued: %#v", enqueuer.requests[0])
+	}
+	policy, err := queue.PolicyForJobType(enqueuer.requests[0].JobType)
+	if err != nil {
+		t.Fatalf("PolicyForJobType(%q) error = %v", enqueuer.requests[0].JobType, err)
+	}
+	if policy.TaskType != queue.TaskTypeAgentRun {
+		t.Fatalf("task_type = %q, want %q", policy.TaskType, queue.TaskTypeAgentRun)
+	}
+
+	reused, err := service.CreateAgentRun(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateAgentRun(child replay) error = %v", err)
+	}
+	if !reused.Reused || reused.Job.ID != created.Job.ID {
+		t.Fatalf("reused = %#v, want canonical child %q", reused, created.Job.ID)
+	}
+	if got, want := len(enqueuer.requests), 1; got != want {
+		t.Fatalf("canonical reuse should not enqueue again, got %d requests", got)
+	}
+}
+
 func TestApiJobsDefaultIDGeneratorUsesUUIDs(t *testing.T) {
 	t.Parallel()
 
@@ -548,6 +860,10 @@ func (m *memoryStore) FindCanonicalChild(_ context.Context, parentJobID, jobType
 	return nil, nil
 }
 
+func (m *memoryStore) ListChildJobs(_ context.Context, parentJobID string) ([]storage.JobRecord, error) {
+	return m.childrenOf(parentJobID), nil
+}
+
 func (m *memoryStore) FindArtifactByKind(_ context.Context, jobID, artifactKind string) (*storage.ArtifactRecord, error) {
 	return m.artifacts[jobID+"::"+artifactKind], nil
 }
@@ -561,6 +877,17 @@ func (m *memoryStore) jobsBySubmission(submissionID string) []storage.JobRecord 
 		}
 	}
 	return jobs
+}
+
+func (m *memoryStore) childrenOf(parentJobID string) []storage.JobRecord {
+	children := make([]storage.JobRecord, 0)
+	for _, jobID := range m.jobOrder {
+		job := m.jobs[jobID]
+		if job.ParentJobID == parentJobID {
+			children = append(children, job)
+		}
+	}
+	return children
 }
 
 type fakeEnqueuer struct {

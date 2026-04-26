@@ -34,9 +34,9 @@ from transcriber_workers_common.api import InternalApiConfig, JobApiClient
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_RUN_WORKER_LOOP = "[WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]"
-_WORKER_KINDS = frozenset({"transcription", "report", "deep_research"})
-_TASK_TYPES = frozenset({"transcription.run", "report.run", "deep_research.run"})
-_JOB_TYPES = frozenset({"transcription", "report", "deep_research"})
+_WORKER_KINDS = frozenset({"transcription", "agent_runner"})
+_TASK_TYPES = frozenset({"transcription.run", "agent_run.run"})
+_JOB_TYPES = frozenset({"transcription", "report", "deep_research", "agent_run"})
 
 __all__ = [
     "JobRunner",

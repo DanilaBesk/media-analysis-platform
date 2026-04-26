@@ -21,11 +21,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
 import time
 from pathlib import Path
 
 from telegram_adapter.api_client import TelegramApiClient, UploadFilePart
-from telegram_transcriber_bot.domain import (
+
+from transcriber_workers_common.domain import (
     ProcessedJob,
     ReportArtifacts,
     SourceCandidate,
@@ -33,6 +36,8 @@ from telegram_transcriber_bot.domain import (
 )
 
 TERMINAL_JOB_STATUSES = {"succeeded", "failed", "canceled"}
+BATCH_MANIFEST_VERSION = "batch-transcription.v1"
+BATCH_COMPLETION_POLICY = "succeed_when_all_sources_succeed"
 
 
 class TelegramApiProcessingGateway:
@@ -74,11 +79,12 @@ class TelegramApiProcessingGateway:
 
     def process_source_group(self, sources: list[SourceCandidate]) -> ProcessedJob:
         if not sources:
-            raise RuntimeError("Combined Telegram submission requires at least one source")
-        upload_parts = [self._build_upload_part(source) for source in sources]
-        response = self.api_client.create_combined_upload(
+            raise RuntimeError("Telegram batch submission requires at least one source")
+        manifest, upload_parts = self._build_batch_manifest_and_files(sources)
+        response = self.api_client.create_batch(
             files=upload_parts,
-            display_name="Telegram combined media",
+            source_manifest=manifest,
+            display_name=_build_batch_display_name(sources),
             delivery_strategy="polling",
         )
         job_snapshot = self._unwrap_job(response)
@@ -86,7 +92,7 @@ class TelegramApiProcessingGateway:
         synthetic_source = SourceCandidate(
             source_id=sources[0].source_id,
             kind=sources[0].kind,
-            display_name="Telegram combined media",
+            display_name=_build_batch_display_name(sources),
             url=None,
             telegram_file_id=None,
             mime_type=None,
@@ -238,6 +244,53 @@ class TelegramApiProcessingGateway:
             content_bytes=source.local_path.read_bytes(),
         )
 
+    def _build_batch_manifest_and_files(
+        self,
+        sources: list[SourceCandidate],
+    ) -> tuple[dict, list[UploadFilePart]]:
+        labels = _build_stable_source_labels(sources)
+        manifest_sources: dict[str, dict[str, str]] = {}
+        upload_parts: list[UploadFilePart] = []
+
+        for label, source in zip(labels, sources):
+            if source.kind == "youtube_url":
+                if not source.url:
+                    raise RuntimeError("Batch URL source is missing a URL")
+                manifest_sources[label] = {
+                    "source_kind": "youtube_url",
+                    "url": source.url,
+                    "display_name": source.display_name,
+                }
+                continue
+
+            if source.local_path is None:
+                raise RuntimeError("Telegram source must be downloaded locally before API batch submission")
+            file_name = source.file_name or source.local_path.name
+            manifest_sources[label] = {
+                "source_kind": "telegram_upload",
+                "file_part": label,
+                "display_name": source.display_name,
+                "original_filename": file_name,
+            }
+            upload_parts.append(
+                UploadFilePart(
+                    filename=file_name,
+                    content_type=source.mime_type or "application/octet-stream",
+                    content_bytes=source.local_path.read_bytes(),
+                    field_name=label,
+                )
+            )
+
+        return (
+            {
+                "manifest_version": BATCH_MANIFEST_VERSION,
+                "ordered_source_labels": labels,
+                "sources": manifest_sources,
+                "completion_policy": BATCH_COMPLETION_POLICY,
+            },
+            upload_parts,
+        )
+
     def _source_from_job(self, job_snapshot: dict) -> SourceCandidate:
         items = (job_snapshot.get("source_set") or {}).get("items") or []
         source = items[0]["source"] if items else {}
@@ -256,3 +309,48 @@ class TelegramApiProcessingGateway:
         if isinstance(job, dict):
             return job
         return payload
+
+
+def _build_batch_display_name(sources: list[SourceCandidate]) -> str:
+    if len(sources) == 1:
+        return sources[0].display_name
+    return f"Telegram basket ({len(sources)} sources)"
+
+
+def _build_stable_source_labels(sources: list[SourceCandidate]) -> list[str]:
+    labels: list[str] = []
+    used: set[str] = set()
+    for index, source in enumerate(sources, start=1):
+        label = _source_label_from_candidate(source, index=index)
+        if label in used:
+            label = f"{label}_{_short_hash(_source_label_seed(source, index=index))}"
+        while label in used:
+            label = f"{label[:55]}_{index}"
+        used.add(label)
+        labels.append(label[:64])
+    return labels
+
+
+def _source_label_from_candidate(source: SourceCandidate, *, index: int) -> str:
+    seed = _source_label_seed(source, index=index)
+    slug = re.sub(r"[^a-z0-9_-]+", "_", seed.lower()).strip("_-")
+    slug = re.sub(r"_+", "_", slug)
+    if not slug or not slug[0].isalpha():
+        prefix = "url" if source.kind == "youtube_url" else "telegram"
+        slug = f"{prefix}_{slug or index}"
+    digest = _short_hash(seed)
+    max_stem = 64 - len(digest) - 1
+    return f"{slug[:max_stem].rstrip('_-')}_{digest}"
+
+
+def _source_label_seed(source: SourceCandidate, *, index: int) -> str:
+    if source.url:
+        return source.url
+    for value in (source.source_id, source.file_name, source.file_unique_id, source.telegram_file_id):
+        if value:
+            return value
+    return f"source-{index}"
+
+
+def _short_hash(value: str) -> str:
+    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]

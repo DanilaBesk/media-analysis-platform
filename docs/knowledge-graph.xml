@@ -18,6 +18,8 @@
         <type-ArtifactResolution PURPOSE="Artifact metadata plus presigned MinIO download link." />
         <type-WorkerFinalizeRequest PURPOSE="Canonical worker finalization DTO used by all Python workers." />
         <type-SourceSet PURPOSE="Ordered input set backing one transcription job." />
+        <type-BatchTranscriptionContract PURPOSE="Mixed-source `/v1/transcription-jobs/batch` contract with stable source labels, root aggregate transcription job, per-source transcription children, and aggregate artifact outputs." />
+        <type-AgentRunContract PURPOSE="Request-only `agent_run_create` contract that creates root `agent_run` jobs keyed by `harness_name` without provider-specific worker routes." />
       </annotations>
     </M-CONTRACTS>
 
@@ -28,6 +30,8 @@
       <verification-ref>V-M-API-HTTP</verification-ref>
       <annotations>
         <export-registerRoutes PURPOSE="Bind public and internal HTTP routes." />
+        <export-createBatchTranscriptionRoute PURPOSE="Accept `POST /v1/transcription-jobs/batch`, validate the source manifest plus multipart file parts, and return the root aggregate job snapshot." />
+        <export-createAgentRunRoute PURPOSE="Accept `POST /v1/agent-runs` and force the generic `agent_run_create` submission boundary." />
         <export-validateRequest PURPOSE="Apply request validation and idempotency rules." />
         <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
         <export-buildRuntimeDependencies PURPOSE="Assemble the concrete API runtime over jobs, storage, queue, and events." />
@@ -41,13 +45,15 @@
       <verification-ref>V-M-API-JOBS</verification-ref>
       <annotations>
         <export-createTranscriptionJobs PURPOSE="Create one job per uploaded file or one job from a supported URL." />
-        <export-createCombinedTranscriptionJob PURPOSE="Create one transcription job bound to an ordered multi-source input set." />
+        <export-createBatchTranscriptionJob PURPOSE="Create a root aggregate transcription job, per-source transcription children, and stable source-label lineage for one mixed-source batch." />
+        <export-scheduleBatchAggregate PURPOSE="Schedule `job:transcription.aggregate` for the root job after source children satisfy the batch completion policy." />
+        <export-createAgentRun PURPOSE="Create one root `agent_run` job with request-only source-set semantics and redacted request metadata." />
         <export-createChildJob PURPOSE="Create or reuse canonical child jobs under validated business rules." />
         <export-cancelJob PURPOSE="Apply cooperative cancellation semantics." />
         <export-retryJob PURPOSE="Create a new lineage-linked retry row." />
         <export-transitionJob PURPOSE="Enforce allowed lifecycle transitions and version increments." />
         <type-JobLineage PURPOSE="Root, parent, and retry relationships preserved across all job types." />
-        <type-CombinedTranscriptionJob PURPOSE="One transcription job bound to an ordered multi-source input set." />
+        <type-BatchTranscriptionJob PURPOSE="Root aggregate transcription job with child source jobs, stable ordered source labels, manifest metadata, and aggregate diagnostics." />
       </annotations>
     </M-API-JOBS>
 
@@ -74,7 +80,9 @@
         <type-JobSubmission PURPOSE="Idempotent create-request persistence including multi-file upload normalization." />
         <type-JobExecutionRecord PURPOSE="Storage-backed execution_id ownership record shared across claim, progress, artifact, finalize, and cancel-check flows." />
         <type-WebhookDelivery PURPOSE="Durable webhook retry state across API restarts." />
-        <type-SourceSetRecord PURPOSE="Persistent ordered source set reused by single-file and combined transcription jobs." />
+        <type-SourceSetRecord PURPOSE="Persistent ordered source set reused by single-file jobs, batch transcription roots/children, and historical combined lineage." />
+        <type-BatchSourceLabel PURPOSE="Stable unique source label persisted on source_set_items with `batch-transcription.v1` label version for root and child lineage." />
+        <type-AgentRunSourceSet PURPOSE="Request-only source-set shell with `input_kind=agent_run` and no source items." />
       </annotations>
     </M-API-STORAGE>
 
@@ -85,6 +93,8 @@
       <verification-ref>V-M-API-QUEUE</verification-ref>
       <annotations>
         <export-enqueue PURPOSE="Publish typed asynq tasks for each job type." />
+        <type-TranscriptionAggregateQueuePolicy PURPOSE="Queue policy for root batch aggregation using the `job:transcription.aggregate` task type." />
+        <type-AgentRunQueuePolicy PURPOSE="Queue policy for `agent_run` tasks using the generic `job:agent_run.run` task type." />
       </annotations>
     </M-API-QUEUE>
 
@@ -101,7 +111,7 @@
     </M-API-EVENTS>
 
     <M-WORKER-COMMON NAME="WorkerCommon" TYPE="UTILITY" STATUS="implemented">
-      <purpose>Host shared Python execution utilities reused by transcription, report, and deep-research workers.</purpose>
+      <purpose>Host shared Python execution utilities and source/domain contracts reused by transcription, the Telegram adapter, and generic agent-runner workers.</purpose>
       <path>workers/common</path>
       <depends>M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-COMMON</verification-ref>
@@ -110,42 +120,40 @@
         <export-artifactWriters PURPOSE="Write worker outputs to MinIO and return metadata payloads." />
         <export-runWorkerLoop PURPOSE="Execute one shared polling or one-shot worker loop for all worker services." />
         <export-objectStore PURPOSE="Fetch source objects and upload artifact objects through the shared MinIO adapter." />
+        <export-domainContracts PURPOSE="Expose canonical source, media, transcript, report, and processed-job dataclasses outside the legacy bot package." />
+        <export-sourceHelpers PURPOSE="Expose shared source extraction, source-label, and Telegram media-group helpers for workers and adapter code." />
       </annotations>
     </M-WORKER-COMMON>
 
     <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Execute transcription jobs by reusing existing source materialization, faster-whisper, and transcript rendering logic.</purpose>
+      <purpose>Execute per-source transcription jobs and root batch aggregate jobs by reusing source materialization, faster-whisper, transcript rendering, source-label ordering, and aggregate artifact persistence logic.</purpose>
       <path>workers/transcription</path>
       <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-TRANSCRIPTION</verification-ref>
       <annotations>
         <export-runTranscription PURPOSE="Claim, execute, emit progress, persist artifacts, and finalize transcription jobs." />
+        <export-runTranscriptionAggregate PURPOSE="Claim a root batch job, merge successful child transcript artifacts in stable source-label order, write aggregate transcript and diagnostics artifacts, and finalize the root." />
         <export-launchTranscriptionWorker PURPOSE="Start the compose-ready transcription worker process." />
         <type-OrderedWorkerInput PURPOSE="Ordered transcription inputs resolved by the internal claim surface." />
+        <type-BatchAggregateArtifacts PURPOSE="Aggregate `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json` artifacts for batch roots." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
 
-    <M-WORKER-REPORT NAME="WorkerReport" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Execute report jobs using the configured report harness and report artifact rendering while preserving current report behavior.</purpose>
-      <path>workers/report</path>
-      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
-      <verification-ref>V-M-WORKER-REPORT</verification-ref>
+    <M-WORKER-AGENT-RUNNER NAME="AgentRunner" TYPE="CORE_LOGIC" STATUS="single-ai-worker-report-deep-research-orchestration-verified">
+      <purpose>Generic AI-agent worker runtime that claims `agent_run` jobs, dispatches deterministic fixtures and first-iteration container-local Claude Code harnesses by `harness_name`, materializes input artifacts, persists report and deep-research operation artifacts plus `agent_result_json` and `execution_log`, enforces per-harness worker-local leases, resolves private request envelopes, and generates Anthropic-compatible Claude Code settings from env.</purpose>
+      <path>workers/agent-runner</path>
+      <depends>M-WORKER-COMMON, M-CONTRACTS, M-API-HTTP</depends>
+      <verification-ref>V-M-WORKER-AGENT-RUNNER</verification-ref>
       <annotations>
-        <export-runReport PURPOSE="Generate markdown and DOCX reports from transcript artifacts." />
-        <export-launchReportWorker PURPOSE="Start the compose-ready report worker process." />
+        <export-runAgentHarness PURPOSE="Dispatch one generic `agent_run` job to the selected harness implementation." />
+        <export-launchAgentRunnerWorker PURPOSE="Start the compose-ready generic agent-runner process through WorkerCommon runtime wiring." />
+        <export-agentHarnessRegistry PURPOSE="Provide generic fixture and container-local Claude Code harness dispatch without Claude-specific worker services." />
+        <export-reserveHarnessLease PURPOSE="Acquire a worker-local per-harness lease before dispatch." />
+        <export-agentClaudeCodeHarness PURPOSE="Generate Claude Code settings JSON from explicit env values, resolve private request access, materialize input artifacts, and execute the container-local Claude Code CLI." />
+        <export-persistOperationArtifacts PURPOSE="Persist report_markdown, report_docx, and deep_research_markdown artifacts requested by public report/deep-research operation envelopes." />
+        <export-persistAgentRunSummary PURPOSE="Persist normalized result summary and redacted metadata through the current control-plane model while keeping full logs and large outputs in artifacts." />
       </annotations>
-    </M-WORKER-REPORT>
-
-    <M-WORKER-DEEP-RESEARCH NAME="WorkerDeepResearch" TYPE="CORE_LOGIC" STATUS="implemented">
-      <purpose>Execute deep-research jobs by reusing the current evidence-driven multi-phase pipeline.</purpose>
-      <path>workers/deep-research</path>
-      <depends>M-WORKER-COMMON, M-CONTRACTS</depends>
-      <verification-ref>V-M-WORKER-DEEP-RESEARCH</verification-ref>
-      <annotations>
-        <export-runDeepResearch PURPOSE="Run the deep-research pipeline and persist the final markdown artifact." />
-        <export-launchDeepResearchWorker PURPOSE="Start the compose-ready deep-research worker process." />
-      </annotations>
-    </M-WORKER-DEEP-RESEARCH>
+    </M-WORKER-AGENT-RUNNER>
 
     <M-WEB-UI NAME="WebUi" TYPE="UI_COMPONENT" STATUS="implemented">
       <purpose>Provide local file/url submission, monitoring, artifact download, and late-wave admin operations.</purpose>
@@ -166,7 +174,9 @@
       <annotations>
         <export-handleIncomingMedia PURPOSE="Download Telegram media temporarily and submit it to the API." />
         <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, and segmented-artifact actions." />
-        <export-submitCombinedMedia PURPOSE="Submit Telegram media groups or buffered sequential media as one combined transcription job." />
+        <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, uploaded files, and URL sources as one API batch basket without owning business orchestration." />
+        <export-registerCommandMenu PURPOSE="Register the Telegram command menu for start, help, batch toggle, basket view, and basket clear." />
+        <export-toggleBatchMode PURPOSE="Maintain adapter-local per-chat/user batch mode state without owning API orchestration." />
       </annotations>
     </M-TELEGRAM-ADAPTER>
 
@@ -184,11 +194,10 @@
     <M-INFRA-COMPOSE NAME="InfraCompose" TYPE="INTEGRATION" STATUS="implemented">
       <purpose>Define and bootstrap the local runtime topology for API, workers, adapters, and storage dependencies.</purpose>
       <path>infra/docker-compose.yml</path>
-      <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
+      <depends>M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER</depends>
       <verification-ref>V-M-INFRA-COMPOSE</verification-ref>
       <annotations>
         <export-composeStack PURPOSE="Bring up the full local stack with deterministic service boundaries." />
-        <export-deterministicHostHarness PURPOSE="Bounded host-side harness command used to prove report and deep-research worker bridge smoke paths through API and MinIO." />
       </annotations>
     </M-INFRA-COMPOSE>
 
@@ -206,14 +215,10 @@
     <CrossLink from="M-API-HTTP" to="M-WORKER-TRANSCRIPTION" relation="provides-internal-control-plane-to" />
     <CrossLink from="M-WORKER-COMMON" to="M-WORKER-TRANSCRIPTION" relation="provides-shared-worker-runtime-to" />
     <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
-    <CrossLink from="M-WORKER-REPORT" to="M-API-HTTP" relation="claims-and-finalizes-through" />
-    <CrossLink from="M-API-HTTP" to="M-WORKER-REPORT" relation="provides-internal-control-plane-to" />
-    <CrossLink from="M-WORKER-COMMON" to="M-WORKER-REPORT" relation="provides-shared-worker-runtime-to" />
-    <CrossLink from="M-WORKER-REPORT" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
-    <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-API-HTTP" relation="claims-and-finalizes-through" />
-    <CrossLink from="M-API-HTTP" to="M-WORKER-DEEP-RESEARCH" relation="provides-internal-control-plane-to" />
-    <CrossLink from="M-WORKER-COMMON" to="M-WORKER-DEEP-RESEARCH" relation="provides-shared-worker-runtime-to" />
-    <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
+    <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-API-HTTP" relation="claims-and-finalizes-through" />
+    <CrossLink from="M-API-HTTP" to="M-WORKER-AGENT-RUNNER" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-WORKER-COMMON" to="M-WORKER-AGENT-RUNNER" relation="provides-shared-worker-runtime-to" />
+    <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
     <CrossLink from="M-WEB-UI" to="M-API-HTTP" relation="consumes" />
     <CrossLink from="M-API-HTTP" to="M-WEB-UI" relation="serves-data-to" />
     <CrossLink from="M-WEB-UI" to="M-API-EVENTS" relation="subscribes-to" />
@@ -226,9 +231,7 @@
     <CrossLink from="M-API-HTTP" to="M-INFRA-COMPOSE" relation="deployed-by" />
     <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-TRANSCRIPTION" relation="runs" />
     <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-INFRA-COMPOSE" relation="deployed-by" />
-    <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-REPORT" relation="runs" />
-    <CrossLink from="M-WORKER-REPORT" to="M-INFRA-COMPOSE" relation="deployed-by" />
-    <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-DEEP-RESEARCH" relation="runs" />
-    <CrossLink from="M-WORKER-DEEP-RESEARCH" to="M-INFRA-COMPOSE" relation="deployed-by" />
+    <CrossLink from="M-INFRA-COMPOSE" to="M-WORKER-AGENT-RUNNER" relation="runs" />
+    <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-INFRA-COMPOSE" relation="deployed-by" />
   </Project>
 </KnowledgeGraph>

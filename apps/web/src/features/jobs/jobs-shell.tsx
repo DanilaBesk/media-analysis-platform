@@ -58,6 +58,20 @@ const RECONNECT_DELAY_MS = 1_000;
 const ACTIVE_JOB_STATUSES = new Set<JobStatus>(["queued", "running", "cancel_requested"]);
 const TERMINAL_JOB_STATUSES = new Set<JobStatus>(["succeeded", "failed", "canceled"]);
 
+function hasArtifactKind(snapshot: JobSnapshot, artifactKind: string): boolean {
+  return snapshot.artifacts.some((artifact) => artifact.artifact_kind === artifactKind);
+}
+
+function canCreateDeepResearch(snapshot: JobSnapshot): boolean {
+  if (snapshot.status !== "succeeded") {
+    return false;
+  }
+  if (snapshot.job_type === "report") {
+    return true;
+  }
+  return snapshot.job_type === "agent_run" && hasArtifactKind(snapshot, "report_markdown");
+}
+
 interface JobDetailsRouteModel {
   snapshot: JobSnapshot | null;
   events: JobEventView[];
@@ -730,6 +744,7 @@ export function JobsRouteShell(): JSX.Element {
                 <option value="transcription">Transcription</option>
                 <option value="report">Report</option>
                 <option value="deep_research">Deep research</option>
+                <option value="agent_run">Agent run</option>
               </select>
             </label>
             <label>
@@ -833,7 +848,7 @@ export function JobDetailsRouteShell({
     if (snapshot.job_type === "transcription" && snapshot.status === "succeeded") {
       buttons.push({ key: "report", label: "Create report job" });
     }
-    if (snapshot.job_type === "report" && snapshot.status === "succeeded") {
+    if (canCreateDeepResearch(snapshot)) {
       buttons.push({ key: "deep_research", label: "Create deep research job" });
     }
     if (snapshot.status === "queued" || snapshot.status === "running") {

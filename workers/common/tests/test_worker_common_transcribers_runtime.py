@@ -21,7 +21,10 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Lock
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -35,7 +38,7 @@ from transcriber_workers_common.transcribers import (
     _is_broken_model_cache_error,
     _snippet_value,
 )
-from telegram_transcriber_bot.domain import SourceCandidate, TranscriptResult, TranscriptSegment
+from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
 
 
 def test_youtube_transcriber_failure_paths_are_deterministic(tmp_path: Path, monkeypatch) -> None:
@@ -170,6 +173,7 @@ def test_whisper_runtime_helpers_cover_download_and_model_branches(tmp_path: Pat
     assert result.title == "call.ogg"
     assert result.language == "ru"
     assert result.raw_text == "Hello"
+    assert result.segments[0].text == "Hello"
 
     fake_empty_model = SimpleNamespace(
         transcribe=lambda *args, **kwargs: ([SimpleNamespace(start=0.0, end=1.0, text="  ")], SimpleNamespace(language="ru"))
@@ -224,3 +228,55 @@ def test_low_level_helper_branches_are_covered() -> None:
     assert _is_broken_model_cache_error(RuntimeError("Unable to open file 'model.bin'")) is True
     assert _is_broken_model_cache_error(RuntimeError("No such file or directory")) is True
     assert _is_broken_model_cache_error(RuntimeError("another error")) is False
+
+
+def test_whisper_transcriber_serializes_shared_model_usage(tmp_path: Path, monkeypatch) -> None:
+    transcriber = WhisperTranscriber(model_name="turbo", device="auto", compute_type="default")
+    audio_a = tmp_path / "audio-a.ogg"
+    audio_b = tmp_path / "audio-b.ogg"
+    audio_a.write_bytes(b"a")
+    audio_b.write_bytes(b"b")
+    source_a = SourceCandidate(
+        source_id="src-a",
+        kind="telegram_audio",
+        display_name="Audio: A",
+        url=None,
+        telegram_file_id="file-a",
+        mime_type="audio/ogg",
+        file_name="a.ogg",
+        local_path=audio_a,
+    )
+    source_b = SourceCandidate(
+        source_id="src-b",
+        kind="telegram_audio",
+        display_name="Audio: B",
+        url=None,
+        telegram_file_id="file-b",
+        mime_type="audio/ogg",
+        file_name="b.ogg",
+        local_path=audio_b,
+    )
+    active_calls = 0
+    max_parallel = 0
+    state_lock = Lock()
+
+    def fake_transcribe(*args, **kwargs):
+        nonlocal active_calls, max_parallel
+        with state_lock:
+            active_calls += 1
+            max_parallel = max(max_parallel, active_calls)
+        time.sleep(0.05)
+        with state_lock:
+            active_calls -= 1
+        return ([SimpleNamespace(start=0.0, end=1.0, text="Hello")], SimpleNamespace(language="ru"))
+
+    fake_model = SimpleNamespace(transcribe=fake_transcribe)
+    monkeypatch.setattr(transcriber, "_get_model", lambda workspace_dir: fake_model)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        left = pool.submit(transcriber.transcribe, source_a, tmp_path / "job-a")
+        right = pool.submit(transcriber.transcribe, source_b, tmp_path / "job-b")
+        left.result()
+        right.result()
+
+    assert max_parallel == 1

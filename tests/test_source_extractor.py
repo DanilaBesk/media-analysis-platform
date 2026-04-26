@@ -1,5 +1,5 @@
-from telegram_transcriber_bot.domain import MediaAttachment
-from telegram_transcriber_bot.source_extractor import extract_sources, extract_youtube_video_id
+from transcriber_workers_common.domain import MediaAttachment
+from transcriber_workers_common.source_extractor import extract_sources, extract_youtube_video_id
 
 
 def test_extract_sources_returns_supported_and_rejected_urls() -> None:

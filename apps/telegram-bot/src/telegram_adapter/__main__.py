@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added the compose-ready Telegram adapter launcher with placeholder-token health mode.
+#   LAST_CHANGE: v1.1.0 - Start the real aiogram polling adapter over the API gateway.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
@@ -19,28 +19,40 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import time
+from pathlib import Path
 from collections.abc import Mapping
 
 from telegram_adapter.api_client import TelegramApiClient
+from telegram_adapter.gateway import TelegramApiProcessingGateway
+from telegram_transcriber_bot.bot import TelegramTranscriberApp
+from telegram_transcriber_bot.config import load_settings
 
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER = "[TelegramAdapter][main][BLOCK_LAUNCH_TELEGRAM_ADAPTER]"
 
 
+async def _run(env: Mapping[str, str] | None = None) -> None:
+    values = os.environ if env is None else env
+    settings = load_settings(Path(values.get("SETTINGS_BASE_DIR", "/workspace")))
+    api_base_url = values.get("API_BASE_URL", "").strip() or "http://api:8080"
+    api_client = TelegramApiClient(api_base_url)
+    gateway = TelegramApiProcessingGateway(api_client, settings.data_dir)
+    app = TelegramTranscriberApp(settings, gateway)
+    _LOGGER.info("%s api_base_url=%s mode=token_configured", _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER, api_base_url)
+    await app.run()
+
+
 def main(env: Mapping[str, str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    values = os.environ if env is None else env
-    api_base_url = values.get("API_BASE_URL", "http://api:8080").strip() or "http://api:8080"
-    token = values.get("TELEGRAM_BOT_TOKEN", "").strip()
-    TelegramApiClient(api_base_url)
-    mode = "token_configured" if token and token != "replace-me" else "token_placeholder"
-    _LOGGER.info("%s api_base_url=%s mode=%s", _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER, api_base_url, mode)
-    while True:
-        time.sleep(60)
+    try:
+        asyncio.run(_run(env))
+    except KeyboardInterrupt:
+        return 0
+    return 0
 
 
 if __name__ == "__main__":

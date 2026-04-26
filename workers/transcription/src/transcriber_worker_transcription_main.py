@@ -22,22 +22,9 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
-from pathlib import Path
 from typing import Mapping
 
-
-def _ensure_worker_dependency_paths() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    for path in (repo_root / "workers" / "common" / "src", repo_root / "src"):
-        resolved = str(path)
-        if path.exists() and resolved not in sys.path:
-            sys.path.insert(0, resolved)
-
-
-_ensure_worker_dependency_paths()
-
-from transcriber_worker_transcription import runTranscription
+from transcriber_worker_transcription import runTranscription, runTranscriptionAggregate
 from transcriber_workers_common.api import JobApiClient
 from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
 from transcriber_workers_common.runtime import WorkerRuntimeConfig, run_worker_loop
@@ -58,6 +45,18 @@ def build_runner(
     transcriber: object,
 ):
     def _runner(job_id: str) -> object:
+        snapshot = api_client.get_job_snapshot(job_id)
+        if (
+            snapshot.job_type == "transcription"
+            and snapshot.parent_job_id is None
+            and any(child.job_type == "transcription" for child in snapshot.children)
+        ):
+            return runTranscriptionAggregate(
+                job_id,
+                workspace_root=config.workspace_root,
+                api_client=api_client,
+                artifact_store=object_store,
+            )
         return runTranscription(
             job_id,
             workspace_root=config.workspace_root,

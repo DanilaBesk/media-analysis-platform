@@ -8,6 +8,7 @@
 .data/
 .beads/
 logs/
+excalidraw.log
 node_modules/
 __pycache__/
 *.pyc

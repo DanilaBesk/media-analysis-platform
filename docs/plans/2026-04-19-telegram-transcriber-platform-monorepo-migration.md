@@ -29,7 +29,7 @@ This document intentionally includes both design and execution detail. It is not
 
 ## 2. Current State Summary
 
-The current repository is a single Python application with one runtime entrypoint:
+The current repository is a compose-owned local platform with one host-side cutover entrypoint:
 
 - [src/telegram_transcriber_bot/__main__.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/__main__.py:1)
 
@@ -37,27 +37,25 @@ The current logic is distributed as follows:
 
 - [src/telegram_transcriber_bot/bot.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/bot.py:1)
   Telegram runtime, source extraction orchestration, attachment download, media group buffering, callback handlers, status messages, and result delivery.
-- [src/telegram_transcriber_bot/service.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/service.py:1)
-  Current application service for processing sources, writing job metadata, generating report artifacts, and running deep research.
-- [src/telegram_transcriber_bot/transcribers.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/transcribers.py:1)
-  YouTube transcript fast path and Whisper fallback.
-- [src/telegram_transcriber_bot/documents.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/documents.py:1)
-  Markdown and DOCX artifact rendering.
-- [src/telegram_transcriber_bot/cglm_runner.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/cglm_runner.py:1)
-  Report generation subprocess adapter.
-- [src/telegram_transcriber_bot/deep_research.py](/Users/danila/work/my/telegram-transcriber-bot/src/telegram_transcriber_bot/deep_research.py:1)
+- [workers/transcription/src/transcriber_worker_transcription.py](/Users/danila/work/my/telegram-transcriber-bot/workers/transcription/src/transcriber_worker_transcription.py:1)
+  Transcription worker runtime, local source materialization, ordered input handling, and transcript artifact persistence.
+- [workers/common/src/transcriber_workers_common/transcribers.py](/Users/danila/work/my/telegram-transcriber-bot/workers/common/src/transcriber_workers_common/transcribers.py:1)
+  Shared YouTube transcript fast path and Whisper fallback.
+- [workers/common/src/transcriber_workers_common/documents.py](/Users/danila/work/my/telegram-transcriber-bot/workers/common/src/transcriber_workers_common/documents.py:1)
+  Transcript/report markdown normalization and DOCX artifact rendering.
+- [workers/report/src/transcriber_worker_report.py](/Users/danila/work/my/telegram-transcriber-bot/workers/report/src/transcriber_worker_report.py:1)
+  Report worker runtime and report harness execution.
+- [workers/deep-research/src](/Users/danila/work/my/telegram-transcriber-bot/workers/deep-research/src:1)
   Deep research multi-phase pipeline.
 
-Current storage model:
+Current storage and runtime model:
 
-- local files under `.data/jobs/<job_id>/...`
-- local metadata JSON per job
-- no external queue
-- no DB
-- no external object storage
-- no HTTP API
-- no Web UI
-- no MCP server
+- PostgreSQL stores jobs, events, source sets, and artifact metadata
+- MinIO stores uploaded sources and produced artifacts
+- Redis backs asynq queues only
+- Go HTTP API owns orchestration and delivery semantics
+- React Web UI, Telegram adapter, and MCP adapter consume the API boundary
+- host-side `uv run telegram-transcriber-bot` is only a cutover pointer, not the old execution path
 
 Current user-visible capabilities to preserve:
 
@@ -68,7 +66,6 @@ Current user-visible capabilities to preserve:
 - segmented transcript output
 - report generation
 - deep research generation
-- artifact reuse inside the current process
 
 ## 3. Non-Goals for the First Platform Version
 
@@ -1354,8 +1351,8 @@ Recommended progress stages:
 
 Reused logic sources:
 
-- current `cglm_runner.py`
-- report docx rendering in `documents.py`
+- `workers/report/src/transcriber_worker_report.py`
+- `workers/common/src/transcriber_workers_common/documents.py`
 
 Outputs:
 
@@ -1725,7 +1722,7 @@ Move into:
 
 - `workers/common/src/transcriber_workers_common/documents.py`
 
-### 23.3 `src/telegram_transcriber_bot/cglm_runner.py`
+### 23.3 `workers/report/src/transcriber_worker_report.py`
 
 Move into:
 
@@ -1737,9 +1734,9 @@ Move into:
 
 - `workers/deep-research/src/...`
 
-### 23.5 `src/telegram_transcriber_bot/service.py`
+### 23.5 Former `src/telegram_transcriber_bot/service.py` local shell
 
-Split:
+Was split into:
 
 - execution-specific code into Python workers;
 - job orchestration semantics into Go API service layer;
@@ -1995,7 +1992,7 @@ Check cancel flag before and after long work.
 
 #### Phase 4.1: Extract report generation package
 
-Move `cglm_runner` and report DOCX generation into report worker layer.
+Move report execution and report DOCX generation into the report worker layer.
 
 #### Phase 4.2: Implement report job creation in API
 
@@ -2119,7 +2116,7 @@ Implement on job details page:
 
 - Create: `apps/telegram-bot/src/...`
 - Create: `packages/sdk-py/...`
-- Retire logic from current `src/telegram_transcriber_bot/service.py` usage
+- Retire logic that had lived in `src/telegram_transcriber_bot/service.py`
 
 **Phases:**
 

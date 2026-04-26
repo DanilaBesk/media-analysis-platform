@@ -23,7 +23,8 @@
       "enum": [
         "transcription",
         "report",
-        "deep_research"
+        "deep_research",
+        "agent_run"
       ]
     },
     "sourceKind": {
@@ -31,7 +32,8 @@
       "enum": [
         "uploaded_file",
         "telegram_upload",
-        "youtube_url"
+        "youtube_url",
+        "external_url"
       ]
     },
     "artifactKind": {
@@ -43,7 +45,10 @@
         "report_markdown",
         "report_docx",
         "deep_research_markdown",
-        "execution_log"
+        "execution_log",
+        "agent_result_json",
+        "source_manifest_json",
+        "batch_diagnostics_json"
       ]
     },
     "deliveryStrategy": {
@@ -60,6 +65,7 @@
         "transcription_url",
         "report_create",
         "deep_research_create",
+        "agent_run_create",
         "job_retry"
       ]
     },
@@ -78,16 +84,15 @@
       "type": "string",
       "enum": [
         "transcription",
-        "report",
-        "deep_research"
+        "agent_runner"
       ]
     },
     "taskType": {
       "type": "string",
       "enum": [
         "transcription.run",
-        "report.run",
-        "deep_research.run"
+        "transcription.aggregate",
+        "agent_run.run"
       ]
     },
     "workerOutcome": {
@@ -103,7 +108,9 @@
       "enum": [
         "single_source",
         "combined_upload",
-        "combined_telegram"
+        "combined_telegram",
+        "batch_transcription",
+        "agent_run"
       ]
     }
   }

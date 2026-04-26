@@ -402,7 +402,7 @@ export function createMappedMcpTools(apiClient: McpAdapterApiClient): McpMappedT
     toolWithApiCall(
       {
         name: "create_report_job",
-        description: "Create a report child job through the HTTP API.",
+        description: "Create a report operation job through the HTTP API.",
         apiPathHint: "/v1/transcription-jobs/{job_id}/report-jobs",
         inputSchema: {
           type: "object",
@@ -433,7 +433,7 @@ export function createMappedMcpTools(apiClient: McpAdapterApiClient): McpMappedT
     toolWithApiCall(
       {
         name: "create_deep_research_job",
-        description: "Create a deep-research child job through the HTTP API.",
+        description: "Create a deep-research operation job through the HTTP API.",
         apiPathHint: "/v1/report-jobs/{job_id}/deep-research-jobs",
         inputSchema: {
           type: "object",

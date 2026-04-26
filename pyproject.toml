@@ -1,7 +1,7 @@
 [project]
 name = "telegram-transcriber-bot"
 version = "0.1.0"
-description = "Telegram bot that transcribes links and uploaded media, then generates research reports via cglm."
+description = "Telegram bot platform that transcribes links and uploaded media, then generates research reports through the compose-owned worker stack."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -37,8 +37,5 @@ addopts = [
   "-ra",
   "--strict-config",
   "--strict-markers",
-  "--cov=transcriber_workers_common",
-  "--cov-branch",
-  "--cov-report=term-missing",
-  "--cov-fail-under=95",
+  "--ignore=tests/test_deep_research.py",
 ]

@@ -26,7 +26,7 @@ export type JobStatus =
   | "failed"
   | "canceled";
 
-export type JobType = "transcription" | "report" | "deep_research";
+export type JobType = "transcription" | "report" | "deep_research" | "agent_run";
 
 export type SourceKind = "uploaded_file" | "telegram_upload" | "youtube_url";
 
@@ -37,6 +37,7 @@ export type ArtifactKind =
   | "report_markdown"
   | "report_docx"
   | "deep_research_markdown"
+  | "agent_result_json"
   | "execution_log";
 
 export type DeliveryStrategy = "polling" | "webhook";

@@ -27,7 +27,7 @@
 - The current large migration brief in `docs/plans/2026-04-19-telegram-transcriber-platform-monorepo-migration.md` remains the detailed architecture baseline, but the GRACE XML docs are now the canonical structure for future planning, execution packets, verification, and graph updates.
 - New modules should carry GRACE-style module contracts and stable semantic/log anchors when they are implemented.
 - For implementation from this point forward, default to GRACE packet-driven execution rather than freeform refactoring.
-- Current next execution target is `M-INFRA-COMPOSE-wave-1` from `docs/operational-packets.xml`.
+- Compose cutover packets are already reflected in GRACE docs; use `bd ready --json` plus `docs/operational-packets.xml` to find the remaining approved execution slice instead of restarting early waves.
 - Recommended next GRACE steps:
   - use `$grace-execute` to execute the next approved packet;
   - use `$grace-reviewer` for scoped gate reviews after each packet;
@@ -36,19 +36,19 @@
 
 ## Repo Basics
 
-- Runtime: Python `3.12` with `uv`.
-- App entrypoint: `uv run telegram-transcriber-bot`
+- Primary runtime: Docker Compose local stack with Python `3.12` components managed inside the compose topology.
+- Local cutover entrypoint: `uv run telegram-transcriber-bot`
 - Tests: `uv run pytest`
-- Required local tools: `cglm`, `ffmpeg`
+- Required local tools: `docker compose`, `uv`; `ffmpeg` is still needed when media-processing paths are exercised on the host.
 - Required env setup: copy `.env.example` to `.env` and set `TELEGRAM_BOT_TOKEN`
 
 ## Code Map
 
 - `src/telegram_transcriber_bot/bot.py` - Telegram runtime and handlers
-- `src/telegram_transcriber_bot/service.py` - job orchestration and artifacts
-- `src/telegram_transcriber_bot/transcribers.py` - YouTube/subtitles/Whisper pipeline
-- `src/telegram_transcriber_bot/cglm_runner.py` - `cglm` subprocess adapter
-- `src/telegram_transcriber_bot/documents.py` - transcript/report document rendering
+- `workers/transcription/src/transcriber_worker_transcription.py` - transcription worker runtime and local source materialization
+- `workers/report/src/transcriber_worker_report.py` - report worker runtime and harness execution
+- `workers/common/src/transcriber_workers_common/transcribers.py` - shared YouTube/subtitles/Whisper helpers
+- `workers/common/src/transcriber_workers_common/documents.py` - transcript/report document rendering helpers
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker

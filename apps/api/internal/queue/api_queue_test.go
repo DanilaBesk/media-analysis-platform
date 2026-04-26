@@ -31,11 +31,15 @@ func TestApiQueueEnqueueUsesMinimalPayloadAndFrozenPolicies(t *testing.T) {
 				t.Fatalf("NewPublisher() error = %v", err)
 			}
 
-			result, err := publisher.Enqueue(context.Background(), EnqueueRequest{
+			req := EnqueueRequest{
 				JobID:   "job-" + policy.JobType,
 				JobType: policy.JobType,
 				Attempt: 1,
-			})
+			}
+			if policy.TaskType != TaskTypeTranscription && policy.TaskType != TaskTypeAgentRun {
+				req.TaskType = policy.TaskType
+			}
+			result, err := publisher.Enqueue(context.Background(), req)
 			if err != nil {
 				t.Fatalf("Enqueue() error = %v", err)
 			}
@@ -117,6 +121,49 @@ func TestApiQueueRejectsInvalidRequests(t *testing.T) {
 	})
 	if !errors.Is(err, ErrContractViolation) {
 		t.Fatalf("unsupported job type should fail with ErrContractViolation, got %v", err)
+	}
+}
+
+func TestApiQueueRejectsDedicatedReportAndDeepResearchTaskPolicies(t *testing.T) {
+	t.Parallel()
+
+	for _, jobType := range []string{JobTypeReport, JobTypeDeepResearch} {
+		_, err := PolicyForJobType(jobType)
+		if !errors.Is(err, ErrContractViolation) {
+			t.Fatalf("PolicyForJobType(%q) error = %v, want ErrContractViolation", jobType, err)
+		}
+	}
+
+	for _, policy := range KnownPolicies() {
+		if policy.TaskType == "job:report.run" || policy.TaskType == "job:deep_research.run" {
+			t.Fatalf("dedicated AI task policy should not be registered: %#v", policy)
+		}
+	}
+}
+
+func TestApiQueueSupportsTranscriptionAggregateTaskPolicy(t *testing.T) {
+	t.Parallel()
+
+	client := &fakeClient{}
+	publisher, err := NewPublisher(client)
+	if err != nil {
+		t.Fatalf("NewPublisher() error = %v", err)
+	}
+
+	result, err := publisher.Enqueue(context.Background(), EnqueueRequest{
+		JobID:    "batch-root",
+		JobType:  JobTypeTranscription,
+		TaskType: TaskTypeTranscriptionAggregate,
+		Attempt:  1,
+	})
+	if err != nil {
+		t.Fatalf("Enqueue(aggregate) error = %v", err)
+	}
+	if result.Policy.QueueName != QueueNameTranscription || result.Policy.TaskType != TaskTypeTranscriptionAggregate {
+		t.Fatalf("aggregate policy = %#v, want transcription aggregate task", result.Policy)
+	}
+	if client.lastSpec.TaskType != TaskTypeTranscriptionAggregate {
+		t.Fatalf("task type = %q, want %q", client.lastSpec.TaskType, TaskTypeTranscriptionAggregate)
 	}
 }
 

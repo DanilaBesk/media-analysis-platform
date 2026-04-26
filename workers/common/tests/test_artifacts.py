@@ -54,6 +54,10 @@ def test_build_artifact_object_key_uses_canonical_layout() -> None:
         == "artifacts/job-1/transcript/segmented/transcript.md"
     )
     assert build_artifact_object_key("job-1", "execution_log", "execution.log") == "artifacts/job-1/logs/execution.log"
+    assert (
+        build_artifact_object_key("job-1", "agent_result_json", "result.json")
+        == "artifacts/job-1/agent/result/result.json"
+    )
 
 
 def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
@@ -81,6 +85,35 @@ def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
             "object_key": "artifacts/job-2/report/markdown/report.md",
             "content": b"# Report\n",
             "mime_type": "text/markdown; charset=utf-8",
+        }
+    ]
+
+
+def test_write_agent_result_json_uses_agent_result_path() -> None:
+    object_store = InMemoryObjectStore()
+    writer = ArtifactWriter(job_id="job-agent", object_store=object_store)
+
+    descriptor = writer.write_text_artifact(
+        "agent_result_json",
+        "result.json",
+        '{"status":"ok"}',
+        mime_type="application/json; charset=utf-8",
+        format="json",
+    )
+
+    assert descriptor.to_payload() == {
+        "artifact_kind": "agent_result_json",
+        "format": "json",
+        "filename": "result.json",
+        "mime_type": "application/json; charset=utf-8",
+        "object_key": "artifacts/job-agent/agent/result/result.json",
+        "size_bytes": len(b'{"status":"ok"}'),
+    }
+    assert object_store.calls == [
+        {
+            "object_key": "artifacts/job-agent/agent/result/result.json",
+            "content": b'{"status":"ok"}',
+            "mime_type": "application/json; charset=utf-8",
         }
     ]
 

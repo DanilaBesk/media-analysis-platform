@@ -29,7 +29,7 @@ from transcriber_workers_common.transcribers import (
     YouTubeTranscriptTranscriber,
     _extract_speaker,
 )
-from telegram_transcriber_bot.domain import SourceCandidate, TranscriptResult, TranscriptSegment
+from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
 
 
 class FakeFetchedTranscript(list):

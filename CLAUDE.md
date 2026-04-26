@@ -24,14 +24,14 @@ bd close <id>         # Complete work
 
 ## Session Completion
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+**When ending a work session**, complete all applicable steps below. Push-to-remote steps are mandatory only if a git remote is configured for this repo.
 
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
+4. **PUSH TO REMOTE** - Mandatory only when a git remote is configured:
    ```bash
    git pull --rebase
    bd dolt push
@@ -43,10 +43,10 @@ bd close <id>         # Complete work
 7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+- If a git remote is configured, work is NOT complete until `git push` succeeds
+- If no git remote is configured, do not invent one and do not claim remote-sync steps were completed
+- NEVER say "ready to push when you are" when remote push is required - YOU must push
+- If push fails and a remote exists, resolve and retry until it succeeds
 <!-- END BEADS INTEGRATION -->
 
 
@@ -60,15 +60,15 @@ uv run pytest
 ## Architecture Overview
 
 - `src/telegram_transcriber_bot/bot.py` contains the aiogram runtime, handlers, callbacks, and media-group flow.
-- `src/telegram_transcriber_bot/service.py` owns job orchestration and artifact lifecycle under `.data/jobs/<job_id>/`.
-- `src/telegram_transcriber_bot/transcribers.py` handles transcript acquisition via YouTube subtitles first, then Whisper fallback.
-- `src/telegram_transcriber_bot/cglm_runner.py` wraps the mandatory `cglm` CLI used for research report generation.
-- `src/telegram_transcriber_bot/documents.py` renders transcript/report outputs.
+- `workers/transcription/src/transcriber_worker_transcription.py` owns transcription worker execution, local source materialization, and transcript artifact persistence.
+- `workers/common/src/transcriber_workers_common/transcribers.py` handles transcript acquisition via YouTube subtitles first, then Whisper fallback.
+- `workers/report/src/transcriber_worker_report.py` executes report jobs through the configured report harness.
+- `workers/common/src/transcriber_workers_common/documents.py` renders transcript/report outputs.
 
 ## Conventions & Patterns
 
 - Use `bd` for task tracking; do not keep parallel markdown TODO lists.
 - Keep `AGENTS.md` short and repo-specific.
-- Local runtime dependencies are `uv`, `cglm`, and `ffmpeg`.
+- Primary runtime is the compose stack; `uv run telegram-transcriber-bot` is only a cutover pointer, and `ffmpeg` is still required for local media-processing flows exercised on the host.
 - `.env` stays local; configure the bot via `.env.example` and `TELEGRAM_BOT_TOKEN`.
 - This repository currently has no configured git remote, so push-related checklist items apply only after remote setup.

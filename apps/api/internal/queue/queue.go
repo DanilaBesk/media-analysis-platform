@@ -12,16 +12,16 @@ import (
 )
 
 const (
-	EnqueueMarker          = "[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]"
-	JobTypeTranscription   = "transcription"
-	JobTypeReport          = "report"
-	JobTypeDeepResearch    = "deep_research"
-	QueueNameTranscription = "transcription"
-	QueueNameReport        = "report"
-	QueueNameDeepResearch  = "deep_research"
-	TaskTypeTranscription  = "job:transcription.run"
-	TaskTypeReport         = "job:report.run"
-	TaskTypeDeepResearch   = "job:deep_research.run"
+	EnqueueMarker                  = "[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]"
+	JobTypeTranscription           = "transcription"
+	JobTypeReport                  = "report"
+	JobTypeDeepResearch            = "deep_research"
+	JobTypeAgentRun                = "agent_run"
+	QueueNameTranscription         = "transcription"
+	QueueNameAgentRun              = "agent_run"
+	TaskTypeTranscription          = "job:transcription.run"
+	TaskTypeTranscriptionAggregate = "job:transcription.aggregate"
+	TaskTypeAgentRun               = "job:agent_run.run"
 )
 
 const (
@@ -140,9 +140,10 @@ func NewPublisher(client Client, opts ...Option) (*Publisher, error) {
 }
 
 type EnqueueRequest struct {
-	JobID   string
-	JobType string
-	Attempt int
+	JobID    string
+	JobType  string
+	TaskType string
+	Attempt  int
 }
 
 type EnqueueResult struct {
@@ -154,8 +155,8 @@ type EnqueueResult struct {
 func KnownPolicies() []Policy {
 	return []Policy{
 		policyByJobType[JobTypeTranscription],
-		policyByJobType[JobTypeReport],
-		policyByJobType[JobTypeDeepResearch],
+		policyByTaskType[TaskTypeTranscriptionAggregate],
+		policyByJobType[JobTypeAgentRun],
 	}
 }
 
@@ -175,7 +176,7 @@ func (p *Publisher) Enqueue(ctx context.Context, req EnqueueRequest) (EnqueueRes
 		return EnqueueResult{}, fmt.Errorf("%w: attempt must be >= 1", ErrContractViolation)
 	}
 
-	policy, err := PolicyForJobType(req.JobType)
+	policy, err := policyForRequest(req)
 	if err != nil {
 		return EnqueueResult{}, err
 	}
@@ -234,18 +235,35 @@ var policyByJobType = map[string]Policy{
 		MaxRetry:  3,
 		Timeout:   2 * time.Hour,
 	},
-	JobTypeReport: {
-		JobType:   JobTypeReport,
-		QueueName: QueueNameReport,
-		TaskType:  TaskTypeReport,
-		MaxRetry:  2,
-		Timeout:   45 * time.Minute,
-	},
-	JobTypeDeepResearch: {
-		JobType:   JobTypeDeepResearch,
-		QueueName: QueueNameDeepResearch,
-		TaskType:  TaskTypeDeepResearch,
-		MaxRetry:  2,
+	JobTypeAgentRun: {
+		JobType:   JobTypeAgentRun,
+		QueueName: QueueNameAgentRun,
+		TaskType:  TaskTypeAgentRun,
+		MaxRetry:  1,
 		Timeout:   2 * time.Hour,
 	},
+}
+
+var policyByTaskType = map[string]Policy{
+	TaskTypeTranscription: policyByJobType[JobTypeTranscription],
+	TaskTypeTranscriptionAggregate: {
+		JobType:   JobTypeTranscription,
+		QueueName: QueueNameTranscription,
+		TaskType:  TaskTypeTranscriptionAggregate,
+		MaxRetry:  3,
+		Timeout:   2 * time.Hour,
+	},
+	TaskTypeAgentRun: policyByJobType[JobTypeAgentRun],
+}
+
+func policyForRequest(req EnqueueRequest) (Policy, error) {
+	taskType := strings.TrimSpace(req.TaskType)
+	if taskType == "" {
+		return PolicyForJobType(req.JobType)
+	}
+	policy, ok := policyByTaskType[taskType]
+	if !ok || policy.JobType != req.JobType {
+		return Policy{}, fmt.Errorf("%w: unsupported task type %q for job type %q", ErrContractViolation, taskType, req.JobType)
+	}
+	return policy, nil
 }

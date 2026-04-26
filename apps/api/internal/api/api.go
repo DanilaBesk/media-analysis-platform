@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	ValidateRequestMarker = "[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]"
-	defaultMaxRequestBody = 1 << 30
+	ValidateRequestMarker           = "[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]"
+	defaultMaxRequestBody           = 1 << 30
+	batchManifestVersion            = "batch-transcription.v1"
+	BatchCompletionPolicyAllSources = "succeed_when_all_sources_succeed"
+	BatchCompletionPolicyAnySource  = "succeed_when_any_source_succeeds"
 )
 
 type Logger interface {
@@ -35,7 +38,9 @@ type Logger interface {
 type PublicService interface {
 	CreateUpload(ctx context.Context, req UploadCommand) ([]JobSnapshot, error)
 	CreateCombined(ctx context.Context, req UploadCommand) (JobSnapshot, error)
+	CreateBatch(ctx context.Context, req BatchCommand) (JobSnapshot, error)
 	CreateFromURL(ctx context.Context, req URLCommand) (JobSnapshot, error)
+	CreateAgentRun(ctx context.Context, req AgentRunCommand) (JobSnapshot, error)
 	GetJob(ctx context.Context, jobID string) (JobSnapshot, error)
 	ListJobs(ctx context.Context, filter ListJobsFilter) (JobListResponse, error)
 	CreateReport(ctx context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error)
@@ -52,6 +57,7 @@ type WorkerService interface {
 	RecordArtifacts(ctx context.Context, jobID string, req ArtifactUpsertRequest) error
 	Finalize(ctx context.Context, jobID string, req FinalizeRequest) (JobSnapshot, error)
 	CancelCheck(ctx context.Context, jobID, executionID string) (CancelCheckResponse, error)
+	ResolveAgentRunRequestAccess(ctx context.Context, jobID, executionID string) (storage.AgentRunRequestAccess, error)
 }
 
 type WebsocketAcceptor interface {
@@ -100,7 +106,9 @@ func NewServer(deps Dependencies, opts ...Option) *Server {
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs/combined", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/transcription-jobs/batch", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs/from-url", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/agent-runs", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/jobs", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs/{job_id}/report-jobs", s.handleCORSPreflight)
@@ -111,7 +119,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}/events", s.handleCORSPreflight)
 	mux.HandleFunc("POST /v1/transcription-jobs", s.withCORS(s.handleCreateUpload))
 	mux.HandleFunc("POST /v1/transcription-jobs/combined", s.withCORS(s.handleCreateCombinedUpload))
+	mux.HandleFunc("POST /v1/transcription-jobs/batch", s.withCORS(s.handleCreateBatch))
 	mux.HandleFunc("POST /v1/transcription-jobs/from-url", s.withCORS(s.handleCreateFromURL))
+	mux.HandleFunc("POST /v1/agent-runs", s.withCORS(s.handleCreateAgentRun))
 	mux.HandleFunc("GET /v1/jobs/{job_id}", s.withCORS(s.handleGetJob))
 	mux.HandleFunc("GET /v1/jobs", s.withCORS(s.handleListJobs))
 	mux.HandleFunc("POST /v1/transcription-jobs/{job_id}/report-jobs", s.withCORS(s.handleCreateReport))
@@ -126,6 +136,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/artifacts", s.withCORS(s.handleRecordArtifacts))
 	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/finalize", s.withCORS(s.handleFinalizeJob))
 	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/cancel-check", s.withCORS(s.handleCancelCheck))
+	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/request-access", s.withCORS(s.handleResolveAgentRunRequestAccess))
 }
 
 func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
@@ -196,12 +207,42 @@ type UploadFile struct {
 	Body        []byte `json:"-"`
 }
 
+type BatchUploadFile struct {
+	PartName string `json:"part_name"`
+	UploadFile
+}
+
 type UploadCommand struct {
 	IdempotencyKey string         `json:"-"`
 	DisplayName    string         `json:"display_name,omitempty"`
 	ClientRef      string         `json:"client_ref,omitempty"`
 	Delivery       DeliveryConfig `json:"delivery"`
 	Files          []UploadFile   `json:"files"`
+}
+
+type BatchCommand struct {
+	IdempotencyKey string              `json:"-"`
+	DisplayName    string              `json:"display_name,omitempty"`
+	ClientRef      string              `json:"client_ref,omitempty"`
+	Delivery       DeliveryConfig      `json:"delivery"`
+	Manifest       BatchSourceManifest `json:"source_manifest"`
+	ManifestJSON   []byte              `json:"-"`
+	Files          []BatchUploadFile   `json:"files"`
+}
+
+type BatchSourceManifest struct {
+	ManifestVersion     string                 `json:"manifest_version"`
+	OrderedSourceLabels []string               `json:"ordered_source_labels"`
+	Sources             map[string]BatchSource `json:"sources"`
+	CompletionPolicy    string                 `json:"completion_policy"`
+}
+
+type BatchSource struct {
+	SourceKind       string `json:"source_kind"`
+	FilePart         string `json:"file_part,omitempty"`
+	URL              string `json:"url,omitempty"`
+	DisplayName      string `json:"display_name,omitempty"`
+	OriginalFilename string `json:"original_filename,omitempty"`
 }
 
 type URLCommand struct {
@@ -217,6 +258,29 @@ type ChildCreateRequest struct {
 	IdempotencyKey string         `json:"-"`
 	ClientRef      string         `json:"client_ref,omitempty"`
 	Delivery       DeliveryConfig `json:"delivery"`
+}
+
+type AgentRunCommand struct {
+	IdempotencyKey string          `json:"-"`
+	ParentJobID    string          `json:"-"`
+	HarnessName    string          `json:"harness_name"`
+	Request        AgentRunRequest `json:"request"`
+	ClientRef      string          `json:"client_ref,omitempty"`
+	Delivery       DeliveryConfig  `json:"delivery"`
+}
+
+type AgentRunRequest struct {
+	Prompt         string                  `json:"prompt,omitempty"`
+	Payload        json.RawMessage         `json:"payload,omitempty"`
+	InputArtifacts []AgentRunInputArtifact `json:"input_artifacts,omitempty"`
+}
+
+type AgentRunInputArtifact struct {
+	ArtifactID   string `json:"artifact_id,omitempty"`
+	ArtifactKind string `json:"artifact_kind,omitempty"`
+	ObjectKey    string `json:"object_key,omitempty"`
+	URI          string `json:"uri,omitempty"`
+	Filename     string `json:"filename,omitempty"`
 }
 
 type ListJobsFilter struct {
@@ -275,8 +339,9 @@ type SourceSetView struct {
 }
 
 type SourceSetItem struct {
-	Position int             `json:"position"`
-	Source   SourceReference `json:"source"`
+	Position    int             `json:"position"`
+	SourceLabel *string         `json:"source_label,omitempty"`
+	Source      SourceReference `json:"source"`
 }
 
 type SourceReference struct {
@@ -412,6 +477,15 @@ type CancelCheckResponse struct {
 	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
 }
 
+type AgentRunRequestAccessResponse struct {
+	Provider            string    `json:"provider"`
+	URL                 string    `json:"url"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	RequestRef          string    `json:"request_ref"`
+	RequestDigestSHA256 string    `json:"request_digest_sha256"`
+	RequestBytes        int64     `json:"request_bytes"`
+}
+
 type errorEnvelope struct {
 	Error errorBody `json:"error"`
 }
@@ -440,10 +514,14 @@ func ValidateRequest(kind string, payload any) error {
 	switch req := payload.(type) {
 	case UploadCommand:
 		return validateUploadCommand(kind, req)
+	case BatchCommand:
+		return validateBatchCommand(req)
 	case URLCommand:
 		return validateURLCommand(req)
 	case ChildCreateRequest:
 		return validateDelivery(req.Delivery)
+	case AgentRunCommand:
+		return validateAgentRunCommand(req)
 	case ListJobsFilter:
 		return validateListJobsFilter(req)
 	case ClaimRequest:
@@ -517,6 +595,28 @@ func (s *Server) handleCreateCombinedUpload(w http.ResponseWriter, r *http.Reque
 	s.writeJSON(w, http.StatusAccepted, JobAcceptedEnvelope{Job: job})
 }
 
+func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	req, err := s.parseBatchCommand(w, r)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	if err := s.validateRequest("create_batch", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	job, err := s.deps.Public.CreateBatch(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusAccepted, JobAcceptedEnvelope{Job: job})
+}
+
 func (s *Server) handleCreateFromURL(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Public == nil {
 		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
@@ -546,6 +646,43 @@ func (s *Server) handleCreateFromURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := s.deps.Public.CreateFromURL(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusAccepted, JobAcceptedEnvelope{Job: job})
+}
+
+func (s *Server) handleCreateAgentRun(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	var body struct {
+		HarnessName string          `json:"harness_name"`
+		Request     AgentRunRequest `json:"request"`
+		ClientRef   string          `json:"client_ref"`
+		Delivery    deliveryDTO     `json:"delivery"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	req := AgentRunCommand{
+		IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+		HarnessName:    strings.TrimSpace(body.HarnessName),
+		Request:        normalizeAgentRunRequest(body.Request),
+		ClientRef:      strings.TrimSpace(body.ClientRef),
+		Delivery:       body.Delivery.toDeliveryConfig(),
+	}
+	if req.Delivery.Strategy == "" {
+		req.Delivery.Strategy = storage.DeliveryStrategyPolling
+	}
+	if err := s.validateRequest("create_agent_run", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	job, err := s.deps.Public.CreateAgentRun(r.Context(), req)
 	if err != nil {
 		s.writeAPIError(w, err)
 		return
@@ -842,6 +979,36 @@ func (s *Server) handleCancelCheck(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, response)
 }
 
+func (s *Server) handleResolveAgentRunRequestAccess(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Worker == nil {
+		s.writeAPIError(w, dependencyUnavailableError("worker control plane is not configured"))
+		return
+	}
+	jobID, err := parseUUIDPathValue(r, "job_id")
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	executionID := strings.TrimSpace(r.URL.Query().Get("execution_id"))
+	if !isUUID(executionID) {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_query", message: "execution_id must be a valid UUID"})
+		return
+	}
+	access, err := s.deps.Worker.ResolveAgentRunRequestAccess(r.Context(), jobID, executionID)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, AgentRunRequestAccessResponse{
+		Provider:            access.Provider,
+		URL:                 access.URL,
+		ExpiresAt:           access.ExpiresAt,
+		RequestRef:          access.RequestRef,
+		RequestDigestSHA256: access.RequestDigestSHA256,
+		RequestBytes:        access.RequestBytes,
+	})
+}
+
 func (s *Server) parseUploadCommand(w http.ResponseWriter, r *http.Request) (UploadCommand, error) {
 	if r.ContentLength > s.maxRequestBytes {
 		return UploadCommand{}, apiError{status: http.StatusRequestEntityTooLarge, code: "request_too_large", message: "request exceeds the configured maximum size"}
@@ -888,6 +1055,70 @@ func (s *Server) parseUploadCommand(w http.ResponseWriter, r *http.Request) (Upl
 			SHA256:      checksum(body),
 			Body:        body,
 		})
+	}
+	return command, nil
+}
+
+func (s *Server) parseBatchCommand(w http.ResponseWriter, r *http.Request) (BatchCommand, error) {
+	if r.ContentLength > s.maxRequestBytes {
+		return BatchCommand{}, apiError{status: http.StatusRequestEntityTooLarge, code: "request_too_large", message: "request exceeds the configured maximum size"}
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return BatchCommand{}, apiError{status: http.StatusRequestEntityTooLarge, code: "request_too_large", message: "request exceeds the configured maximum size"}
+		}
+		return BatchCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "request body must be valid multipart/form-data", details: err.Error()}
+	}
+
+	rawManifest := strings.TrimSpace(r.FormValue("source_manifest"))
+	if rawManifest == "" {
+		return BatchCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "source_manifest is required"}
+	}
+	var manifest BatchSourceManifest
+	if err := json.Unmarshal([]byte(rawManifest), &manifest); err != nil {
+		return BatchCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "source_manifest must be valid JSON", details: err.Error()}
+	}
+
+	command := BatchCommand{
+		IdempotencyKey: strings.TrimSpace(r.Header.Get("Idempotency-Key")),
+		DisplayName:    strings.TrimSpace(r.FormValue("display_name")),
+		ClientRef:      strings.TrimSpace(r.FormValue("client_ref")),
+		Delivery: DeliveryConfig{
+			Strategy:   strings.TrimSpace(r.FormValue("delivery_strategy")),
+			WebhookURL: strings.TrimSpace(r.FormValue("delivery_webhook_url")),
+		},
+		Manifest:     normalizeBatchManifest(manifest),
+		ManifestJSON: []byte(rawManifest),
+	}
+	if command.Delivery.Strategy == "" {
+		command.Delivery.Strategy = storage.DeliveryStrategyPolling
+	}
+
+	for partName, headers := range r.MultipartForm.File {
+		for _, header := range headers {
+			file, err := header.Open()
+			if err != nil {
+				return BatchCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "multipart file part could not be opened", details: err.Error()}
+			}
+			body, readErr := io.ReadAll(file)
+			file.Close()
+			if readErr != nil {
+				return BatchCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "multipart file part could not be read", details: readErr.Error()}
+			}
+			command.Files = append(command.Files, BatchUploadFile{
+				PartName: strings.TrimSpace(partName),
+				UploadFile: UploadFile{
+					Filename:    filepath.Base(header.Filename),
+					ContentType: header.Header.Get("Content-Type"),
+					SizeBytes:   int64(len(body)),
+					SHA256:      checksum(body),
+					Body:        body,
+				},
+			})
+		}
 	}
 	return command, nil
 }
@@ -954,6 +1185,70 @@ func validateUploadCommand(kind string, req UploadCommand) error {
 	return validateDelivery(req.Delivery)
 }
 
+func validateBatchCommand(req BatchCommand) error {
+	if req.Manifest.ManifestVersion != batchManifestVersion {
+		return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "source_manifest.manifest_version must be batch-transcription.v1"}
+	}
+	if len(req.Manifest.OrderedSourceLabels) == 0 || len(req.Manifest.Sources) == 0 {
+		return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "source_manifest must include ordered_source_labels and sources"}
+	}
+	if req.Manifest.CompletionPolicy == "" {
+		req.Manifest.CompletionPolicy = BatchCompletionPolicyAllSources
+	}
+	switch req.Manifest.CompletionPolicy {
+	case BatchCompletionPolicyAllSources, BatchCompletionPolicyAnySource:
+	default:
+		return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "unsupported completion_policy"}
+	}
+
+	filesByPart := map[string]BatchUploadFile{}
+	for _, file := range req.Files {
+		if strings.TrimSpace(file.PartName) == "" || strings.TrimSpace(file.Filename) == "" || len(file.Body) == 0 {
+			return apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "batch file parts must be non-empty and named"}
+		}
+		if _, exists := filesByPart[file.PartName]; exists {
+			return apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "batch file part names must be unique"}
+		}
+		filesByPart[file.PartName] = file
+	}
+
+	seen := map[string]struct{}{}
+	for _, label := range req.Manifest.OrderedSourceLabels {
+		if !validBatchLabel(label) {
+			return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "source labels must match ^[a-z][a-z0-9_-]*$"}
+		}
+		if _, ok := seen[label]; ok {
+			return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "ordered_source_labels must be unique"}
+		}
+		seen[label] = struct{}{}
+		source, ok := req.Manifest.Sources[label]
+		if !ok {
+			return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "ordered_source_labels must match sources keys"}
+		}
+		switch source.SourceKind {
+		case storage.SourceKindUploadedFile, storage.SourceKindTelegramUpload:
+			if strings.TrimSpace(source.FilePart) == "" {
+				return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "uploaded batch sources require file_part"}
+			}
+			if _, ok := filesByPart[source.FilePart]; !ok {
+				return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "uploaded batch source references missing multipart file_part"}
+			}
+		case storage.SourceKindYouTubeURL:
+			if err := validateBatchURL(source.URL); err != nil {
+				return err
+			}
+		default:
+			return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "unsupported batch source_kind"}
+		}
+	}
+	for label := range req.Manifest.Sources {
+		if _, ok := seen[label]; !ok {
+			return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "sources keys must match ordered_source_labels"}
+		}
+	}
+	return validateDelivery(req.Delivery)
+}
+
 func validateURLCommand(req URLCommand) error {
 	if req.SourceKind != storage.SourceKindYouTubeURL {
 		return apiError{status: http.StatusBadRequest, code: "unsupported_source_url", message: "source_kind must be youtube_url"}
@@ -969,6 +1264,114 @@ func validateURLCommand(req URLCommand) error {
 		return apiError{status: http.StatusBadRequest, code: "unsupported_source_url", message: "source URL must use a supported YouTube host"}
 	}
 	return validateDelivery(req.Delivery)
+}
+
+func validateBatchURL(rawURL string) error {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed == nil || !parsed.IsAbs() {
+		return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "batch URL sources require an absolute URL"}
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "batch URL sources require http or https"}
+	}
+	return nil
+}
+
+func normalizeBatchManifest(manifest BatchSourceManifest) BatchSourceManifest {
+	manifest.ManifestVersion = strings.TrimSpace(manifest.ManifestVersion)
+	manifest.CompletionPolicy = strings.TrimSpace(manifest.CompletionPolicy)
+	if manifest.CompletionPolicy == "" {
+		manifest.CompletionPolicy = BatchCompletionPolicyAllSources
+	}
+	labels := make([]string, 0, len(manifest.OrderedSourceLabels))
+	for _, label := range manifest.OrderedSourceLabels {
+		labels = append(labels, strings.TrimSpace(label))
+	}
+	manifest.OrderedSourceLabels = labels
+	sources := map[string]BatchSource{}
+	for label, source := range manifest.Sources {
+		normalized := BatchSource{
+			SourceKind:       strings.TrimSpace(source.SourceKind),
+			FilePart:         strings.TrimSpace(source.FilePart),
+			URL:              strings.TrimSpace(source.URL),
+			DisplayName:      strings.TrimSpace(source.DisplayName),
+			OriginalFilename: strings.TrimSpace(source.OriginalFilename),
+		}
+		sources[strings.TrimSpace(label)] = normalized
+	}
+	manifest.Sources = sources
+	return manifest
+}
+
+func validBatchLabel(label string) bool {
+	if len(label) == 0 || len(label) > 64 {
+		return false
+	}
+	for idx, r := range label {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case idx > 0 && r >= '0' && r <= '9':
+		case idx > 0 && (r == '_' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func validateAgentRunCommand(req AgentRunCommand) error {
+	if strings.TrimSpace(req.HarnessName) == "" {
+		return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "harness_name is required"}
+	}
+	if strings.TrimSpace(req.Request.Prompt) == "" && len(req.Request.Payload) == 0 && len(req.Request.InputArtifacts) == 0 {
+		return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "request must include prompt, payload, or input_artifacts"}
+	}
+	if len(req.Request.Payload) > 0 && !json.Valid(req.Request.Payload) {
+		return apiError{status: http.StatusBadRequest, code: "invalid_json", message: "request.payload must be valid JSON"}
+	}
+	if len(req.Request.Payload) > 0 {
+		var payloadObject map[string]any
+		if err := json.Unmarshal(req.Request.Payload, &payloadObject); err != nil {
+			return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "request.payload must be a JSON object"}
+		}
+	}
+	for _, artifact := range req.Request.InputArtifacts {
+		artifactID := strings.TrimSpace(artifact.ArtifactID)
+		objectKey := strings.TrimSpace(artifact.ObjectKey)
+		uri := strings.TrimSpace(artifact.URI)
+		if artifactID == "" && objectKey == "" && uri == "" {
+			return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "input_artifacts entries require artifact_id, object_key, or uri"}
+		}
+		if artifactID != "" && !isUUID(artifactID) {
+			return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "input_artifacts artifact_id must be a valid UUID"}
+		}
+		if kind := strings.TrimSpace(artifact.ArtifactKind); kind != "" && !isKnownArtifactKind(kind) {
+			return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "input_artifacts artifact_kind is not supported"}
+		}
+		if uri != "" {
+			parsed, err := neturl.Parse(uri)
+			if err != nil || parsed == nil || !parsed.IsAbs() {
+				return apiError{status: http.StatusBadRequest, code: "validation_failed", message: "input_artifacts uri must be absolute"}
+			}
+		}
+	}
+	return validateDelivery(req.Delivery)
+}
+
+func isKnownArtifactKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case "transcript_plain",
+		"transcript_segmented_markdown",
+		"transcript_docx",
+		"report_markdown",
+		"report_docx",
+		"deep_research_markdown",
+		"execution_log",
+		"agent_result_json":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDelivery(delivery DeliveryConfig) error {

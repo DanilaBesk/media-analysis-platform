@@ -34,7 +34,7 @@ CREATE TABLE source_sets (
     input_kind text NOT NULL,
     display_name text NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT source_sets_input_kind_chk CHECK (input_kind IN ('single_source', 'combined_upload', 'combined_telegram'))
+    CONSTRAINT source_sets_input_kind_chk CHECK (input_kind IN ('single_source', 'combined_upload', 'combined_telegram', 'agent_run'))
 );
 
 CREATE TABLE source_set_items (

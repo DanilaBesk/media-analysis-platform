@@ -35,7 +35,10 @@ _ARTIFACT_KINDS = frozenset(
         "report_markdown",
         "report_docx",
         "deep_research_markdown",
+        "agent_result_json",
         "execution_log",
+        "source_manifest_json",
+        "batch_diagnostics_json",
     }
 )
 _ARTIFACT_KEY_SEGMENTS = {
@@ -45,7 +48,10 @@ _ARTIFACT_KEY_SEGMENTS = {
     "report_markdown": ("report", "markdown"),
     "report_docx": ("report", "docx"),
     "deep_research_markdown": ("deep-research", "markdown"),
+    "agent_result_json": ("agent", "result"),
     "execution_log": ("logs",),
+    "source_manifest_json": (),
+    "batch_diagnostics_json": (),
 }
 
 __all__ = [

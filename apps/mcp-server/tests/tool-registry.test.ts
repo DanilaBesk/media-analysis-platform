@@ -153,6 +153,72 @@ test("createMcpToolRegistryShell maps representative tools to API calls and logs
   // END_BLOCK_BLOCK_VERIFY_TOOL_DISPATCH
 });
 
+test("createMcpToolRegistryShell tolerates agent_run snapshots for report operations", async () => {
+  const registry = createMcpToolRegistryShell({
+    apiClient: {
+      request: async (request) => {
+        if (request.path === "/v1/transcription-jobs/transcription-1/report-jobs") {
+          return {
+            status: 202,
+            data: {
+              job: {
+                job_id: "agent-report-1",
+                job_type: "agent_run",
+                status: "queued",
+                artifacts: [],
+              },
+            },
+          };
+        }
+        if (request.path === "/v1/report-jobs/agent-report-1/deep-research-jobs") {
+          return {
+            status: 202,
+            data: {
+              job: {
+                job_id: "agent-deep-1",
+                job_type: "agent_run",
+                status: "queued",
+                artifacts: [],
+              },
+            },
+          };
+        }
+        throw new Error(`unexpected request path ${request.path}`);
+      },
+    },
+  });
+
+  const reportResult = await registry.callTool({
+    name: "create_report_job",
+    arguments: {
+      job_id: "transcription-1",
+    },
+  });
+  const deepResearchResult = await registry.callTool({
+    name: "create_deep_research_job",
+    arguments: {
+      job_id: "agent-report-1",
+    },
+  });
+
+  assert.deepEqual(reportResult.structuredContent, {
+    job: {
+      job_id: "agent-report-1",
+      job_type: "agent_run",
+      status: "queued",
+      artifacts: [],
+    },
+  });
+  assert.deepEqual(deepResearchResult.structuredContent, {
+    job: {
+      job_id: "agent-deep-1",
+      job_type: "agent_run",
+      status: "queued",
+      artifacts: [],
+    },
+  });
+});
+
 test("createMcpToolRegistryShell keeps adapter validation and upstream failures contract-shaped", async () => {
   // START_BLOCK_BLOCK_VERIFY_ERROR_SHAPING
   const registry = createMcpToolRegistryShell({

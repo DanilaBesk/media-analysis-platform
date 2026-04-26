@@ -1,5 +1,5 @@
-from telegram_transcriber_bot.domain import MediaAttachment
-from telegram_transcriber_bot.media_groups import MediaGroupAccumulator
+from transcriber_workers_common.domain import MediaAttachment
+from transcriber_workers_common.media_groups import MediaGroupAccumulator
 
 
 def test_media_group_accumulator_collects_items_by_group_key() -> None:

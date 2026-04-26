@@ -502,6 +502,10 @@ WHERE id = $1
 func (s *SQLStateStore) ListOrderedSources(ctx context.Context, sourceSetID string) ([]OrderedSource, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT ssi.position,
+       ssi.source_label,
+       ssi.source_label_version,
+       ssi.metadata,
+       ssi.lineage,
        s.id, s.source_kind, s.display_name, s.original_filename, s.mime_type, s.source_url, s.object_key, s.size_bytes, s.created_at
 FROM source_set_items ssi
 JOIN sources s ON s.id = ssi.source_id
@@ -520,8 +524,12 @@ ORDER BY ssi.position ASC, s.id ASC
 			return nil, err
 		}
 		ordered = append(ordered, OrderedSource{
-			Position: orderedSource.Position,
-			Source:   orderedSource.Source,
+			Position:           orderedSource.Position,
+			Source:             orderedSource.Source,
+			SourceLabel:        orderedSource.SourceLabel,
+			SourceLabelVersion: orderedSource.SourceLabelVersion,
+			MetadataJSON:       orderedSource.MetadataJSON,
+			LineageJSON:        orderedSource.LineageJSON,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -658,6 +666,14 @@ func (s *MinioObjectStore) PresignGetObject(ctx context.Context, bucket, objectK
 	return presignedURL.String(), time.Now().UTC().Add(expiry), nil
 }
 
+func (s *MinioObjectStore) PresignInternalGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error) {
+	presignedURL, err := s.client.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return presignedURL.String(), time.Now().UTC().Add(expiry), nil
+}
+
 func insertSubmission(ctx context.Context, execer sqlExecer, submission JobSubmission) error {
 	_, err := execer.ExecContext(ctx, `
 INSERT INTO job_submissions (id, submission_kind, idempotency_key, request_fingerprint, created_at)
@@ -685,9 +701,9 @@ VALUES ($1, $2, $3, $4)
 func insertSourceSetItems(ctx context.Context, execer sqlExecer, sourceSet SourceSetRecord) error {
 	for _, item := range sourceSet.Items {
 		_, err := execer.ExecContext(ctx, `
-INSERT INTO source_set_items (id, source_set_id, source_id, position, created_at)
-VALUES ($1, $2, $3, $4, $5)
-`, uuid.NewString(), sourceSet.ID, item.SourceID, item.Position, sourceSet.CreatedAt)
+INSERT INTO source_set_items (id, source_set_id, source_id, position, source_label, source_label_version, metadata, lineage, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`, uuid.NewString(), sourceSet.ID, item.SourceID, item.Position, nullString(item.SourceLabel), nullString(item.SourceLabelVersion), jsonObjectOrDefault(item.MetadataJSON), jsonObjectOrDefault(item.LineageJSON), sourceSet.CreatedAt)
 		if err != nil {
 			return err
 		}
@@ -763,15 +779,21 @@ func scanOrderedSource(scanner interface {
 	Scan(dest ...any) error
 }) (OrderedSource, error) {
 	var (
-		ordered          OrderedSource
-		originalFilename sql.NullString
-		mimeType         sql.NullString
-		sourceURL        sql.NullString
-		objectKey        sql.NullString
-		sizeBytes        sql.NullInt64
+		ordered            OrderedSource
+		sourceLabel        sql.NullString
+		sourceLabelVersion sql.NullString
+		originalFilename   sql.NullString
+		mimeType           sql.NullString
+		sourceURL          sql.NullString
+		objectKey          sql.NullString
+		sizeBytes          sql.NullInt64
 	)
 	err := scanner.Scan(
 		&ordered.Position,
+		&sourceLabel,
+		&sourceLabelVersion,
+		&ordered.MetadataJSON,
+		&ordered.LineageJSON,
 		&ordered.Source.ID,
 		&ordered.Source.SourceKind,
 		&ordered.Source.DisplayName,
@@ -785,6 +807,8 @@ func scanOrderedSource(scanner interface {
 	if err != nil {
 		return OrderedSource{}, err
 	}
+	ordered.SourceLabel = nullStringValue(sourceLabel)
+	ordered.SourceLabelVersion = nullStringValue(sourceLabelVersion)
 	ordered.Source.OriginalFilename = nullStringValue(originalFilename)
 	ordered.Source.MIMEType = nullStringValue(mimeType)
 	ordered.Source.SourceURL = nullStringValue(sourceURL)
@@ -959,6 +983,13 @@ func nullString(value string) sql.NullString {
 
 func nullInt64(value int64) sql.NullInt64 {
 	return sql.NullInt64{Int64: value, Valid: value != 0}
+}
+
+func jsonObjectOrDefault(value []byte) []byte {
+	if len(value) == 0 {
+		return []byte("{}")
+	}
+	return value
 }
 
 func nullStringValue(value sql.NullString) string {

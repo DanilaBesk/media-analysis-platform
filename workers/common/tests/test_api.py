@@ -31,6 +31,7 @@ from typing import Mapping
 import pytest
 
 from transcriber_workers_common.api import (
+    ClaimedJobExecution,
     InternalApiConfig,
     InternalApiUnavailableError,
     JobApiClient,
@@ -244,6 +245,32 @@ def test_check_cancel_uses_query_contract() -> None:
     assert result.cancel_requested_at == "2026-04-22T10:00:00Z"
 
 
+def test_resolve_agent_run_request_access_uses_query_contract() -> None:
+    config = InternalApiConfig(base_url="http://internal.local")
+    transport = StubTransport(
+        responses={
+            (
+                "GET",
+                "http://internal.local/internal/v1/jobs/job-agent/request-access?execution_id=exec-agent",
+            ): {
+                "provider": "minio_presigned_url",
+                "url": "https://minio.local/private/request.json",
+                "expires_at": "2026-04-25T12:00:00Z",
+                "request_ref": "agentreq_digest",
+                "request_digest_sha256": "digest",
+                "request_bytes": 321,
+            }
+        }
+    )
+    client = JobApiClient(config, transport=transport)
+
+    result = client.resolve_agent_run_request_access("job-agent", execution_id="exec-agent")
+
+    assert result.provider == "minio_presigned_url"
+    assert result.request_ref == "agentreq_digest"
+    assert result.request_bytes == 321
+
+
 def test_internal_api_failures_emit_required_marker(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     client = JobApiClient(
@@ -280,3 +307,48 @@ def test_claim_job_rejects_malformed_response() -> None:
 
     with pytest.raises(ValueError, match="ordered_inputs"):
         client.claim_job("job-4", worker_kind="transcription", task_type="transcription.run")
+
+
+def test_claim_job_allows_agent_run_without_ordered_inputs() -> None:
+    client = JobApiClient(
+        InternalApiConfig(base_url="http://internal.local"),
+        transport=StubTransport(
+            responses={
+                (
+                    "POST",
+                    "http://internal.local/internal/v1/jobs/job-agent/claim",
+                ): {
+                    "execution_id": "exec-agent",
+                    "job_id": "job-agent",
+                    "root_job_id": "job-agent",
+                    "parent_job_id": None,
+                    "retry_of_job_id": None,
+                    "job_type": "agent_run",
+                    "version": 1,
+                    "ordered_inputs": [],
+                    "params": {"harness_name": "fixture"},
+                }
+            }
+        ),
+    )
+
+    execution = client.claim_job("job-agent", worker_kind="agent_runner", task_type="agent_run.run")
+
+    assert execution.job_type == "agent_run"
+    assert execution.ordered_inputs == ()
+    assert execution.params == {"harness_name": "fixture"}
+
+
+def test_claim_job_rejects_empty_ordered_inputs_for_non_agent_jobs() -> None:
+    with pytest.raises(ValueError, match="ordered_inputs"):
+        ClaimedJobExecution(
+            execution_id="exec-report",
+            job_id="job-report",
+            root_job_id="root-report",
+            parent_job_id=None,
+            retry_of_job_id=None,
+            job_type="report",
+            version=1,
+            ordered_inputs=(),
+            params={},
+        )

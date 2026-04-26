@@ -1,36 +1,33 @@
 <RequirementsAnalysis VERSION="0.3.0">
   <Project>
     <name>telegram-transcriber-bot</name>
-    <annotation>Lossless GRACE requirements surface for migrating the current single-process Telegram transcription bot into a local-first monorepo platform with a Go control plane, Python workers, React UI, thin Telegram adapter, thin MCP adapter, PostgreSQL, Redis plus asynq, MinIO, WebSocket, webhook, retry, and cooperative cancellation.</annotation>
+    <annotation>Lossless GRACE requirements surface for the completed migration from the former single-process Telegram transcription bot into a local-first monorepo platform with a Go control plane, Python workers, React UI, thin Telegram adapter, thin MCP adapter, PostgreSQL, Redis plus asynq, MinIO, WebSocket, webhook, retry, and cooperative cancellation.</annotation>
     <keywords>telegram, transcription, whisper, faster-whisper, reports, deep research, go api, python workers, react ui, mcp, minio, postgres, redis, asynq, polling, webhook, docker compose, monorepo</keywords>
   </Project>
 
   <Purpose>
-    <purpose-1>This document is the GRACE requirements source of truth for the migration from the current monolithic Telegram bot to the target multi-application local platform.</purpose-1>
+    <purpose-1>This document is the GRACE requirements source of truth for the migration from the former monolithic Telegram bot to the target multi-application local platform.</purpose-1>
     <purpose-2>It exists to preserve the full intent of the original migration plan while translating it into GRACE-governed requirements, constraints, and acceptance expectations.</purpose-2>
     <purpose-3>It must remain sufficient for architecture alignment, execution sequencing, API and event contract definition, monorepo bootstrapping, worker split design, UI and adapter adaptation, Docker Compose rollout, verification, and cutover without rediscovering major decisions.</purpose-3>
   </Purpose>
 
   <CurrentState>
     <runtime-entrypoint>src/telegram_transcriber_bot/__main__.py</runtime-entrypoint>
-    <current-shape>single Python application with one runtime entrypoint and local filesystem-backed job storage</current-shape>
+    <current-shape>compose-owned local platform with a Go control plane, Python workers, and thin adapters; the legacy telegram_transcriber_bot package bootstrap is removed from the normal runtime.</current-shape>
     <current-modules>
       <module path="src/telegram_transcriber_bot/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
-      <module path="src/telegram_transcriber_bot/service.py" role="Current application service for processing sources, writing job metadata, generating report artifacts, and running deep research" />
-      <module path="src/telegram_transcriber_bot/transcribers.py" role="YouTube transcript fast path and Whisper fallback" />
-      <module path="src/telegram_transcriber_bot/documents.py" role="Markdown and DOCX artifact rendering" />
-      <module path="src/telegram_transcriber_bot/cglm_runner.py" role="Report generation subprocess adapter" />
-      <module path="src/telegram_transcriber_bot/deep_research.py" role="Deep research multi-phase pipeline" />
+      <module path="workers/transcription/src/transcriber_worker_transcription.py" role="Transcription worker runtime, per-source transcription execution, batch aggregate merging, source-manifest diagnostics, and transcript artifact persistence" />
+      <module path="workers/common/src/transcriber_workers_common/transcribers.py" role="YouTube transcript fast path and Whisper fallback shared by the transcription worker" />
+      <module path="workers/common/src/transcriber_workers_common/documents.py" role="Transcript/report markdown normalization and DOCX artifact rendering" />
+      <module path="workers/agent-runner/src/transcriber_worker_agent_runner.py" role="Single generic AI worker runtime for report and deep-research operations backed by agent_run jobs" />
     </current-modules>
     <current-storage>
-      <item>local files under .data/jobs/job_id</item>
-      <item>local metadata JSON per job</item>
-      <item>no external queue</item>
-      <item>no PostgreSQL</item>
-      <item>no external object storage</item>
-      <item>no HTTP API</item>
-      <item>no Web UI</item>
-      <item>no MCP server</item>
+      <item>PostgreSQL stores jobs, events, artifacts, submissions, and source-set metadata</item>
+      <item>MinIO stores uploaded sources and produced artifacts</item>
+      <item>Redis backs asynq queues only</item>
+      <item>Go HTTP API owns orchestration and delivery contracts</item>
+      <item>React Web UI consumes the public HTTP and WebSocket surface</item>
+      <item>Telegram and MCP adapters stay thin over the API</item>
     </current-storage>
     <preserved-user-capabilities>
       <item>YouTube transcription</item>
@@ -40,7 +37,7 @@
       <item>segmented transcript output</item>
       <item>report generation</item>
       <item>deep research generation</item>
-      <item>artifact reuse inside the current process</item>
+      <item>mixed-source batch transcription through one aggregate root job with per-source transcription children</item>
     </preserved-user-capabilities>
   </CurrentState>
 
@@ -76,6 +73,7 @@
     <decision-16>WebSocket is the live-update channel for the Web UI.</decision-16>
     <decision-17>First-version file uploads go through the API and support multiple files in one request.</decision-17>
     <decision-18>There is no legacy compatibility track; the repository is restructured directly toward the target architecture.</decision-18>
+    <decision-19>The current batch transcription contract is root/children/aggregate: `POST /v1/transcription-jobs/batch` creates a root aggregate transcription job, per-source transcription children keyed by stable source labels, and a worker-transcription aggregate task after eligible children complete.</decision-19>
   </FrozenDecisions>
 
   <Actors>
@@ -84,7 +82,7 @@
     <actor-WebUI>Browser-based local UI for uploads, monitoring, downloads, and admin actions.</actor-WebUI>
     <actor-MCPClient>Local MCP consumer that creates jobs and inspects results through the same HTTP API.</actor-MCPClient>
     <actor-APIControlPlane>Go API service that owns contracts, orchestration, state transitions, artifact metadata, idempotency, lineage, delivery, and cancellation semantics.</actor-APIControlPlane>
-    <actor-Worker>Python worker process executing transcription, report, or deep-research jobs.</actor-Worker>
+    <actor-Worker>Python worker process executing transcription jobs or generic agent_run jobs for report and deep-research operations.</actor-Worker>
     <actor-Operator>Local operator maintaining Docker Compose runtime and troubleshooting failed jobs.</actor-Operator>
   </Actors>
 
@@ -101,10 +99,10 @@
 
     <UC-001B>
       <Actor>EndUser</Actor>
-      <Action>Submits multiple uploaded media files as one ordered combined transcription operation through the API or Telegram adapter.</Action>
-      <Goal>Receive one queued transcription job whose final transcript spans all uploaded media in the supplied order.</Goal>
-      <Preconditions>API, PostgreSQL, Redis, and MinIO are reachable; at least one valid non-empty file is supplied; caller chooses the combined transcription endpoint explicitly.</Preconditions>
-      <AcceptanceCriteria>API persists each source object to MinIO, creates one ordered source set, creates one transcription job bound to that source set, and returns one initial job snapshot immediately with the chosen delivery strategy.</AcceptanceCriteria>
+      <Action>Submits a mixed basket of uploaded media and URL sources as one ordered batch transcription operation through the API or Telegram adapter.</Action>
+      <Goal>Receive one root aggregate transcription job whose final transcript spans all successful sources in stable source-label order while preserving per-source lineage.</Goal>
+      <Preconditions>API, PostgreSQL, Redis, and MinIO are reachable; `source_manifest.manifest_version=batch-transcription.v1` is valid; each uploaded-file source references a non-empty multipart part; each URL source is supported; caller chooses the batch endpoint explicitly.</Preconditions>
+      <AcceptanceCriteria>API accepts `POST /v1/transcription-jobs/batch`, persists a root source set with stable unique source labels, creates one root aggregate transcription job plus one per-source transcription child per manifest source, enqueues per-source `job:transcription.run` tasks first, schedules a root `job:transcription.aggregate` task only after completion policy permits aggregation, and returns the root job snapshot immediately.</AcceptanceCriteria>
       <Priority>high</Priority>
       <RelatedFlows>DF-007, DF-006</RelatedFlows>
     </UC-001B>
@@ -134,7 +132,7 @@
       <Action>Requests a report job from a succeeded transcription job.</Action>
       <Goal>Generate markdown and DOCX research reports from transcript output.</Goal>
       <Preconditions>Parent transcription job succeeded and transcript_plain exists.</Preconditions>
-      <AcceptanceCriteria>API returns an existing canonical report child if present or creates a new report child job otherwise; reruns require explicit retry.</AcceptanceCriteria>
+      <AcceptanceCriteria>API returns an existing canonical report operation child if present or creates a new `agent_run` child with `operation=report`, `harness_name=claude-code`, transcript input artifacts, and expected `report_markdown` plus `report_docx` outputs; reruns require explicit retry.</AcceptanceCriteria>
       <Priority>high</Priority>
       <RelatedFlows>DF-004</RelatedFlows>
     </UC-004>
@@ -142,9 +140,9 @@
     <UC-005>
       <Actor>EndUser</Actor>
       <Action>Requests a deep-research job from a succeeded report job.</Action>
-      <Goal>Produce a deeper evidence-driven markdown report using the existing deep-research pipeline.</Goal>
-      <Preconditions>Parent report job succeeded and report_markdown exists.</Preconditions>
-      <AcceptanceCriteria>API creates or reuses the canonical deep-research child, workers persist the final markdown artifact, and terminal state is visible through polling plus webhook delivery when the job chooses webhook strategy.</AcceptanceCriteria>
+      <Goal>Produce a deeper evidence-driven markdown report using the generic agent-runner operation path.</Goal>
+      <Preconditions>Parent report operation job succeeded and report_markdown exists.</Preconditions>
+      <AcceptanceCriteria>API creates or reuses the canonical deep-research `agent_run` child with `operation=deep_research`, `harness_name=claude-code`, transcript and report input artifacts, and expected `deep_research_markdown` output; terminal state is visible through polling plus webhook delivery when the job chooses webhook strategy.</AcceptanceCriteria>
       <Priority>high</Priority>
       <RelatedFlows>DF-005</RelatedFlows>
     </UC-005>
@@ -174,7 +172,7 @@
       <Action>Acts as a thin transport adapter over the API.</Action>
       <Goal>Preserve current Telegram UX while removing business logic from the bot runtime.</Goal>
       <Preconditions>API is reachable; Telegram media can be downloaded temporarily by the adapter.</Preconditions>
-      <AcceptanceCriteria>Bot uploads source data to the API, waits by polling by default, sends returned artifacts to the user, preserves report and deep-research affordances, auto-maps Telegram media groups to combined transcription jobs, and may submit buffered sequential media through the same combined flow when the user explicitly chooses to process them together.</AcceptanceCriteria>
+      <AcceptanceCriteria>Bot remains a thin adapter: it registers `/start`, `/help`, `/batch`, `/basket`, and `/clear`, lets the user toggle batch basket mode on or off through a command or inline button, collects sources in a Telegram basket when batch mode is enabled, downloads Telegram files only long enough to submit them, posts the whole basket to `/v1/transcription-jobs/batch`, waits by polling by default, sends returned artifacts to the user, and triggers report or deep-research only through API-owned `agent_run` operation children.</AcceptanceCriteria>
       <Priority>high</Priority>
       <RelatedFlows>DF-001, DF-004, DF-005, DF-007</RelatedFlows>
     </UC-008>
@@ -211,7 +209,14 @@
     <constraint-7>Webhook is a per-job delivery strategy chosen at create time and requires a callback URL.</constraint-7>
     <constraint-8>Web UI, Telegram bot, and MCP server must all consume the same API contracts.</constraint-8>
     <constraint-9>The migration must preserve current core capabilities: YouTube, Telegram voice or audio or video or document, media groups, plain transcript, segmented transcript, report generation, and deep research generation.</constraint-9>
-    <constraint-10>The platform must support explicit combined multi-media transcription as one ordered job without changing the existing per-file upload contract.</constraint-10>
+    <constraint-10>The platform must support explicit mixed-source batch transcription as one aggregate root job with per-source transcription children and a worker-transcription aggregate task, without changing the existing per-file upload contract.</constraint-10>
+    <constraint-11>Report and deep-research AI execution must be container-native in the normal runtime through the single `worker-agent-runner`: the worker may receive explicit provider settings, credentials, model, base URL, timeout, generation flags, and container-local cache or config dirs, but must not depend on host CLI invocation, host broker execution, host bridge URLs, host-visible workspace roots, host path remapping, host.docker.internal, or bind-mounted host executables.</constraint-11>
+    <constraint-12>Autonomous AI-agent execution remains behind the existing API control plane as one generic `agent-runner` worker selected by `harness_name`; provider-specific report, deep-research, Claude, or Codex worker services are not part of the approved architecture.</constraint-12>
+    <constraint-13>Generic agent runs must use a new `agent_run` job family in the existing control plane and persist status, execution ownership, events, logs, and artifacts through the existing `jobs`, `job_executions`, `job_events`, and `job_artifacts` model instead of a parallel persistence stack.</constraint-13>
+    <constraint-14>Control-plane and database payloads for generic agent runs must store only normalized result summary data plus redacted metadata plus opaque request reference metadata; full logs, transcripts, prompts, tool traces, and other large outputs belong in private objects or artifacts rather than row payloads.</constraint-14>
+    <constraint-15>For the first autonomous AI-agent execution iteration, only Claude Code with an Anthropic-compatible JSON settings provider is supported. The worker must run `claude-code` inside the container, generate provider settings from explicit env values, and must not use a host-side execution broker or persist raw credentials in control-plane payloads.</constraint-15>
+    <constraint-16>Generic agent execution must expose per-harness concurrency as explicit configuration or policy, so admission control is set per `harness_name` instead of by separate worker type.</constraint-16>
+    <constraint-17>The `agent_run_create` control-plane surface must treat agent runs as request-only jobs: clients may pass `harness_name` and request content, but must not provide job type, source-set id, root id, provider-specific worker identity, or raw session credentials.</constraint-17>
   </Constraints>
 
   <Risks>
@@ -226,6 +231,12 @@
   <ResolvedQuestions>
     <resolution-1>Go API granularity is fixed for the migration horizon as `internal/api`, `internal/jobs`, `internal/storage`, `internal/queue`, `internal/ws`, and `internal/db`. Finer GRACE subdivision is explicitly deferred until after the first full-system migration cutover and only if implementation pressure proves it necessary.</resolution-1>
     <resolution-2>API-owned worker-control contracts remain explicit HTTP routes for the entire migration and first platform version. They are not collapsed into an in-process shared service layer during this migration because transport-adapter independence and containerized worker boundaries are part of the target architecture.</resolution-2>
+    <resolution-3>The approved generic agent execution contract is one `agent-runner` worker keyed by `harness_name`; Claude Code does not get a dedicated worker service, and Codex is intentionally out of scope for the first container-local provider iteration.</resolution-3>
+    <resolution-4>The approved control-plane persistence boundary for generic agent execution is a new `agent_run` job family submitted through `agent_run_create` and persisted through the existing job, execution, event, and artifact tables with normalized summary plus redacted metadata in row payloads and a private request envelope referenced by opaque request metadata.</resolution-4>
+    <resolution-5>The implementation slices have added the generic `workers/agent-runner` runtime for deterministic fixture harness dispatch, `agent_run` claim and finalize, artifact-backed `agent_result_json` plus `execution_log` persistence, worker-local per-harness lease enforcement, compose service wiring, worker-only short-lived `request_access` resolution for the private agent-run request envelope, and container-local Claude Code execution through generated Anthropic-compatible settings. Live fixture-mode compose e2e is verified through the public and worker-control APIs plus MinIO artifact download on 2026-04-24T21:12:45Z; live external Claude Code provider smoke was verified on 2026-04-26 with Z.ai GLM `glm-5.1` through job `5bb4d608-02ec-478d-9267-8d278a21f0e3`.</resolution-5>
+    <resolution-6>The approved first container-local provider model for Claude Code mirrors the local `cglm` wrapper: env-supplied `AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY`, `AGENT_RUNNER_CLAUDE_CODE_BASE_URL`, and `AGENT_RUNNER_CLAUDE_CODE_MODEL` generate Claude Code settings JSON with `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_API_KEY`, `CLAUDE_API_BASE_URL`, and model override env values. `AGENT_RUNNER_CLAUDE_CODE_AUTH_TOKEN` remains a compatibility fallback only; Anthropic Claude subscription login and Codex are not part of this iteration.</resolution-6>
+    <resolution-7>Per-harness concurrency is an explicit policy surface owned by configuration, for example `claude-code` limits, and not a reason to split the worker topology.</resolution-7>
+    <resolution-8>The completed batch transcription implementation supersedes concat-first combined transcription as active architecture. The active contract uses `/v1/transcription-jobs/batch`, stable `source_label` values in a `batch-transcription.v1` source manifest, per-source transcription children, a root aggregate transcription task, aggregate artifacts `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json`, and report/deep-research handoff from the aggregate root through `agent_run` children handled only by worker-agent-runner. Earlier `/combined` and ordered concatenation wording is historical lineage, not the current runtime contract.</resolution-8>
   </ResolvedQuestions>
 
   <PreservationPolicy>

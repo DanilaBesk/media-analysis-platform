@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 # PURPOSE: Execute claimed transcription jobs through the shared control-plane client while preserving the current transcript artifact contract.
-# SCOPE: Worker claim/run orchestration, ordered-input materialization, combined-media concatenation, transcript artifact persistence, cancellation checks, and local extraction helpers reused by the legacy service shell.
+# SCOPE: Worker claim/run orchestration, ordered-input materialization, combined-media concatenation, transcript artifact persistence, cancellation checks, and packet-local helper functions for local transcription materialization.
 # DEPENDS: M-WORKER-TRANSCRIPTION, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION
 # ROLE: RUNTIME
@@ -19,39 +19,29 @@
 #   WorkerCancellationRequested - Signals authoritative cancellation observed by the dedicated worker loop.
 #   materialize_local_source - Copies a local source into a workspace without changing current bot semantics.
 #   process_local_transcription - Executes the preserved local transcription pipeline and writes plain, markdown, and DOCX artifacts.
+#   runTranscriptionAggregate - Claims a batch aggregate job, merges child transcript artifacts, registers root artifacts, and finalizes.
 #   runTranscription - Claims a job, executes the worker pipeline, registers artifacts, and finalizes through the shared control-plane client.
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
-import sys
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
+from urllib import request
 
+from docx import Document
 
-def _ensure_worker_dependency_paths() -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    dependency_paths = (
-        repo_root / "workers" / "common" / "src",
-        repo_root / "src",
-    )
-    for path in dependency_paths:
-        resolved = str(path)
-        if path.exists() and resolved not in sys.path:
-            sys.path.insert(0, resolved)
-
-
-_ensure_worker_dependency_paths()
-
-from transcriber_workers_common.api import ClaimedJobExecution, JobApiClient, OrderedWorkerInput
+from transcriber_workers_common.api import ArtifactSummary, ClaimedJobExecution, JobApiClient, JobSnapshot, OrderedWorkerInput
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
-from telegram_transcriber_bot.documents import build_transcript_markdown, write_transcript_docx
-from telegram_transcriber_bot.domain import SourceCandidate, TranscriptArtifacts, TranscriptResult
-from telegram_transcriber_bot.transcribers import _download_youtube_audio
+from transcriber_workers_common.documents import build_transcript_markdown, write_transcript_docx
+from transcriber_workers_common.transcribers import _download_youtube_audio
+from transcriber_workers_common.domain import SourceCandidate, TranscriptArtifacts, TranscriptResult
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,6 +55,7 @@ __all__ = [
     "WorkerCancellationRequested",
     "materialize_local_source",
     "process_local_transcription",
+    "runTranscriptionAggregate",
     "runTranscription",
 ]
 
@@ -82,11 +73,36 @@ class TranscriptionWorkerResult:
     artifact_descriptors: tuple[ArtifactDescriptor, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class AggregateTranscriptSection:
+    source_label: str
+    child_job_id: str
+    plain_text: str
+    markdown_text: str
+
+
+@dataclass(frozen=True, slots=True)
+class AggregateTranscriptionWorkerResult:
+    execution: ClaimedJobExecution
+    sections: tuple[AggregateTranscriptSection, ...]
+    artifacts: TranscriptArtifacts
+    artifact_descriptors: tuple[ArtifactDescriptor, ...]
+    diagnostics: dict[str, object]
+
+
 class WorkerCancellationRequested(RuntimeError):
     pass
 
 
 class SourceMaterializationError(RuntimeError):
+    pass
+
+
+class AggregateTranscriptionError(RuntimeError):
+    pass
+
+
+class MissingChildTranscriptArtifactError(AggregateTranscriptionError):
     pass
 
 
@@ -220,6 +236,101 @@ def runTranscription(
         raise
 
 
+def runTranscriptionAggregate(
+    job_id: str,
+    *,
+    workspace_root: Path,
+    api_client: JobApiClient,
+    artifact_store: ArtifactObjectStore,
+) -> AggregateTranscriptionWorkerResult:
+    execution = api_client.claim_job(job_id, worker_kind="transcription", task_type="transcription.aggregate")
+    workspace_dir = Path(workspace_root) / execution.job_id
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        _check_cancellation(api_client, execution)
+        api_client.publish_progress(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            progress_stage="resolving_child_artifacts",
+            progress_message="Resolving batch child transcript artifacts",
+        )
+        root_snapshot = api_client.get_job_snapshot(execution.job_id)
+        sections, diagnostics = _load_aggregate_sections(
+            execution,
+            root_snapshot=root_snapshot,
+            workspace_dir=workspace_dir,
+            api_client=api_client,
+        )
+
+        _check_cancellation(api_client, execution)
+        api_client.publish_progress(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            progress_stage="merging_transcripts",
+            progress_message="Merging batch transcripts",
+        )
+        artifacts = _write_aggregate_transcript_artifacts(workspace_dir, sections)
+
+        _check_cancellation(api_client, execution)
+        api_client.publish_progress(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            progress_stage="persisting_artifacts",
+            progress_message="Uploading aggregate transcript artifacts",
+        )
+        artifact_descriptors = (
+            *_persist_transcript_artifacts(execution.job_id, artifacts, artifact_store),
+            *_persist_aggregate_metadata_artifacts(execution, sections, diagnostics, artifact_store),
+        )
+        _assert_required_artifacts_exist(artifacts)
+        api_client.register_artifacts(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            artifacts=artifact_descriptors,
+        )
+
+        _check_cancellation(api_client, execution)
+        api_client.finalize_job(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            outcome="succeeded",
+            progress_stage="completed",
+            progress_message="Aggregate transcript ready",
+            error_code=None,
+            error_message=None,
+        )
+        return AggregateTranscriptionWorkerResult(
+            execution=execution,
+            sections=sections,
+            artifacts=artifacts,
+            artifact_descriptors=artifact_descriptors,
+            diagnostics=diagnostics,
+        )
+    except WorkerCancellationRequested:
+        api_client.finalize_job(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            outcome="canceled",
+            progress_stage="canceled",
+            progress_message="Cancellation requested",
+            error_code=None,
+            error_message=None,
+        )
+        raise
+    except Exception as exc:
+        api_client.finalize_job(
+            execution.job_id,
+            execution_id=execution.execution_id,
+            outcome="failed",
+            progress_stage="failed",
+            progress_message="Batch transcript aggregation failed",
+            error_code=_classify_error_code(exc),
+            error_message=str(exc),
+        )
+        raise
+
+
 def _write_transcript_artifacts(workspace_dir: Path, transcript_result: TranscriptResult) -> TranscriptArtifacts:
     markdown_path = workspace_dir / "transcript.md"
     text_path = workspace_dir / "transcript.txt"
@@ -235,6 +346,144 @@ def _write_transcript_artifacts(workspace_dir: Path, transcript_result: Transcri
     )
 
 
+def _load_aggregate_sections(
+    execution: ClaimedJobExecution,
+    *,
+    root_snapshot: JobSnapshot,
+    workspace_dir: Path,
+    api_client: JobApiClient,
+) -> tuple[tuple[AggregateTranscriptSection, ...], dict[str, object]]:
+    ordered_labels = _resolve_aggregate_source_labels(execution, root_snapshot)
+    completion_policy = _resolve_completion_policy(execution)
+    child_snapshots = tuple(
+        api_client.get_job_snapshot(child.job_id)
+        for child in root_snapshot.children
+        if child.job_type == "transcription"
+    )
+    children_by_label: dict[str, list[JobSnapshot]] = {}
+    for child in child_snapshots:
+        label = _source_label_from_snapshot(child)
+        if label:
+            children_by_label.setdefault(label, []).append(child)
+
+    sections: list[AggregateTranscriptSection] = []
+    skipped_sources: list[dict[str, object]] = []
+    child_artifacts: list[dict[str, object]] = []
+    for label in ordered_labels:
+        candidates = sorted(children_by_label.get(label, ()), key=lambda item: (item.status != "succeeded", item.job_id))
+        child = next((candidate for candidate in candidates if candidate.status == "succeeded"), None)
+        if child is None:
+            skipped_sources.append(
+                {
+                    "source_label": label,
+                    "reason": "child_not_succeeded",
+                    "child_statuses": [candidate.status for candidate in candidates],
+                    "child_job_ids": [candidate.job_id for candidate in candidates],
+                }
+            )
+            if completion_policy == "succeed_when_all_sources_succeed":
+                raise AggregateTranscriptionError(f"source {label} has no succeeded transcription child")
+            continue
+
+        plain_artifact = _artifact_by_kind(child, "transcript_plain")
+        markdown_artifact = _artifact_by_kind(child, "transcript_segmented_markdown")
+        if plain_artifact is None or markdown_artifact is None:
+            missing = []
+            if plain_artifact is None:
+                missing.append("transcript_plain")
+            if markdown_artifact is None:
+                missing.append("transcript_segmented_markdown")
+            raise MissingChildTranscriptArtifactError(
+                f"source {label} child {child.job_id} is missing artifact(s): {', '.join(missing)}"
+            )
+
+        child_dir = workspace_dir / "children" / f"{len(sections):02d}-{label}"
+        plain_path = _download_child_artifact(api_client, plain_artifact, child_dir / "transcript.txt")
+        markdown_path = _download_child_artifact(api_client, markdown_artifact, child_dir / "transcript.md")
+        child_artifacts.append(
+            {
+                "source_label": label,
+                "child_job_id": child.job_id,
+                "plain_artifact_id": plain_artifact.artifact_id,
+                "markdown_artifact_id": markdown_artifact.artifact_id,
+            }
+        )
+        sections.append(
+            AggregateTranscriptSection(
+                source_label=label,
+                child_job_id=child.job_id,
+                plain_text=plain_path.read_text(encoding="utf-8").strip(),
+                markdown_text=markdown_path.read_text(encoding="utf-8").strip(),
+            )
+        )
+
+    if not sections:
+        raise AggregateTranscriptionError("batch transcription has no eligible successful source children")
+
+    diagnostics: dict[str, object] = {
+        "diagnostics_version": "batch-transcription.aggregate.diagnostics.v1",
+        "root_job_id": execution.job_id,
+        "completion_policy": completion_policy,
+        "ordered_source_labels": list(ordered_labels),
+        "included_count": len(sections),
+        "skipped_sources": skipped_sources,
+        "child_artifacts": child_artifacts,
+    }
+    return tuple(sections), diagnostics
+
+
+def _write_aggregate_transcript_artifacts(
+    workspace_dir: Path,
+    sections: tuple[AggregateTranscriptSection, ...],
+) -> TranscriptArtifacts:
+    markdown_path = workspace_dir / "transcript.md"
+    text_path = workspace_dir / "transcript.txt"
+    docx_path = workspace_dir / "transcript.docx"
+
+    text_path.write_text(_build_aggregate_plain_text(sections), encoding="utf-8")
+    markdown_path.write_text(_build_aggregate_markdown(sections), encoding="utf-8")
+    _write_aggregate_docx(docx_path, sections)
+    return TranscriptArtifacts(
+        markdown_path=markdown_path,
+        docx_path=docx_path,
+        text_path=text_path,
+    )
+
+
+def _build_aggregate_plain_text(sections: tuple[AggregateTranscriptSection, ...]) -> str:
+    chunks = []
+    for section in sections:
+        chunks.append(f"## Транскрибация {section.source_label}\n\n{section.plain_text.strip()}")
+    return "\n\n".join(chunks).strip() + "\n"
+
+
+def _build_aggregate_markdown(sections: tuple[AggregateTranscriptSection, ...]) -> str:
+    chunks = ["# Транскрибация", ""]
+    for section in sections:
+        chunks.extend(
+            [
+                f"## Транскрибация {section.source_label}",
+                "",
+                section.markdown_text.strip(),
+                "",
+            ]
+        )
+    return "\n".join(chunks).strip() + "\n"
+
+
+def _write_aggregate_docx(output_path: Path, sections: tuple[AggregateTranscriptSection, ...]) -> None:
+    document = Document()
+    document.add_heading("Транскрибация", level=0)
+    for section in sections:
+        document.add_heading(f"Транскрибация {section.source_label}", level=1)
+        for paragraph_text in section.plain_text.splitlines():
+            text = paragraph_text.strip()
+            if text:
+                document.add_paragraph(text)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    document.save(output_path)
+
+
 def _materialize_execution_source(
     execution: ClaimedJobExecution,
     workspace_dir: Path,
@@ -242,7 +491,12 @@ def _materialize_execution_source(
 ) -> SourceCandidate:
     ordered_inputs = tuple(sorted(execution.ordered_inputs, key=lambda item: item.position))
     if len(ordered_inputs) == 1:
-        return _materialize_single_ordered_input(ordered_inputs[0], workspace_dir, source_store)
+        return _materialize_single_ordered_input(
+            ordered_inputs[0],
+            workspace_dir,
+            source_store,
+            source_label=_resolve_claimed_source_label(ordered_inputs[0], execution.params),
+        )
     return _materialize_combined_source(ordered_inputs, workspace_dir, source_store)
 
 
@@ -250,9 +504,12 @@ def _materialize_single_ordered_input(
     ordered_input: OrderedWorkerInput,
     workspace_dir: Path,
     source_store: SourceObjectStore,
+    *,
+    source_label: str | None = None,
 ) -> SourceCandidate:
     input_dir = workspace_dir / "inputs" / f"{ordered_input.position:02d}-{ordered_input.source_id}"
     input_dir.mkdir(parents=True, exist_ok=True)
+    display_name = source_label or _resolve_display_name(ordered_input)
 
     if ordered_input.source_kind == "youtube_url":
         if not ordered_input.source_url:
@@ -260,7 +517,7 @@ def _materialize_single_ordered_input(
         return SourceCandidate(
             source_id=ordered_input.source_id,
             kind="youtube_url",
-            display_name=_resolve_display_name(ordered_input),
+            display_name=display_name,
             url=ordered_input.source_url,
             telegram_file_id=None,
             mime_type=None,
@@ -273,7 +530,7 @@ def _materialize_single_ordered_input(
     return SourceCandidate(
         source_id=ordered_input.source_id,
         kind=_guess_media_kind(ordered_input),
-        display_name=_resolve_display_name(ordered_input),
+        display_name=display_name,
         url=None,
         telegram_file_id=None,
         mime_type=None,
@@ -391,6 +648,43 @@ def _persist_transcript_artifacts(
     )
 
 
+def _persist_aggregate_metadata_artifacts(
+    execution: ClaimedJobExecution,
+    sections: tuple[AggregateTranscriptSection, ...],
+    diagnostics: dict[str, object],
+    artifact_store: ArtifactObjectStore,
+) -> tuple[ArtifactDescriptor, ...]:
+    writer = ArtifactWriter(job_id=execution.job_id, object_store=artifact_store)
+    manifest = {
+        "manifest_version": "batch-transcription.aggregate.v1",
+        "root_job_id": execution.job_id,
+        "ordered_source_labels": [section.source_label for section in sections],
+        "included_sources": [
+            {
+                "source_label": section.source_label,
+                "child_job_id": section.child_job_id,
+            }
+            for section in sections
+        ],
+    }
+    return (
+        writer.write_text_artifact(
+            "source_manifest_json",
+            "source-manifest.json",
+            _json_dump(manifest),
+            mime_type="application/json; charset=utf-8",
+            format="json",
+        ),
+        writer.write_text_artifact(
+            "batch_diagnostics_json",
+            "batch-diagnostics.json",
+            _json_dump(diagnostics),
+            mime_type="application/json; charset=utf-8",
+            format="json",
+        ),
+    )
+
+
 def _assert_required_artifacts_exist(artifacts: TranscriptArtifacts) -> None:
     required_paths = (
         artifacts.text_path,
@@ -406,6 +700,19 @@ def _check_cancellation(api_client: JobApiClient, execution: ClaimedJobExecution
     cancel_state = api_client.check_cancel(execution.job_id, execution_id=execution.execution_id)
     if cancel_state.cancel_requested:
         raise WorkerCancellationRequested(f"job {execution.job_id} was canceled")
+
+
+def _resolve_claimed_source_label(ordered_input: OrderedWorkerInput, params: Mapping[str, object]) -> str | None:
+    if ordered_input.source_label:
+        return ordered_input.source_label.strip() or None
+
+    batch_params = params.get("batch")
+    if not isinstance(batch_params, Mapping):
+        return None
+    source_label = batch_params.get("source_label")
+    if not isinstance(source_label, str):
+        return None
+    return source_label.strip() or None
 
 
 def _resolve_display_name(ordered_input: OrderedWorkerInput) -> str:
@@ -448,7 +755,66 @@ def _guess_media_kind(ordered_input: OrderedWorkerInput) -> str:
     return "telegram_audio"
 
 
+def _resolve_aggregate_source_labels(execution: ClaimedJobExecution, root_snapshot: JobSnapshot) -> tuple[str, ...]:
+    batch = execution.params.get("batch")
+    if isinstance(batch, Mapping):
+        labels = batch.get("ordered_source_labels")
+        if isinstance(labels, list):
+            normalized = tuple(str(label).strip() for label in labels if str(label).strip())
+            if normalized:
+                return normalized
+
+    snapshot_labels = tuple(
+        item.source_label.strip()
+        for item in sorted(root_snapshot.source_set_items, key=lambda source: source.position)
+        if item.source_label and item.source_label.strip()
+    )
+    if snapshot_labels:
+        return snapshot_labels
+
+    raise AggregateTranscriptionError("aggregate job has no ordered source labels")
+
+
+def _resolve_completion_policy(execution: ClaimedJobExecution) -> str:
+    batch = execution.params.get("batch")
+    if isinstance(batch, Mapping):
+        policy = str(batch.get("completion_policy") or "").strip()
+        if policy:
+            return policy
+    return "succeed_when_all_sources_succeed"
+
+
+def _source_label_from_snapshot(snapshot: JobSnapshot) -> str | None:
+    for item in sorted(snapshot.source_set_items, key=lambda source: source.position):
+        if item.source_label and item.source_label.strip():
+            return item.source_label.strip()
+    return None
+
+
+def _artifact_by_kind(snapshot: JobSnapshot, artifact_kind: str) -> ArtifactSummary | None:
+    for artifact in snapshot.artifacts:
+        if artifact.artifact_kind == artifact_kind:
+            return artifact
+    return None
+
+
+def _download_child_artifact(api_client: JobApiClient, artifact: ArtifactSummary, destination: Path) -> Path:
+    resolution = api_client.resolve_artifact(artifact.artifact_id)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with request.urlopen(resolution.download_url, timeout=60) as response:
+        destination.write_bytes(response.read())
+    return destination
+
+
+def _json_dump(payload: dict[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+
+
 def _classify_error_code(error: Exception) -> str:
     if isinstance(error, SourceMaterializationError):
         return "source_fetch_failed"
+    if isinstance(error, MissingChildTranscriptArtifactError):
+        return "missing_child_artifact"
+    if isinstance(error, AggregateTranscriptionError):
+        return "batch_aggregation_failed"
     return "transcription_failed"

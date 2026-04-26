@@ -74,3 +74,48 @@ def test_create_combined_upload_uses_multipart_and_polling_fields() -> None:
     assert "multipart/form-data" in content_type
     assert 'name="delivery_strategy"' in body
     assert "polling" in body
+
+
+def test_create_batch_uses_manifest_and_source_label_file_parts() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(json.dumps({"job": {"job_id": "batch-root-1"}}).encode("utf-8"))
+
+    client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
+    client.create_batch(
+        files=[
+            UploadFilePart(
+                filename="voice.ogg",
+                content_type="audio/ogg",
+                content_bytes=b"voice",
+                field_name="voice_abc123",
+            )
+        ],
+        source_manifest={
+            "manifest_version": "batch-transcription.v1",
+            "ordered_source_labels": ["voice_abc123", "url_def456"],
+            "sources": {
+                "voice_abc123": {
+                    "source_kind": "telegram_upload",
+                    "file_part": "voice_abc123",
+                    "display_name": "Voice",
+                    "original_filename": "voice.ogg",
+                },
+                "url_def456": {
+                    "source_kind": "youtube_url",
+                    "url": "https://youtu.be/demo",
+                    "display_name": "YouTube: demo",
+                },
+            },
+            "completion_policy": "succeed_when_all_sources_succeed",
+        },
+    )
+
+    body = captured["request"].data.decode("utf-8", errors="replace")
+    assert captured["request"].full_url == "http://localhost:8080/v1/transcription-jobs/batch"
+    assert 'name="source_manifest"' in body
+    assert '"ordered_source_labels":["voice_abc123","url_def456"]' in body
+    assert 'name="voice_abc123"; filename="voice.ogg"' in body
+    assert 'name="files"' not in body

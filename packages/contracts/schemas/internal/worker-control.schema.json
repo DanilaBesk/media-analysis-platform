@@ -69,7 +69,6 @@
         },
         "ordered_inputs": {
           "type": "array",
-          "minItems": 1,
           "items": {
             "$ref": "#/$defs/orderedWorkerInput"
           }
@@ -78,7 +77,35 @@
           "type": "object"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "job_type": {
+                "const": "agent_run"
+              }
+            },
+            "required": [
+              "job_type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ordered_inputs": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "ordered_inputs": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
     },
     "orderedWorkerInput": {
       "type": "object",
@@ -94,6 +121,9 @@
         },
         "source_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "source_label": {
+          "$ref": "../common/job-snapshot.schema.json#/$defs/sourceLabel"
         },
         "source_kind": {
           "$ref": "../common/enums.schema.json#/$defs/sourceKind"
@@ -279,6 +309,45 @@
             "null"
           ],
           "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agentRunRequestAccessResponse": {
+      "type": "object",
+      "required": [
+        "provider",
+        "url",
+        "expires_at",
+        "request_ref",
+        "request_digest_sha256",
+        "request_bytes"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "request_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_digest_sha256": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_bytes": {
+          "type": "integer",
+          "minimum": 1
         }
       },
       "additionalProperties": false

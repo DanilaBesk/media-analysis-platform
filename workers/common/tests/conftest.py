@@ -1,8 +1,8 @@
 # FILE: workers/common/tests/conftest.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Make the packet-local worker-common tests import both the shared package and the legacy compatibility modules.
-# SCOPE: Python path bootstrap for `workers/common/src` and `src` during packet-local pytest execution.
+# PURPOSE: Make the packet-local worker-common tests import the shared package.
+# SCOPE: Python path bootstrap for `workers/common/src` during packet-local pytest execution.
 # DEPENDS: M-WORKER-COMMON
 # LINKS: M-WORKER-COMMON, V-M-WORKER-COMMON
 # ROLE: TEST
@@ -15,7 +15,7 @@
 #
 # START_MODULE_MAP
 #   _ensure_path - Insert a repository-local Python source root when it exists.
-#   bootstrap-pythonpath - Add worker-common and legacy src roots for packet-local tests.
+#   bootstrap-pythonpath - Add the worker-common source root for packet-local tests.
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -33,5 +33,4 @@ def _ensure_path(path: Path) -> None:
 # START_BLOCK_BLOCK_BOOTSTRAP_PACKET_LOCAL_PYTHONPATH
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _ensure_path(REPO_ROOT / "workers" / "common" / "src")
-_ensure_path(REPO_ROOT / "src")
 # END_BLOCK_BLOCK_BOOTSTRAP_PACKET_LOCAL_PYTHONPATH

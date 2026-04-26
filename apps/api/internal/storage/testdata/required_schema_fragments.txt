@@ -10,11 +10,17 @@ CREATE TABLE job_events
 CREATE TABLE webhook_deliveries
 source_kind = 'youtube_url'
 source_kind IN ('uploaded_file', 'telegram_upload')
-input_kind IN ('single_source', 'combined_upload', 'combined_telegram')
+input_kind IN ('single_source', 'combined_upload', 'combined_telegram', 'batch_transcription', 'agent_run')
+source_label text NULL
+source_label_version text NULL
+metadata jsonb NOT NULL DEFAULT '{}'::jsonb
+lineage jsonb NOT NULL DEFAULT '{}'::jsonb
+CREATE UNIQUE INDEX source_set_items_source_set_source_label_unique_idx
 delivery_strategy = 'webhook'
 delivery_strategy = 'polling'
 status <> 'cancel_requested'
 status IN ('queued', 'running', 'cancel_requested', 'succeeded')
+job_type IN ('agent_run', 'report', 'deep_research')
 finished_at IS NULL AND outcome IS NULL
 finished_at IS NOT NULL AND outcome IN ('succeeded', 'failed', 'canceled')
 job_event_id uuid NOT NULL UNIQUE REFERENCES job_events(id) ON DELETE CASCADE

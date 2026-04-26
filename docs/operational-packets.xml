@@ -109,6 +109,73 @@ Verification-plan excerpt goes here.
   </FailurePacketTemplate>
 
   <ProjectExecutionPackets>
+    <ExecutionPacket packet-id="Wave-0-supported-flow-baseline-freeze" module="M-CONTRACTS" phase="Wave-0" step="1" verification-ref="V-M-CONTRACTS">
+      <module-id>M-CONTRACTS</module-id>
+      <module-name>Contracts</module-name>
+      <purpose>Retired historical placeholder for Wave-0 baseline freeze coverage. The baseline is now carried by README, cutover runbooks, and verified compose-owned evidence rather than a separate Wave-0 backfill packet.</purpose>
+      <packet-state>retired-historical-placeholder</packet-state>
+      <entry-condition>Do not execute as a new implementation packet. Reopen only if the repo intentionally restores standalone Wave-0 baseline artifacts instead of the current compose-owned SSOT.</entry-condition>
+      <write-scope>
+        <file-1>README.md</file-1>
+        <file-2>docs/architecture/cutover-checklist.md</file-2>
+        <file-3>docs/architecture/runtime-ops.md</file-3>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / Wave-0:
+- Goal: freeze current behavior so the migration has a hard acceptance target.
+- Phase-0-1: record supported flows for YouTube, Telegram media, media groups, plain transcript, segmented transcript, report, and deep research.
+- Phase-0-2: record transcript.txt, transcript.md, transcript.docx, report.md, report.docx, and deep-research final report semantics.
+      ]]></contract-excerpt>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / BaselineFreeze:
+- Required checks: conceptual preservation of supported flows and artifact-name preservation.
+- Current Python tests remain the reference baseline until equivalent platform tests replace them.
+      ]]></verification-excerpt>
+      <expected-verification-delta-fields>
+        <field-1>historical Wave-0 freeze is treated as satisfied by the current compose-owned SSOT instead of a missing standalone packet.</field-1>
+        <field-2>supported-flow and artifact expectations remain anchored in README plus verified cutover evidence.</field-2>
+        <field-3>this placeholder is not an executable queue item while the current SSOT remains stable.</field-3>
+        <field-4>reopen only if separate baseline-freeze artifacts become a real project requirement again.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This placeholder existed because Wave-0 was historically marked done in the plan but had no explicit execution packet coverage.</note-1>
+        <note-2>After compose cutover and verification closure, the missing Wave-0 packet is retired instead of being kept as a false pending execution target.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="Wave-0-acceptance-baseline-freeze" module="M-INFRA-COMPOSE" phase="Wave-0" step="2" verification-ref="V-M-INFRA-COMPOSE">
+      <module-id>M-INFRA-COMPOSE</module-id>
+      <module-name>InfraCompose</module-name>
+      <purpose>Retired historical placeholder for Wave-0 acceptance baseline coverage. Current runtime acceptance is already preserved in compose cutover runbooks and verification evidence, so this packet is no longer an active execution target.</purpose>
+      <packet-state>retired-historical-placeholder</packet-state>
+      <entry-condition>Do not execute as a new packet. Reopen only if the project decides to reconstruct standalone Wave-0 acceptance documents beyond the current verified compose-owned SSOT.</entry-condition>
+      <write-scope>
+        <file-1>README.md</file-1>
+        <file-2>docs/architecture/cutover-checklist.md</file-2>
+        <file-3>docs/architecture/runtime-ops.md</file-3>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / Wave-0:
+- Phase-0-3: freeze acceptance tests and identify which current tests must remain conceptually valid after migration.
+- Phase-0-4: freeze architectural decisions accepted at baseline time.
+      ]]></contract-excerpt>
+      <verification-excerpt><![CDATA[
+VerificationPlan / TestingStrategy / BaselineFreeze:
+- Current Python tests remain the reference baseline until equivalent platform tests replace them.
+- Cutover parity later must prove the new stack still covers the frozen baseline.
+      ]]></verification-excerpt>
+      <expected-verification-delta-fields>
+        <field-1>baseline test expectations remain frozen through the verified compose-owned acceptance surfaces.</field-1>
+        <field-2>accepted architectural decisions are already anchored in GRACE requirements, technology, and verification artifacts.</field-2>
+        <field-3>runtime verification notes stay attached to current compose evidence rather than a synthetic historical packet.</field-3>
+        <field-4>this placeholder is retired and must not appear as pending execution debt while the current SSOT is stable.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This placeholder existed only to close the missing packet or wave coverage gap for historical Wave-0 work.</note-1>
+        <note-2>After final cutover proof, the historical gap is retired instead of being presented as active implementation debt.</note-2>
+      </notes>
+    </ExecutionPacket>
+
     <ExecutionPacket packet-id="M-CONTRACTS-wave-1" module="M-CONTRACTS" phase="Phase-1" step="1" verification-ref="V-M-CONTRACTS">
       <module-id>M-CONTRACTS</module-id>
       <module-name>Contracts</module-name>
@@ -143,7 +210,7 @@ DevelopmentPlan / M-CONTRACTS:
 PublicApiContract + WebSocketContract + InternalWorkerContract:
 - Create endpoints support optional Idempotency-Key, but retry is intentionally non-idempotent.
 - If delivery strategy is webhook, a webhook URL is required.
-- The existing upload endpoint preserves one-file-to-one-job semantics, while combined multi-media transcription uses a separate `/v1/transcription-jobs/combined` endpoint.
+- The existing upload endpoint preserves one-file-to-one-job semantics, while current batch transcription uses `/v1/transcription-jobs/batch`, stable source labels, a root aggregate transcription job, and per-source transcription children.
 - WebSocket envelope and webhook envelope carry versioned event fields, but polling remains the authoritative read path.
 - Internal worker claim, progress, artifact, finalize, and cancel-check DTOs are part of the same frozen contract surface, and claim returns ordered inputs rather than assuming a single source.
 
@@ -180,7 +247,7 @@ VerificationPlan / TestingStrategy / V-M-CONTRACTS / Gate-Phase-1:
 - Contract tests must cover OpenAPI validation, JSON schema tests for WebSocket and webhook envelopes, SDK compatibility expectations, and delivery-strategy plus idempotency normalization.
 - Module check: validate OpenAPI, JSON schemas, and enum surfaces against the frozen design decisions.
 - Success scenario: polling and webhook create requests share the same canonical job snapshot envelope.
-- Success scenario: combined transcription create request preserves one-job semantics while reusing the canonical job snapshot envelope.
+- Success scenario: batch transcription create request returns the root aggregate job snapshot while preserving per-source child lineage.
 - Failure scenario: invalid delivery strategy or missing webhook URL is rejected deterministically.
 - Required marker: [Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]
 - Required assertion: retry remains non-idempotent while create endpoints support Idempotency-Key.
@@ -190,7 +257,7 @@ VerificationPlan / TestingStrategy / V-M-CONTRACTS / Gate-Phase-1:
       <step-local-verification>
         <command-1>.venv/bin/python -m pytest packages/contracts/tests/test_contract_surfaces.py</command-1>
         <command-2>Contract-specific schema validation covering OpenAPI, shared enums, webhook, WebSocket, and internal worker DTO coherence.</command-2>
-        <evidence-1>The same canonical job snapshot and error envelope are reused across per-file upload, combined upload, URL, child-create, cancel, retry, artifact-resolve, WebSocket, and webhook surfaces.</evidence-1>
+        <evidence-1>The same canonical job snapshot and error envelope are reused across per-file upload, batch upload, URL, child-create, cancel, retry, artifact-resolve, WebSocket, and webhook surfaces.</evidence-1>
         <evidence-2>Wave follow-up remains SDK regeneration only; broader phase follow-up is freezing the contract diff before M-API-STORAGE and M-API-QUEUE start.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
@@ -207,7 +274,7 @@ VerificationPlan / TestingStrategy / V-M-CONTRACTS / Gate-Phase-1:
       </expected-verification-delta-fields>
       <notes>
         <note-1>Start by freezing shared enums, the delivery model, job snapshot envelope, error envelope, and artifact-resolution shape; route-specific schemas should reuse those shapes instead of re-declaring them.</note-1>
-        <note-2>Model multipart and JSON create flows as semantically aligned after defaulting `delivery.strategy=polling`, but preserve the split between per-file upload and explicit combined upload semantics.</note-2>
+        <note-2>Model multipart and JSON create flows as semantically aligned after defaulting `delivery.strategy=polling`, but preserve the split between per-file upload and explicit batch-root semantics.</note-2>
         <note-3>Include internal worker claim, progress, cancel-check, artifacts, and finalize DTOs in the first freeze because M-WORKER-COMMON depends on those contracts immediately after Phase-2 foundation work starts.</note-3>
         <note-4>Keep polling authoritative in every schema and example. WebSocket and webhook are delivery layers, not stronger read models.</note-4>
       </notes>
@@ -234,7 +301,7 @@ DevelopmentPlan / M-INFRA-COMPOSE:
 - Note: this step prepares the canonical runtime boundary before service implementation spreads across later phases.
 
 ComposeDesign + RepositoryShape + EnvironmentContracts:
-- Define required services for postgres, redis, minio, api, worker-transcription, worker-report, worker-deep-research, web, telegram-bot, and mcp-server.
+- Define required services for postgres, redis, minio, api, worker-transcription, worker-agent-runner, web, telegram-bot, and mcp-server; dedicated worker-report and worker-deep-research services are historical lineage only.
 - Freeze healthcheck expectations, named volumes, env-file layout, and startup ordering assumptions in one compose-owned surface.
 - Because the service modules are not implemented yet, Phase-1 verification is config-level and smoke-scaffold-level rather than full stack boot.
 
@@ -244,7 +311,7 @@ ImplementationOrder / Phase-1 step-2:
       <graph-entry-excerpt><![CDATA[
 KnowledgeGraph / M-INFRA-COMPOSE:
 - Path: infra/docker-compose.yml
-- Depends: M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER
+- Depends: M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER
 - Verification ref: V-M-INFRA-COMPOSE
 - Purpose: define and bootstrap the local runtime topology for API, workers, adapters, and storage dependencies.
 - Public annotations already expected in the graph:
@@ -253,8 +320,7 @@ KnowledgeGraph / M-INFRA-COMPOSE:
 Existing CrossLinks:
 - M-INFRA-COMPOSE -> M-API-HTTP relation="runs"
 - M-INFRA-COMPOSE -> M-WORKER-TRANSCRIPTION relation="runs"
-- M-INFRA-COMPOSE -> M-WORKER-REPORT relation="runs"
-- M-INFRA-COMPOSE -> M-WORKER-DEEP-RESEARCH relation="runs"
+- M-INFRA-COMPOSE -> M-WORKER-AGENT-RUNNER relation="runs"
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="future-service-modules">Compose depends on later service modules conceptually, but this Phase-1 packet only freezes their runtime slots, not their implementations.</dependency-1>
@@ -273,7 +339,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-1:
       <step-local-verification>
         <command-1>docker compose -f infra/docker-compose.yml config</command-1>
         <command-2>bash infra/scripts/compose-smoke.sh --check-config</command-2>
-        <evidence-1>Compose shape covers postgres, redis, minio, api, worker-transcription, worker-report, worker-deep-research, web, telegram-bot, and mcp-server with explicit env-file and volume expectations.</evidence-1>
+        <evidence-1>Compose shape covers postgres, redis, minio, api, worker-transcription, worker-agent-runner, web, telegram-bot, and mcp-server with explicit env-file and volume expectations; dedicated report/deep-research worker services are historical lineage only.</evidence-1>
         <evidence-2>Runtime boot is not claimed in this phase; only deterministic config validation and smoke scaffolding are required before Phase-2 implementation starts.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
@@ -324,7 +390,7 @@ PersistentModel + StorageContract + MigrationMapping:
 - InternalWorkerContract depends on authoritative `execution_id` state across claim, progress, artifacts, finalize, and cancel-check; storage owns that persistence boundary and it must not be inferred from `jobs.started_at` alone.
 - Enforce canonical rules for multi-file idempotent submissions, source/object-key constraints, ordered source sets, job lineage columns, artifact uniqueness, append-only job events, and durable webhook-delivery retry state.
 - MinIO buckets are `sources` and `artifacts`; clients never upload directly to MinIO in v1, and presigned download links are generated by the API at read time using the public endpoint configured for browser access.
-- `src/telegram_transcriber_bot/service.py` orchestration metadata is replaced by PostgreSQL, MinIO, and Redis-backed infrastructure in the new control plane.
+- Former `src/telegram_transcriber_bot/service.py` orchestration metadata is replaced by PostgreSQL, MinIO, and Redis-backed infrastructure in the new control plane.
 
 ImplementationOrder / Phase-2 step-1:
 - Add PostgreSQL migrations for sources, jobs, job_executions, job_artifacts, job_events, job_submissions, and webhook_deliveries.
@@ -365,7 +431,7 @@ Existing CrossLinks:
 VerificationPlan / TestingStrategy / V-M-API-STORAGE / Gate-Phase-2:
 - Module check: go test ./... -run ApiStorage
 - Success scenario: source rows, source sets, jobs, artifacts, events, and webhook deliveries persist with correct lineage and constraints.
-- Success scenario: combined transcription persistence creates one ordered source set plus ordered source_set_items and one job bound to that source set.
+- Success scenario: batch transcription persistence creates one root source set with stable source labels, one root aggregate transcription job, one per-source transcription child per manifest source, and aggregate artifact metadata.
 - Failure scenario: artifact resolution fails cleanly when object store or DB is unavailable.
 - Required marker: [ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]
 - Required assertions:
@@ -378,7 +444,7 @@ VerificationPlan / TestingStrategy / V-M-API-STORAGE / Gate-Phase-2:
       <step-local-verification>
         <command-1>go test ./... -run ApiStorage</command-1>
         <command-2>Migration application and rollback smoke checks for the Phase-2 schema set.</command-2>
-        <evidence-1>All required Phase-2 tables and constraints exist with the lossless PersistentModel semantics preserved, including ordered source sets for combined transcription.</evidence-1>
+        <evidence-1>All required Phase-2 tables and constraints exist with the lossless PersistentModel semantics preserved, including batch_transcription source sets and stable source labels.</evidence-1>
         <evidence-2>Presigned artifact resolution stays ephemeral and API-owned; object-store or DB outages surface deterministic storage failures instead of partial DB success.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
@@ -424,8 +490,8 @@ DevelopmentPlan / M-API-QUEUE:
 QueueContract:
 - Queue names and task types are frozen:
   - transcription -> job:transcription.run (max-retry 3, timeout 2h)
-  - report -> job:report.run (max-retry 2, timeout 45m)
-  - deep_research -> job:deep_research.run (max-retry 2, timeout 2h)
+  - transcription aggregate -> job:transcription.aggregate (max-retry 3, timeout 2h)
+  - agent_run -> job:agent_run.run (max-retry 2, timeout 2h)
 - Minimal payload is `job_id` plus attempt number. Full mutable job metadata must not be placed in asynq payloads.
 - Deterministic business failures must use SkipRetry, including terminal claim rejection, authoritative cancel, missing parent artifact, invalid request data, and terminal model or pipeline failures.
 
@@ -506,7 +572,7 @@ DevelopmentPlan / M-API-JOBS:
 
 PublicApiContract + RetryPolicy + CancellationPolicy + PersistentModel:
 - Create endpoints support optional Idempotency-Key; equivalent request plus same key returns the original accepted response.
-- The existing upload endpoint preserves one-file-to-one-job behavior; combined upload creates one job bound to one ordered source set.
+- The existing upload endpoint preserves one-file-to-one-job behavior; batch upload creates one aggregate root plus per-source children over a stable source-label manifest.
 - Create-child behavior is stronger than idempotency: if a canonical child already exists, return it even without an idempotency key.
 - Retry is intentionally non-idempotent and creates a new row linked by `retry_of_job_id`; historical rows stay immutable.
 - Cancel may finalize queued jobs directly as canceled, or set `cancel_requested` for running jobs; terminal jobs return unchanged.
@@ -525,7 +591,7 @@ KnowledgeGraph / M-API-JOBS:
   - export-createJob
   - export-transitionJob
   - type-JobLineage
-  - type-CombinedTranscriptionJob
+  - type-BatchTranscriptionJob
 
 Existing CrossLinks:
 - M-API-JOBS -> M-API-STORAGE relation="persists-through"
@@ -543,11 +609,11 @@ Existing CrossLinks:
 VerificationPlan / TestingStrategy / V-M-API-JOBS / Gate-Phase-2:
 - Module check: go test ./... -run ApiJobs
 - Success scenario: create root and child jobs under correct lineage and delivery rules.
-- Success scenario: combined transcription create produces one job from an ordered source set without breaking per-file upload semantics.
+- Success scenario: batch transcription create produces one root aggregate job plus per-source children without breaking per-file upload semantics.
 - Failure scenario: reject invalid transitions, malformed idempotency replays, and missing artifact prerequisites.
 - Required marker: [ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]
 - Required assertion: retry must create a new row and never mutate terminal historical rows.
-- Required assertion: combined transcription create must not fan out into one job per file.
+- Required assertion: batch transcription create must fan out only inside one root/children graph, not into unrelated top-level jobs.
 - Testing strategy must prove canonical child reuse, retry-as-new-row, and polling remaining authoritative for webhook-configured jobs.
 - Module readiness target: ready-after-state-transition-tests.
 - Wave follow-up: exercise cancel and retry against real workers, not only storage mocks.
@@ -557,7 +623,7 @@ VerificationPlan / TestingStrategy / V-M-API-JOBS / Gate-Phase-2:
         <command-1>go test ./... -run ApiJobs</command-1>
         <command-2>State-transition and lineage checks covering idempotent create, canonical child reuse, cancel, retry, and required-artifact validation.</command-2>
         <evidence-1>Retry creates a new lineage-linked row, never mutates historical rows, and does not copy artifacts or job events forward.</evidence-1>
-        <evidence-2>Create-child requests reuse canonical children unless explicit retry is invoked, and combined transcription create preserves one-job semantics over ordered inputs.</evidence-2>
+        <evidence-2>Create-child requests reuse canonical children unless explicit retry is invoked, and batch transcription create preserves one root aggregate graph over stable source labels.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
         <field-1>imports: M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, and the narrowest possible event-emission seam needed for the next M-API-EVENTS integration step.</field-1>
@@ -684,7 +750,7 @@ DevelopmentPlan / M-API-HTTP:
 - Note: public routes and internal worker routes should remain explicit rather than merged by convention.
 
 PublicApiContract + InternalWorkerContract + ExecutionRules:
-- Public routes cover per-file multipart upload, combined multipart upload, URL create, get, list, report child create, deep-research child create, cancel, retry, artifact resolve, and events.
+- Public routes cover per-file multipart upload, batch multipart plus source_manifest upload, URL create, get, list, report child create, deep-research child create, cancel, retry, artifact resolve, and events.
 - Internal worker routes cover claim, progress, artifacts, finalize, and cancel-check.
 - Create endpoints support optional Idempotency-Key, delivery strategy, webhook URL validation, and a recommended 1 GiB request limit.
 - Error envelopes use stable `error.code`, `error.message`, and `error.details`.
@@ -709,8 +775,7 @@ Existing CrossLinks:
 - M-API-HTTP -> M-CONTRACTS relation="depends-on-contracts-from"
 - M-API-HTTP -> M-API-JOBS relation="routes-to"
 - M-API-HTTP -> M-WORKER-TRANSCRIPTION relation="provides-internal-control-plane-to"
-- M-API-HTTP -> M-WORKER-REPORT relation="provides-internal-control-plane-to"
-- M-API-HTTP -> M-WORKER-DEEP-RESEARCH relation="provides-internal-control-plane-to"
+- M-API-HTTP -> M-WORKER-AGENT-RUNNER relation="provides-internal-control-plane-to"
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="M-CONTRACTS">HTTP must shape requests and responses exactly to the frozen public and internal contract surface, including multipart rules, webhook validation, event envelopes, and error codes.</dependency-1>
@@ -722,18 +787,18 @@ Existing CrossLinks:
       <verification-excerpt><![CDATA[
 VerificationPlan / TestingStrategy / V-M-API-HTTP / Gate-Phase-2:
 - Module check: go test ./... -run ApiHttp
-- Success scenario: public endpoints shape accepted requests and responses according to the canonical contract, including the separate combined upload route.
+- Success scenario: public endpoints shape accepted requests and responses according to the canonical contract, including the separate batch upload route.
 - Success scenario: local Web UI browser origins receive CORS headers for REST polling and action routes.
 - Failure scenario: invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.
 - Required marker: [ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]
 - Required assertion: internal worker endpoints must not be confused with public client endpoints.
-- Wave follow-up: run API handler tests with real multipart and JSON fixtures for both per-file and combined upload routes.
+- Wave follow-up: run API handler tests with real multipart and JSON fixtures for both per-file and batch upload routes.
 - Phase follow-up: full route regression against generated SDKs and manual curl smoke checks.
 - Phase gate evidence: core routes return canonical envelopes, and the full Go control plane can create, persist, enqueue, and inspect jobs using contract-compliant routes.
       ]]></verification-excerpt>
       <step-local-verification>
         <command-1>go test ./... -run ApiHttp</command-1>
-        <command-2>Route-level per-file multipart, combined multipart, JSON, WebSocket, and internal worker fixture checks plus targeted manual curl smoke coverage.</command-2>
+        <command-2>Route-level per-file multipart, batch multipart plus source_manifest, JSON, WebSocket, and internal worker fixture checks plus targeted manual curl smoke coverage.</command-2>
         <evidence-1>Public route outputs match the canonical job, artifact, event, and error envelopes from M-CONTRACTS.</evidence-1>
         <evidence-2>Internal worker-control routes stay explicit and do not leak into the public client surface.</evidence-2>
       </step-local-verification>
@@ -758,9 +823,9 @@ VerificationPlan / TestingStrategy / V-M-API-HTTP / Gate-Phase-2:
     <ExecutionPacket packet-id="M-WORKER-COMMON-wave-3" module="M-WORKER-COMMON" phase="Phase-3" step="1" verification-ref="V-M-WORKER-COMMON">
       <module-id>M-WORKER-COMMON</module-id>
       <module-name>WorkerCommon</module-name>
-      <purpose>Extract the shared Python worker runtime layer so transcription, report, and deep-research workers all use one canonical internal API client, artifact-writing contract, and execution scaffold.</purpose>
+      <purpose>Extract the shared Python worker runtime layer so transcription, report, and deep-research workers all use one canonical internal API client, artifact-writing contract, execution scaffold, and source/domain contract boundary.</purpose>
       <packet-state>completed</packet-state>
-      <completion-evidence>.venv/bin/python -m pytest workers/common/tests passed; shared API client, object-store adapter, and worker loop are consumed by all worker launcher packets.</completion-evidence>
+      <completion-evidence>.venv/bin/python -m pytest --no-cov workers/common/tests passed, and the broad worker-common coverage gate is now `uv run pytest --cov=transcriber_workers_common --cov-branch --cov-report=term-missing --cov-fail-under=95 workers/common/tests workers/transcription/tests/test_transcriber_worker_transcription.py workers/report/tests/test_transcriber_worker_report.py workers/deep-research/tests tests/test_bot.py`; shared API client, object-store adapter, and worker loop are consumed by all worker launcher packets without the deleted local service shell.</completion-evidence>
       <write-scope>
         <file-1>workers/common/src/transcriber_workers_common/*.py</file-1>
         <file-2>workers/common/tests/*.py</file-2>
@@ -781,6 +846,7 @@ DevelopmentPlan / M-WORKER-COMMON:
 MigrationMapping + Wave-3:
 - `src/telegram_transcriber_bot/transcribers.py` maps into `workers/common/src/transcriber_workers_common/transcribers.py` plus worker-specific transcription code.
 - `src/telegram_transcriber_bot/documents.py` maps into `workers/common/src/transcriber_workers_common/documents.py`.
+- Then-current source and domain helper code was consolidated into `workers/common/src/transcriber_workers_common`; deleted compatibility helper files are no longer part of current repo truth.
 - Phase-3 step-1 creates the shared Python worker API and storage helpers before any worker-specific run loop is implemented.
       ]]></contract-excerpt>
       <graph-entry-excerpt><![CDATA[
@@ -788,22 +854,23 @@ KnowledgeGraph / M-WORKER-COMMON:
 - Path: workers/common
 - Depends: M-CONTRACTS
 - Verification ref: V-M-WORKER-COMMON
-- Purpose: host shared Python execution utilities reused by transcription, report, and deep-research workers.
+- Purpose: host shared Python execution utilities reused by worker-transcription and worker-agent-runner; historical report/deep-research dedicated workers are no longer active runtime modules.
 - Public annotations already expected in the graph:
   - export-apiClient
   - export-artifactWriters
+  - export-domainContracts
+  - export-sourceHelpers
 
 Existing CrossLinks:
 - M-WORKER-COMMON -> M-WORKER-TRANSCRIPTION relation="provides-shared-worker-runtime-to"
-- M-WORKER-COMMON -> M-WORKER-REPORT relation="provides-shared-worker-runtime-to"
-- M-WORKER-COMMON -> M-WORKER-DEEP-RESEARCH relation="provides-shared-worker-runtime-to"
+- M-WORKER-COMMON -> M-WORKER-AGENT-RUNNER relation="provides-shared-worker-runtime-to"
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="M-CONTRACTS">Shared helpers must shape claim, progress, artifact, finalize, and cancel-check payloads exactly to the frozen worker-control contracts.</dependency-1>
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
 VerificationPlan / V-M-WORKER-COMMON / Gate-Phase-3:
-- Module check: .venv/bin/python -m pytest workers/common/tests
+- Module check: .venv/bin/python -m pytest --no-cov workers/common/tests
 - Success scenario: shared worker API client and artifact helpers produce valid internal control-plane payloads.
 - Failure scenario: internal API unavailability or malformed artifact payloads fail deterministically before worker-specific execution continues.
 - Required marker: [WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]
@@ -815,7 +882,7 @@ VerificationPlan / V-M-WORKER-COMMON / Gate-Phase-3:
 - Phase follow-up: inspect DTO drift whenever contracts change.
       ]]></verification-excerpt>
       <step-local-verification>
-        <command-1>.venv/bin/python -m pytest workers/common/tests</command-1>
+        <command-1>.venv/bin/python -m pytest --no-cov workers/common/tests</command-1>
         <command-2>Contract-shaped helper checks covering claim/progress/finalize payloads, artifact metadata writes, and deterministic internal API failure handling.</command-2>
         <evidence-1>Worker-common exposes one reusable API client and one reusable artifact-writer surface that later worker packets can consume without redefining DTO shapes.</evidence-1>
         <evidence-2>Current reusable transcription and document helpers move behind the shared worker boundary without changing end-user behavior in this packet.</evidence-2>
@@ -841,15 +908,15 @@ VerificationPlan / V-M-WORKER-COMMON / Gate-Phase-3:
     <ExecutionPacket packet-id="M-WORKER-TRANSCRIPTION-wave-3" module="M-WORKER-TRANSCRIPTION" phase="Phase-3" step="2" verification-ref="V-M-WORKER-TRANSCRIPTION">
       <module-id>M-WORKER-TRANSCRIPTION</module-id>
       <module-name>WorkerTranscription</module-name>
-      <purpose>Move transcription execution into a dedicated worker that claims jobs through the API-owned control contract, preserves current transcript outputs, and handles ordered combined-media inputs deterministically.</purpose>
+      <purpose>Move transcription execution into a dedicated worker that claims jobs through the API-owned control contract, preserves current transcript outputs, and now handles batch per-source children plus aggregate roots deterministically.</purpose>
       <packet-state>completed</packet-state>
-      <completion-evidence>.venv/bin/python -m pytest workers/transcription/tests passed; compose-ready transcription launcher exists and reuses WorkerCommon runtime.</completion-evidence>
+      <completion-evidence>.venv/bin/python -m pytest --no-cov workers/transcription/tests passed; compose-ready transcription launcher exists and reuses WorkerCommon runtime.</completion-evidence>
       <write-scope>
         <file-1>workers/transcription/src/*.py</file-1>
         <file-2>workers/transcription/tests/*.py</file-2>
         <file-3>tests/test_transcribers.py</file-3>
         <file-4>tests/test_documents.py</file-4>
-        <file-5>src/telegram_transcriber_bot/service.py</file-5>
+        <file-5>former src/telegram_transcriber_bot/service.py local shell</file-5>
       </write-scope>
       <write-scope-notes>
         <note-1>Touch `service.py` only to extract or detach source materialization and transcript orchestration into the worker shell.</note-1>
@@ -866,7 +933,7 @@ Wave-3 + DataFlows:
 - Phase-3 step-2 implements the worker claim and run loop.
 - Phase-3 step-3 preserves plain transcript, segmented markdown transcript, and transcript docx outputs.
 - Phase-3 step-4 adds cancellation checks before and after long work.
-- DF-001, DF-002, and DF-007 require ordered input handling, combined-media concatenation, and deterministic success finalization only after all required artifacts exist.
+- DF-001, DF-002, and DF-007 require ordered input handling, stable source-label preservation, per-source child execution, aggregate root artifact assembly, and deterministic success finalization only after all required artifacts exist.
       ]]></contract-excerpt>
       <graph-entry-excerpt><![CDATA[
 KnowledgeGraph / M-WORKER-TRANSCRIPTION:
@@ -884,25 +951,25 @@ Existing CrossLinks:
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="M-WORKER-COMMON">Transcription must reuse the shared worker API client, artifact writers, and execution scaffolding instead of redefining worker-control behavior locally.</dependency-1>
-        <dependency-2 module="M-CONTRACTS">Claimed input shape, artifact registration, progress updates, and finalization must stay contract-compatible across single-file, URL, and combined-media flows.</dependency-2>
+        <dependency-2 module="M-CONTRACTS">Claimed input shape, artifact registration, progress updates, and finalization must stay contract-compatible across single-file, URL, per-source batch child, and batch aggregate root flows.</dependency-2>
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
 VerificationPlan / V-M-WORKER-TRANSCRIPTION / Gate-Phase-3:
-- Module check: .venv/bin/python -m pytest tests/test_transcribers.py tests/test_documents.py
+- Module check: .venv/bin/python -m pytest --no-cov tests/test_transcribers.py tests/test_documents.py
 - Success scenario: worker produces plain, segmented, and DOCX transcript artifacts from uploaded and YouTube sources.
 - Failure scenario: unsupported URLs, empty transcripts, and downloader failures surface deterministic terminal errors.
-- Success scenario: worker preserves ordering and emits one artifact set for combined multi-media transcription jobs.
+- Success scenario: worker preserves stable source-label ordering and emits aggregate root artifacts for batch transcription jobs.
 - Required marker: [WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]
 - Required assertions:
   - success finalization must not happen before all required transcript artifacts exist;
-  - when more than one ordered input exists, concatenation occurs before the final transcription pass and before success finalization.
+  - batch aggregate roots merge completed child transcript artifacts in source-label order and persist source_manifest_json plus batch_diagnostics_json before success finalization.
 - Wave follow-up: run end-to-end against real MinIO and internal API claim/finalize endpoints.
 - Phase follow-up: replay current Telegram UX expectations using the thin adapter.
       ]]></verification-excerpt>
       <step-local-verification>
-        <command-1>.venv/bin/python -m pytest tests/test_transcribers.py tests/test_documents.py</command-1>
-        <command-2>.venv/bin/python -m pytest workers/transcription/tests</command-2>
-        <evidence-1>The worker produces the preserved transcript artifact set and uses ordered-input concatenation only for combined transcription jobs.</evidence-1>
+        <command-1>.venv/bin/python -m pytest --no-cov tests/test_transcribers.py tests/test_documents.py</command-1>
+        <command-2>.venv/bin/python -m pytest --no-cov workers/transcription/tests</command-2>
+        <evidence-1>The worker produces the preserved transcript artifact set for source children and aggregate roots; concat-first combined transcription is historical and superseded by child-artifact aggregation.</evidence-1>
         <evidence-2>Cancellation and terminal-failure behavior are observable around the dedicated worker run loop rather than through Telegram-local orchestration.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
@@ -925,40 +992,40 @@ VerificationPlan / V-M-WORKER-TRANSCRIPTION / Gate-Phase-3:
 
     <ExecutionPacket packet-id="M-WORKER-REPORT-wave-4" module="M-WORKER-REPORT" phase="Phase-4" step="1" verification-ref="V-M-WORKER-REPORT">
       <module-id>M-WORKER-REPORT</module-id>
-      <module-name>WorkerReport</module-name>
-      <purpose>Extract report generation into a dedicated worker that consumes transcript artifacts, executes the configured report harness, preserves markdown plus DOCX outputs, and keeps subprocess cancellation under the API-owned job shell.</purpose>
-      <packet-state>completed</packet-state>
-      <completion-evidence>.venv/bin/python -m pytest workers/report/tests passed; compose-ready report launcher exists and reuses WorkerCommon runtime.</completion-evidence>
+      <module-name>HistoricalWorkerReport</module-name>
+      <purpose>Historical dedicated report-worker extraction packet. Active report execution is now owned by worker-agent-runner through `agent_run` operation envelopes.</purpose>
+      <packet-state>superseded-by-agent-runner</packet-state>
+      <completion-evidence>Historical .venv/bin/python -m pytest --no-cov workers/report/tests evidence is retained as lineage only; current report verification lives under worker-agent-runner and agent_run gates.</completion-evidence>
       <write-scope>
         <file-1>workers/report/src/*.py</file-1>
         <file-2>workers/report/tests/*.py</file-2>
-        <file-3>tests/test_cglm_runner.py</file-3>
-        <file-4>tests/test_cglm_runner_errors.py</file-4>
-        <file-5>src/telegram_transcriber_bot/cglm_runner.py</file-5>
-        <file-6>src/telegram_transcriber_bot/documents.py</file-6>
+        <file-3>workers/report/src/transcriber_worker_report.py</file-3>
+        <file-4>workers/common/src/transcriber_workers_common/documents.py</file-4>
       </write-scope>
       <write-scope-notes>
-        <note-1>Touch existing `cglm_runner.py` and report DOCX rendering only to move them into the report worker layer.</note-1>
+        <note-1>Touch only the report worker runtime and shared report DOCX rendering while keeping API child-job rules and deep-research execution out of scope.</note-1>
         <note-2>Do not broaden into API child-job rules or deep-research execution in this packet.</note-2>
       </write-scope-notes>
       <contract-excerpt><![CDATA[
-DevelopmentPlan / M-WORKER-REPORT:
-- Purpose: generate markdown and DOCX research reports from transcript artifacts using the configured report harness.
+Historical DevelopmentPlan / M-WORKER-REPORT:
+- Purpose: historical dedicated worker that generated markdown and DOCX research reports from transcript artifacts using the configured report harness.
+- Current contract: report execution is now an `agent_run` operation handled by M-WORKER-AGENT-RUNNER.
 - Scope: report harness command execution, subprocess lifecycle handling, report rendering, artifact upload, and terminal finalization.
 - Links: M-WORKER-REPORT, V-M-WORKER-REPORT, DF-004, DF-006.
 - Error: report_failed.
 
 Wave-4 + MigrationMapping:
-- `src/telegram_transcriber_bot/cglm_runner.py` maps into `workers/report/src`.
-- Report DOCX generation is extracted from `src/telegram_transcriber_bot/documents.py`.
+- `workers/report/src/transcriber_worker_report.py` owns report harness execution in the report worker layer.
+- `workers/common/src/transcriber_workers_common/documents.py` owns shared report DOCX generation.
 - Phase-4 step-1 is the report-worker extraction wave; API child-job validation remains a dependency and not an ownership change for this packet.
       ]]></contract-excerpt>
       <graph-entry-excerpt><![CDATA[
-KnowledgeGraph / M-WORKER-REPORT:
+Historical KnowledgeGraph / M-WORKER-REPORT:
 - Path: workers/report
 - Depends: M-WORKER-COMMON, M-CONTRACTS
 - Verification ref: V-M-WORKER-REPORT
-- Purpose: execute report jobs using the configured report harness and report artifact rendering while preserving current report behavior.
+- Purpose: historical dedicated report job execution using the configured report harness and report artifact rendering.
+- Current graph: M-WORKER-AGENT-RUNNER owns active report execution.
 - Public annotations already expected in the graph:
   - export-runReport
 
@@ -971,20 +1038,19 @@ Existing CrossLinks:
         <dependency-2 module="M-CONTRACTS">Artifact registration, error reporting, and terminal worker finalization must stay aligned with the frozen worker-control DTOs.</dependency-2>
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
-VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
-- Module check: .venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py
+Historical VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
+- Module check: .venv/bin/python -m pytest --no-cov workers/report/tests
 - Success scenario: report worker produces markdown and DOCX artifacts from transcript input.
-- Failure scenario: missing binary, timeout, and non-zero exit are surfaced as deterministic worker failures.
+- Failure scenario: provider unavailable, timeout, and non-zero exit are surfaced as deterministic worker failures.
 - Required marker: [WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]
 - Required assertion: cancellation must terminate subprocess execution before finalizing `canceled`.
 - Wave follow-up: validate report child reuse semantics through the API.
-- Phase follow-up: run report-worker integration against real internal control-plane endpoints.
+- Phase follow-up: run report-worker integration against real internal control-plane endpoints; container-native harness coverage lives under V-M-WORKER-HARNESS.
       ]]></verification-excerpt>
       <step-local-verification>
-        <command-1>.venv/bin/python -m pytest tests/test_cglm_runner.py tests/test_cglm_runner_errors.py</command-1>
-        <command-2>.venv/bin/python -m pytest workers/report/tests</command-2>
+        <command-1>.venv/bin/python -m pytest --no-cov workers/report/tests</command-1>
         <evidence-1>Report worker preserves markdown and DOCX outputs while running the configured report harness behind the dedicated worker shell.</evidence-1>
-        <evidence-2>Subprocess timeout, missing binary, non-zero exit, and cancel-aware handling are observable through the worker packet boundary.</evidence-2>
+        <evidence-2>Provider unavailable, timeout, non-zero exit, and cancel-aware handling are observable through the worker packet boundary.</evidence-2>
       </step-local-verification>
       <expected-graph-delta-fields>
         <field-1>imports: confirm stable dependencies on M-WORKER-COMMON and M-CONTRACTS.</field-1>
@@ -993,9 +1059,9 @@ VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
         <field-4>CrossLinks: preserve HTTP control-plane and shared-runtime reuse links.</field-4>
       </expected-graph-delta-fields>
       <expected-verification-delta-fields>
-        <field-1>test-files: preserve current report harness regression coverage while adding `workers/report/tests`.</field-1>
+        <field-1>test-files: canonical report verification now lives in `workers/report/tests`; shared harness verification stays in `workers/common/tests/test_harness*.py` under V-M-WORKER-HARNESS.</field-1>
         <field-2>module-checks: keep the narrow report-focused pytest commands.</field-2>
-        <field-3>required-log-markers: preserve `[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]`.</field-3>
+        <field-3>required-log-markers: historical `[WorkerReport][runReport][BLOCK_EXECUTE_REPORT_PIPELINE]`; active report markers live under AgentRunner.</field-3>
         <field-4>follow-up-checks: API child reuse stays wave follow-up and real control-plane integration stays phase follow-up.</field-4>
       </expected-verification-delta-fields>
       <notes>
@@ -1006,37 +1072,38 @@ VerificationPlan / V-M-WORKER-REPORT / Gate-Phase-4:
 
     <ExecutionPacket packet-id="M-WORKER-DEEP-RESEARCH-wave-4" module="M-WORKER-DEEP-RESEARCH" phase="Phase-4" step="2" verification-ref="V-M-WORKER-DEEP-RESEARCH">
       <module-id>M-WORKER-DEEP-RESEARCH</module-id>
-      <module-name>WorkerDeepResearch</module-name>
-      <purpose>Extract the deep-research pipeline into a dedicated worker that preserves phase artifacts, final markdown output, optional execution logs, and deterministic terminal-failure handling.</purpose>
-      <packet-state>completed</packet-state>
-      <completion-evidence>.venv/bin/python -m pytest workers/deep-research/tests passed; compose-ready deep-research launcher exists and reuses WorkerCommon runtime.</completion-evidence>
+      <module-name>HistoricalWorkerDeepResearch</module-name>
+      <purpose>Historical dedicated deep-research-worker extraction packet. Active deep-research execution is now owned by worker-agent-runner through `agent_run` operation envelopes.</purpose>
+      <packet-state>superseded-by-agent-runner</packet-state>
+      <completion-evidence>Historical .venv/bin/python -m pytest --no-cov workers/deep-research/tests evidence is retained as lineage only; current deep-research verification lives under worker-agent-runner and agent_run gates.</completion-evidence>
       <write-scope>
         <file-1>workers/deep-research/src/*.py</file-1>
         <file-2>workers/deep-research/tests/*.py</file-2>
-        <file-3>tests/test_deep_research.py</file-3>
-        <file-4>src/telegram_transcriber_bot/deep_research.py</file-4>
+        <file-3>workers/deep-research/tests/*.py</file-3>
       </write-scope>
       <write-scope-notes>
         <note-1>Touch the current deep-research pipeline only to move it into the dedicated worker shell with minimal rewrite.</note-1>
         <note-2>Do not broaden into report worker internals or UI surfacing in this packet.</note-2>
       </write-scope-notes>
       <contract-excerpt><![CDATA[
-DevelopmentPlan / M-WORKER-DEEP-RESEARCH:
-- Purpose: run the evidence-driven deep-research pipeline and persist the final markdown output plus optional execution logs.
+Historical DevelopmentPlan / M-WORKER-DEEP-RESEARCH:
+- Purpose: historical dedicated worker that ran the evidence-driven deep-research pipeline and persisted the final markdown output plus optional execution logs.
+- Current contract: deep-research execution is now an `agent_run` operation handled by M-WORKER-AGENT-RUNNER.
 - Scope: phase-driven deep-research execution, required artifact validation, optional log persistence, and terminal finalization.
 - Links: M-WORKER-DEEP-RESEARCH, V-M-WORKER-DEEP-RESEARCH, DF-005, DF-006.
 - Error: deep_research_failed.
 
 Wave-4 + MigrationMapping:
-- `src/telegram_transcriber_bot/deep_research.py` maps into `workers/deep-research/src`.
+- The deep-research pipeline now lives in `workers/deep-research/src`.
 - The packet preserves the current multi-phase pipeline while adding worker-shell finalization, artifact persistence, and cancellation boundaries.
       ]]></contract-excerpt>
       <graph-entry-excerpt><![CDATA[
-KnowledgeGraph / M-WORKER-DEEP-RESEARCH:
+Historical KnowledgeGraph / M-WORKER-DEEP-RESEARCH:
 - Path: workers/deep-research
 - Depends: M-WORKER-COMMON, M-CONTRACTS
 - Verification ref: V-M-WORKER-DEEP-RESEARCH
-- Purpose: execute deep-research jobs by reusing the current evidence-driven multi-phase pipeline.
+- Purpose: historical dedicated deep-research job execution using the evidence-driven multi-phase pipeline.
+- Current graph: M-WORKER-AGENT-RUNNER owns active deep-research execution.
 - Public annotations already expected in the graph:
   - export-runDeepResearch
 
@@ -1049,8 +1116,8 @@ Existing CrossLinks:
         <dependency-2 module="M-CONTRACTS">Worker finalization, optional execution-log registration, and terminal error shaping must remain contract-compatible.</dependency-2>
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
-VerificationPlan / V-M-WORKER-DEEP-RESEARCH / Gate-Phase-4:
-- Module check: .venv/bin/python -m pytest tests/test_deep_research.py
+Historical VerificationPlan / V-M-WORKER-DEEP-RESEARCH / Gate-Phase-4:
+- Module check: .venv/bin/python -m pytest --no-cov workers/deep-research/tests
 - Success scenario: deep-research worker preserves required phase artifacts and final markdown output.
 - Failure scenario: pipeline timeouts, missing phase artifacts, and blocked writes surface deterministic failures.
 - Required marker: [WorkerDeepResearch][runDeepResearch][BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE]
@@ -1059,8 +1126,8 @@ VerificationPlan / V-M-WORKER-DEEP-RESEARCH / Gate-Phase-4:
 - Phase follow-up: smoke-check deep-research runtime inside Docker Compose.
       ]]></verification-excerpt>
       <step-local-verification>
-        <command-1>.venv/bin/python -m pytest tests/test_deep_research.py</command-1>
-        <command-2>.venv/bin/python -m pytest workers/deep-research/tests</command-2>
+        <command-1>.venv/bin/python -m pytest --no-cov workers/deep-research/tests</command-1>
+        <command-2>Deep-research packet replay over the worker-local regression suite.</command-2>
         <evidence-1>Worker extraction preserves required deep-research phase artifacts and the final markdown contract before success finalization.</evidence-1>
         <evidence-2>Timeouts, missing phase outputs, and blocked writes are surfaced as deterministic worker failures instead of partial success.</evidence-2>
       </step-local-verification>
@@ -1073,7 +1140,7 @@ VerificationPlan / V-M-WORKER-DEEP-RESEARCH / Gate-Phase-4:
       <expected-verification-delta-fields>
         <field-1>test-files: preserve current deep-research regression coverage while adding `workers/deep-research/tests`.</field-1>
         <field-2>module-checks: keep narrow deep-research pytest commands.</field-2>
-        <field-3>required-log-markers: preserve `[WorkerDeepResearch][runDeepResearch][BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE]`.</field-3>
+        <field-3>required-log-markers: historical `[WorkerDeepResearch][runDeepResearch][BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE]`; active deep-research markers live under AgentRunner.</field-3>
         <field-4>follow-up-checks: API-created child-job integration and compose smoke remain later checks outside this extraction packet.</field-4>
       </expected-verification-delta-fields>
       <notes>
@@ -1190,7 +1257,7 @@ DevelopmentPlan / M-WEB-UI:
 
 Wave-6 + ImplementationOrder / Phase-5 step-1:
 - Create jobs list and job details pages.
-- Add create-job form for per-file upload, combined multi-media upload, and YouTube URL submission.
+- Add create-job form for per-file upload, batch transcription, and YouTube URL submission.
 - Add polling and WebSocket integration using polling as fallback and WebSocket for fast updates.
 - Add report, deep research, cancel, retry, delivery-strategy controls, and late-wave admin operations.
       ]]></contract-excerpt>
@@ -1225,7 +1292,7 @@ VerificationPlan / V-M-WEB-UI / Gate-Phase-5:
       ]]></verification-excerpt>
       <step-local-verification>
         <command-1>pnpm --dir apps/web test</command-1>
-        <command-2>Browser-local smoke coverage for upload, combined upload, URL create, job details, artifact resolve, and polling or WebSocket reconciliation.</command-2>
+        <command-2>Browser-local smoke coverage for upload, batch upload, URL create, job details, artifact resolve, and polling or WebSocket reconciliation.</command-2>
         <evidence-1>UI preserves polling as the authoritative read path while using WebSocket only for latency reduction.</evidence-1>
         <evidence-2>Admin actions and expired-link refresh flows surface API truth instead of client-side inferred state.</evidence-2>
       </step-local-verification>
@@ -1250,7 +1317,7 @@ VerificationPlan / V-M-WEB-UI / Gate-Phase-5:
     <ExecutionPacket packet-id="M-TELEGRAM-ADAPTER-wave-5" module="M-TELEGRAM-ADAPTER" phase="Phase-5" step="2" verification-ref="V-M-TELEGRAM-ADAPTER">
       <module-id>M-TELEGRAM-ADAPTER</module-id>
       <module-name>TelegramAdapter</module-name>
-      <purpose>Replace bot-side orchestration with API calls while preserving the current Telegram UX, polling-default delivery, media-group combined submission, and artifact callback flows.</purpose>
+      <purpose>Replace bot-side orchestration with API calls while preserving the current Telegram UX, polling-default delivery, Telegram basket batch submission, and artifact callback flows.</purpose>
       <write-scope>
         <file-1>apps/telegram-bot/pyproject.toml</file-1>
         <file-2>apps/telegram-bot/.env.example</file-2>
@@ -1275,8 +1342,9 @@ DevelopmentPlan / M-TELEGRAM-ADAPTER:
 - Error: telegram_upload_failed.
 
 Wave-7 + ImplementationOrder / Phase-5 step-2:
-- Add typed Python API client support for create upload job, combined upload, URL job, get/list job, child-job create, cancel, retry, and artifact resolution.
-- Map Telegram media groups to the combined endpoint and allow explicit buffered combined submission for sequential media.
+- Add typed Python API client support for create upload job, batch upload, URL job, get/list job, child-job create, cancel, retry, and artifact resolution.
+- Map Telegram media groups and explicit user baskets to `/v1/transcription-jobs/batch`.
+- Register `/start`, `/help`, `/batch`, `/basket`, and `/clear` in the Telegram command menu and expose a batch-mode toggle button.
 - Preserve plain transcript delivery, segmented transcript button, report button, and deep research button.
 - Remove execution coupling so the bot no longer imports execution core directly.
       ]]></contract-excerpt>
@@ -1289,14 +1357,16 @@ KnowledgeGraph / M-TELEGRAM-ADAPTER:
 - Public annotations already expected in the graph:
   - export-handleIncomingMedia
   - export-handleCallbacks
-  - export-submitCombinedMedia
+  - export-submitBatchBasket
+  - export-registerCommandMenu
+  - export-toggleBatchMode
 
 Existing CrossLinks:
 - M-TELEGRAM-ADAPTER -> M-API-HTTP relation="consumes"
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="M-CONTRACTS">Telegram request shaping, artifact delivery, callback actions, and error handling must stay aligned with the canonical API contract and artifact metadata shapes.</dependency-1>
-        <dependency-2 module="M-API-HTTP">The adapter submits uploads, combined-media jobs, URL jobs, child-job actions, retry, cancel, and artifact resolution through the API only.</dependency-2>
+        <dependency-2 module="M-API-HTTP">The adapter submits uploads, batch jobs, URL jobs, child-job actions, retry, cancel, and artifact resolution through the API only.</dependency-2>
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
 VerificationPlan / V-M-TELEGRAM-ADAPTER / Gate-Phase-5:
@@ -1308,21 +1378,22 @@ VerificationPlan / V-M-TELEGRAM-ADAPTER / Gate-Phase-5:
 - Required marker: [TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]
 - Required assertions:
   - default Telegram delivery strategy remains polling;
-  - media groups map to the combined transcription flow instead of the per-file upload flow.
+  - media groups and user-curated baskets map to the batch transcription flow instead of the per-file upload flow.
+  - command registry and batch-mode toggle remain adapter-local UX controls and do not move orchestration out of the API.
 - Wave follow-up: replay current plain-transcript and segmented/report button UX through the new adapter.
 - Phase follow-up: validate Telegram runtime under the compose stack before deleting the old entrypoint.
       ]]></verification-excerpt>
       <step-local-verification>
         <command-1>.venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py</command-1>
         <command-2>PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py</command-2>
-        <command-3>Adapter-local replay coverage for plain transcript, segmented transcript, report, deep-research, retry, and combined-media callback flows.</command-3>
+        <command-3>Adapter-local replay coverage for command registry, batch-mode toggle, plain transcript, segmented transcript, report, deep-research, retry, and batch callback flows.</command-3>
         <evidence-1>Bot behavior preserves the current user-visible flow while delegating execution and lineage ownership to the API.</evidence-1>
-        <evidence-2>Media groups and buffered sequential media route to the combined endpoint instead of spawning unrelated per-file jobs.</evidence-2>
+        <evidence-2>Media groups and buffered sequential media route to the batch endpoint instead of spawning unrelated per-file jobs.</evidence-2>
         <evidence-3>The adapter packet leaves behind any missing app-root metadata and env contract files without broadening into shared-SDK work.</evidence-3>
       </step-local-verification>
       <expected-graph-delta-fields>
         <field-1>imports: confirm stable dependency on M-CONTRACTS and M-API-HTTP only.</field-1>
-        <field-2>exports: confirm incoming-media, callback, and combined-submission adapter entrypoints.</field-2>
+        <field-2>exports: confirm incoming-media, callback, and batch-submission adapter entrypoints.</field-2>
         <field-3>annotations: refine only stable Telegram adapter entrypoints that remain public module surface.</field-3>
         <field-4>CrossLinks: preserve the single adapter-to-API consumption boundary; do not add worker or storage ownership links.</field-4>
       </expected-graph-delta-fields>
@@ -1499,23 +1570,23 @@ VerificationPlan / V-M-MCP-ADAPTER / Gate-Phase-5:
       <module-name>InfraCompose</module-name>
       <purpose>Harden the compose stack for the post-implementation phase by proving startup order, healthchecks, persistent volumes, and stack-local smoke execution before final cutover.</purpose>
       <packet-state>completed</packet-state>
-      <completion-evidence>docker compose config, compose-smoke --check-config, and compose-smoke --live-smoke passed with API, workers, Web UI, Telegram adapter, MCP adapter, Postgres, Redis, MinIO, and MinIO init converged. 2026-04-23 follow-up evidence: worker-transcription now builds from infra/images/worker-transcription/Dockerfile and provides /usr/bin/ffmpeg for live transcription E2E; report/deep-research runtime wiring now exposes a configurable host harness command/type bridge instead of hard-coding one developer CLI name; infra/host-tools/deterministic-harness.py provides a bounded host command for API/MinIO/worker bridge smoke checks without asserting external LLM quality.</completion-evidence>
+      <completion-evidence>docker compose config, compose-smoke --check-config, and compose-smoke --live-smoke passed with API, workers, Web UI, Telegram adapter, MCP adapter, Postgres, Redis, MinIO, and MinIO init converged. 2026-04-23 cutover follow-up evidence: worker-transcription now builds from infra/images/worker-transcription/Dockerfile and provides /usr/bin/ffmpeg for live transcription E2E. A bounded deterministic helper remained available during that cutover for legacy bridge smoke coverage through API and MinIO, but it is historical residue rather than an active compose-owned interface.</completion-evidence>
       <write-scope>
         <file-1>infra/docker-compose.yml</file-1>
         <file-2>infra/env/*.env.example</file-2>
         <file-3>infra/init/*</file-3>
         <file-4>infra/scripts/compose-smoke.sh</file-4>
         <file-5>infra/images/worker-transcription/Dockerfile</file-5>
-        <file-6>infra/host-tools/*.py</file-6>
       </write-scope>
       <write-scope-notes>
-        <note-1>Keep this packet inside compose topology, env contracts, init scripts, and smoke verification assets.</note-1>
+        <note-1>Keep this packet inside the container-native compose topology, env contracts, init scripts, and smoke verification assets.</note-1>
         <note-2>Do not move application business logic into compose files; this packet hardens runtime wiring only.</note-2>
+        <note-3>Legacy host bridge helpers may be referenced only as historical cutover context and are not part of the compose-owned wiring model.</note-3>
       </write-scope-notes>
       <contract-excerpt><![CDATA[
 DevelopmentPlan / M-INFRA-COMPOSE:
 - Purpose: own local Docker Compose topology, service dependencies, and environment contracts.
-- Scope: compose topology, healthchecks, startup ordering, volumes, service env contracts, configurable host harness bridge wiring, and smoke-run expectations.
+- Scope: compose topology, healthchecks, startup ordering, volumes, service env contracts, and smoke-run expectations for the container-native runtime only.
 - Links: M-INFRA-COMPOSE, V-M-INFRA-COMPOSE, DF-001, DF-003, DF-006, DF-007.
 - Error: compose_boot_failed.
 
@@ -1528,7 +1599,7 @@ Wave-9 + ImplementationOrder / Phase-6 step-1:
       <graph-entry-excerpt><![CDATA[
 KnowledgeGraph / M-INFRA-COMPOSE:
 - Path: infra/docker-compose.yml
-- Depends: M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER
+- Depends: M-API-HTTP, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER, M-WEB-UI, M-TELEGRAM-ADAPTER, M-MCP-ADAPTER
 - Verification ref: V-M-INFRA-COMPOSE
 - Purpose: define and bootstrap the local runtime topology for API, workers, adapters, and storage dependencies.
 - Public annotations already expected in the graph:
@@ -1537,8 +1608,7 @@ KnowledgeGraph / M-INFRA-COMPOSE:
 Existing CrossLinks:
 - M-INFRA-COMPOSE -> M-API-HTTP relation="runs"
 - M-INFRA-COMPOSE -> M-WORKER-TRANSCRIPTION relation="runs"
-- M-INFRA-COMPOSE -> M-WORKER-REPORT relation="runs"
-- M-INFRA-COMPOSE -> M-WORKER-DEEP-RESEARCH relation="runs"
+- M-INFRA-COMPOSE -> M-WORKER-AGENT-RUNNER relation="runs"
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="all-runtime-modules">Compose hardening is only valid after API, workers, UI, Telegram, and MCP modules expose stable runtime entrypoints.</dependency-1>
@@ -1575,7 +1645,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
         <field-4>CrossLinks: preserve runtime `runs` edges and avoid adding business-logic ownership edges.</field-4>
       </expected-graph-delta-fields>
       <expected-verification-delta-fields>
-        <field-1>test-files: keep compose, env-example, init-script, worker runtime image, host harness bridge, and smoke-script coverage inside `infra/`.</field-1>
+        <field-1>test-files: keep compose, env-example, init-script, worker runtime image, and smoke-script coverage inside `infra/`.</field-1>
         <field-2>module-checks: preserve config validation plus compose smoke commands as authoritative checks.</field-2>
         <field-3>required-log-markers: preserve `[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]`.</field-3>
         <field-4>follow-up-checks: compose health convergence is closed; full functional smoke matrix remains the final phase gate before cutover.</field-4>
@@ -1590,7 +1660,7 @@ VerificationPlan / V-M-INFRA-COMPOSE / Gate-Phase-6:
       <module-id>M-API-HTTP</module-id>
       <module-name>ApiHttp</module-name>
       <purpose>Close the cutover wave by proving full-stack API parity against the frozen acceptance matrix and keeping any final HTTP-layer changes limited to route-level gaps surfaced by evidence.</purpose>
-      <packet-state>http-parity-verified-downstream-gates-open</packet-state>
+      <packet-state>completed</packet-state>
       <entry-condition>Start only after M-INFRA-COMPOSE-wave-6 is completed and compose live-smoke health convergence is proven.</entry-condition>
       <write-scope>
         <file-1>apps/api/internal/api/*_test.go</file-1>
@@ -1629,8 +1699,7 @@ KnowledgeGraph / M-API-HTTP:
 Existing CrossLinks:
 - M-API-HTTP -> M-API-JOBS relation="routes-to"
 - M-API-HTTP -> M-WORKER-TRANSCRIPTION relation="provides-internal-control-plane-to"
-- M-API-HTTP -> M-WORKER-REPORT relation="provides-internal-control-plane-to"
-- M-API-HTTP -> M-WORKER-DEEP-RESEARCH relation="provides-internal-control-plane-to"
+- M-API-HTTP -> M-WORKER-AGENT-RUNNER relation="provides-internal-control-plane-to"
       ]]></graph-entry-excerpt>
       <dependency-contract-summaries>
         <dependency-1 module="M-CONTRACTS">Parity verification uses the frozen public and internal worker contract surface as the source of truth for every route and envelope.</dependency-1>
@@ -1641,11 +1710,11 @@ Existing CrossLinks:
       <verification-excerpt><![CDATA[
 VerificationPlan / V-M-API-HTTP / CutoverParity:
 - Module check: go test ./... -run ApiHttp
-- Success scenario: public endpoints shape accepted requests and responses according to the canonical contract, including the separate combined upload route.
+- Success scenario: public endpoints shape accepted requests and responses according to the canonical contract, including the separate batch upload route.
 - Failure scenario: invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.
 - Required marker: [ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]
 - Required assertion: internal worker endpoints must not be confused with public client endpoints.
-- Wave follow-up: run API handler tests with real multipart and JSON fixtures for both per-file and combined upload routes.
+- Wave follow-up: run API handler tests with real multipart and JSON fixtures for both per-file and batch upload routes.
 - Phase follow-up: full route regression against generated SDKs and manual curl smoke checks.
 - Cutover parity evidence:
   - compose-wide smoke verification passes with all required services healthy;
@@ -1654,7 +1723,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
       ]]></verification-excerpt>
       <step-local-verification>
         <command-1>go test ./... -run ApiHttp</command-1>
-        <command-2>Full route regression with multipart, combined upload, URL, child-job, artifact, cancel, retry, WebSocket, and internal worker fixtures against the live stack.</command-2>
+        <command-2>Full route regression with multipart, batch upload, URL, child-job, artifact, cancel, retry, WebSocket, and internal worker fixtures against the live stack.</command-2>
         <command-3>Acceptance-matrix parity replay proving the new stack covers the frozen baseline before legacy cutover.</command-3>
         <evidence-1>HTTP route behavior stays contract-shaped for both public clients and internal worker-control flows under the full stack.</evidence-1>
         <evidence-2>Cutover is blocked until parity evidence exists; route-level deltas remain narrow and evidence-driven.</evidence-2>
@@ -1670,18 +1739,358 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
         <field-1>test-files: expand route-level fixture coverage under `apps/api/internal/api/*_test.go` only where parity evidence proves a gap.</field-1>
         <field-2>module-checks: preserve `go test ./... -run ApiHttp` and add live-stack acceptance replay commands only as parity verification.</field-2>
         <field-3>required-log-markers: preserve `[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]`.</field-3>
-        <field-4>follow-up-checks: legacy path removal remains blocked on explicit cutover evidence, not on assumptions.</field-4>
+        <field-4>follow-up-checks: legacy path removal is now closed by explicit cutover evidence, not by assumptions.</field-4>
       </expected-verification-delta-fields>
       <open-cutover-gates>
-        <gate-1 id="CUTOVER-PARITY-HTTP" status="verified" verified-at="2026-04-23">Live-stack route regression passed for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes; no M-API-HTTP route-level patch was required.</gate-1>
-        <gate-2 id="CUTOVER-WORKER-E2E" status="verified" verified-at="2026-04-23">Transcription execution is verified against real MinIO and API claim/finalize paths for single and combined uploads; report child job 3f3773ab-a38d-47e0-a6f2-d48a441f6a42 and deep-research child job a822b304-ff7c-449e-8cd4-e4645f3a7869 succeeded through API-created child routes, worker claim/finalize, configurable host bridge, and MinIO artifact persistence using the bounded deterministic harness. External LLM throughput and quality remain outside this worker E2E gate.</gate-2>
+        <gate-1 id="CUTOVER-PARITY-HTTP" status="verified" verified-at="2026-04-23">Historical live-stack route regression passed for multipart upload, combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes. Current batch route proof is tracked by GRACE-BATCH-TRANSCRIPTION-REFRESH.</gate-1>
+        <gate-2 id="CUTOVER-WORKER-E2E" status="verified" verified-at="2026-04-24">Historical transcription execution evidence covered single and combined uploads; current report/deep-research child execution is agent_run-backed through worker-agent-runner, and current batch proof is root/children/aggregate evidence under GRACE-BATCH-TRANSCRIPTION-REFRESH.</gate-2>
         <gate-3 id="CUTOVER-ADAPTER-PARITY" status="verified" verified-at="2026-04-23">Adapter parity is now closed. Web UI browser smoke was replayed at `http://localhost:3300` with fresh Playwright screenshots for the workspace and job-details routes, while earlier browser evidence already covers zero-console-error load or list or create or details behavior and WebSocket reconciliation. Telegram replay through `apps/telegram-bot` gateway proved transcript and report download on live job `b8a845c2-c713-4be4-871b-60e8c22257e3`, exposed the deep callback-id drift on the parent transcription id, and then verified the fixed path where the report child id `0e991c7e-c7ad-495d-a0a8-39942abb590b` drives succeeded deep-research job `d674cb10-0d40-4d2b-b5a4-15b2961a9553`. MCP live tool mapping inside compose created succeeded transcription, report, and deep-research jobs (`b9065337-64fa-400b-b338-39334d030ece`, `b62b5bf7-d555-44da-af31-ea646f01b397`, `489502a0-b1a9-4780-81c9-42456fb292fb`) and resolved deep-research artifact download info through the API with the required mapping marker.</gate-3>
         <gate-4 id="CUTOVER-FAILURE-PATHS" status="verified" verified-at="2026-04-23">Storage, queue, webhook, and WebSocket failure-path smokes are closed: live PostgreSQL migration Up/Down smoke, compose Redis/asynq inspector smoke, Redis outage HTTP 503 `queue_unavailable`, public/internal cancel-check/finalize cancellation flow, webhook 502-to-204 durable retry after API restart, and browser WebSocket reconnect REST refresh evidence are recorded in verification-plan.xml.</gate-4>
-        <gate-5 id="CUTOVER-LEGACY-REMOVAL">Delete or replace the old single-process runtime path only after all previous gates pass.</gate-5>
+        <gate-5 id="CUTOVER-LEGACY-REMOVAL" status="verified" verified-at="2026-04-23">The old single-process runtime path was replaced with a fail-fast compose cutover message after the fresh speech-based replay succeeded end-to-end and artifact resolution returned HTTP 200.</gate-5>
       </open-cutover-gates>
       <notes>
         <note-1>This is a verification-heavy packet and should not be used as a pretext for broad control-plane refactors.</note-1>
         <note-2>Use first-divergent-block reasoning: if parity fails outside HTTP, hand off through failure packets instead of patching blindly in the route layer.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-WORKER-HARNESS-wave-10" module="M-WORKER-HARNESS" phase="Phase-7" step="1" verification-ref="V-M-WORKER-HARNESS">
+      <module-id>M-WORKER-HARNESS</module-id>
+      <module-name>WorkerHarness</module-name>
+      <purpose>Create the provider-neutral, container-native execution boundary that replaces the temporary host-harness bridge for report and deep-research workers.</purpose>
+      <packet-state>completed</packet-state>
+      <entry-condition>Start only after the current host-harness debt is recorded in Beads and GRACE docs; do not remove bridge assets until deterministic container fixture and worker-local tests pass.</entry-condition>
+      <write-scope>
+        <file-1>workers/common/src/transcriber_workers_common/harness.py</file-1>
+        <file-2>workers/common/src/transcriber_workers_common/harness_providers.py</file-2>
+        <file-3>workers/common/src/transcriber_workers_common/harness_fixtures.py</file-3>
+        <file-4>workers/common/tests/test_harness*.py</file-4>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>Keep this packet inside the shared provider-neutral harness layer and tests.</note-1>
+        <note-2>Do not edit report, deep-research, compose, or docs in this packet except to resolve import exposure required by the new worker-common harness module.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-WORKER-HARNESS:
+- Purpose: provide a provider-neutral, container-native execution boundary for report and deep-research LLM harness calls.
+- Scope: request shaping, provider selection, in-container launcher dispatch, timeout and cancellation semantics, secret redaction, deterministic fixture mode, and host-dependency guardrails.
+- Allowed runtime config: LLM_PROVIDER, LLM_API_KEY or LLM_API_KEY_FILE, LLM_MODEL, LLM_BASE_URL, LLM_TIMEOUT_SECONDS, LLM_MAX_TOKENS, LLM_TEMPERATURE, LLM_CACHE_DIR, LLM_CONFIG_DIR.
+- Forbidden runtime contracts: HOST_HARNESS_COMMAND, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TOKEN, HOST_WORKSPACE_ROOT, host.docker.internal worker execution, bind-mounted host executable, host path remapping.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-WORKER-HARNESS:
+- Path: workers/common/src/transcriber_workers_common/harness.py
+- Depends: M-WORKER-COMMON, M-CONTRACTS
+- Verification ref: V-M-WORKER-HARNESS
+- Public annotations:
+  - export-runHarness
+  - export-buildProviderLauncher
+  - export-deterministicFixtureProvider
+  - type-HarnessRequest
+  - type-HarnessResult
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-WORKER-COMMON">Reuse shared worker runtime conventions, cancellation classification, and artifact path discipline instead of creating a parallel worker loop.</dependency-1>
+        <dependency-2 module="M-CONTRACTS">Do not change API DTOs in this packet; harness execution is internal to worker execution after claim.</dependency-2>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / V-M-WORKER-HARNESS:
+- Module checks:
+  - uv run pytest --no-cov workers/common/tests/test_harness.py workers/common/tests/test_harness_providers.py workers/common/tests/test_harness_fixtures.py
+  - static forbidden-contract scan for HOST_HARNESS, HOST_WORKSPACE_ROOT, host.docker.internal, host path defaults, and host executable vars in normal runtime scope.
+- Required marker: [WorkerHarness][runHarness][BLOCK_RUN_CONTAINER_NATIVE_HARNESS]
+- Success scenario: deterministic fixture provider runs entirely in-container.
+- Failure scenarios: missing provider config, invalid provider, timeout, non-zero exit, cancellation, and secret redaction.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>uv run pytest --no-cov workers/common/tests/test_harness.py workers/common/tests/test_harness_providers.py workers/common/tests/test_harness_fixtures.py</command-1>
+        <command-2>grace lint --path .</command-2>
+        <evidence-1>WorkerHarness exposes provider-neutral request/result contracts with deterministic failure classification.</evidence-1>
+        <evidence-2>Deterministic fixture provider requires no host bridge, host workspace, host executable, or host.docker.internal.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: only M-WORKER-COMMON and M-CONTRACTS.</field-1>
+        <field-2>exports: stable runHarness, provider launcher factory, deterministic fixture provider, HarnessRequest, and HarnessResult.</field-2>
+        <field-3>annotations: keep provider-specific launchers public only where report/deep-research need to invoke them.</field-3>
+        <field-4>CrossLinks: add WorkerHarness provider-execution links to report and deep-research only after those modules consume it.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: add focused worker-common harness tests.</field-1>
+        <field-2>module-checks: add targeted pytest command and static forbidden-contract scan.</field-2>
+        <field-3>required-log-markers: add [WorkerHarness][runHarness][BLOCK_RUN_CONTAINER_NATIVE_HARNESS].</field-3>
+        <field-4>follow-up-checks: report/deep-research consumption and compose image cutover remain later packets.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet creates the abstraction; it does not yet prove full e2e cutover.</note-1>
+        <note-2>If provider-specific CLI behavior is uncertain, implement deterministic fixture first and leave real-provider smoke to compose cutover.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-WORKER-REPORT-container-harness-wave-10" module="M-WORKER-REPORT" phase="Phase-7" step="2" verification-ref="V-M-WORKER-REPORT">
+      <module-id>M-WORKER-REPORT</module-id>
+      <module-name>HistoricalWorkerReport</module-name>
+      <purpose>Historical report WorkerHarness packet superseded by worker-agent-runner operation execution.</purpose>
+      <packet-state>superseded-by-agent-runner</packet-state>
+      <entry-condition>Start only after M-WORKER-HARNESS-wave-10 passes its module-local tests.</entry-condition>
+      <write-scope>
+        <file-1>workers/report/src/transcriber_worker_report.py</file-1>
+        <file-2>workers/report/tests/test_transcriber_worker_report.py</file-2>
+      </write-scope>
+      <notes>
+        <note-1>Completed outcome: normal runtime no longer depends on legacy host executable selector env vars; any remaining compatibility is limited to explicitly governed test-only paths.</note-1>
+        <note-2>Report worker should build HarnessRequest and consume HarnessResult while preserving markdown normalization, DOCX rendering, cancellation, and artifact registration.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-WORKER-DEEP-RESEARCH-container-harness-wave-10" module="M-WORKER-DEEP-RESEARCH" phase="Phase-7" step="3" verification-ref="V-M-WORKER-DEEP-RESEARCH">
+      <module-id>M-WORKER-DEEP-RESEARCH</module-id>
+      <module-name>HistoricalWorkerDeepResearch</module-name>
+      <purpose>Historical deep-research WorkerHarness packet superseded by worker-agent-runner operation execution.</purpose>
+      <packet-state>superseded-by-agent-runner</packet-state>
+      <entry-condition>Start only after M-WORKER-HARNESS-wave-10 passes and report consumption proves the request/result boundary.</entry-condition>
+      <write-scope>
+        <file-1>workers/deep-research/src/*.py</file-1>
+        <file-2>workers/deep-research/tests/*.py</file-2>
+      </write-scope>
+      <notes>
+        <note-1>Remove normal-runtime dependency on CLAUDE_BIN, DEEP_RESEARCH_BIN, /Users/... method paths, and /opt/homebrew fallback paths.</note-1>
+        <note-2>Keep required phase artifacts and final-report gates unchanged; only the provider execution boundary changes.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-INFRA-COMPOSE-container-harness-wave-10" module="M-INFRA-COMPOSE" phase="Phase-7" step="4" verification-ref="V-M-INFRA-COMPOSE">
+      <module-id>M-INFRA-COMPOSE</module-id>
+      <module-name>InfraCompose</module-name>
+      <purpose>Historical compose packet for self-contained dedicated report/deep-research worker images. Active report and deep-research execution now runs through worker-agent-runner with agent_run operation envelopes.</purpose>
+      <packet-state>superseded-by-agent-runner</packet-state>
+      <entry-condition>Historical lineage only; do not execute this packet for current runtime work.</entry-condition>
+      <write-scope>
+        <file-1>infra/docker-compose.yml</file-1>
+        <file-2>Retired path: infra/env/worker-report.env.example</file-2>
+        <file-3>Retired path: infra/env/worker-deep-research.env.example</file-3>
+        <file-4>infra/scripts/compose-smoke.sh</file-4>
+        <file-5>Retired path: infra/images/worker-report/Dockerfile</file-5>
+        <file-6>Retired path: infra/images/worker-deep-research/Dockerfile</file-6>
+        <file-7>docs/architecture/runtime-ops.md</file-7>
+        <file-8>docs/architecture/cutover-checklist.md</file-8>
+        <file-9>README.md</file-9>
+      </write-scope>
+      <step-local-verification>
+        <command-1>docker compose -f infra/docker-compose.yml config</command-1>
+        <command-2>bash infra/scripts/compose-smoke.sh --check-config</command-2>
+        <command-3>Historical command only: unset HOST_WORKSPACE_ROOT; docker compose -f infra/docker-compose.yml up -d --build --wait worker-report worker-deep-research</command-3>
+        <command-4>Current forbidden-contract scan covers infra/docker-compose.yml, worker-agent-runner, workers/common/src, docs/architecture, and README.md; retired worker-report and worker-deep-research service paths are not active runtime inputs.</command-4>
+        <command-5>Current report/deep-research e2e uses API-created agent_run child jobs and worker-agent-runner, not dedicated worker services.</command-5>
+        <evidence-1>No HOST_HARNESS_* env, HOST_WORKSPACE_ROOT, host.docker.internal worker execution, host path remapping, or host executable bind mounts remain in normal worker runtime.</evidence-1>
+        <evidence-2>Current report and deep-research jobs succeed through API-created agent_run children, worker-agent-runner claim/finalize, and MinIO artifact persistence with worker-local provider execution.</evidence-2>
+      </step-local-verification>
+      <notes>
+        <note-1>Do not mask host execution as optional dev mode until the primary path is fully container-native and verified.</note-1>
+        <note-2>After the April 24 container-native verification closed this packet, the obsolete host bridge assets (`infra/host-tools/host-harness-*`, `infra/env/host-harness.env.example`, and `tests/test_host_harness_bridge.py`) were removed; the agent-runner path now remains container-local for the first Claude Code provider iteration.</note-2>
+        <note-3>Dedicated worker-report and worker-deep-research service wording in this packet is retained as historical lineage only and must not be used as the current runtime contract.</note-3>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-WORKER-AGENT-RUNNER-wave-11" module="M-WORKER-AGENT-RUNNER" phase="Phase-8" step="1" verification-ref="V-M-WORKER-AGENT-RUNNER">
+      <module-id>M-WORKER-AGENT-RUNNER</module-id>
+      <module-name>AgentRunner</module-name>
+      <purpose>Docs-only decision-freeze packet that approves the generic `agent-runner` architecture contract without starting implementation.</purpose>
+      <packet-state>done</packet-state>
+      <entry-condition>The current platform cutover is stable and the repo needs a frozen contract for generic agent execution before any implementation packet starts.</entry-condition>
+      <write-scope>
+        <file-1>docs/requirements.xml</file-1>
+        <file-2>docs/technology.xml</file-2>
+        <file-3>docs/development-plan.xml</file-3>
+        <file-4>docs/knowledge-graph.xml</file-4>
+        <file-5>docs/verification-plan.xml</file-5>
+        <file-6>docs/operational-packets.xml</file-6>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / M-WORKER-AGENT-RUNNER:
+- Purpose: one approved generic AI-agent worker keyed by `harness_name`, not provider-specific workers.
+- Generic agent execution uses the `agent_run` job family and persists through `jobs`, `job_executions`, `job_events`, and `job_artifacts`.
+- First-iteration Claude Code execution runs inside the worker container through generated Anthropic-compatible settings JSON.
+- Control-plane persistence stores only normalized result summary and redacted metadata; full logs and large outputs stay in artifacts.
+- Per-harness concurrency must be configurable independently.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-WORKER-AGENT-RUNNER:
+- Path: workers/agent-runner
+- Depends: M-WORKER-COMMON, M-CONTRACTS, M-API-HTTP
+- Verification ref: V-M-WORKER-AGENT-RUNNER
+      ]]></graph-entry-excerpt>
+      <verification-excerpt><![CDATA[
+VerificationPlan / V-M-WORKER-AGENT-RUNNER:
+- Verify the docs freeze `harness_name` dispatch, the `agent_run` persistence boundary, container-local Claude Code settings-provider access, and per-harness concurrency before implementation.
+- Codex and Anthropic Claude subscription login remain out of scope for the first provider iteration.
+      ]]></verification-excerpt>
+      <expected-verification-delta-fields>
+        <field-1>dispatch contract explicitly keyed by `harness_name`.</field-1>
+        <field-2>container-local Claude Code settings-provider boundary is explicit for first-iteration external provider harnesses.</field-2>
+        <field-3>`agent_run` plus existing jobs or executions or events or artifacts model is the approved persistence boundary.</field-3>
+        <field-4>control-plane storage excludes raw auth or session material and stores normalized summary plus redacted metadata plus opaque request-reference metadata only.</field-4>
+        <field-5>per-harness concurrency policy is explicit and independently configurable.</field-5>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet closes the architecture decision gap only; it does not include implementation files.</note-1>
+        <note-2>Keep the abstraction provider-neutral; do not expand into provider-specific worker design from this packet.</note-2>
+        <note-3>Future Codex or subscription-login work belongs to a separate packet and must not reintroduce host-side execution as the primary path.</note-3>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-WORKER-AGENT-RUNNER-wave-12" module="M-WORKER-AGENT-RUNNER" phase="Phase-9" step="1" verification-ref="V-M-WORKER-AGENT-RUNNER">
+      <module-id>M-WORKER-AGENT-RUNNER</module-id>
+      <module-name>AgentRunner</module-name>
+      <purpose>Implement the already approved generic `agent-runner` contract, `agent_run` control-plane family, container-local Claude Code settings-provider integration, and per-harness concurrency enforcement.</purpose>
+      <packet-state>container-local-claude-code-provider-live-provider-smoke-verified</packet-state>
+      <partial-completion-evidence>`telegram-transcriber-bot-av0.1` verified the control-plane sub-slice on 2026-04-24. `telegram-transcriber-bot-av0.2` verified the generic worker-runtime sub-slice on 2026-04-24: `workers/agent-runner` claims `agent_run`, dispatches deterministic fixture harnesses by `harness_name`, writes `agent_result_json` and `execution_log`, and finalizes through WorkerCommon. The request-access slice persists a private agent-run request envelope, stores only `request_ref` plus digest metadata in `jobs.params_json`, and resolves short-lived worker-only access through `/internal/v1/jobs/{job_id}/request-access`. The April 26 provider update replaced the host broker path with container-local `claude-code` execution: worker env mirrors the local `cglm` contract and generates Claude Code settings JSON with `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_API_KEY`, `CLAUDE_API_BASE_URL`, and model override env values, verifies the private request digest before prompt execution, keeps raw credentials out of the control plane, and leaves Codex out of scope. Compose service wiring was added through `worker-agent-runner`, `infra/env/worker-agent-runner.env.example`, and `infra/images/worker-agent-runner/Dockerfile`; `docker compose -f infra/docker-compose.yml config --services` includes `worker-agent-runner`. Live fixture-mode compose e2e was verified on 2026-04-24T21:12:45Z: `POST /v1/agent-runs` returned `202`, `worker-agent-runner` claimed and finalized job `74351b05-d6e1-4694-9954-875c9ce08e4b`, `/v1/jobs/{id}` reached `succeeded`, and both `agent_result_json` plus `execution_log` were downloaded through `/v1/artifacts/{id}` MinIO presigned URLs. Live external Claude Code provider smoke was verified on 2026-04-26: `POST /v1/agent-runs` created job `5bb4d608-02ec-478d-9267-8d278a21f0e3`, `worker-agent-runner` resolved private `request_access`, executed container-local Claude Code with Z.ai GLM `glm-5.1`, finalized `succeeded`, and produced artifacts `8d198a58-b293-4f7d-9e65-0d6ec49b7f2b` (`agent_result_json`) and `cf3e52b5-f8a3-4275-8a2e-7eb42ea69238` (`execution_log`) containing the expected `agent-runner claude-code glm live smoke ok` output.</partial-completion-evidence>
+      <entry-condition>Start only after the Wave-11 decision-freeze packet is accepted without reopening the architecture contract.</entry-condition>
+      <write-scope>
+        <file-1>workers/agent-runner</file-1>
+        <file-2>apps/api/internal/jobs</file-2>
+        <file-3>apps/api/internal/api</file-3>
+        <file-4>apps/api/internal/storage</file-4>
+        <file-5>packages/contracts</file-5>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+DevelopmentPlan / Phase-9:
+- Implement `agent_run_create`, worker claim or finalize wiring, redacted-summary persistence, artifact-backed logs, container-local Claude Code settings-provider access, and per-harness concurrency enforcement.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-WORKER-AGENT-RUNNER:
+- Status: worker runtime, lease boundary, compose wiring, live fixture-mode e2e, and live external Claude Code provider smoke verified
+- Depends: M-WORKER-COMMON, M-CONTRACTS, M-API-HTTP
+      ]]></graph-entry-excerpt>
+      <verification-excerpt><![CDATA[
+VerificationPlan / V-M-WORKER-AGENT-RUNNER:
+- Verified implementation covers deterministic fixture dispatch, container-local Claude Code settings generation, private request digest verification, worker-local per-harness lease enforcement, compose service wiring, live fixture-mode e2e, live external Claude Code provider smoke, persistence boundary, redaction boundary, and artifact-backed `agent_result_json` plus `execution_log`.
+      ]]></verification-excerpt>
+      <expected-verification-delta-fields>
+        <field-1 status="done">`agent_run_create` and the `agent_run` family are wired into the current contracts, HTTP, jobs, storage, and queue control plane.</field-1>
+        <field-2 status="done">Dispatch is keyed by `harness_name` in the generic `workers/agent-runner` runtime with no provider-specific worker services.</field-2>
+        <field-3 status="done">DB request payloads stay normalized and redacted with opaque request references only; the runtime writes full execution evidence to `execution_log`, normalized output to `agent_result_json`, and private request envelopes outside row payloads.</field-3>
+        <field-4 status="done">Container-local Claude Code settings-provider integration is enforced through worker-local settings generation plus worker-only short-lived `request_access` resolution.</field-4>
+        <field-5 status="done">Per-harness concurrency policy is enforced by worker-local lease admission control.</field-5>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet is intentionally separate from the Wave-11 decision freeze.</note-1>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="M-WORKER-AGENT-RUNNER-wave-13-topology-collapse" module="M-WORKER-AGENT-RUNNER" phase="Phase-9" step="2" verification-ref="V-M-WORKER-AGENT-RUNNER">
+      <module-id>M-WORKER-AGENT-RUNNER</module-id>
+      <module-name>AgentRunner</module-name>
+      <purpose>Collapse report and deep-research AI execution onto the single worker-agent-runner topology and remove dedicated AI worker services.</purpose>
+      <packet-state>verified</packet-state>
+      <completion-evidence>Public report creation now creates or reuses an `agent_run` child with `operation=report`, `harness_name=claude-code`, transcript input artifact references, and expected `report_markdown` plus `report_docx` outputs. Public deep-research creation now creates or reuses an `agent_run` child with `operation=deep_research`, transcript plus report input artifact references, and expected `deep_research_markdown` output. Worker-agent-runner resolves private request access, materializes input artifacts through API artifact resolution, persists requested operation artifacts, and still writes `agent_result_json` plus `execution_log`. Compose exposes worker-agent-runner and worker-transcription only for worker execution; worker-report and worker-deep-research services and env templates are removed.</completion-evidence>
+      <entry-condition>Start only after Wave-12 agent-runner runtime and Claude Code provider execution are verified.</entry-condition>
+      <write-scope>
+        <file-1>apps/api/internal/api</file-1>
+        <file-2>apps/api/internal/jobs</file-2>
+        <file-3>apps/api/internal/queue</file-3>
+        <file-4>workers/agent-runner</file-4>
+        <file-5>infra/docker-compose.yml</file-5>
+        <file-6>packages/contracts</file-6>
+        <file-7>apps/web, apps/mcp-server, apps/telegram-bot adapter semantics</file-7>
+        <file-8>docs/requirements.xml, docs/technology.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml, docs/operational-packets.xml</file-8>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+Current topology:
+- Active worker services: worker-transcription and worker-agent-runner.
+- Active queue task types: job:transcription.run and job:agent_run.run.
+- Report/deep-research remain public operation concepts and artifact kinds, but not dedicated worker services or queue task types.
+- Control-plane payloads keep only redacted metadata plus opaque request_ref/digest/size; full operation envelopes stay private and are resolved by worker-only request-access.
+      ]]></contract-excerpt>
+      <verification-excerpt><![CDATA[
+Commands verified:
+- cd apps/api && go test -count=1 ./internal/...
+- uv run pytest workers/agent-runner/tests workers/common/tests packages/contracts/tests/test_contract_surfaces.py -q
+- cd apps/web && pnpm test -- --run
+- cd apps/mcp-server && pnpm test
+- cd apps/telegram-bot && PYTHONPATH=src:../../workers/common/src uv run pytest tests -q
+- bash infra/scripts/compose-smoke.sh --check-config
+      ]]></verification-excerpt>
+      <expected-verification-delta-fields>
+        <field-1 status="done">Dedicated report and deep-research AI worker services are absent from compose.</field-1>
+        <field-2 status="done">Queue policy rejects `job:report.run` and `job:deep_research.run` as active task types.</field-2>
+        <field-3 status="done">Public report and deep-research schemas describe agent_run-backed operation creation and do not expose raw harness request fields.</field-3>
+        <field-4 status="done">Worker-agent-runner materializes input artifacts and persists operation artifacts for report and deep-research.</field-4>
+        <field-5 status="done">Adapters and Web UI continue to expose report and deep-research semantics through API-owned job snapshots and artifacts.</field-5>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet supersedes the historical dedicated report/deep-research worker topology; do not recreate provider-specific AI worker services for concurrency.</note-1>
+        <note-2>Provider credentials remain worker-local env or secret-file config and must not enter control-plane payloads.</note-2>
+      </notes>
+    </ExecutionPacket>
+
+    <ExecutionPacket packet-id="GRACE-BATCH-TRANSCRIPTION-REFRESH" module="M-CONTRACTS,M-API-HTTP,M-API-JOBS,M-API-STORAGE,M-API-QUEUE,M-WORKER-TRANSCRIPTION,M-TELEGRAM-ADAPTER,M-WORKER-AGENT-RUNNER" phase="Phase-10" step="1" verification-ref="BATCH-TRANSCRIPTION-GRACE-REFRESH">
+      <module-id>M-BATCH-TRANSCRIPTION</module-id>
+      <module-name>BatchTranscriptionGraceRefresh</module-name>
+      <purpose>Refresh canonical GRACE artifacts after the completed batch transcription implementation, replacing active concat-first combined wording with the root aggregate, per-source child, and worker-transcription aggregate-task architecture.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>GRACE-only refresh over the completed implementation. Evidence includes contract tests, Go API focused tests, live PostgreSQL batch E2E, worker-transcription aggregate tests, Telegram basket tests, worker-agent-runner tests, and XML validation.</completion-evidence>
+      <write-scope>
+        <file-1>docs/requirements.xml</file-1>
+        <file-2>docs/technology.xml</file-2>
+        <file-3>docs/development-plan.xml</file-3>
+        <file-4>docs/verification-plan.xml</file-4>
+        <file-5>docs/knowledge-graph.xml</file-5>
+        <file-6>docs/operational-packets.xml</file-6>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+Current batch transcription contract:
+- Public endpoint: POST /v1/transcription-jobs/batch.
+- Request model: multipart form with `source_manifest` using `manifest_version=batch-transcription.v1`, `ordered_source_labels`, and source map entries keyed by stable source_label.
+- Job graph: one root aggregate transcription job plus one per-source transcription child per manifest source.
+- Queue: per-source children use `job:transcription.run`; root aggregation uses `job:transcription.aggregate`.
+- Aggregate artifacts: transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, batch_diagnostics_json.
+- Telegram: basket adapter only; it collects sources, downloads Telegram files for submission, and delegates business semantics to the API.
+- Report/deep_research: public operations create agent_run children and are executed only by worker-agent-runner.
+- Historical `/combined` and concat-first wording is superseded except where explicitly labeled historical lineage.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+Required graph deltas:
+- M-CONTRACTS exports BatchTranscriptionContract.
+- M-API-HTTP exports createBatchTranscriptionRoute.
+- M-API-JOBS exports createBatchTranscriptionJob and scheduleBatchAggregate.
+- M-API-QUEUE includes TranscriptionAggregateQueuePolicy for `job:transcription.aggregate`.
+- M-WORKER-TRANSCRIPTION exports runTranscriptionAggregate and BatchAggregateArtifacts.
+- M-TELEGRAM-ADAPTER exports submitBatchBasket.
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">Contracts freeze `/v1/transcription-jobs/batch`, source labels, task type enums, and aggregate artifact kinds.</dependency-1>
+        <dependency-2 module="M-API-JOBS">Jobs owns root/child lineage, idempotency, completion policy, aggregate scheduling, retry, and cancellation semantics.</dependency-2>
+        <dependency-3 module="M-WORKER-TRANSCRIPTION">Worker-transcription owns per-source execution and aggregate root artifact assembly; concat-first root transcription is historical only.</dependency-3>
+        <dependency-4 module="M-WORKER-AGENT-RUNNER">Report and deep-research handoff from the batch root remains agent_run-backed and does not reintroduce dedicated AI workers.</dependency-4>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+Completed evidence to preserve:
+- Go API focused/live PostgreSQL E2E: TestApiBatchTranscriptionE2EWithLivePostgresControlPlane covers root aggregate creation, idempotent replay, source children, aggregate enqueue, aggregate finalization, source_manifest_json, batch_diagnostics_json, report child agent_run handoff, deep_research agent_run handoff, cancel, failure, and retry.
+- Worker tests: workers/transcription/tests cover per-source source_label preservation, aggregate merge ordering, missing child artifact failure, best-effort diagnostics, and aggregate artifact registration.
+- Telegram tests: tests/test_bot.py plus apps/telegram-bot tests cover basket collection, stable manifest file parts, one batch API call, and API-owned callback lineage.
+- Agent-runner tests: workers/agent-runner/tests plus workers/common/tests cover report/deep_research operation artifacts and request-access materialization.
+- Contract tests: packages/contracts/tests/test_contract_surfaces.py freezes `/v1/transcription-jobs/batch`, source labels, task types, artifact kinds, and single worker-agent-runner topology.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</command-1>
+        <evidence-1>All six GRACE XML files parse after the refresh.</evidence-1>
+        <evidence-2>Active GRACE wording now consistently describes batch root/children/aggregate semantics and marks old concat-first combined wording historical where retained.</evidence-2>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: preserve existing module boundaries; do not add adapter-to-worker or adapter-to-storage ownership edges.</field-1>
+        <field-2>exports: add or rename only stable batch-specific exports listed above.</field-2>
+        <field-3>annotations: update active batch semantics and artifact kinds.</field-3>
+        <field-4>CrossLinks: preserve API-owned orchestration, worker-control execution, thin adapters, and agent_run report/deep_research topology.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: reference existing completed batch, worker, Telegram, agent-runner, and contract tests without creating new tests in this docs-only packet.</field-1>
+        <field-2>module-checks: keep completed evidence commands in verification-plan and use XML validation as the packet-local gate.</field-2>
+        <field-3>required-log-markers: preserve ApiJobs, WorkerTranscription, TelegramAdapter, and AgentRunner markers already defined in verification-plan.</field-3>
+        <field-4>follow-up-checks: none for this packet if XML validates and the Beads issue is closed.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet is documentation synchronization only; production code and tests are intentionally outside write scope.</note-1>
+        <note-2>If future implementation reopens batch semantics, update this packet and the six GRACE artifacts together.</note-2>
       </notes>
     </ExecutionPacket>
   </ProjectExecutionPackets>
@@ -1820,23 +2229,24 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
     </FailurePacket>
 
     <FailurePacket packet-id="M-WORKER-TRANSCRIPTION-wave-3-artifact-order-drift" module="M-WORKER-TRANSCRIPTION" verification-ref="V-M-WORKER-TRANSCRIPTION">
-      <scenario>Transcription worker finalizes success before all transcript artifacts exist, or combined-media inputs lose ordering before the final transcription pass.</scenario>
+      <scenario>Transcription worker finalizes success before all transcript artifacts exist, or batch aggregate roots lose stable source-label ordering before artifact assembly.</scenario>
       <contract-ref>M-WORKER-TRANSCRIPTION / V-M-WORKER-TRANSCRIPTION / DF-001 / DF-002 / DF-007 / Phase-3 step-2</contract-ref>
       <expected-evidence>
         <marker-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</marker-1>
         <assertion-1>Plain, segmented, and DOCX transcript artifacts all exist before success finalization.</assertion-1>
-        <assertion-2>Combined-media jobs concatenate ordered inputs before the final transcription pass.</assertion-2>
+        <assertion-2>Batch aggregate roots merge child transcript artifacts in stable source-label order and persist diagnostics before finalization.</assertion-2>
       </expected-evidence>
       <observed-evidence>
         <log-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE] emitted before artifact-order assertion failed</log-1>
         <trace-1>Success finalization happened with missing transcript artifact rows or files</trace-1>
-        <trace-2>Combined-input path skipped ordered concatenation or transcribed inputs independently</trace-2>
+        <trace-2>Batch aggregate path skipped source-label ordering, omitted diagnostics, or tried to use historical concat-first root transcription</trace-2>
       </observed-evidence>
       <first-divergent-block>BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE</first-divergent-block>
       <suggested-next-action>Inspect ordered-input materialization and artifact-finalization sequencing first; restore the preserved transcript artifact contract before touching Telegram or UI consumers.</suggested-next-action>
     </FailurePacket>
 
     <FailurePacket packet-id="M-WORKER-REPORT-wave-4-subprocess-cancel-drift" module="M-WORKER-REPORT" verification-ref="V-M-WORKER-REPORT">
+      <historical-note>This failure packet is retained as historical lineage for the retired dedicated report worker. Current report failures belong to M-WORKER-AGENT-RUNNER agent_run operation handling.</historical-note>
       <scenario>Report worker loses deterministic subprocess failure handling, or cancellation does not terminate the report harness before finalizing `canceled`.</scenario>
       <contract-ref>M-WORKER-REPORT / V-M-WORKER-REPORT / Phase-4 step-1 / DF-004 / DF-006</contract-ref>
       <expected-evidence>
@@ -1850,10 +2260,11 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
         <trace-2>Report worker surfaced non-deterministic subprocess errors or partial artifact output</trace-2>
       </observed-evidence>
       <first-divergent-block>BLOCK_EXECUTE_REPORT_PIPELINE</first-divergent-block>
-      <suggested-next-action>Restore subprocess lifecycle ownership inside the report worker first, then re-check artifact registration and cancel sequencing against the worker-common helpers.</suggested-next-action>
+      <suggested-next-action>For historical replay only, inspect the retired report worker subprocess lifecycle. For current runtime failures, inspect worker-agent-runner agent_run materialization, provider execution, artifact registration, and cancel sequencing first.</suggested-next-action>
     </FailurePacket>
 
     <FailurePacket packet-id="M-WORKER-DEEP-RESEARCH-wave-4-phase-output-drift" module="M-WORKER-DEEP-RESEARCH" verification-ref="V-M-WORKER-DEEP-RESEARCH">
+      <historical-note>This failure packet is retained as historical lineage for the retired dedicated deep-research worker. Current deep-research failures belong to M-WORKER-AGENT-RUNNER agent_run operation handling.</historical-note>
       <scenario>Deep-research worker emits success without required phase artifacts or final markdown output, or blocked writes surface as partial success.</scenario>
       <contract-ref>M-WORKER-DEEP-RESEARCH / V-M-WORKER-DEEP-RESEARCH / Phase-4 step-2 / DF-005 / DF-006</contract-ref>
       <expected-evidence>
@@ -1866,7 +2277,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
         <trace-2>Blocked writes or timeout paths surfaced partial success instead of deterministic failure</trace-2>
       </observed-evidence>
       <first-divergent-block>BLOCK_EXECUTE_DEEP_RESEARCH_PIPELINE</first-divergent-block>
-      <suggested-next-action>Inspect required artifact checks and terminal finalization order first; restore deterministic failure handling before touching API child-job flows or compose runtime concerns.</suggested-next-action>
+      <suggested-next-action>For historical replay only, inspect the retired deep-research worker artifact gates. For current runtime failures, inspect worker-agent-runner agent_run input materialization, provider output gates, artifact registration, and terminal finalization first.</suggested-next-action>
     </FailurePacket>
 
     <FailurePacket packet-id="M-WEB-UI-wave-5-polling-truth-drift" module="M-WEB-UI" verification-ref="V-M-WEB-UI">
@@ -1891,7 +2302,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
       <expected-evidence>
         <marker-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</marker-1>
         <assertion-1>Default Telegram delivery strategy remains polling.</assertion-1>
-        <assertion-2>Media groups map to the combined transcription flow instead of the per-file upload flow.</assertion-2>
+        <assertion-2>Media groups and user-curated baskets map to the batch transcription flow instead of the per-file upload flow.</assertion-2>
       </expected-evidence>
       <observed-evidence>
         <log-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB] emitted before adapter parity assertion failed</log-1>
@@ -1899,7 +2310,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
         <trace-2>Media-group flow spawned multiple unrelated jobs or callback flow bypassed API child-job rules</trace-2>
       </observed-evidence>
       <first-divergent-block>BLOCK_SUBMIT_AND_WAIT_FOR_JOB</first-divergent-block>
-      <suggested-next-action>Restore thin-adapter boundaries first, then verify combined-media submission and callback-to-API mapping before changing worker or API business logic.</suggested-next-action>
+      <suggested-next-action>Restore thin-adapter boundaries first, then verify batch submission and callback-to-API mapping before changing worker or API business logic.</suggested-next-action>
     </FailurePacket>
 
     <FailurePacket packet-id="M-MCP-ADAPTER-wave-5-thin-boundary-drift" module="M-MCP-ADAPTER" verification-ref="V-M-MCP-ADAPTER">
@@ -1940,7 +2351,7 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
       <contract-ref>M-API-HTTP / V-M-API-HTTP / Phase-6 step-2 / CutoverParity / PublicApiContract</contract-ref>
       <expected-evidence>
         <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
-        <assertion-1>Combined upload, URL create, child-job, artifact, cancel, retry, WebSocket, and internal worker routes remain contract-shaped under the live stack.</assertion-1>
+        <assertion-1>Batch upload, URL create, child-job, artifact, cancel, retry, WebSocket, and internal worker routes remain contract-shaped under the live stack.</assertion-1>
       </expected-evidence>
       <observed-evidence>
         <log-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE] emitted before parity assertion failed</log-1>
@@ -1949,6 +2360,25 @@ VerificationPlan / V-M-API-HTTP / CutoverParity:
       </observed-evidence>
       <first-divergent-block>BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE</first-divergent-block>
       <suggested-next-action>Patch only the proven route-level divergence first; if parity failure originates downstream, stop and hand off through the owning module instead of broadening the HTTP packet.</suggested-next-action>
+    </FailurePacket>
+
+    <FailurePacket packet-id="M-WORKER-HARNESS-wave-10-host-dependency-drift" module="M-WORKER-HARNESS" verification-ref="V-M-WORKER-HARNESS">
+      <scenario>Report or deep-research execution still depends on host CLI invocation, host bridge URLs, host workspace paths, host.docker.internal, host path remapping, or bind-mounted host executables after the container-native cutover.</scenario>
+      <contract-ref>M-WORKER-HARNESS / V-M-WORKER-HARNESS / Phase-7 / CUTOVER-CONTAINER-HARNESS</contract-ref>
+      <expected-evidence>
+        <marker-1>[WorkerHarness][runHarness][BLOCK_RUN_CONTAINER_NATIVE_HARNESS]</marker-1>
+        <assertion-1>Provider-specific launcher runs inside the worker container using explicit LLM env or secret-file config.</assertion-1>
+        <assertion-2>Static forbidden-contract scan finds no normal-runtime dependency on HOST_HARNESS_COMMAND, HOST_HARNESS_BRIDGE_URL, HOST_HARNESS_TOKEN, HOST_WORKSPACE_ROOT, host.docker.internal, host path remapping, or bind-mounted host executables.</assertion-2>
+        <assertion-3>Report and deep-research e2e pass with HOST_WORKSPACE_ROOT unset and no host bridge process running.</assertion-3>
+      </expected-evidence>
+      <observed-evidence>
+        <log-1>[WorkerHarness][runHarness][BLOCK_RUN_CONTAINER_NATIVE_HARNESS] emitted before provider execution or static isolation assertion failed</log-1>
+        <trace-1>Compose config or env templates still reference host bridge contracts or host-visible workspace roots</trace-1>
+        <trace-2>Worker command builder still resolves user-specific paths, Homebrew paths, host binaries, or host-mounted executable shims</trace-2>
+        <trace-3>Report/deep-research e2e succeeds only while a host bridge process is running</trace-3>
+      </observed-evidence>
+      <first-divergent-block>BLOCK_RUN_CONTAINER_NATIVE_HARNESS</first-divergent-block>
+      <suggested-next-action>Stop in WorkerHarness or the consuming worker module that introduced the host dependency; restore provider-neutral container-local execution before touching adapters, API, or UI.</suggested-next-action>
     </FailurePacket>
   </ProjectFailurePackets>
 </OperationalPackets>

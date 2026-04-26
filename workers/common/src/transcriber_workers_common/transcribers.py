@@ -31,8 +31,8 @@ from threading import Lock
 from faster_whisper import WhisperModel
 from youtube_transcript_api import YouTubeTranscriptApi
 
-from telegram_transcriber_bot.domain import SourceCandidate, TranscriptResult, TranscriptSegment
-from telegram_transcriber_bot.source_extractor import extract_youtube_video_id
+from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
+from transcriber_workers_common.source_extractor import extract_youtube_video_id
 
 __all__ = [
     "DefaultTranscriber",

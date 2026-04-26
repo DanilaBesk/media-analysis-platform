@@ -7,14 +7,18 @@ from types import SimpleNamespace
 import pytest
 
 from telegram_transcriber_bot.bot import (
+    BatchModeStore,
+    BasketStore,
     CandidateSelectionStore,
     HANDLE_MEDIA_MARKER,
+    TELEGRAM_COMMANDS,
     TelegramTranscriberApp,
     _extract_attachments,
     _guess_suffix,
+    _with_stable_source_id,
 )
 from telegram_transcriber_bot.config import Settings
-from telegram_transcriber_bot.domain import (
+from transcriber_workers_common.domain import (
     ProcessedJob,
     ReportArtifacts,
     SourceCandidate,
@@ -36,9 +40,9 @@ class FakeStatusMessage:
     async def answer_document(self, document, caption: str = "", reply_markup=None) -> None:
         self.documents.append({"document": document, "caption": caption, "reply_markup": reply_markup})
 
-    async def answer(self, text: str) -> "FakeStatusMessage":
+    async def answer(self, text: str, reply_markup=None) -> "FakeStatusMessage":
         status = FakeStatusMessage(self.chat.id, text)
-        self.documents.append({"answer_text": text, "status": status})
+        self.documents.append({"answer_text": text, "status": status, "reply_markup": reply_markup})
         return status
 
 
@@ -59,11 +63,15 @@ class FakeBot:
         self.sent_messages: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
         self.downloads: list[dict[str, object]] = []
+        self.commands: list[object] = []
 
     async def send_message(self, chat_id: int, text: str, reply_markup=None) -> FakeStatusMessage:
         status = FakeStatusMessage(chat_id=chat_id, text=text)
         self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup, "status": status})
         return status
+
+    async def set_my_commands(self, commands: list[object]) -> None:
+        self.commands = commands
 
     async def download(self, file_id: str, destination: Path) -> None:
         destination.write_bytes(b"fake-media")
@@ -194,6 +202,74 @@ def test_candidate_selection_store_restricts_by_chat_and_user() -> None:
     assert store.get(selection_id, chat_id=1, user_id=2, index=5) is None
 
 
+def test_basket_store_add_remove_clear_is_scoped_by_chat_and_user() -> None:
+    store = BasketStore()
+    candidate = SourceCandidate(
+        source_id="url:https://youtu.be/demo",
+        kind="youtube_url",
+        display_name="YouTube: demo",
+        url="https://youtu.be/demo",
+        telegram_file_id=None,
+        mime_type=None,
+        file_name=None,
+    )
+
+    store.add(chat_id=1, user_id=2, candidates=[candidate])
+
+    assert store.list(chat_id=1, user_id=2) == [candidate]
+    assert store.list(chat_id=1, user_id=3) == []
+    assert store.remove(chat_id=1, user_id=2, index=0) == candidate
+    assert store.list(chat_id=1, user_id=2) == []
+    store.add(chat_id=1, user_id=2, candidates=[candidate])
+    store.clear(chat_id=1, user_id=2)
+    assert store.list(chat_id=1, user_id=2) == []
+
+
+def test_batch_mode_store_defaults_to_enabled_and_toggles_by_user() -> None:
+    store = BatchModeStore()
+
+    assert store.is_enabled(chat_id=1, user_id=2) is True
+    assert store.toggle(chat_id=1, user_id=2) is False
+    assert store.is_enabled(chat_id=1, user_id=2) is False
+    assert store.is_enabled(chat_id=1, user_id=3) is True
+    store.set_enabled(chat_id=1, user_id=2, enabled=True)
+    assert store.is_enabled(chat_id=1, user_id=2) is True
+
+
+def test_stable_source_id_uses_message_id_file_name_file_id_and_url() -> None:
+    url_candidate = SourceCandidate(
+        source_id="random",
+        kind="youtube_url",
+        display_name="YouTube: demo",
+        url="https://youtu.be/demo",
+        telegram_file_id=None,
+        mime_type=None,
+        file_name=None,
+    )
+    media_candidate = SourceCandidate(
+        source_id="random",
+        kind="telegram_audio",
+        display_name="Audio: call.ogg",
+        url=None,
+        telegram_file_id="file-1",
+        mime_type="audio/ogg",
+        file_name="call.ogg",
+    )
+    file_id_candidate = SourceCandidate(
+        source_id="random",
+        kind="telegram_audio",
+        display_name="Audio",
+        url=None,
+        telegram_file_id="file-2",
+        mime_type="audio/ogg",
+        file_name=None,
+    )
+
+    assert _with_stable_source_id(url_candidate, message_id=10).source_id == "url:https://youtu.be/demo"
+    assert _with_stable_source_id(media_candidate, message_id=10).source_id == "telegram-message:10:call.ogg"
+    assert _with_stable_source_id(file_id_candidate, message_id=None).source_id == "telegram-file-id:file-2"
+
+
 @pytest.mark.asyncio
 async def test_process_candidate_set_sends_unsupported_message(tmp_path: Path) -> None:
     fake_bot = FakeBot()
@@ -207,7 +283,7 @@ async def test_process_candidate_set_sends_unsupported_message(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_process_candidate_set_sends_selection_keyboard_for_multiple_sources(tmp_path: Path) -> None:
+async def test_process_candidate_set_adds_multiple_sources_to_basket(tmp_path: Path) -> None:
     fake_bot = FakeBot()
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
 
@@ -216,16 +292,122 @@ async def test_process_candidate_set_sends_selection_keyboard_for_multiple_sourc
         user_id=11,
         text="https://youtu.be/one https://youtu.be/two",
         attachments=[],
+        message_id=77,
     )
 
     payload = fake_bot.sent_messages[0]
-    assert "Выберите" in payload["text"]
+    assert "В корзине 2 источника" in payload["text"]
+    assert app.baskets.list(10, 11)[0].source_id == "url:https://youtu.be/one"
     keyboard = payload["reply_markup"]
     assert keyboard is not None
     buttons = keyboard.inline_keyboard
-    assert len(buttons) == 2
-    assert buttons[0][0].text == "YouTube: one"
-    assert buttons[1][0].text == "YouTube: two"
+    assert buttons[0][0].text == "Batch: включен"
+    assert buttons[1][0].text == "Запустить batch"
+    assert buttons[1][1].text == "Очистить"
+    assert buttons[2][0].callback_data == "basket:remove:0"
+
+
+@pytest.mark.asyncio
+async def test_configure_commands_registers_public_command_menu(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+
+    await app._configure_commands()
+
+    assert [command.command for command in fake_bot.commands] == [command.command for command in TELEGRAM_COMMANDS]
+    assert [command.command for command in fake_bot.commands] == ["start", "help", "batch", "basket", "clear"]
+
+
+@pytest.mark.asyncio
+async def test_batch_command_and_toggle_button_switch_mode(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    message = FakeStatusMessage(10)
+
+    await app._handle_batch_command(message)  # type: ignore[arg-type]
+
+    assert app.batch_modes.is_enabled(10, 7) is False
+    assert "выключен" in message.documents[-1]["answer_text"]
+    keyboard = message.documents[-1]["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "Batch: выключен"
+
+    callback = FakeCallback(data="mode:batch:toggle", message=message)
+    await app._handle_batch_mode_toggle(callback)  # type: ignore[arg-type]
+
+    assert app.batch_modes.is_enabled(10, 7) is True
+    assert callback.answers == [
+        {
+            "text": "Batch-режим включен. Новые источники будут добавляться в корзину для одного общего запуска.",
+            "show_alert": False,
+        }
+    ]
+    assert message.edits[-1]["reply_markup"].inline_keyboard[0][0].text == "Batch: включен"
+
+
+@pytest.mark.asyncio
+async def test_basket_and_clear_commands_show_controls(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    message = FakeStatusMessage(10)
+    app.baskets.add(
+        chat_id=10,
+        user_id=7,
+        candidates=[
+            SourceCandidate(
+                source_id="url:https://youtu.be/demo",
+                kind="youtube_url",
+                display_name="YouTube: demo",
+                url="https://youtu.be/demo",
+                telegram_file_id=None,
+                mime_type=None,
+                file_name=None,
+            )
+        ],
+    )
+
+    await app._handle_basket_command(message)  # type: ignore[arg-type]
+
+    assert "В корзине 1" in message.documents[-1]["answer_text"]
+    assert message.documents[-1]["reply_markup"].inline_keyboard[1][0].callback_data == "basket:start"
+
+    await app._handle_clear_command(message)  # type: ignore[arg-type]
+
+    assert app.baskets.list(10, 7) == []
+    assert message.documents[-1]["answer_text"] == "Корзина очищена."
+
+
+@pytest.mark.asyncio
+async def test_batch_disabled_processes_single_source_immediately(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    app.batch_modes.set_enabled(chat_id=10, user_id=11, enabled=False)
+
+    await app._process_candidate_set(chat_id=10, user_id=11, text="https://youtu.be/demo", attachments=[])
+
+    assert app.baskets.list(10, 11) == []
+    assert fake_service.processed_sources[0].url == "https://youtu.be/demo"
+    assert fake_bot.sent_messages[0]["text"] == "Batch-режим выключен. Запускаю одиночную обработку."
+
+
+@pytest.mark.asyncio
+async def test_batch_disabled_offers_source_selection_for_multiple_sources(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    app.batch_modes.set_enabled(chat_id=10, user_id=11, enabled=False)
+
+    await app._process_candidate_set(
+        chat_id=10,
+        user_id=11,
+        text="https://youtu.be/one https://youtu.be/two",
+        attachments=[],
+    )
+
+    assert app.baskets.list(10, 11) == []
+    payload = fake_bot.sent_messages[0]
+    assert "Выберите один источник" in payload["text"]
+    keyboard = payload["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data.startswith("pick:")
 
 
 @pytest.mark.asyncio
@@ -363,6 +545,29 @@ async def test_handle_generate_report_sends_document_on_success(tmp_path: Path) 
     assert keyboard.inline_keyboard[0][0].callback_data == "deep:report-job-123"
 
 
+@pytest.mark.asyncio
+async def test_handle_generate_report_requires_authoritative_report_job_id(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    callback_message = FakeStatusMessage(10)
+    fake_service = FakeProcessingService(tmp_path)
+    assert fake_service.job.report is not None
+    fake_service.job.report = ReportArtifacts(
+        job_id="",
+        markdown_path=fake_service.job.report.markdown_path,
+        docx_path=fake_service.job.report.docx_path,
+    )
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    callback = FakeCallback(data="report:job-123", message=callback_message)
+
+    await app._handle_generate_report(callback)  # type: ignore[arg-type]
+
+    assert callback.answers == [{"text": "Запускаю генерацию отчёта...", "show_alert": False}]
+    assert len(callback_message.documents) == 2
+    assert callback_message.documents[1]["answer_text"] == (
+        "Отчёт сохранён без идентификатора report job; глубокое исследование недоступно."
+    )
+
+
 def test_extract_attachments_and_guess_suffix() -> None:
     message = SimpleNamespace(
         audio=SimpleNamespace(file_id="a1", file_name="song.mp3", mime_type="audio/mpeg", file_unique_id="ua"),
@@ -409,9 +614,9 @@ async def test_handle_start_and_help_answer_with_guidance(tmp_path: Path) -> Non
     await app._handle_start(start_message)  # type: ignore[arg-type]
     await app._handle_help(help_message)  # type: ignore[arg-type]
 
-    assert start_message.documents[0]["answer_text"].startswith("Отправьте ссылку")
-    assert "цельную txt-транскрибацию" in help_message.documents[0]["answer_text"]
-    assert "по сегментам" in help_message.documents[0]["answer_text"]
+    assert start_message.documents[0]["answer_text"].startswith("Отправьте voice/audio/video/document")
+    assert "корзина" in help_message.documents[0]["answer_text"].lower()
+    assert "batch" in help_message.documents[0]["answer_text"]
 
 
 @pytest.mark.asyncio
@@ -420,14 +625,23 @@ async def test_handle_message_delegates_non_media_input_to_processing(tmp_path: 
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
     calls: list[dict[str, object]] = []
 
-    async def fake_process_candidate_set(chat_id: int, user_id: int | None, text: str, attachments: list) -> None:
-        calls.append({"chat_id": chat_id, "user_id": user_id, "text": text, "attachments": attachments})
+    async def fake_process_candidate_set(
+        chat_id: int,
+        user_id: int | None,
+        text: str,
+        attachments: list,
+        message_id: int | None = None,
+    ) -> None:
+        calls.append(
+            {"chat_id": chat_id, "user_id": user_id, "text": text, "attachments": attachments, "message_id": message_id}
+        )
 
     monkeypatch.setattr(app, "_process_candidate_set", fake_process_candidate_set)
     message = SimpleNamespace(
         text="https://youtu.be/demo",
         caption=None,
         media_group_id=None,
+        message_id=99,
         chat=SimpleNamespace(id=10),
         from_user=SimpleNamespace(id=11),
         audio=None,
@@ -439,7 +653,7 @@ async def test_handle_message_delegates_non_media_input_to_processing(tmp_path: 
 
     await app._handle_message(message)  # type: ignore[arg-type]
 
-    assert calls == [{"chat_id": 10, "user_id": 11, "text": "https://youtu.be/demo", "attachments": []}]
+    assert calls == [{"chat_id": 10, "user_id": 11, "text": "https://youtu.be/demo", "attachments": [], "message_id": 99}]
 
 
 @pytest.mark.asyncio
@@ -494,8 +708,16 @@ async def test_flush_media_group_forwards_buffered_payload(tmp_path: Path, monke
     app.media_group_tasks[(10, "group-1")] = FakeTask(done=False)  # type: ignore[assignment]
     forwarded: list[dict[str, object]] = []
 
-    async def fake_process_candidate_set(chat_id: int, user_id: int | None, text: str, attachments: list) -> None:
-        forwarded.append({"chat_id": chat_id, "user_id": user_id, "text": text, "attachments": attachments})
+    async def fake_process_candidate_set(
+        chat_id: int,
+        user_id: int | None,
+        text: str,
+        attachments: list,
+        message_id: int | None = None,
+    ) -> None:
+        forwarded.append(
+            {"chat_id": chat_id, "user_id": user_id, "text": text, "attachments": attachments, "message_id": message_id}
+        )
 
     async def fake_sleep(seconds: float) -> None:
         return None
@@ -506,6 +728,7 @@ async def test_flush_media_group_forwards_buffered_payload(tmp_path: Path, monke
     await app._flush_media_group(chat_id=10, user_id=11, media_group_id="group-1")
 
     assert forwarded[0]["text"] == "caption"
+    assert forwarded[0]["message_id"] is None
     assert forwarded[0]["attachments"][0].telegram_file_id == "file-1"
     assert (10, "group-1") not in app.media_group_tasks
 
@@ -516,7 +739,13 @@ async def test_flush_media_group_stops_on_cancellation(tmp_path: Path, monkeypat
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
     called = False
 
-    async def fake_process_candidate_set(chat_id: int, user_id: int | None, text: str, attachments: list) -> None:
+    async def fake_process_candidate_set(
+        chat_id: int,
+        user_id: int | None,
+        text: str,
+        attachments: list,
+        message_id: int | None = None,
+    ) -> None:
         nonlocal called
         called = True
 
@@ -532,31 +761,23 @@ async def test_flush_media_group_stops_on_cancellation(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_process_candidate_set_starts_processing_for_single_source(tmp_path: Path, monkeypatch) -> None:
+async def test_process_candidate_set_adds_single_source_to_basket(tmp_path: Path, monkeypatch) -> None:
     fake_bot = FakeBot()
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
-    started: list[SourceCandidate] = []
-
-    async def fake_start_processing(chat_id: int, candidate: SourceCandidate) -> None:
-        started.append(candidate)
-
-    monkeypatch.setattr(app, "_start_processing", fake_start_processing)
 
     await app._process_candidate_set(chat_id=10, user_id=11, text="https://youtu.be/demo", attachments=[])
 
-    assert started[0].display_name == "YouTube: demo"
+    basket = app.baskets.list(10, 11)
+    assert basket[0].display_name == "YouTube: demo"
+    keyboard = fake_bot.sent_messages[0]["reply_markup"].inline_keyboard
+    assert keyboard[0][0].callback_data == "mode:batch:toggle"
+    assert keyboard[1][0].callback_data == "basket:start"
 
 
 @pytest.mark.asyncio
-async def test_process_candidate_set_routes_multiple_attachments_to_combined_submission(tmp_path: Path, monkeypatch) -> None:
+async def test_process_candidate_set_adds_multiple_attachments_to_basket(tmp_path: Path, monkeypatch) -> None:
     fake_bot = FakeBot()
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
-    grouped: list[list[SourceCandidate]] = []
-
-    async def fake_start_processing_group(chat_id: int, candidates: list[SourceCandidate]) -> None:
-        grouped.append(candidates)
-
-    monkeypatch.setattr(app, "_start_processing_group", fake_start_processing_group)
 
     await app._process_candidate_set(
         chat_id=10,
@@ -580,8 +801,7 @@ async def test_process_candidate_set_routes_multiple_attachments_to_combined_sub
         ],
     )
 
-    assert len(grouped) == 1
-    assert [candidate.telegram_file_id for candidate in grouped[0]] == ["voice-1", "voice-2"]
+    assert [candidate.telegram_file_id for candidate in app.baskets.list(10, 11)] == ["voice-1", "voice-2"]
 
 
 @pytest.mark.asyncio
@@ -638,6 +858,93 @@ async def test_handle_source_selection_starts_processing_for_valid_candidate(tmp
     assert callback.answers[0] == {"text": "Запускаю обработку...", "show_alert": False}
     assert started[0][0] == 10
     assert started[0][1].display_name == "YouTube: demo"
+
+
+@pytest.mark.asyncio
+async def test_handle_basket_callback_removes_and_clears_items(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    candidates = [
+        SourceCandidate(
+            source_id="url:https://youtu.be/one",
+            kind="youtube_url",
+            display_name="YouTube: one",
+            url="https://youtu.be/one",
+            telegram_file_id=None,
+            mime_type=None,
+            file_name=None,
+        ),
+        SourceCandidate(
+            source_id="url:https://youtu.be/two",
+            kind="youtube_url",
+            display_name="YouTube: two",
+            url="https://youtu.be/two",
+            telegram_file_id=None,
+            mime_type=None,
+            file_name=None,
+        ),
+    ]
+    app.baskets.add(chat_id=10, user_id=7, candidates=candidates)
+    message = FakeStatusMessage(10)
+
+    await app._handle_basket_callback(FakeCallback(data="basket:remove:0", message=message))  # type: ignore[arg-type]
+
+    assert app.baskets.list(10, 7) == [candidates[1]]
+    assert message.edits[-1]["text"].startswith("В корзине 1")
+
+    await app._handle_basket_callback(FakeCallback(data="basket:clear", message=message))  # type: ignore[arg-type]
+
+    assert app.baskets.list(10, 7) == []
+    assert message.edits[-1]["text"] == "Корзина очищена."
+
+
+@pytest.mark.asyncio
+async def test_start_basket_processing_downloads_mixed_sources_and_calls_one_batch_gateway(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    app.baskets.add(
+        chat_id=10,
+        user_id=7,
+        candidates=[
+            SourceCandidate(
+                source_id="telegram-message:42:call.ogg",
+                kind="telegram_audio",
+                display_name="Audio: call.ogg",
+                url=None,
+                telegram_file_id="file-telegram",
+                mime_type="audio/ogg",
+                file_name="call.ogg",
+            ),
+            SourceCandidate(
+                source_id="url:https://youtu.be/demo",
+                kind="youtube_url",
+                display_name="YouTube: demo",
+                url="https://youtu.be/demo",
+                telegram_file_id=None,
+                mime_type=None,
+                file_name=None,
+            ),
+        ],
+    )
+
+    await app._handle_basket_callback(FakeCallback(data="basket:start", message=FakeStatusMessage(10)))  # type: ignore[arg-type]
+
+    assert fake_service.processed_sources == []
+    assert len(fake_service.processed_groups) == 1
+    prepared = fake_service.processed_groups[0]
+    assert prepared[0].local_path is not None
+    assert prepared[0].local_path.exists()
+    assert prepared[1].url == "https://youtu.be/demo"
+    assert app.baskets.list(10, 7) == []
+    status = fake_bot.sent_messages[0]["status"]
+    assert status.edits[-1]["text"] == "Пакетная транскрибация готова."
+    document_entry = next(item for item in status.documents if "document" in item)
+    assert document_entry["document"].path == fake_service.job.transcript.text_path
+    assert document_entry["caption"] == "Готовая пакетная транскрибация без сегментов."
+    keyboard = document_entry["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
+    assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
 
 
 @pytest.mark.asyncio
@@ -875,7 +1182,13 @@ async def test_handle_message_blocks_non_whitelisted_user_before_processing(tmp_
     )  # type: ignore[arg-type]
     called = False
 
-    async def fake_process_candidate_set(chat_id: int, user_id: int | None, text: str, attachments: list) -> None:
+    async def fake_process_candidate_set(
+        chat_id: int,
+        user_id: int | None,
+        text: str,
+        attachments: list,
+        message_id: int | None = None,
+    ) -> None:
         nonlocal called
         called = True
 
@@ -952,7 +1265,7 @@ async def test_callback_handlers_block_non_whitelisted_user(tmp_path: Path) -> N
     assert callback.answers == [{"text": "Доступ к этому боту ограничен.", "show_alert": True}]
 
 
-def test_extract_attachments_handles_audio_documents_and_ignores_other_documents() -> None:
+def test_extract_attachments_handles_audio_and_generic_documents() -> None:
     audio_document_message = SimpleNamespace(
         audio=None,
         voice=None,
@@ -965,7 +1278,7 @@ def test_extract_attachments_handles_audio_documents_and_ignores_other_documents
             file_unique_id="uniq-a1",
         ),
     )
-    unsupported_document_message = SimpleNamespace(
+    generic_document_message = SimpleNamespace(
         audio=None,
         voice=None,
         video=None,
@@ -979,12 +1292,14 @@ def test_extract_attachments_handles_audio_documents_and_ignores_other_documents
     )
 
     audio_attachments = _extract_attachments(audio_document_message)  # type: ignore[arg-type]
-    unsupported_attachments = _extract_attachments(unsupported_document_message)  # type: ignore[arg-type]
+    generic_attachments = _extract_attachments(generic_document_message)  # type: ignore[arg-type]
 
     assert len(audio_attachments) == 1
     assert audio_attachments[0].kind == "telegram_audio"
     assert audio_attachments[0].file_name == "uniq-a1.bin"
-    assert unsupported_attachments == []
+    assert len(generic_attachments) == 1
+    assert generic_attachments[0].kind == "telegram_audio"
+    assert generic_attachments[0].file_name == "notes.txt"
 
 
 def test_guess_suffix_covers_audio_video_and_default_fallbacks() -> None:

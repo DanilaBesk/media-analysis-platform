@@ -22,7 +22,7 @@ import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 
 const HOST = process.env.HOST ?? "0.0.0.0";
-const PORT = Number(process.env.PORT ?? "3000");
+const PORT = Number(process.env.PORT ?? "3201");
 const DIST_DIR = resolve(process.env.WEB_DIST_DIR ?? new URL("../dist", import.meta.url).pathname);
 const MARKER = "[WebUi][serveDist][BLOCK_SERVE_WEB_UI_DIST]";
 

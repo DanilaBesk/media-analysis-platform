@@ -30,8 +30,8 @@ from pathlib import Path
 
 from docx import Document
 
-from telegram_transcriber_bot.domain import TranscriptResult
-from telegram_transcriber_bot.source_labels import humanize_source_label, is_human_readable_title, looks_like_machine_file_name
+from transcriber_workers_common.domain import TranscriptResult
+from transcriber_workers_common.source_labels import humanize_source_label, is_human_readable_title, looks_like_machine_file_name
 
 __all__ = [
     "build_source_label",

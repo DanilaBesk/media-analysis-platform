@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://telegram-transcriber.local/contracts/schemas/http/create-transcription-batch.schema.json",
+  "title": "CreateBatchTranscriptionRequest",
+  "$ref": "#/$defs/batchTranscriptionRequest",
+  "$defs": {
+    "binaryFileField": {
+      "type": "string",
+      "format": "binary"
+    },
+    "sourceLabel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9_-]*$"
+    },
+    "batchTranscriptionRequest": {
+      "type": "object",
+      "required": [
+        "source_manifest"
+      ],
+      "properties": {
+        "source_manifest": {
+          "$ref": "#/$defs/sourceManifest"
+        },
+        "files": {
+          "type": "array",
+          "description": "Multipart file basket. Uploaded-file sources reference their stable part name through source_manifest.sources.<source_label>.file_part.",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/binaryFileField"
+          }
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delivery": {
+          "$ref": "./create-transcription-upload.schema.json#/$defs/deliveryRequest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceManifest": {
+      "type": "object",
+      "required": [
+        "manifest_version",
+        "ordered_source_labels",
+        "sources",
+        "completion_policy"
+      ],
+      "properties": {
+        "manifest_version": {
+          "const": "batch-transcription.v1"
+        },
+        "ordered_source_labels": {
+          "type": "array",
+          "description": "Canonical source order. Labels are stable, unique, and match keys in sources.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/sourceLabel"
+          }
+        },
+        "sources": {
+          "type": "object",
+          "description": "Source map keyed by stable source_label. The API owns this basket before creating root/group and per-source transcription children.",
+          "minProperties": 1,
+          "propertyNames": {
+            "$ref": "#/$defs/sourceLabel"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/batchSource"
+          }
+        },
+        "completion_policy": {
+          "type": "string",
+          "enum": [
+            "succeed_when_all_sources_succeed",
+            "succeed_when_any_source_succeeds"
+          ],
+          "default": "succeed_when_all_sources_succeed"
+        }
+      },
+      "additionalProperties": false
+    },
+    "batchSource": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/uploadedFileSource"
+        },
+        {
+          "$ref": "#/$defs/urlSource"
+        }
+      ]
+    },
+    "uploadedFileSource": {
+      "type": "object",
+      "required": [
+        "source_kind",
+        "file_part"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "uploaded_file",
+            "telegram_upload"
+          ]
+        },
+        "file_part": {
+          "type": "string",
+          "description": "Stable multipart part name or file field key owned by the public API basket.",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_filename": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "urlSource": {
+      "type": "object",
+      "required": [
+        "source_kind",
+        "url"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "youtube_url",
+            "external_url"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

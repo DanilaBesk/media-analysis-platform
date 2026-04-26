@@ -30,7 +30,7 @@ from transcriber_workers_common.documents import (
     normalize_report_markdown,
     write_transcript_docx,
 )
-from telegram_transcriber_bot.domain import TranscriptResult, TranscriptSegment
+from transcriber_workers_common.domain import TranscriptResult, TranscriptSegment
 
 
 def test_build_transcript_markdown_includes_timestamps_and_speakers() -> None:
@@ -49,6 +49,9 @@ def test_build_transcript_markdown_includes_timestamps_and_speakers() -> None:
 
     assert "# Demo call" in markdown
     assert "- Источник: YouTube: demo" in markdown
+    assert "- Язык: ru" in markdown
+    assert "## Сегменты" in markdown
+    assert "## Полный текст" in markdown
     assert "[00:00 - 00:05] Speaker 1: Intro" in markdown
     assert "[00:05 - 00:12] Фрагмент: Plan" in markdown
 
@@ -69,6 +72,9 @@ def test_write_transcript_docx_creates_document(tmp_path: Path) -> None:
     text = "\n".join(paragraph.text for paragraph in document.paragraphs)
     assert "Weekly Sync" in text
     assert "Источник: sync.mp3" in text
+    assert "Язык: ru" in text
+    assert "Сегменты" in text
+    assert "Полный текст" in text
     assert "Speaker 1" in text
     assert "Hello team" in text
 

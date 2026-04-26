@@ -27,17 +27,30 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import pytest
+from docx import Document
 
-from transcriber_workers_common.api import CancelCheckResult, ClaimedJobExecution, OrderedWorkerInput
-from telegram_transcriber_bot.domain import SourceCandidate, TranscriptResult, TranscriptSegment
+from transcriber_workers_common.api import (
+    ArtifactResolutionResult,
+    ArtifactSummary,
+    CancelCheckResult,
+    ChildJobReference,
+    ClaimedJobExecution,
+    JobSnapshot,
+    OrderedWorkerInput,
+    SourceSetItem,
+)
+from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
 import transcriber_worker_transcription as worker_module
 from transcriber_worker_transcription import (
     WorkerCancellationRequested,
+    materialize_local_source,
     process_local_transcription,
+    runTranscriptionAggregate,
     runTranscription,
 )
 
@@ -48,9 +61,13 @@ class RecordingApiClient:
         execution: ClaimedJobExecution,
         *,
         cancel_results: list[CancelCheckResult] | None = None,
+        snapshots: dict[str, JobSnapshot] | None = None,
+        artifact_downloads: dict[str, Path] | None = None,
     ) -> None:
         self.execution = execution
         self.cancel_results = list(cancel_results or [])
+        self.snapshots = dict(snapshots or {})
+        self.artifact_downloads = dict(artifact_downloads or {})
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def claim_job(self, job_id: str, *, worker_kind: str, task_type: str) -> ClaimedJobExecution:
@@ -131,6 +148,23 @@ class RecordingApiClient:
             return self.cancel_results.pop(0)
         return CancelCheckResult(cancel_requested=False, status="running")
 
+    def get_job_snapshot(self, job_id: str) -> JobSnapshot:
+        self.calls.append(("get_job_snapshot", {"job_id": job_id}))
+        return self.snapshots[job_id]
+
+    def resolve_artifact(self, artifact_id: str) -> ArtifactResolutionResult:
+        self.calls.append(("resolve_artifact", {"artifact_id": artifact_id}))
+        path = self.artifact_downloads[artifact_id]
+        return ArtifactResolutionResult(
+            artifact_id=artifact_id,
+            job_id="child-job",
+            artifact_kind="transcript_plain",
+            filename=path.name,
+            mime_type="text/plain; charset=utf-8",
+            size_bytes=path.stat().st_size,
+            download_url=path.as_uri(),
+        )
+
 
 class FakeSourceStore:
     def __init__(self, payloads: dict[str, bytes]) -> None:
@@ -170,6 +204,30 @@ class RecordingTranscriber:
             language="ru",
             raw_text="Hello world",
         )
+
+
+class FailingTranscriber:
+    def transcribe(self, source: SourceCandidate, workspace_dir: Path) -> TranscriptResult:
+        raise RuntimeError("whisper crashed")
+
+
+def test_ordered_worker_input_parses_source_label_from_claim_payload() -> None:
+    ordered_input = OrderedWorkerInput.from_payload(
+        {
+            "position": 0,
+            "source_id": "source-1",
+            "source_label": "voice_a",
+            "source_kind": "uploaded_file",
+            "display_name": "Voice A",
+            "original_filename": "voice.ogg",
+            "object_key": "uploads/voice.ogg",
+            "source_url": None,
+            "sha256": None,
+            "size_bytes": 5,
+        }
+    )
+
+    assert ordered_input.source_label == "voice_a"
 
 
 def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
@@ -281,6 +339,114 @@ def test_run_transcription_combines_sorted_inputs_before_one_final_pass(tmp_path
     assert result.source.local_path.name == "combined.wav"
 
 
+def test_run_transcription_batch_child_preserves_ordered_source_label_without_concat(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-voice",
+            source_label="voice_a",
+            source_kind="uploaded_file",
+            display_name="Voice A",
+            original_filename="voice.ogg",
+            object_key="uploads/voice.ogg",
+        ),
+        params={"batch": {"role": "source", "source_label": "params_label"}},
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/voice.ogg": b"audio"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    def fail_concat(input_paths: list[Path], output_path: Path) -> None:
+        raise AssertionError("batch source children must not concatenate inputs first")
+
+    monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fail_concat)
+
+    result = runTranscription(
+        execution.job_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert result.source.display_name == "voice_a"
+    assert result.source.file_name == "voice.ogg"
+    assert result.transcript.source_label == "voice_a"
+    assert [call[0] for call in source_store.calls] == ["uploads/voice.ogg"]
+
+
+def test_run_transcription_batch_child_preserves_params_source_label_for_telegram_document_media(
+    tmp_path: Path,
+) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-video",
+            source_kind="telegram_upload",
+            display_name="Video attachment",
+            original_filename="clip.mp4",
+            object_key="telegram/clip.mp4",
+        ),
+        params={"batch": {"role": "source", "source_label": "video_b"}},
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"telegram/clip.mp4": b"video"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    result = runTranscription(
+        execution.job_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert result.source.kind == "telegram_video"
+    assert result.source.display_name == "video_b"
+    assert result.source.file_name == "clip.mp4"
+    assert result.transcript.source_label == "video_b"
+
+
+def test_run_transcription_batch_child_preserves_source_label_for_youtube_input(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-youtube",
+            source_label="youtube_c",
+            source_kind="youtube_url",
+            display_name="Demo video",
+            source_url="https://youtu.be/demo123",
+        ),
+        params={"batch": {"role": "source", "source_label": "params_label"}},
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    result = runTranscription(
+        execution.job_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert source_store.calls == []
+    assert result.source.kind == "youtube_url"
+    assert result.source.url == "https://youtu.be/demo123"
+    assert result.source.display_name == "youtube_c"
+    assert result.transcript.source_label == "youtube_c"
+
+
 def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path) -> None:
     execution = _build_execution(
         OrderedWorkerInput(
@@ -364,6 +530,29 @@ def test_process_local_transcription_reuses_extracted_local_pipeline(tmp_path: P
     assert artifacts.docx_path.exists()
 
 
+def test_materialize_local_source_keeps_workspace_file_in_place(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "job-1"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    existing = workspace_dir / "source.ogg"
+    existing.write_bytes(b"audio")
+    source = SourceCandidate(
+        source_id="source-2",
+        kind="telegram_audio",
+        display_name="Audio: source.ogg",
+        url=None,
+        telegram_file_id=None,
+        mime_type="audio/ogg",
+        file_name="source.ogg",
+        file_unique_id="uniq-2",
+        local_path=existing,
+    )
+
+    materialized_source = materialize_local_source(source, workspace_dir)
+
+    assert materialized_source.local_path == existing
+    assert existing.read_bytes() == b"audio"
+
+
 def test_run_transcription_classifies_source_materialization_failures(tmp_path: Path) -> None:
     execution = _build_execution(
         OrderedWorkerInput(
@@ -404,18 +593,310 @@ def test_run_transcription_classifies_source_materialization_failures(tmp_path: 
     )
 
 
-def _build_execution(*ordered_inputs: OrderedWorkerInput) -> ClaimedJobExecution:
+def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-1",
+            source_kind="uploaded_file",
+            display_name="Audio: call.ogg",
+            original_filename="call.ogg",
+            object_key="uploads/call.ogg",
+        )
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/call.ogg": b"audio"})
+    artifact_store = InMemoryArtifactStore()
+
+    with pytest.raises(RuntimeError, match="whisper crashed"):
+        runTranscription(
+            execution.job_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            source_store=source_store,
+            artifact_store=artifact_store,
+            transcriber=FailingTranscriber(),
+        )
+
+    assert api_client.calls[-1] == (
+        "finalize_job",
+        {
+            "job_id": execution.job_id,
+            "execution_id": execution.execution_id,
+            "outcome": "failed",
+            "progress_stage": "failed",
+            "progress_message": "Transcription failed",
+            "error_code": "transcription_failed",
+            "error_message": "whisper crashed",
+        },
+    )
+
+
+def test_run_transcription_aggregate_merges_child_artifacts_in_source_set_order(tmp_path: Path) -> None:
+    execution = _build_execution(
+        job_id="root-job",
+        root_job_id="root-job",
+        params={
+            "batch": {
+                "role": "aggregate",
+                "completion_policy": "succeed_when_all_sources_succeed",
+                "ordered_source_labels": ["voice_b", "voice_a"],
+            }
+        },
+    )
+    downloads = {
+        "plain-a": _download_file(tmp_path, "plain-a.txt", "Voice A plain\n"),
+        "md-a": _download_file(tmp_path, "md-a.md", "# Child A\n\nA segmented\n"),
+        "plain-b": _download_file(tmp_path, "plain-b.txt", "Voice B plain\n"),
+        "md-b": _download_file(tmp_path, "md-b.md", "# Child B\n\nB segmented\n"),
+    }
+    snapshots = {
+        "root-job": _snapshot(
+            "root-job",
+            labels=["voice_b", "voice_a"],
+            children=[
+                ChildJobReference(job_id="child-a", job_type="transcription", status="succeeded", version=2),
+                ChildJobReference(job_id="child-b", job_type="transcription", status="succeeded", version=2),
+            ],
+        ),
+        "child-a": _snapshot(
+            "child-a",
+            parent_job_id="root-job",
+            labels=["voice_a"],
+            artifacts=[
+                _artifact("plain-a", "transcript_plain", "a.txt"),
+                _artifact("md-a", "transcript_segmented_markdown", "a.md"),
+            ],
+        ),
+        "child-b": _snapshot(
+            "child-b",
+            parent_job_id="root-job",
+            labels=["voice_b"],
+            artifacts=[
+                _artifact("plain-b", "transcript_plain", "b.txt"),
+                _artifact("md-b", "transcript_segmented_markdown", "b.md"),
+            ],
+        ),
+    }
+    api_client = RecordingApiClient(execution, snapshots=snapshots, artifact_downloads=downloads)
+    artifact_store = InMemoryArtifactStore()
+
+    result = runTranscriptionAggregate(
+        execution.job_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+    )
+
+    assert api_client.calls[0] == (
+        "claim_job",
+        {"job_id": "root-job", "worker_kind": "transcription", "task_type": "transcription.aggregate"},
+    )
+    markdown = result.artifacts.markdown_path.read_text(encoding="utf-8")
+    assert markdown.index("## Транскрибация voice_b") < markdown.index("## Транскрибация voice_a")
+    assert "B segmented" in markdown
+    assert "A segmented" in markdown
+    assert result.artifacts.text_path.read_text(encoding="utf-8") == (
+        "## Транскрибация voice_b\n\nVoice B plain\n\n"
+        "## Транскрибация voice_a\n\nVoice A plain\n"
+    )
+    assert result.artifacts.docx_path.exists()
+    docx_text = "\n".join(paragraph.text for paragraph in Document(result.artifacts.docx_path).paragraphs)
+    assert docx_text.index("Транскрибация voice_b") < docx_text.index("Транскрибация voice_a")
+    assert "Voice B plain" in docx_text
+    assert "Voice A plain" in docx_text
+    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
+    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
+        "transcript_plain",
+        "transcript_segmented_markdown",
+        "transcript_docx",
+        "source_manifest_json",
+        "batch_diagnostics_json",
+    ]
+    finalize_call = api_client.calls[-1]
+    assert finalize_call[0] == "finalize_job"
+    assert api_client.calls.index(register_call) < api_client.calls.index(finalize_call)
+    diagnostics_upload = next(call for call in artifact_store.calls if call["object_key"].endswith("batch-diagnostics.json"))
+    diagnostics = json.loads(diagnostics_upload["content"].decode("utf-8"))
+    assert diagnostics["included_count"] == 2
+    assert diagnostics["skipped_sources"] == []
+    manifest_upload = next(call for call in artifact_store.calls if call["object_key"].endswith("source-manifest.json"))
+    manifest = json.loads(manifest_upload["content"].decode("utf-8"))
+    assert manifest == {
+        "manifest_version": "batch-transcription.aggregate.v1",
+        "root_job_id": "root-job",
+        "ordered_source_labels": ["voice_b", "voice_a"],
+        "included_sources": [
+            {"source_label": "voice_b", "child_job_id": "child-b"},
+            {"source_label": "voice_a", "child_job_id": "child-a"},
+        ],
+    }
+
+
+def test_run_transcription_aggregate_fails_when_succeeded_child_artifact_is_missing(tmp_path: Path) -> None:
+    execution = _build_execution(
+        job_id="root-job",
+        root_job_id="root-job",
+        params={
+            "batch": {
+                "role": "aggregate",
+                "completion_policy": "succeed_when_all_sources_succeed",
+                "ordered_source_labels": ["voice_a"],
+            }
+        },
+    )
+    snapshots = {
+        "root-job": _snapshot(
+            "root-job",
+            labels=["voice_a"],
+            children=[ChildJobReference(job_id="child-a", job_type="transcription", status="succeeded", version=2)],
+        ),
+        "child-a": _snapshot(
+            "child-a",
+            parent_job_id="root-job",
+            labels=["voice_a"],
+            artifacts=[_artifact("plain-a", "transcript_plain", "a.txt")],
+        ),
+    }
+    api_client = RecordingApiClient(execution, snapshots=snapshots)
+
+    with pytest.raises(worker_module.MissingChildTranscriptArtifactError, match="transcript_segmented_markdown"):
+        runTranscriptionAggregate(
+            execution.job_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            artifact_store=InMemoryArtifactStore(),
+        )
+
+    assert not any(call[0] == "register_artifacts" for call in api_client.calls)
+    assert api_client.calls[-1] == (
+        "finalize_job",
+        {
+            "job_id": "root-job",
+            "execution_id": execution.execution_id,
+            "outcome": "failed",
+            "progress_stage": "failed",
+            "progress_message": "Batch transcript aggregation failed",
+            "error_code": "missing_child_artifact",
+            "error_message": "source voice_a child child-a is missing artifact(s): transcript_segmented_markdown",
+        },
+    )
+
+
+def test_run_transcription_aggregate_best_effort_skips_failed_children(tmp_path: Path) -> None:
+    execution = _build_execution(
+        job_id="root-job",
+        root_job_id="root-job",
+        params={
+            "batch": {
+                "role": "aggregate",
+                "completion_policy": "succeed_when_any_source_succeeds",
+                "ordered_source_labels": ["voice_a", "voice_b"],
+            }
+        },
+    )
+    downloads = {
+        "plain-a": _download_file(tmp_path, "plain-a.txt", "Voice A plain\n"),
+        "md-a": _download_file(tmp_path, "md-a.md", "# Child A\n\nA segmented\n"),
+    }
+    snapshots = {
+        "root-job": _snapshot(
+            "root-job",
+            labels=["voice_a", "voice_b"],
+            children=[
+                ChildJobReference(job_id="child-a", job_type="transcription", status="succeeded", version=2),
+                ChildJobReference(job_id="child-b", job_type="transcription", status="failed", version=2),
+            ],
+        ),
+        "child-a": _snapshot(
+            "child-a",
+            parent_job_id="root-job",
+            labels=["voice_a"],
+            artifacts=[
+                _artifact("plain-a", "transcript_plain", "a.txt"),
+                _artifact("md-a", "transcript_segmented_markdown", "a.md"),
+            ],
+        ),
+        "child-b": _snapshot("child-b", parent_job_id="root-job", labels=["voice_b"], status="failed"),
+    }
+    api_client = RecordingApiClient(execution, snapshots=snapshots, artifact_downloads=downloads)
+
+    result = runTranscriptionAggregate(
+        execution.job_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=InMemoryArtifactStore(),
+    )
+
+    assert [section.source_label for section in result.sections] == ["voice_a"]
+    assert result.diagnostics["skipped_sources"] == [
+        {
+            "source_label": "voice_b",
+            "reason": "child_not_succeeded",
+            "child_statuses": ["failed"],
+            "child_job_ids": ["child-b"],
+        }
+    ]
+    assert api_client.calls[-1][0] == "finalize_job"
+    assert api_client.calls[-1][1]["outcome"] == "succeeded"
+
+
+def _build_execution(
+    *ordered_inputs: OrderedWorkerInput,
+    job_id: str = "job-1",
+    root_job_id: str = "root-1",
+    params: dict[str, object] | None = None,
+) -> ClaimedJobExecution:
     return ClaimedJobExecution(
         execution_id="exec-1",
-        job_id="job-1",
-        root_job_id="root-1",
+        job_id=job_id,
+        root_job_id=root_job_id,
         parent_job_id=None,
         retry_of_job_id=None,
         job_type="transcription",
         version=1,
         ordered_inputs=ordered_inputs,
-        params={},
+        params=params or {},
     )
+
+
+def _snapshot(
+    job_id: str,
+    *,
+    labels: list[str],
+    status: str = "succeeded",
+    parent_job_id: str | None = None,
+    artifacts: list[ArtifactSummary] | None = None,
+    children: list[ChildJobReference] | None = None,
+) -> JobSnapshot:
+    return JobSnapshot(
+        job_id=job_id,
+        root_job_id="root-job",
+        parent_job_id=parent_job_id,
+        job_type="transcription",
+        status=status,
+        version=2,
+        source_set_items=tuple(SourceSetItem(position=index, source_label=label) for index, label in enumerate(labels)),
+        artifacts=tuple(artifacts or ()),
+        children=tuple(children or ()),
+    )
+
+
+def _artifact(artifact_id: str, artifact_kind: str, filename: str) -> ArtifactSummary:
+    return ArtifactSummary(
+        artifact_id=artifact_id,
+        artifact_kind=artifact_kind,
+        filename=filename,
+        mime_type="text/plain; charset=utf-8",
+        size_bytes=10,
+    )
+
+
+def _download_file(tmp_path: Path, filename: str, content: str) -> Path:
+    path = tmp_path / "downloads" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
 
 
 def _required_marker() -> str:

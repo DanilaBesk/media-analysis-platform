@@ -35,7 +35,7 @@ from transcriber_workers_common.documents import (
     normalize_report_markdown,
     write_report_docx,
 )
-from telegram_transcriber_bot.domain import TranscriptResult
+from transcriber_workers_common.domain import TranscriptResult
 
 
 def test_write_report_docx_creates_document(tmp_path: Path) -> None:
@@ -106,6 +106,20 @@ def test_timestamp_and_machine_name_helpers_cover_edge_cases() -> None:
     assert format_timestamp(-5) == "00:00"
     assert _looks_like_machine_file_name("AgADqZkAAk-zkEo.ogg") is True
     assert _looks_like_machine_file_name("meeting_notes.ogg") is False
+    assert _looks_like_machine_file_name("plain text.mp3") is False
     assert _is_human_readable_title("meeting_notes.ogg") is True
     assert _is_human_readable_title("") is False
     assert normalize_report_markdown("") == "# Исследовательский отчёт\n"
+
+
+def test_human_readable_media_name_is_preserved() -> None:
+    transcript = TranscriptResult(
+        title="meeting_notes.ogg",
+        source_label="Audio: meeting_notes.ogg",
+        segments=[],
+        language="ru",
+        raw_text="",
+    )
+
+    assert build_transcript_title(transcript) == "meeting_notes.ogg"
+    assert build_source_label(transcript) == "meeting_notes.ogg"

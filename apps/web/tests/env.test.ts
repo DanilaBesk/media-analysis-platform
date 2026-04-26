@@ -51,15 +51,4 @@ describe("resolveWebUiRuntimeEnv", () => {
   });
   // END_BLOCK_BLOCK_VERIFY_EXPLICIT_ENV_CONTRACT
 
-  it("normalizes legacy local websocket paths back to the canonical stream path", () => {
-    expect(
-      resolveWebUiRuntimeEnv({
-        VITE_API_BASE_URL: "http://localhost:8080",
-        VITE_WS_URL: "ws://localhost:8080/events",
-      }),
-    ).toEqual({
-      apiBaseUrl: "http://localhost:8080",
-      wsUrl: "ws://localhost:8080/v1/ws",
-    });
-  });
 });

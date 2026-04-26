@@ -108,6 +108,176 @@ func TestApiHttpCombinedUploadReturnsSingleJobEnvelope(t *testing.T) {
 	}
 }
 
+func TestApiHttpBatchTranscriptionParsesManifestFilesURLsAndIdempotency(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{
+		batchJob: snapshot("77777777-7777-7777-7777-777777777777", queue.JobTypeTranscription, "queued"),
+	}
+	mux := newMux(t, Dependencies{Public: public})
+
+	manifest := `{
+		"manifest_version":"batch-transcription.v1",
+		"ordered_source_labels":["voice_a","video_b"],
+		"sources":{
+			"voice_a":{"source_kind":"uploaded_file","file_part":"voice_a","display_name":"Voice A"},
+			"video_b":{"source_kind":"youtube_url","url":"https://youtu.be/example","display_name":"Video B"}
+		},
+		"completion_policy":"succeed_when_all_sources_succeed"
+	}`
+	body, contentType := buildMultipart(t, multipartInput{
+		Fields: map[string]string{
+			"source_manifest": manifest,
+			"display_name":    "Mixed batch",
+			"client_ref":      "client-1",
+		},
+		Files: []multipartFile{
+			{Name: "voice_a", Filename: "voice.ogg", ContentType: "audio/ogg", Body: []byte("voice")},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs/batch", body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Idempotency-Key", "batch-idem")
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var envelope JobAcceptedEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("Unmarshal(response) error = %v", err)
+	}
+	if envelope.Job.JobID != public.batchJob.JobID {
+		t.Fatalf("job_id = %q, want %q", envelope.Job.JobID, public.batchJob.JobID)
+	}
+	if public.lastBatch.IdempotencyKey != "batch-idem" || public.lastBatch.DisplayName != "Mixed batch" {
+		t.Fatalf("batch command metadata = %#v", public.lastBatch)
+	}
+	if got, want := len(public.lastBatch.Manifest.OrderedSourceLabels), 2; got != want {
+		t.Fatalf("manifest labels = %d, want %d", got, want)
+	}
+	if got, want := len(public.lastBatch.Files), 1; got != want {
+		t.Fatalf("batch files = %d, want %d", got, want)
+	}
+	if public.lastBatch.Files[0].PartName != "voice_a" || public.lastBatch.Files[0].SHA256 == "" {
+		t.Fatalf("batch file normalization = %#v", public.lastBatch.Files[0])
+	}
+}
+
+func TestApiHttpBatchTranscriptionRejectsInvalidManifest(t *testing.T) {
+	t.Parallel()
+
+	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
+	body, contentType := buildMultipart(t, multipartInput{
+		Fields: map[string]string{
+			"source_manifest": `{"manifest_version":"batch-transcription.v1","ordered_source_labels":["missing"],"sources":{},"completion_policy":"succeed_when_all_sources_succeed"}`,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs/batch", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_source_manifest")
+}
+
+func TestApiHttpCreateAgentRunParsesIdempotencyHarnessAndRequest(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{
+		agentRunJob: snapshot("33333333-3333-3333-3333-333333333333", queue.JobTypeAgentRun, "queued"),
+	}
+	mux := newMux(t, Dependencies{Public: public})
+
+	req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
+		"harness_name": "generic",
+		"client_ref":   "client-1",
+		"request": map[string]any{
+			"prompt": "summarize",
+			"payload": map[string]any{
+				"topic": "calls",
+			},
+			"input_artifacts": []map[string]any{
+				{"artifact_id": "44444444-4444-4444-4444-444444444444", "artifact_kind": "transcript_plain"},
+			},
+		},
+	})
+	req.Header.Set("Idempotency-Key", "agent-idem")
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	var envelope JobAcceptedEnvelope
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("Unmarshal(response) error = %v", err)
+	}
+	if envelope.Job.JobID != public.agentRunJob.JobID {
+		t.Fatalf("job_id = %q, want %q", envelope.Job.JobID, public.agentRunJob.JobID)
+	}
+	if public.lastAgentRun.IdempotencyKey != "agent-idem" || public.lastAgentRun.HarnessName != "generic" {
+		t.Fatalf("agent run request = %#v, want idempotency+harness", public.lastAgentRun)
+	}
+	if string(public.lastAgentRun.Request.Payload) == "" {
+		t.Fatalf("agent run payload was not parsed: %#v", public.lastAgentRun.Request)
+	}
+}
+
+func TestApiHttpCreateReportAndDeepResearchRoutesReturnAgentRunJobs(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{
+		reportJob:       snapshot("55555555-5555-5555-5555-555555555555", queue.JobTypeAgentRun, "queued"),
+		deepResearchJob: snapshot("66666666-6666-6666-6666-666666666666", queue.JobTypeAgentRun, "queued"),
+	}
+	mux := newMux(t, Dependencies{Public: public})
+
+	reportReq := jsonRequest(t, http.MethodPost, "/v1/transcription-jobs/11111111-1111-1111-1111-111111111111/report-jobs", map[string]any{
+		"client_ref": "report-client",
+	})
+	reportReq.Header.Set("Idempotency-Key", "report-idem")
+	reportRec := httptest.NewRecorder()
+	mux.ServeHTTP(reportRec, reportReq)
+	if reportRec.Code != http.StatusAccepted {
+		t.Fatalf("report status = %d, want %d body=%s", reportRec.Code, http.StatusAccepted, reportRec.Body.String())
+	}
+	var reportEnvelope JobAcceptedEnvelope
+	if err := json.Unmarshal(reportRec.Body.Bytes(), &reportEnvelope); err != nil {
+		t.Fatalf("Unmarshal(report response) error = %v", err)
+	}
+	if reportEnvelope.Job.JobType != queue.JobTypeAgentRun {
+		t.Fatalf("report route job_type = %q, want agent_run", reportEnvelope.Job.JobType)
+	}
+	if public.lastReportJobID != "11111111-1111-1111-1111-111111111111" || public.lastReportReq.IdempotencyKey != "report-idem" {
+		t.Fatalf("report request = job_id %q req %#v", public.lastReportJobID, public.lastReportReq)
+	}
+
+	deepReq := jsonRequest(t, http.MethodPost, "/v1/report-jobs/22222222-2222-2222-2222-222222222222/deep-research-jobs", map[string]any{
+		"client_ref": "deep-client",
+	})
+	deepReq.Header.Set("Idempotency-Key", "deep-idem")
+	deepRec := httptest.NewRecorder()
+	mux.ServeHTTP(deepRec, deepReq)
+	if deepRec.Code != http.StatusAccepted {
+		t.Fatalf("deep status = %d, want %d body=%s", deepRec.Code, http.StatusAccepted, deepRec.Body.String())
+	}
+	var deepEnvelope JobAcceptedEnvelope
+	if err := json.Unmarshal(deepRec.Body.Bytes(), &deepEnvelope); err != nil {
+		t.Fatalf("Unmarshal(deep response) error = %v", err)
+	}
+	if deepEnvelope.Job.JobType != queue.JobTypeAgentRun {
+		t.Fatalf("deep route job_type = %q, want agent_run", deepEnvelope.Job.JobType)
+	}
+	if public.lastDeepResearchJobID != "22222222-2222-2222-2222-222222222222" || public.lastDeepResearchReq.IdempotencyKey != "deep-idem" {
+		t.Fatalf("deep request = job_id %q req %#v", public.lastDeepResearchJobID, public.lastDeepResearchReq)
+	}
+}
+
 func TestApiHttpRejectsInvalidInputsWithStableErrorEnvelopes(t *testing.T) {
 	t.Parallel()
 
@@ -158,6 +328,39 @@ func TestApiHttpRejectsInvalidInputsWithStableErrorEnvelopes(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		assertErrorEnvelope(t, rec, http.StatusBadRequest, "unsupported_source_url")
+	})
+
+	t.Run("missing agent harness", func(t *testing.T) {
+		req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
+			"request": map[string]any{"prompt": "hello"},
+		})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		assertErrorEnvelope(t, rec, http.StatusBadRequest, "validation_failed")
+	})
+
+	t.Run("missing agent request content", func(t *testing.T) {
+		req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
+			"harness_name": "generic",
+			"request":      map[string]any{},
+		})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		assertErrorEnvelope(t, rec, http.StatusBadRequest, "validation_failed")
+	})
+
+	t.Run("unsupported agent artifact kind", func(t *testing.T) {
+		req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
+			"harness_name": "generic",
+			"request": map[string]any{
+				"input_artifacts": []map[string]any{
+					{"artifact_id": "44444444-4444-4444-4444-444444444444", "artifact_kind": "not_a_kind"},
+				},
+			},
+		})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		assertErrorEnvelope(t, rec, http.StatusBadRequest, "validation_failed")
 	})
 }
 
@@ -311,6 +514,41 @@ func TestApiHttpInternalWorkerRoutesRemainExplicit(t *testing.T) {
 	}
 }
 
+func TestApiHttpInternalAgentRunRequestAccessRouteReturnsOpaqueAccess(t *testing.T) {
+	t.Parallel()
+
+	worker := &fakeWorkerService{
+		requestAccess: storage.AgentRunRequestAccess{
+			Provider:            storage.AgentRunRequestProviderMinIO,
+			URL:                 "https://minio.local/private/request.json",
+			ExpiresAt:           time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC),
+			RequestRef:          "agentreq_digest",
+			RequestDigestSHA256: "digest",
+			RequestBytes:        123,
+		},
+	}
+	mux := newMux(t, Dependencies{Public: &fakePublicService{}, Worker: worker})
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/internal/v1/jobs/11111111-1111-1111-1111-111111111111/request-access?execution_id=55555555-5555-5555-5555-555555555555",
+		nil,
+	)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var response AgentRunRequestAccessResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Unmarshal(response) error = %v", err)
+	}
+	if response.RequestRef != "agentreq_digest" || response.RequestBytes != 123 {
+		t.Fatalf("response = %#v, want request-access payload", response)
+	}
+}
+
 func TestApiHttpAllowsLocalWebUiCors(t *testing.T) {
 	t.Parallel()
 
@@ -381,13 +619,23 @@ type httpFixture struct {
 }
 
 type fakePublicService struct {
-	uploadJobs         []JobSnapshot
-	uploadErr          error
-	combinedJob        JobSnapshot
-	lastUpload         UploadCommand
-	lastCombined       UploadCommand
-	artifactResolution storage.ArtifactResolution
-	events             []ws.JobEventEnvelope
+	uploadJobs            []JobSnapshot
+	uploadErr             error
+	combinedJob           JobSnapshot
+	batchJob              JobSnapshot
+	agentRunJob           JobSnapshot
+	reportJob             JobSnapshot
+	deepResearchJob       JobSnapshot
+	lastUpload            UploadCommand
+	lastCombined          UploadCommand
+	lastBatch             BatchCommand
+	lastAgentRun          AgentRunCommand
+	lastReportJobID       string
+	lastReportReq         ChildCreateRequest
+	lastDeepResearchJobID string
+	lastDeepResearchReq   ChildCreateRequest
+	artifactResolution    storage.ArtifactResolution
+	events                []ws.JobEventEnvelope
 }
 
 func (f *fakePublicService) CreateUpload(_ context.Context, req UploadCommand) ([]JobSnapshot, error) {
@@ -406,8 +654,18 @@ func (f *fakePublicService) CreateCombined(_ context.Context, req UploadCommand)
 	return f.combinedJob, nil
 }
 
+func (f *fakePublicService) CreateBatch(_ context.Context, req BatchCommand) (JobSnapshot, error) {
+	f.lastBatch = req
+	return f.batchJob, nil
+}
+
 func (f *fakePublicService) CreateFromURL(_ context.Context, _ URLCommand) (JobSnapshot, error) {
 	return JobSnapshot{}, nil
+}
+
+func (f *fakePublicService) CreateAgentRun(_ context.Context, req AgentRunCommand) (JobSnapshot, error) {
+	f.lastAgentRun = req
+	return f.agentRunJob, nil
 }
 
 func (f *fakePublicService) GetJob(_ context.Context, _ string) (JobSnapshot, error) {
@@ -418,12 +676,16 @@ func (f *fakePublicService) ListJobs(_ context.Context, filter ListJobsFilter) (
 	return JobListResponse{Items: nil, Page: filter.Page, PageSize: filter.PageSize}, nil
 }
 
-func (f *fakePublicService) CreateReport(_ context.Context, _ string, _ ChildCreateRequest) (JobSnapshot, error) {
-	return JobSnapshot{}, nil
+func (f *fakePublicService) CreateReport(_ context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
+	f.lastReportJobID = jobID
+	f.lastReportReq = req
+	return f.reportJob, nil
 }
 
-func (f *fakePublicService) CreateDeepResearch(_ context.Context, _ string, _ ChildCreateRequest) (JobSnapshot, error) {
-	return JobSnapshot{}, nil
+func (f *fakePublicService) CreateDeepResearch(_ context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
+	f.lastDeepResearchJobID = jobID
+	f.lastDeepResearchReq = req
+	return f.deepResearchJob, nil
 }
 
 func (f *fakePublicService) CancelJob(_ context.Context, _ string) (JobSnapshot, error) {
@@ -445,6 +707,7 @@ func (f *fakePublicService) ListJobEvents(_ context.Context, _ string) ([]ws.Job
 type fakeWorkerService struct {
 	claimResponse ClaimResponse
 	claimCalls    int
+	requestAccess storage.AgentRunRequestAccess
 }
 
 func (f *fakeWorkerService) Claim(_ context.Context, _ string, _ ClaimRequest) (ClaimResponse, error) {
@@ -466,6 +729,10 @@ func (f *fakeWorkerService) Finalize(_ context.Context, _ string, _ FinalizeRequ
 
 func (f *fakeWorkerService) CancelCheck(_ context.Context, _ string, _ string) (CancelCheckResponse, error) {
 	return CancelCheckResponse{CancelRequested: false, Status: "running"}, nil
+}
+
+func (f *fakeWorkerService) ResolveAgentRunRequestAccess(_ context.Context, _ string, _ string) (storage.AgentRunRequestAccess, error) {
+	return f.requestAccess, nil
 }
 
 type fakeWebsocket struct {

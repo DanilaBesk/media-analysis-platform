@@ -45,6 +45,7 @@ class UploadFilePart:
     filename: str
     content_type: str
     content_bytes: bytes
+    field_name: str = "files"
 
 
 def build_delivery_payload(
@@ -65,6 +66,7 @@ def build_multipart_body(
     files: list[UploadFilePart],
     display_name: str | None = None,
     client_ref: str | None = None,
+    source_manifest: JsonObject | None = None,
     delivery_strategy: str = "polling",
     delivery_webhook_url: str | None = None,
 ) -> tuple[bytes, str]:
@@ -78,7 +80,7 @@ def build_multipart_body(
         chunks.append(f"--{boundary}\r\n".encode("utf-8"))
         append_header(
             "Content-Disposition",
-            f'form-data; name="files"; filename="{file_part.filename}"',
+            f'form-data; name="{file_part.field_name}"; filename="{file_part.filename}"',
         )
         append_header("Content-Type", file_part.content_type)
         chunks.append(b"\r\n")
@@ -99,6 +101,11 @@ def build_multipart_body(
         attach_text("display_name", display_name)
     if client_ref:
         attach_text("client_ref", client_ref)
+    if source_manifest is not None:
+        attach_text(
+            "source_manifest",
+            json.dumps(source_manifest, ensure_ascii=False, separators=(",", ":")),
+        )
     attach_text("delivery_strategy", delivery_strategy)
     if delivery_strategy == "webhook" and delivery_webhook_url:
         attach_text("delivery_webhook_url", delivery_webhook_url)
@@ -177,6 +184,31 @@ class TelegramApiClient:
         )
         return self._request_json(
             "/v1/transcription-jobs/combined",
+            method="POST",
+            body=body,
+            headers={"Content-Type": content_type},
+        )
+
+    def create_batch(
+        self,
+        *,
+        files: list[UploadFilePart],
+        source_manifest: JsonObject,
+        display_name: str | None = None,
+        client_ref: str | None = None,
+        delivery_strategy: str = "polling",
+        delivery_webhook_url: str | None = None,
+    ) -> JsonObject:
+        body, content_type = build_multipart_body(
+            files=files,
+            display_name=display_name,
+            client_ref=client_ref,
+            source_manifest=source_manifest,
+            delivery_strategy=delivery_strategy,
+            delivery_webhook_url=delivery_webhook_url,
+        )
+        return self._request_json(
+            "/v1/transcription-jobs/batch",
             method="POST",
             body=body,
             headers={"Content-Type": content_type},

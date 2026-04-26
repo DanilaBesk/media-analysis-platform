@@ -76,6 +76,22 @@ def test_runtime_config_from_env_normalizes_worker_settings(tmp_path: Path) -> N
     assert config.max_processed_jobs == 3
 
 
+def test_runtime_config_accepts_agent_runner_identity(tmp_path: Path) -> None:
+    config = WorkerRuntimeConfig.from_env(
+        worker_kind="agent_runner",
+        task_type="agent_run.run",
+        job_type="agent_run",
+        env={
+            "API_BASE_URL": "http://api.internal",
+            "WORKER_WORKSPACE_ROOT": str(tmp_path / "workspace"),
+        },
+    )
+
+    assert config.worker_kind == "agent_runner"
+    assert config.task_type == "agent_run.run"
+    assert config.job_type == "agent_run"
+
+
 def test_run_worker_loop_executes_explicit_job_without_polling(tmp_path: Path) -> None:
     config = _config(tmp_path, job_id="job-explicit")
     api_client = FakeApiClient([])
