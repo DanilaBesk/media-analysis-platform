@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
 from media_analysis_platform.bot import (
     BatchModeStore,
@@ -12,6 +13,7 @@ from media_analysis_platform.bot import (
     CandidateSelectionStore,
     HANDLE_MEDIA_MARKER,
     TELEGRAM_COMMANDS,
+    TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS,
     TelegramTranscriberApp,
     _extract_attachments,
     _guess_suffix,
@@ -33,18 +35,27 @@ class FakeStatusMessage:
         self.text = text
         self.from_user = SimpleNamespace(id=7)
         self.edits: list[dict[str, object]] = []
+        self.answers: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
 
     async def edit_text(self, text: str, reply_markup=None) -> None:
         self.edits.append({"text": text, "reply_markup": reply_markup})
 
     async def answer_document(self, document, caption: str = "", reply_markup=None) -> None:
+        assert Path(document.path).exists(), f"document path does not exist: {document.path}"
         self.documents.append({"document": document, "caption": caption, "reply_markup": reply_markup})
 
     async def answer(self, text: str, reply_markup=None) -> "FakeStatusMessage":
         status = FakeStatusMessage(self.chat.id, text)
-        self.documents.append({"answer_text": text, "status": status, "reply_markup": reply_markup})
+        payload = {"answer_text": text, "text": text, "status": status, "reply_markup": reply_markup}
+        self.answers.append(payload)
+        self.documents.append(payload)
         return status
+
+
+class InlineRejectedStatusMessage(FakeStatusMessage):
+    async def answer(self, text: str, reply_markup=None) -> "FakeStatusMessage":
+        raise TelegramBadRequest(method=None, message="message is too long")
 
 
 class FakeTask:
@@ -186,6 +197,129 @@ def _make_job(tmp_path: Path) -> ProcessedJob:
         report=ReportArtifacts(job_id="report-job-123", markdown_path=report_md, docx_path=report_docx),
         metadata_path=workspace / "job.json",
     )
+
+
+def _document_entries(message: FakeStatusMessage) -> list[dict[str, object]]:
+    return [item for item in message.documents if "document" in item]
+
+
+@pytest.mark.asyncio
+async def test_send_transcript_result_delivers_threshold_length_transcript_inline(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.write_text("x" * TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS, encoding="utf-8")
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = FakeStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="fallback")  # type: ignore[arg-type]
+
+    assert len(status.answers) == 1
+    assert status.answers[0]["text"] == "x" * TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS
+    assert _document_entries(status) == []
+    keyboard = status.answers[0]["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
+    assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
+
+
+@pytest.mark.asyncio
+async def test_send_transcript_result_falls_back_to_document_when_inline_delivery_is_rejected(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.write_text("short transcript", encoding="utf-8")
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = InlineRejectedStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="fallback")  # type: ignore[arg-type]
+
+    assert status.answers == []
+    document_entry = _document_entries(status)[0]
+    assert document_entry["document"].path == fake_service.job.transcript.text_path
+    assert document_entry["caption"] == "fallback"
+    keyboard = document_entry["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
+    assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
+
+
+@pytest.mark.asyncio
+async def test_send_transcript_result_falls_back_to_document_for_long_transcript(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.write_text("x" * (TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS + 1), encoding="utf-8")
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = FakeStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="Готовая цельная транскрибация без сегментов.")  # type: ignore[arg-type]
+
+    assert status.answers == []
+    document_entry = _document_entries(status)[0]
+    assert document_entry["document"].path == fake_service.job.transcript.text_path
+    assert document_entry["caption"] == "Готовая цельная транскрибация без сегментов."
+    keyboard = document_entry["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
+    assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
+
+
+@pytest.mark.parametrize("content", ["", " \n\t "])
+@pytest.mark.asyncio
+async def test_send_transcript_result_falls_back_to_document_for_empty_or_whitespace_transcript(
+    tmp_path: Path,
+    content: str,
+) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.write_text(content, encoding="utf-8")
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = FakeStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="fallback")  # type: ignore[arg-type]
+
+    assert status.answers == []
+    document_entry = _document_entries(status)[0]
+    assert document_entry["document"].path == fake_service.job.transcript.text_path
+    assert document_entry["caption"] == "fallback"
+
+
+@pytest.mark.asyncio
+async def test_send_transcript_result_sends_unavailable_message_for_missing_transcript_file(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.unlink()
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = FakeStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="fallback")  # type: ignore[arg-type]
+
+    assert len(status.answers) == 1
+    assert status.answers[0]["text"] == "Транскрибация готова, но текстовый файл артефакта недоступен."
+    assert _document_entries(status) == []
+    keyboard = status.answers[0]["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
+    assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
+
+
+@pytest.mark.asyncio
+async def test_send_transcript_result_sends_unavailable_message_for_non_file_transcript_path(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.unlink()
+    fake_service.job.transcript.text_path.mkdir()
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = FakeStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="fallback")  # type: ignore[arg-type]
+
+    assert len(status.answers) == 1
+    assert status.answers[0]["text"] == "Транскрибация готова, но текстовый файл артефакта недоступен."
+    assert _document_entries(status) == []
+
+
+@pytest.mark.asyncio
+async def test_send_transcript_result_falls_back_to_document_for_unreadable_transcript(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    fake_service.job.transcript.text_path.write_bytes(b"\xff")
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    status = FakeStatusMessage(10)
+
+    await app._send_transcript_result(status, fake_service.job, fallback_caption="fallback")  # type: ignore[arg-type]
+
+    assert status.answers == []
+    document_entry = _document_entries(status)[0]
+    assert document_entry["document"].path == fake_service.job.transcript.text_path
+    assert document_entry["caption"] == "fallback"
 
 
 def test_candidate_selection_store_restricts_by_chat_and_user() -> None:
@@ -452,12 +586,49 @@ async def test_start_processing_downloads_attachment_and_updates_status(tmp_path
     assert fake_service.processed_sources[0].local_path.exists()
     status = fake_bot.sent_messages[0]["status"]
     assert status.edits[-1]["text"] == "Транскрибация готова."
-    document_entry = next(item for item in status.documents if "document" in item)
-    assert document_entry["document"].path.name == "transcript.txt"
-    assert document_entry["caption"] == "Готовая цельная транскрибация без сегментов."
-    keyboard = document_entry["reply_markup"]
+    assert status.answers[0]["text"] == "hello\n"
+    assert _document_entries(status) == []
+    keyboard = status.answers[0]["reply_markup"]
     assert keyboard.inline_keyboard[0][0].text == "Получить по сегментам"
     assert keyboard.inline_keyboard[1][0].text == "Создать исследовательский отчет"
+
+
+@pytest.mark.asyncio
+async def test_start_processing_group_delivers_short_transcript_inline(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    candidates = [
+        SourceCandidate(
+            source_id="src-1",
+            kind="youtube_url",
+            display_name="YouTube: one",
+            url="https://youtu.be/one",
+            telegram_file_id=None,
+            mime_type=None,
+            file_name=None,
+        ),
+        SourceCandidate(
+            source_id="src-2",
+            kind="youtube_url",
+            display_name="YouTube: two",
+            url="https://youtu.be/two",
+            telegram_file_id=None,
+            mime_type=None,
+            file_name=None,
+        ),
+    ]
+
+    await app._start_processing_group(chat_id=10, candidates=candidates)
+
+    assert fake_service.processed_groups == [candidates]
+    status = fake_bot.sent_messages[0]["status"]
+    assert status.edits[-1]["text"] == "Транскрибация готова."
+    assert status.answers[0]["text"] == "hello\n"
+    assert _document_entries(status) == []
+    keyboard = status.answers[0]["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
+    assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
 
 
 @pytest.mark.asyncio
@@ -1043,10 +1214,9 @@ async def test_start_basket_processing_downloads_mixed_sources_and_calls_one_bat
     assert app.baskets.list(10, 7) == []
     status = fake_bot.sent_messages[0]["status"]
     assert status.edits[-1]["text"] == "Пакетная транскрибация готова."
-    document_entry = next(item for item in status.documents if "document" in item)
-    assert document_entry["document"].path == fake_service.job.transcript.text_path
-    assert document_entry["caption"] == "Готовая пакетная транскрибация без сегментов."
-    keyboard = document_entry["reply_markup"]
+    assert status.answers[0]["text"] == "hello\n"
+    assert _document_entries(status) == []
+    keyboard = status.answers[0]["reply_markup"]
     assert keyboard.inline_keyboard[0][0].callback_data == "get:job-123"
     assert keyboard.inline_keyboard[1][0].callback_data == "report:job-123"
 

@@ -829,6 +829,9 @@
         <item>create URL jobs through the API</item>
       <item>poll for result readiness by default</item>
       <item>send resulting artifacts back to Telegram users</item>
+      <item>present short readable `transcript_plain` artifacts inline as exact Telegram text when they fit the adapter limit</item>
+      <item>send an unavailable-artifact message with the result keyboard when `transcript_plain` resolves to a missing or non-file `text_path`</item>
+      <item>fall back to document delivery when an existing `transcript_plain` file is long, empty, or unreadable</item>
       <item>expose buttons that trigger API actions</item>
     </TelegramBot>
     <TelegramBotForbidden>
@@ -894,7 +897,9 @@
         <map>batch basket to POST /v1/transcription-jobs/batch</map>
         <map>batch toggle command or button to adapter-local mode state without moving orchestration out of the API</map>
         <map>YouTube URL to POST /v1/transcription-jobs/from-url</map>
-        <map>plain transcript ready to send plain transcript artifact</map>
+        <map>short readable `transcript_plain` artifact to exact inline Telegram text with the result keyboard</map>
+        <map>missing or non-file `transcript_plain` text path to an unavailable-artifact Telegram message with the result keyboard</map>
+        <map>existing long, empty, or unreadable `transcript_plain` file to document delivery with the result keyboard</map>
         <map>segmented transcript button to resolve and send segmented artifact</map>
         <map>report button to create report job and wait or poll</map>
         <map>deep research button to create deep-research job and wait or poll</map>
@@ -906,6 +911,8 @@
         <rule>Bot registers `/start`, `/help`, `/batch`, `/basket`, and `/clear` as the public Telegram command menu.</rule>
         <rule>Batch mode defaults to enabled, can be toggled per chat/user, and when disabled the adapter processes a single source immediately or asks the user to select one source from a multi-source message.</rule>
         <rule>Telegram media groups and user-curated baskets map to the batch transcription flow; sequential standalone media enter the batch flow only after an explicit user action such as Обработать вместе.</rule>
+        <rule>`TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS` is an adapter presentation guard, currently 3500 characters, chosen below Telegram message-size pressure so the bot can keep short transcripts readable in chat without changing artifact ownership.</rule>
+        <rule>Inline transcript delivery must use the exact gateway-materialized `transcript_plain` content; the adapter must not stitch batch pieces, re-render transcripts, or call a worker.</rule>
       </runtime-policy>
     </Telegram>
   </UxRequirements>
@@ -1354,7 +1361,7 @@
     <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Preserve Telegram UX while delegating all business logic to the API.</purpose>
-        <scope>Telegram update parsing, temporary media download, API submission, polling wait flow, callback mapping, and artifact sending.</scope>
+        <scope>Telegram update parsing, temporary media download, API submission, polling wait flow, callback mapping, artifact sending, and bounded transcript presentation transport selection after artifact materialization.</scope>
         <inputs>
           <param name="telegram-update" type="telegram-event" />
         </inputs>
@@ -1372,6 +1379,7 @@
         <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, and URL sources as one API batch basket." />
         <export-registerCommandMenu PURPOSE="Register `/start`, `/help`, `/batch`, `/basket`, and `/clear` commands for Telegram clients." />
         <export-toggleBatchMode PURPOSE="Switch per-chat/user batch collection mode between basket submission and immediate single-source processing." />
+        <export-deliverTranscriptResult PURPOSE="Choose inline Telegram text for short readable `transcript_plain` artifacts, an unavailable-artifact message for missing or non-file text paths, and document fallback for existing long, empty, or unreadable artifact files without changing API or worker contracts." />
       </interface>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <target>
@@ -1387,6 +1395,7 @@
         <note-1>Default delivery strategy is polling for Telegram flows.</note-1>
         <note-2>If `apps/telegram-bot` is absent, materialize it inside the adapter packet while using the current `bot.py` and Telegram tests as the migration source; no separate shell packet is required.</note-2>
         <note-3>If `packages/sdk-py` is still absent during Phase-5, keep a thin packet-local API client under the Telegram adapter boundary and defer shared SDK extraction.</note-3>
+        <note-4>`TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS=3500` is a Telegram UX limit only. It does not define transcript artifact size, API response shape, worker output policy, or batch aggregation semantics.</note-4>
       </notes>
     </M-TELEGRAM-ADAPTER>
 
@@ -1478,6 +1487,16 @@
       <step-5>API emits versioned events, exposes one authoritative root polling snapshot with child lineage, and schedules webhook deliveries only when the batch root uses webhook delivery.</step-5>
       <evidence>V-M-CONTRACTS, V-M-API-STORAGE, V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-TELEGRAM-ADAPTER</evidence>
     </DF-007>
+
+    <DF-008 NAME="TelegramInlineTranscriptPresentation" TRIGGER="Telegram polling observes succeeded transcription job">
+      <step-1>Telegram adapter waits for job readiness through the API-backed gateway and receives a processed job whose plain transcript path points to the materialized `transcript_plain` artifact.</step-1>
+      <step-2>Adapter reads only the canonical `transcript_plain` artifact content already produced by the worker and exposed by the gateway; no bot-side stitching, transcript rendering, AI worker call, or API contract change is allowed.</step-2>
+      <step-3>If the artifact text is readable, non-empty after trimming, and length is less than or equal to `TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS` currently 3500, the adapter sends that exact text as a Telegram message with the result keyboard.</step-3>
+      <step-4>If the `transcript_plain` text path is missing or not a file, the adapter sends an unavailable-artifact Telegram message with the result keyboard.</step-4>
+      <step-5>If an existing artifact file is longer than the limit, empty, or unreadable, the adapter sends the transcript document with the same result keyboard.</step-5>
+      <step-6>For batch roots, the exact aggregate `transcript_plain` artifact is sent or attached, so source-label boundaries already encoded by worker-transcription remain preserved.</step-6>
+      <evidence>V-M-TELEGRAM-ADAPTER, V-M-WORKER-TRANSCRIPTION, DF-001, DF-007</evidence>
+    </DF-008>
 
     <DF-002 NAME="YouTubeUrlToTranscript" TRIGGER="URL transcription create request">
       <step-1>Client submits a supported YouTube URL to the API.</step-1>

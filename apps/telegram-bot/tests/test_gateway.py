@@ -32,6 +32,7 @@ class FakeGatewayApiClient:
         self.batch_requests: list[dict[str, Any]] = []
         self.report_requests: list[str] = []
         self.deep_research_requests: list[str] = []
+        self.download_requests: list[str] = []
         self.downloads = {
             "memory://transcript.md": b"# Transcript\n",
             "memory://transcript.docx": b"transcript-docx",
@@ -106,6 +107,7 @@ class FakeGatewayApiClient:
         return self.resolutions[artifact_id]
 
     def download_bytes(self, url: str) -> bytes:
+        self.download_requests.append(url)
         return self.downloads[url]
 
     def _jobs(self) -> dict[str, dict[str, Any]]:
@@ -216,6 +218,25 @@ def test_gateway_materializes_agent_run_report_and_preserves_returned_job_id(tmp
     assert processed.report.job_id == "agent-report-1"
     assert processed.report.markdown_path.read_text(encoding="utf-8") == "# Report\n"
     assert processed.report.docx_path.read_bytes() == b"report-docx"
+
+
+def test_gateway_materializes_transcript_plain_from_api_artifacts(tmp_path) -> None:
+    api_client = FakeGatewayApiClient()
+    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
+
+    processed = gateway.load_job("transcription-1")
+
+    assert processed.transcript.text_path == (
+        tmp_path / "api-jobs" / "transcription-1" / "transcript" / "transcript.txt"
+    )
+    assert processed.transcript.text_path.read_text(encoding="utf-8") == "Transcript text\n"
+    assert processed.transcript.markdown_path.read_text(encoding="utf-8") == "# Transcript\n"
+    assert processed.transcript.docx_path.read_bytes() == b"transcript-docx"
+    assert api_client.download_requests == [
+        "memory://transcript.md",
+        "memory://transcript.docx",
+        "memory://transcript.txt",
+    ]
 
 
 def test_gateway_submits_mixed_sources_to_batch_endpoint_and_polls_root(tmp_path: Path) -> None:

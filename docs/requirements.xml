@@ -174,8 +174,18 @@
       <Preconditions>API is reachable; Telegram media can be downloaded temporarily by the adapter.</Preconditions>
       <AcceptanceCriteria>Bot remains a thin adapter: it registers `/start`, `/help`, `/batch`, `/basket`, and `/clear`, lets the user toggle batch basket mode on or off through a command or inline button, collects sources in a Telegram basket when batch mode is enabled, downloads Telegram files only long enough to submit them, posts the whole basket to `/v1/transcription-jobs/batch`, waits by polling by default, sends returned artifacts to the user, and triggers report or deep-research only through API-owned `agent_run` operation children.</AcceptanceCriteria>
       <Priority>high</Priority>
-      <RelatedFlows>DF-001, DF-004, DF-005, DF-007</RelatedFlows>
+      <RelatedFlows>DF-001, DF-004, DF-005, DF-007, DF-008</RelatedFlows>
     </UC-008>
+
+    <UC-008A>
+      <Actor>TelegramBot</Actor>
+      <Action>Presents a completed transcription result in Telegram after the API and gateway have materialized the canonical `transcript_plain` artifact.</Action>
+      <Goal>Deliver short readable transcripts inline while preserving artifact-backed correctness and the existing result keyboard.</Goal>
+      <Preconditions>The transcription job has reached a terminal success state; the gateway has resolved the job artifacts through the API; `transcript_plain` is the source of truth for the plain transcript content.</Preconditions>
+      <AcceptanceCriteria>If `transcript_plain` is readable, non-empty after whitespace trimming, and no longer than `TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS` currently set to 3500 characters, Telegram sends the exact `transcript_plain` text as a plain message with the result keyboard. If `transcript_plain` resolves to a missing or non-file `text_path`, Telegram sends an unavailable-artifact message with the result keyboard. If an existing `transcript_plain` file is long, empty, or unreadable, Telegram falls back to document delivery with the same result keyboard. The adapter must not stitch transcript parts, run an AI worker, alter batch boundaries, or require any API contract change.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-008, DF-007, DF-001</RelatedFlows>
+    </UC-008A>
 
     <UC-009>
       <Actor>MCPClient</Actor>
@@ -217,6 +227,7 @@
     <constraint-15>For the first autonomous AI-agent execution iteration, only Claude Code with an Anthropic-compatible JSON settings provider is supported. The worker must run `claude-code` inside the container, generate provider settings from explicit env values, and must not use a host-side execution broker or persist raw credentials in control-plane payloads.</constraint-15>
     <constraint-16>Generic agent execution must expose per-harness concurrency as explicit configuration or policy, so admission control is set per `harness_name` instead of by separate worker type.</constraint-16>
     <constraint-17>The `agent_run_create` control-plane surface must treat agent runs as request-only jobs: clients may pass `harness_name` and request content, but must not provide job type, source-set id, root id, provider-specific worker identity, or raw session credentials.</constraint-17>
+    <constraint-18>Telegram inline transcript presentation is a bounded adapter delivery choice over the canonical API/worker `transcript_plain` artifact. It must not introduce a new transcription architecture, bot-side transcript assembly, AI worker, artifact kind, or API response contract.</constraint-18>
   </Constraints>
 
   <Risks>
@@ -237,6 +248,7 @@
     <resolution-6>The approved first container-local provider model for Claude Code mirrors the local `cglm` wrapper: env-supplied `AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY`, `AGENT_RUNNER_CLAUDE_CODE_BASE_URL`, and `AGENT_RUNNER_CLAUDE_CODE_MODEL` generate Claude Code settings JSON with `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_API_KEY`, `CLAUDE_API_BASE_URL`, and model override env values. `AGENT_RUNNER_CLAUDE_CODE_AUTH_TOKEN` remains a compatibility fallback only; Anthropic Claude subscription login and Codex are not part of this iteration.</resolution-6>
     <resolution-7>Per-harness concurrency is an explicit policy surface owned by configuration, for example `claude-code` limits, and not a reason to split the worker topology.</resolution-7>
     <resolution-8>The completed batch transcription implementation supersedes concat-first combined transcription as active architecture. The active contract uses `/v1/transcription-jobs/batch`, stable `source_label` values in a `batch-transcription.v1` source manifest, per-source transcription children, a root aggregate transcription task, aggregate artifacts `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json`, and report/deep-research handoff from the aggregate root through `agent_run` children handled only by worker-agent-runner. Earlier `/combined` and ordered concatenation wording is historical lineage, not the current runtime contract.</resolution-8>
+    <resolution-9>The `media-20e` Telegram inline transcript delta is closed as presentation transport only: short readable `transcript_plain` artifacts are sent inline as exact Telegram text with the result keyboard, missing or non-file `transcript_plain` text paths send an unavailable-artifact message with the result keyboard, and existing long, empty, or unreadable artifact files continue to use document delivery. API/worker artifact ownership, batch aggregate boundaries, and report/deep-research follow-up semantics remain unchanged.</resolution-9>
   </ResolvedQuestions>
 
   <PreservationPolicy>

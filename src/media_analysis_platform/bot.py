@@ -29,6 +29,7 @@ from transcriber_workers_common.source_extractor import extract_sources
 
 LOGGER = logging.getLogger(__name__)
 HANDLE_MEDIA_MARKER = "[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]"
+TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS = 3500
 
 TELEGRAM_COMMANDS = (
     BotCommand(command="start", description="Показать основное меню"),
@@ -480,10 +481,10 @@ class TelegramTranscriberApp:
             return
 
         await status_message.edit_text("Транскрибация готова.")
-        await status_message.answer_document(
-            FSInputFile(job.transcript.text_path),
-            caption="Готовая цельная транскрибация без сегментов.",
-            reply_markup=_build_result_keyboard(job.job_id),
+        await self._send_transcript_result(
+            status_message,
+            job,
+            fallback_caption="Готовая цельная транскрибация без сегментов.",
         )
 
     async def _start_processing_group(self, chat_id: int, candidates: list[SourceCandidate]) -> None:
@@ -497,10 +498,10 @@ class TelegramTranscriberApp:
             return
 
         await status_message.edit_text("Транскрибация готова.")
-        await status_message.answer_document(
-            FSInputFile(job.transcript.text_path),
-            caption="Готовая цельная транскрибация без сегментов.",
-            reply_markup=_build_result_keyboard(job.job_id),
+        await self._send_transcript_result(
+            status_message,
+            job,
+            fallback_caption="Готовая цельная транскрибация без сегментов.",
         )
 
     async def _start_basket_processing(self, chat_id: int, user_id: int | None) -> None:
@@ -520,10 +521,43 @@ class TelegramTranscriberApp:
 
         self.baskets.clear(chat_id, user_id)
         await status_message.edit_text("Пакетная транскрибация готова.")
+        await self._send_transcript_result(
+            status_message,
+            job,
+            fallback_caption="Готовая пакетная транскрибация без сегментов.",
+        )
+
+    async def _send_transcript_result(self, status_message: Message, job: ProcessedJob, *, fallback_caption: str) -> None:
+        reply_markup = _build_result_keyboard(job.job_id)
+        text_path = job.transcript.text_path
+        if not text_path.is_file():
+            await status_message.answer(
+                "Транскрибация готова, но текстовый файл артефакта недоступен.",
+                reply_markup=reply_markup,
+            )
+            return
+
+        try:
+            with text_path.open(encoding="utf-8") as transcript_file:
+                transcript_text = transcript_file.read(TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS + 1)
+        except (OSError, UnicodeDecodeError):
+            transcript_text = None
+
+        if (
+            transcript_text is not None
+            and transcript_text.strip()
+            and len(transcript_text) <= TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS
+        ):
+            try:
+                await status_message.answer(transcript_text, reply_markup=reply_markup)
+                return
+            except TelegramBadRequest:
+                pass
+
         await status_message.answer_document(
-            FSInputFile(job.transcript.text_path),
-            caption="Готовая пакетная транскрибация без сегментов.",
-            reply_markup=_build_result_keyboard(job.job_id),
+            FSInputFile(text_path),
+            caption=fallback_caption,
+            reply_markup=reply_markup,
         )
 
     async def _download_attachment_if_needed(self, candidate: SourceCandidate) -> SourceCandidate:

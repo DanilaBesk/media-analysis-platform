@@ -1411,6 +1411,79 @@ VerificationPlan / V-M-TELEGRAM-ADAPTER / Gate-Phase-5:
       </notes>
     </ExecutionPacket>
 
+    <ExecutionPacket packet-id="media-20e-telegram-inline-transcript-delivery" module="M-TELEGRAM-ADAPTER" phase="Phase-5-delta" step="media-20e" verification-ref="V-M-TELEGRAM-ADAPTER">
+      <module-id>M-TELEGRAM-ADAPTER</module-id>
+      <module-name>TelegramAdapter</module-name>
+      <purpose>Record the completed bounded Telegram adapter delivery delta that sends short readable `transcript_plain` artifacts inline and keeps document fallback for every unsafe inline case.</purpose>
+      <packet-state>completed</packet-state>
+      <completion-evidence>Focused Telegram pytest coverage verifies threshold-length inline delivery, document fallback for long or empty or unreadable existing files, unavailable-artifact status delivery for missing or non-file paths, TelegramBadRequest inline-rejection fallback to document delivery, result keyboard preservation, and batch path delivery over the exact gateway-materialized `transcript_plain` artifact. Gateway coverage proves API `transcript_plain` artifacts are resolved/downloaded into `ProcessedJob.transcript.text_path` before bot presentation. Evidence commands: `.venv/bin/pytest tests/test_bot.py -q` passed with 58 tests before hardening; focused final-gate replay `.venv/bin/pytest tests/test_bot.py -k send_transcript_result -q` passed with 8 tests; `PYTHONPATH=workers/common/src:apps/telegram-bot/src .venv/bin/pytest apps/telegram-bot/tests/test_gateway.py -q` passed with 5 tests.</completion-evidence>
+      <write-scope>
+        <file-1>src/media_analysis_platform/bot.py</file-1>
+        <file-2>tests/test_bot.py</file-2>
+      </write-scope>
+      <write-scope-notes>
+        <note-1>This packet records completed runtime/test work; the GRACE refresh for this task edits only canonical XML artifacts.</note-1>
+        <note-2>Keep the feature inside Telegram adapter presentation delivery. Do not touch API routes, worker transcription, artifact schema, agent-runner, or batch aggregation contracts for this delta.</note-2>
+      </write-scope-notes>
+      <contract-excerpt><![CDATA[
+Requirements / UC-008A:
+- Source of truth is the API/worker `transcript_plain` artifact after the gateway materializes it.
+- If readable, non-empty, and length <= TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS currently 3500, send the exact transcript text inline with the result keyboard.
+- If an existing file is long, empty, whitespace-only, or unreadable, send the transcript document with the result keyboard.
+- If the `transcript_plain` path is missing or not a file, send a concise unavailable-artifact status message with the result keyboard and do not attempt document upload.
+- No new AI worker, no bot-side stitching, no API contract change, and no new transcription architecture.
+
+DevelopmentPlan / DF-008:
+- TelegramInlineTranscriptPresentation chooses only the Telegram presentation transport after job readiness and artifact materialization.
+- Batch roots preserve boundaries because the exact aggregate `transcript_plain` artifact content is sent or attached.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph / M-TELEGRAM-ADAPTER:
+- Add export-deliverTranscriptResult.
+- Add type-TelegramInlineTranscriptDelivery.
+- Link M-TELEGRAM-ADAPTER to M-CONTRACTS and M-WORKER-TRANSCRIPTION through `transcript_plain` artifact presentation semantics, not through direct worker ownership.
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">`transcript_plain` remains the canonical artifact kind and no public API envelope changes for inline Telegram presentation.</dependency-1>
+        <dependency-2 module="M-WORKER-TRANSCRIPTION">Workers continue to produce per-source and aggregate `transcript_plain` artifacts; adapter presentation does not re-render or stitch them.</dependency-2>
+        <dependency-3 module="M-API-HTTP">The gateway reads artifact metadata and materializes artifact content through the existing API-owned path before Telegram chooses inline text or document fallback.</dependency-3>
+      </dependency-contract-summaries>
+      <verification-excerpt><![CDATA[
+VerificationPlan / V-M-TELEGRAM-ADAPTER:
+- Required evidence: inline exact text delivery for readable non-empty transcript_plain at the 3500-character threshold.
+- Required evidence: document fallback for long, empty or whitespace-only, and unreadable existing transcript_plain files.
+- Required evidence: unavailable-artifact status message delivery, with result keyboard and no document upload, for missing or non-file transcript_plain paths.
+- Required evidence: document fallback when inline Telegram delivery rejects with TelegramBadRequest.
+- Required evidence: result keyboard is preserved for both inline and document delivery.
+- Required evidence: batch delivery uses gateway-materialized transcript_plain content and does not add bot-side stitching.
+- Required evidence: gateway resolves/downloads API transcript_plain artifacts into ProcessedJob.transcript.text_path before bot presentation.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>.venv/bin/pytest tests/test_bot.py -q</command-1>
+        <command-2>.venv/bin/pytest tests/test_bot.py -k send_transcript_result -q</command-2>
+        <command-3>PYTHONPATH=workers/common/src:apps/telegram-bot/src .venv/bin/pytest apps/telegram-bot/tests/test_gateway.py -q</command-3>
+        <evidence-1>Short readable `transcript_plain` content is sent as exact inline Telegram text.</evidence-1>
+        <evidence-2>Long, empty, unreadable existing, and TelegramBadRequest inline-rejection `transcript_plain` paths fall back to document sending.</evidence-2>
+        <evidence-2a>Missing or non-file `transcript_plain` paths send an unavailable-artifact status message with the result keyboard and no document upload.</evidence-2a>
+        <evidence-3>The result keyboard remains attached in both presentation transports.</evidence-3>
+        <evidence-4>Gateway tests prove API artifact materialization writes `transcript_plain` content to `ProcessedJob.transcript.text_path`.</evidence-4>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>exports: add or preserve `export-deliverTranscriptResult` under M-TELEGRAM-ADAPTER.</field-1>
+        <field-2>annotations: record `type-TelegramInlineTranscriptDelivery` as a bounded presentation rule.</field-2>
+        <field-3>CrossLinks: connect Telegram presentation to `transcript_plain` artifact ownership without adding worker or API ownership edges to the adapter.</field-3>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: `tests/test_bot.py` holds focused adapter delivery coverage.</field-1>
+        <field-2>module-checks: record the focused pytest command for inline and fallback paths.</field-2>
+        <field-3>required-trace-assertions: preserve the thin-adapter and exact-artifact-content boundaries.</field-3>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>`TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS=3500` is a Telegram message presentation guard, not an artifact, worker, or API contract limit.</note-1>
+        <note-2>This packet is a delivery delta on top of the completed Telegram adapter, not a new transcription architecture.</note-2>
+      </notes>
+    </ExecutionPacket>
+
     <ExecutionPacket packet-id="M-MCP-ADAPTER-app-shell-wave-5" module="M-MCP-ADAPTER" phase="Phase-5" step="0b" verification-ref="V-M-MCP-ADAPTER">
       <module-id>M-MCP-ADAPTER</module-id>
       <module-name>McpAdapter</module-name>
@@ -2028,7 +2101,7 @@ Commands verified:
       <module-name>BatchTranscriptionGraceRefresh</module-name>
       <purpose>Refresh canonical GRACE artifacts after the completed batch transcription implementation, replacing active concat-first combined wording with the root aggregate, per-source child, and worker-transcription aggregate-task architecture.</purpose>
       <packet-state>completed</packet-state>
-      <completion-evidence>GRACE-only refresh over the completed implementation. Evidence includes contract tests, Go API focused tests, live PostgreSQL batch E2E, worker-transcription aggregate tests, Telegram basket tests, worker-agent-runner tests, and XML validation.</completion-evidence>
+      <completion-evidence>GRACE-only refresh over the completed implementation. Evidence includes contract tests, Go API focused tests, worker-transcription aggregate tests, Telegram basket tests, Telegram gateway artifact-materialization tests, worker-agent-runner tests, XML validation, and a live compose PostgreSQL batch E2E. The host live PostgreSQL batch E2E command was run but skipped because `API_STORAGE_POSTGRES_DSN` was unset; preserve that as host skipped/blocker evidence. Follow-up DB-backed evidence passed inside the compose API container against the compose PostgreSQL test DB with `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v'`; result `PASS`, `ok github.com/danila/media-analysis-platform/apps/api/internal/api 0.512s`.</completion-evidence>
       <write-scope>
         <file-1>docs/requirements.xml</file-1>
         <file-2>docs/technology.xml</file-2>
@@ -2065,9 +2138,12 @@ Required graph deltas:
       </dependency-contract-summaries>
       <verification-excerpt><![CDATA[
 Completed evidence to preserve:
-- Go API focused/live PostgreSQL E2E: TestApiBatchTranscriptionE2EWithLivePostgresControlPlane covers root aggregate creation, idempotent replay, source children, aggregate enqueue, aggregate finalization, source_manifest_json, batch_diagnostics_json, report child agent_run handoff, deep_research agent_run handoff, cancel, failure, and retry.
+- Go API focused tests cover root aggregate creation, idempotent replay, source children, aggregate enqueue, aggregate finalization, source_manifest_json, batch_diagnostics_json, report child agent_run handoff, deep_research agent_run handoff, cancel, failure, and retry.
+- Host Live PostgreSQL E2E command `go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v` was executed but skipped because API_STORAGE_POSTGRES_DSN was unset, with a PASS wrapper around the skip. Preserve this as host skipped/blocker evidence.
+- Compose-container DB-backed E2E command `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v'` passed against the compose PostgreSQL test DB; result `PASS`, `ok github.com/danila/media-analysis-platform/apps/api/internal/api 0.512s`.
+- API report/deep-research transcript handoff focused tests passed: `go test ./internal/api -run 'TestApiHttpRuntimeCreateReportCreatesClaudeCodeAgentRunWithTranscriptInput|TestApiHttpRuntimeClaimUsesTranscriptArtifactForReportChild' -count=1 -v`.
 - Worker tests: workers/transcription/tests cover per-source source_label preservation, aggregate merge ordering, missing child artifact failure, best-effort diagnostics, and aggregate artifact registration.
-- Telegram tests: tests/test_bot.py plus apps/telegram-bot tests cover basket collection, stable manifest file parts, one batch API call, and API-owned callback lineage.
+- Telegram tests: tests/test_bot.py plus apps/telegram-bot tests cover basket collection, stable manifest file parts, one batch API call, API-owned callback lineage, TelegramBadRequest inline rejection fallback to document delivery, and gateway materialization of API transcript_plain artifacts into ProcessedJob.transcript.text_path.
 - Agent-runner tests: workers/agent-runner/tests plus workers/common/tests cover report/deep_research operation artifacts and request-access materialization.
 - Contract tests: packages/contracts/tests/test_contract_surfaces.py freezes `/v1/transcription-jobs/batch`, source labels, task types, artifact kinds, and single worker-agent-runner topology.
       ]]></verification-excerpt>

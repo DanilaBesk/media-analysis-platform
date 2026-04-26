@@ -16,6 +16,7 @@
         <type-JobSnapshot PURPOSE="Canonical job read model including lineage, artifacts, and children." />
         <type-DeliveryStrategy PURPOSE="Per-job delivery choice: polling or webhook." />
         <type-ArtifactResolution PURPOSE="Artifact metadata plus presigned MinIO download link." />
+        <type-TranscriptPlainArtifact PURPOSE="Canonical plain transcript artifact produced by transcription workers and consumed by adapters for presentation." />
         <type-WorkerFinalizeRequest PURPOSE="Canonical worker finalization DTO used by all Python workers." />
         <type-SourceSet PURPOSE="Ordered input set backing one transcription job." />
         <type-BatchTranscriptionContract PURPOSE="Mixed-source `/v1/transcription-jobs/batch` contract with stable source labels, root aggregate transcription job, per-source transcription children, and aggregate artifact outputs." />
@@ -135,6 +136,7 @@
         <export-runTranscriptionAggregate PURPOSE="Claim a root batch job, merge successful child transcript artifacts in stable source-label order, write aggregate transcript and diagnostics artifacts, and finalize the root." />
         <export-launchTranscriptionWorker PURPOSE="Start the compose-ready transcription worker process." />
         <type-OrderedWorkerInput PURPOSE="Ordered transcription inputs resolved by the internal claim surface." />
+        <type-TranscriptPlainArtifactOutput PURPOSE="Worker-owned `transcript_plain` output that remains the source of truth for Telegram inline or document presentation." />
         <type-BatchAggregateArtifacts PURPOSE="Aggregate `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json` artifacts for batch roots." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
@@ -177,6 +179,8 @@
         <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, uploaded files, and URL sources as one API batch basket without owning business orchestration." />
         <export-registerCommandMenu PURPOSE="Register the Telegram command menu for start, help, batch toggle, basket view, and basket clear." />
         <export-toggleBatchMode PURPOSE="Maintain adapter-local per-chat/user batch mode state without owning API orchestration." />
+        <export-deliverTranscriptResult PURPOSE="Present short readable `transcript_plain` artifacts as exact inline Telegram text with the result keyboard, use document fallback for existing long, empty, or unreadable artifact files, and show an unavailable-artifact message when the text file is missing or not a file." />
+        <type-TelegramInlineTranscriptDelivery PURPOSE="Bounded adapter presentation rule over gateway-materialized `transcript_plain`; no bot-side stitching, new worker, or API contract change." />
       </annotations>
     </M-TELEGRAM-ADAPTER>
 
@@ -225,6 +229,9 @@
     <CrossLink from="M-API-EVENTS" to="M-WEB-UI" relation="streams-events-to" />
     <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="consumes" />
     <CrossLink from="M-API-HTTP" to="M-TELEGRAM-ADAPTER" relation="serves-data-to" />
+    <CrossLink from="M-TELEGRAM-ADAPTER" to="M-CONTRACTS" relation="presents-transcript_plain-artifact-defined-by" />
+    <CrossLink from="M-TELEGRAM-ADAPTER" to="M-WORKER-TRANSCRIPTION" relation="presents-transcript_plain-artifacts-produced-by" />
+    <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-TELEGRAM-ADAPTER" relation="provides-transcript_plain-content-for-presentation" />
     <CrossLink from="M-MCP-ADAPTER" to="M-API-HTTP" relation="consumes" />
     <CrossLink from="M-API-HTTP" to="M-MCP-ADAPTER" relation="serves-data-to" />
     <CrossLink from="M-INFRA-COMPOSE" to="M-API-HTTP" relation="runs" />
