@@ -15,6 +15,7 @@ from media_analysis_platform.bot import (
     TelegramTranscriberApp,
     _extract_attachments,
     _guess_suffix,
+    _looks_like_command_menu_request,
     _with_stable_source_id,
 )
 from media_analysis_platform.config import Settings
@@ -64,14 +65,20 @@ class FakeBot:
         self.documents: list[dict[str, object]] = []
         self.downloads: list[dict[str, object]] = []
         self.commands: list[object] = []
+        self.command_scopes: list[object] = []
+        self.menu_buttons: list[object] = []
 
     async def send_message(self, chat_id: int, text: str, reply_markup=None) -> FakeStatusMessage:
         status = FakeStatusMessage(chat_id=chat_id, text=text)
         self.sent_messages.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup, "status": status})
         return status
 
-    async def set_my_commands(self, commands: list[object]) -> None:
+    async def set_my_commands(self, commands: list[object], scope=None) -> None:
         self.commands = commands
+        self.command_scopes.append(scope)
+
+    async def set_chat_menu_button(self, menu_button=None) -> None:
+        self.menu_buttons.append(menu_button)
 
     async def download(self, file_id: str, destination: Path) -> None:
         destination.write_bytes(b"fake-media")
@@ -316,6 +323,8 @@ async def test_configure_commands_registers_public_command_menu(tmp_path: Path) 
 
     assert [command.command for command in fake_bot.commands] == [command.command for command in TELEGRAM_COMMANDS]
     assert [command.command for command in fake_bot.commands] == ["start", "help", "batch", "basket", "clear"]
+    assert fake_bot.command_scopes[-1].type == "default"
+    assert fake_bot.menu_buttons[-1].type == "commands"
 
 
 @pytest.mark.asyncio
@@ -617,6 +626,45 @@ async def test_handle_start_and_help_answer_with_guidance(tmp_path: Path) -> Non
     assert start_message.documents[0]["answer_text"].startswith("Отправьте voice/audio/video/document")
     assert "корзина" in help_message.documents[0]["answer_text"].lower()
     assert "batch" in help_message.documents[0]["answer_text"]
+
+
+def test_slash_text_is_treated_as_command_menu_request() -> None:
+    assert _looks_like_command_menu_request("/") is True
+    assert _looks_like_command_menu_request("/unknown") is True
+    assert _looks_like_command_menu_request(" //not-command") is False
+    assert _looks_like_command_menu_request("https://example.com/a/b") is False
+
+
+@pytest.mark.asyncio
+async def test_handle_message_answers_command_menu_for_bare_slash(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    message = SimpleNamespace(
+        text="/",
+        caption=None,
+        media_group_id=None,
+        message_id=99,
+        chat=SimpleNamespace(id=10),
+        from_user=SimpleNamespace(id=11),
+        audio=None,
+        voice=None,
+        video=None,
+        video_note=None,
+        document=None,
+        documents=[],
+    )
+
+    async def answer(text: str, reply_markup=None) -> None:
+        message.documents.append({"answer_text": text, "reply_markup": reply_markup})
+
+    message.answer = answer
+
+    await app._handle_message(message)  # type: ignore[arg-type]
+
+    assert message.documents[0]["answer_text"].startswith("Команды доступны в меню Telegram")
+    keyboard = message.documents[0]["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].callback_data == "mode:batch:toggle"
+    assert fake_bot.sent_messages == []
 
 
 @pytest.mark.asyncio

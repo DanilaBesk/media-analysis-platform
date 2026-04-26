@@ -10,7 +10,15 @@ from uuid import uuid4
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import BotCommand, CallbackQuery, FSInputFile, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeDefault,
+    CallbackQuery,
+    FSInputFile,
+    InlineKeyboardMarkup,
+    MenuButtonCommands,
+    Message,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from media_analysis_platform.config import Settings
@@ -159,7 +167,8 @@ class TelegramTranscriberApp:
         )
 
     async def _configure_commands(self) -> None:
-        await self.bot.set_my_commands(list(TELEGRAM_COMMANDS))
+        await self.bot.set_my_commands(list(TELEGRAM_COMMANDS), scope=BotCommandScopeDefault())
+        await self.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
     async def _handle_start(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
@@ -177,16 +186,7 @@ class TelegramTranscriberApp:
         if not await self._ensure_message_allowed(message):
             return
         user_id = message.from_user.id if message.from_user else None
-        await message.answer(
-            "Поддерживается корзина из voice/audio/video/document, YouTube и URL. "
-            "Кнопками можно убрать источник, очистить корзину или запустить одну batch-транскрибацию. "
-            "Кнопка batch включает сбор корзины или выключает его для одиночной обработки. "
-            "После обработки бот отдаёт txt-артефакт, markdown по кнопке, отчёт и deep research от aggregate root/report job.",
-            reply_markup=_build_main_keyboard(
-                batch_enabled=self.batch_modes.is_enabled(message.chat.id, user_id),
-                basket=self.baskets.list(message.chat.id, user_id),
-            ),
-        )
+        await self._send_command_menu(chat_id=message.chat.id, user_id=user_id, answer=message.answer)
 
     async def _handle_batch_command(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
@@ -233,6 +233,11 @@ class TelegramTranscriberApp:
             return
         attachments = _extract_attachments(message)
         text = message.text or message.caption or ""
+        user_id = message.from_user.id if message.from_user else None
+
+        if _looks_like_command_menu_request(text) and not attachments:
+            await self._send_command_menu(chat_id=message.chat.id, user_id=user_id, answer=message.answer)
+            return
 
         if message.media_group_id and attachments:
             key = (message.chat.id, message.media_group_id)
@@ -247,7 +252,7 @@ class TelegramTranscriberApp:
             self.media_group_tasks[key] = asyncio.create_task(
                 self._flush_media_group(
                     chat_id=message.chat.id,
-                    user_id=message.from_user.id if message.from_user else None,
+                    user_id=user_id,
                     media_group_id=message.media_group_id,
                 )
             )
@@ -255,10 +260,28 @@ class TelegramTranscriberApp:
 
         await self._process_candidate_set(
             chat_id=message.chat.id,
-            user_id=message.from_user.id if message.from_user else None,
+            user_id=user_id,
             text=text,
             attachments=attachments,
             message_id=getattr(message, "message_id", None),
+        )
+
+    async def _send_command_menu(self, chat_id: int, user_id: int | None, answer) -> None:
+        basket = self.baskets.list(chat_id, user_id)
+        await answer(
+            "Команды доступны в меню Telegram рядом с полем ввода:\n"
+            "/start - основное меню\n"
+            "/help - помощь\n"
+            "/batch - включить или выключить batch-режим\n"
+            "/basket - показать корзину\n"
+            "/clear - очистить корзину\n\n"
+            "Корзина собирает несколько источников перед общим batch-запуском. "
+            "Кнопками можно убрать источник, очистить корзину или запустить одну batch-транскрибацию. "
+            "Кнопка batch включает сбор корзины или выключает его для одиночной обработки.",
+            reply_markup=_build_main_keyboard(
+                batch_enabled=self.batch_modes.is_enabled(chat_id, user_id),
+                basket=basket,
+            ),
         )
 
     async def _flush_media_group(self, chat_id: int, user_id: int | None, media_group_id: str) -> None:
@@ -768,6 +791,11 @@ def _extract_attachments(message: Message) -> list[MediaAttachment]:
             )
 
     return attachments
+
+
+def _looks_like_command_menu_request(text: str) -> bool:
+    stripped = text.strip()
+    return stripped == "/" or (stripped.startswith("/") and not stripped.startswith("//"))
 
 
 def _guess_suffix(candidate: SourceCandidate) -> str:
