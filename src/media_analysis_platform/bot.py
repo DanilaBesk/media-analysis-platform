@@ -133,6 +133,8 @@ class TelegramTranscriberApp:
         self.media_groups = MediaGroupAccumulator()
         self.media_group_tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
         self.media_group_text: dict[tuple[int, str], str] = {}
+        self.basket_summary_tasks: dict[tuple[int, int | None], asyncio.Task[None]] = {}
+        self.basket_summary_added_counts: dict[tuple[int, int | None], int] = {}
         self.report_locks: dict[str, asyncio.Lock] = {}
         self.deep_research_locks: dict[str, asyncio.Lock] = {}
         self._register_handlers()
@@ -205,6 +207,7 @@ class TelegramTranscriberApp:
         if not await self._ensure_message_allowed(message):
             return
         user_id = message.from_user.id if message.from_user else None
+        self._cancel_pending_basket_summary(message.chat.id, user_id)
         basket = self.baskets.list(message.chat.id, user_id)
         text = _build_basket_text(basket) if basket else "Корзина пуста."
         await message.answer(
@@ -219,6 +222,7 @@ class TelegramTranscriberApp:
         if not await self._ensure_message_allowed(message):
             return
         user_id = message.from_user.id if message.from_user else None
+        self._cancel_pending_basket_summary(message.chat.id, user_id)
         self.baskets.clear(message.chat.id, user_id)
         await message.answer(
             "Корзина очищена.",
@@ -320,6 +324,7 @@ class TelegramTranscriberApp:
 
         candidates = [_with_stable_source_id(candidate, message_id=message_id) for candidate in result.candidates]
         if not self.batch_modes.is_enabled(chat_id, user_id):
+            self._cancel_pending_basket_summary(chat_id, user_id)
             if len(candidates) == 1:
                 await self.bot.send_message(chat_id, "Batch-режим выключен. Запускаю одиночную обработку.")
                 await self._start_processing(chat_id, candidates[0])
@@ -336,7 +341,46 @@ class TelegramTranscriberApp:
         message = _build_basket_text(basket, added_count=len(candidates))
         if result.rejected_urls:
             message += "\n\nПропущены неподдерживаемые ссылки:\n" + "\n".join(f"- {item}" for item in result.rejected_urls)
+
+        if len(candidates) == 1 and not result.rejected_urls:
+            self._schedule_basket_summary(chat_id, user_id, added_count=1)
+            return
+
+        self._cancel_pending_basket_summary(chat_id, user_id)
         await self.bot.send_message(chat_id, message, reply_markup=_build_basket_keyboard(basket))
+
+    def _schedule_basket_summary(self, chat_id: int, user_id: int | None, *, added_count: int) -> None:
+        key = (chat_id, user_id)
+        self.basket_summary_added_counts[key] = self.basket_summary_added_counts.get(key, 0) + added_count
+        existing = self.basket_summary_tasks.get(key)
+        if existing and not existing.done():
+            existing.cancel()
+        self.basket_summary_tasks[key] = asyncio.create_task(self._flush_basket_summary(chat_id, user_id))
+
+    def _cancel_pending_basket_summary(self, chat_id: int, user_id: int | None) -> None:
+        key = (chat_id, user_id)
+        existing = self.basket_summary_tasks.pop(key, None)
+        if existing and not existing.done():
+            existing.cancel()
+        self.basket_summary_added_counts.pop(key, None)
+
+    async def _flush_basket_summary(self, chat_id: int, user_id: int | None) -> None:
+        key = (chat_id, user_id)
+        try:
+            await asyncio.sleep(self.settings.media_group_window_seconds)
+        except asyncio.CancelledError:
+            return
+
+        self.basket_summary_tasks.pop(key, None)
+        added_count = self.basket_summary_added_counts.pop(key, 0)
+        basket = self.baskets.list(chat_id, user_id)
+        if not basket:
+            return
+        await self.bot.send_message(
+            chat_id,
+            _build_basket_text(basket, added_count=added_count or None),
+            reply_markup=_build_basket_keyboard(basket),
+        )
 
     async def _handle_source_selection(self, callback: CallbackQuery) -> None:
         if callback.message is None or callback.data is None:
@@ -392,11 +436,13 @@ class TelegramTranscriberApp:
         command = action[1] if len(action) > 1 else ""
 
         if command == "start":
+            self._cancel_pending_basket_summary(chat_id, user_id)
             await _safe_callback_answer(callback, "Запускаю batch-транскрибацию...")
             await self._start_basket_processing(chat_id=chat_id, user_id=user_id)
             return
 
         if command == "clear":
+            self._cancel_pending_basket_summary(chat_id, user_id)
             self.baskets.clear(chat_id, user_id)
             await _safe_callback_answer(callback, "Корзина очищена.")
             await callback.message.edit_text("Корзина очищена.")
@@ -412,6 +458,7 @@ class TelegramTranscriberApp:
             if removed is None:
                 await callback.answer("Источник уже недоступен.", show_alert=True)
                 return
+            self._cancel_pending_basket_summary(chat_id, user_id)
             await _safe_callback_answer(callback, "Источник удалён.")
             basket = self.baskets.list(chat_id, user_id)
             if basket:

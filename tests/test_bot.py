@@ -812,11 +812,67 @@ async def test_flush_media_group_stops_on_cancellation(tmp_path: Path, monkeypat
 async def test_process_candidate_set_adds_single_source_to_basket(tmp_path: Path, monkeypatch) -> None:
     fake_bot = FakeBot()
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    scheduled = FakeTask(done=False)
+
+    def fake_create_task(coro):
+        coro.close()
+        return scheduled
+
+    monkeypatch.setattr("media_analysis_platform.bot.asyncio.create_task", fake_create_task)
 
     await app._process_candidate_set(chat_id=10, user_id=11, text="https://youtu.be/demo", attachments=[])
 
     basket = app.baskets.list(10, 11)
     assert basket[0].display_name == "YouTube: demo"
+    assert fake_bot.sent_messages == []
+    assert app.basket_summary_added_counts[(10, 11)] == 1
+    assert app.basket_summary_tasks[(10, 11)] is scheduled
+
+
+@pytest.mark.asyncio
+async def test_forwarded_single_sources_are_coalesced_into_one_basket_summary(tmp_path: Path, monkeypatch) -> None:
+    fake_bot = FakeBot()
+    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    app.settings = app.settings.__class__(
+        telegram_bot_token=app.settings.telegram_bot_token,
+        allowed_user_ids=app.settings.allowed_user_ids,
+        whisper_model=app.settings.whisper_model,
+        whisper_device=app.settings.whisper_device,
+        whisper_compute_type=app.settings.whisper_compute_type,
+        report_prompt_suffix=app.settings.report_prompt_suffix,
+        media_group_window_seconds=0,
+        data_dir=app.settings.data_dir,
+        youtube_languages=app.settings.youtube_languages,
+    )
+
+    async def no_sleep(seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr("media_analysis_platform.bot.asyncio.sleep", no_sleep)
+
+    for index in range(7):
+        await app._process_candidate_set(
+            chat_id=10,
+            user_id=11,
+            text="",
+            attachments=[
+                SimpleNamespace(
+                    telegram_file_id=f"voice-{index}",
+                    kind="telegram_audio",
+                    file_name=f"voice-{index}.ogg",
+                    mime_type="audio/ogg",
+                    file_unique_id=f"uniq-{index}",
+                )
+            ],
+            message_id=100 + index,
+        )
+
+    pending = app.basket_summary_tasks[(10, 11)]
+    await pending
+
+    assert len(fake_bot.sent_messages) == 1
+    assert "Добавлено источников: 7" in fake_bot.sent_messages[0]["text"]
+    assert "В корзине 7 источника(ов)" in fake_bot.sent_messages[0]["text"]
     keyboard = fake_bot.sent_messages[0]["reply_markup"].inline_keyboard
     assert keyboard[0][0].callback_data == "mode:batch:toggle"
     assert keyboard[1][0].callback_data == "basket:start"
