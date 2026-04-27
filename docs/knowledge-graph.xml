@@ -81,8 +81,9 @@
         <export-claimJobExecution PURPOSE="Create authoritative execution ownership rows for queued work." />
         <export-getActiveJobExecution PURPOSE="Validate active execution ownership across worker lifecycle calls." />
         <export-finishJobExecution PURPOSE="Persist terminal execution completion for authoritative ownership release." />
-        <export-resolveArtifact PURPOSE="Return artifact metadata plus presigned URL." />
-        <export-newMinioObjectStoreWithPresignClient PURPOSE="Preserve internal MinIO object IO while signing artifact URLs with a public browser-reachable endpoint." />
+        <export-resolveArtifact PURPOSE="Return artifact metadata plus a public browser or host presigned URL." />
+        <export-resolveInternalArtifactDownloadAccess PURPOSE="Return artifact metadata plus an internal service-to-service presigned URL for server-side adapters and workers." />
+        <export-newMinioObjectStoreWithPresignClient PURPOSE="Preserve internal MinIO object IO while signing public artifact URLs with a browser-reachable endpoint and internal artifact URLs with service DNS." />
         <type-JobSubmission PURPOSE="Idempotent create-request persistence including multi-file upload normalization." />
         <type-JobExecutionRecord PURPOSE="Storage-backed execution_id ownership record shared across claim, progress, artifact, finalize, and cancel-check flows." />
         <type-WebhookDelivery PURPOSE="Durable webhook retry state across API restarts." />
@@ -123,7 +124,7 @@
       <depends>M-CONTRACTS</depends>
       <verification-ref>V-M-WORKER-COMMON</verification-ref>
       <annotations>
-        <export-apiClient PURPOSE="Call internal worker-control endpoints consistently." />
+        <export-apiClient PURPOSE="Call internal worker-control and internal artifact download-access endpoints consistently." />
         <export-artifactWriters PURPOSE="Write worker outputs to MinIO and return metadata payloads." />
         <export-runWorkerLoop PURPOSE="Execute one shared polling or one-shot worker loop for all worker services." />
         <export-objectStore PURPOSE="Fetch source objects and upload artifact objects through the shared MinIO adapter." />
@@ -186,7 +187,7 @@
         <export-renderDraftCallbacks PURPOSE="Render inline callback data with draft_id and version so stale buttons resolve against API draft state." />
         <export-registerCommandMenu PURPOSE="Register the Telegram command menu for start, help, batch toggle, basket view, and basket clear." />
         <export-toggleBatchMode PURPOSE="Maintain adapter-local presentation mode only; API-owned batch drafts remain the canonical pre-submit basket state." />
-        <export-deliverTranscriptResult PURPOSE="Present short readable `transcript_plain` artifacts as exact inline Telegram text with the result keyboard, use document fallback for existing long, empty, or unreadable artifact files, and show an unavailable-artifact message when the text file is missing or not a file." />
+        <export-deliverTranscriptResult PURPOSE="Present short readable `transcript_plain` artifacts after materializing them through the internal artifact download-access endpoint; use document fallback for existing long, empty, or unreadable artifact files, and show an unavailable-artifact message when the text file is missing or not a file." />
         <type-TelegramDraftCallback PURPOSE="Callback payload carrying draft_id and version or a draft-scoped item token, never only basket:start or chat/user state." />
         <type-TelegramInlineTranscriptDelivery PURPOSE="Bounded adapter presentation rule over gateway-materialized `transcript_plain`; no bot-side stitching, new worker, or API contract change." />
       </annotations>
@@ -225,6 +226,7 @@
     <CrossLink from="M-API-EVENTS" to="M-API-JOBS" relation="observes-transitions-from" />
     <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-API-HTTP" relation="claims-and-finalizes-through" />
     <CrossLink from="M-API-HTTP" to="M-WORKER-TRANSCRIPTION" relation="provides-internal-control-plane-to" />
+    <CrossLink from="M-API-HTTP" to="M-WORKER-COMMON" relation="provides-internal-artifact-download-access-to" />
     <CrossLink from="M-WORKER-COMMON" to="M-WORKER-TRANSCRIPTION" relation="provides-shared-worker-runtime-to" />
     <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-WORKER-COMMON" relation="reuses-shared-worker-runtime-from" />
     <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-API-HTTP" relation="claims-and-finalizes-through" />

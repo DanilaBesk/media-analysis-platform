@@ -333,7 +333,7 @@ class TelegramApiProcessingGateway:
         if artifact is None:
             raise FileNotFoundError(f"Artifact {artifact_kind} is missing")
 
-        artifact_resolution = self.api_client.resolve_artifact(artifact["artifact_id"])
+        artifact_resolution = self.api_client.resolve_internal_artifact_download_access(artifact["artifact_id"])
         filename = artifact_resolution.get("filename") or fallback_name
         destination = target_dir / filename
         destination.write_bytes(self.api_client.download_bytes(artifact_resolution["download"]["url"]))

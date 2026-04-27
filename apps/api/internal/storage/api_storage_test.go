@@ -256,6 +256,45 @@ func TestApiStorageResolveArtifactReturnsFreshPresignedURL(t *testing.T) {
 	}
 }
 
+func TestApiStorageResolveArtifactInternalAudienceUsesInternalPresignedURL(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	state.persistedArtifacts["artifact-1"] = ArtifactRecord{
+		ID:           "artifact-1",
+		JobID:        "job-3",
+		ArtifactKind: "transcript_plain",
+		Filename:     "transcript.txt",
+		MIMEType:     "text/plain",
+		ObjectKey:    "artifacts/job-3/transcript/plain/transcript.txt",
+		SizeBytes:    17,
+		CreatedAt:    time.Date(2026, 4, 22, 11, 0, 0, 0, time.UTC),
+	}
+	objects := newFakeObjectStore()
+	objects.presignedURL = "https://localhost:9000/presigned/transcript.txt"
+	objects.internalPresignedURL = "http://minio:9000/presigned/transcript.txt"
+
+	repo, err := NewRepository(state, objects)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	resolution, err := repo.ResolveArtifactForAudience(context.Background(), "artifact-1", ArtifactDownloadAudienceInternal)
+	if err != nil {
+		t.Fatalf("ResolveArtifactForAudience() error = %v", err)
+	}
+
+	if resolution.Download.URL != objects.internalPresignedURL {
+		t.Fatalf("download url = %q, want %q", resolution.Download.URL, objects.internalPresignedURL)
+	}
+	if objects.internalPresignCalls != 1 {
+		t.Fatalf("internal presign calls = %d, want 1", objects.internalPresignCalls)
+	}
+	if objects.publicPresignCalls != 0 {
+		t.Fatalf("public presign calls = %d, want 0", objects.publicPresignCalls)
+	}
+}
+
 func TestApiStorageResolveAgentRunRequestAccessUsesInternalPresignedURL(t *testing.T) {
 	t.Parallel()
 

@@ -627,7 +627,7 @@ class JobApiClient:
         return JobSnapshot.from_payload(response)
 
     def resolve_artifact(self, artifact_id: str) -> ArtifactResolutionResult:
-        response = self._call_internal_api("GET", f"/v1/artifacts/{artifact_id}")
+        response = self._call_internal_api("GET", f"/internal/v1/artifacts/{artifact_id}/download-access")
         return ArtifactResolutionResult.from_payload(response)
 
     def resolve_agent_run_request_access(self, job_id: str, *, execution_id: str) -> AgentRunRequestAccessResult:

@@ -735,7 +735,7 @@
     "/v1/artifacts/{artifact_id}": {
       "get": {
         "operationId": "resolveArtifact",
-        "summary": "Resolve artifact metadata plus a MinIO presigned download URL.",
+        "summary": "Resolve artifact metadata plus a public MinIO presigned download URL.",
         "parameters": [
           {
             "name": "artifact_id",
@@ -748,7 +748,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Artifact metadata and download handle.",
+            "description": "Artifact metadata and public download handle for browser or host clients.",
             "content": {
               "application/json": {
                 "schema": {
@@ -976,6 +976,37 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/internal/v1/artifacts/{artifact_id}/download-access": {
+      "get": {
+        "operationId": "resolveInternalArtifactDownloadAccess",
+        "summary": "Resolve artifact metadata plus an internal service-to-service MinIO presigned download URL.",
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact metadata and internal download handle for server-side adapters and workers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/artifact-resolution.schema.json"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
           }
         }
       }

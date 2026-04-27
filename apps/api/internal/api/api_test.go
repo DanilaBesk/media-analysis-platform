@@ -675,6 +675,20 @@ func TestApiHttpRoutesEventsArtifactAndWebsocketShapes(t *testing.T) {
 				ExpiresAt: time.Date(2026, 4, 22, 12, 15, 0, 0, time.UTC),
 			},
 		},
+		internalArtifactAccess: storage.ArtifactResolution{
+			ArtifactID:   "33333333-3333-3333-3333-333333333333",
+			JobID:        "11111111-1111-1111-1111-111111111111",
+			ArtifactKind: "report_markdown",
+			Filename:     "report.md",
+			MIMEType:     "text/markdown",
+			SizeBytes:    64,
+			CreatedAt:    time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
+			Download: storage.DownloadDescriptor{
+				Provider:  storage.DownloadProviderMinIO,
+				URL:       "http://minio:9000/report.md",
+				ExpiresAt: time.Date(2026, 4, 22, 12, 15, 0, 0, time.UTC),
+			},
+		},
 		events: []ws.JobEventEnvelope{
 			{
 				EventID:   "44444444-4444-4444-4444-444444444444",
@@ -709,6 +723,25 @@ func TestApiHttpRoutesEventsArtifactAndWebsocketShapes(t *testing.T) {
 		}
 		if response.Download.Provider != storage.DownloadProviderMinIO {
 			t.Fatalf("download provider = %q, want %q", response.Download.Provider, storage.DownloadProviderMinIO)
+		}
+		if response.Download.URL != "https://minio.local/report.md" {
+			t.Fatalf("download url = %q, want public URL", response.Download.URL)
+		}
+	})
+
+	t.Run("internal artifact download access", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/internal/v1/artifacts/33333333-3333-3333-3333-333333333333/download-access", nil)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var response ArtifactResolutionView
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("Unmarshal(response) error = %v", err)
+		}
+		if response.Download.URL != "http://minio:9000/report.md" {
+			t.Fatalf("download url = %q, want internal URL", response.Download.URL)
 		}
 	})
 
@@ -892,31 +925,32 @@ type httpFixture struct {
 }
 
 type fakePublicService struct {
-	uploadJobs            []JobSnapshot
-	uploadErr             error
-	combinedJob           JobSnapshot
-	batchJob              JobSnapshot
-	batchDraft            BatchDraft
-	batchDraftErr         error
-	agentRunJob           JobSnapshot
-	reportJob             JobSnapshot
-	deepResearchJob       JobSnapshot
-	lastUpload            UploadCommand
-	lastCombined          UploadCommand
-	lastBatch             BatchCommand
-	lastCreateBatchDraft  BatchDraftCreateCommand
-	lastGetBatchDraft     BatchDraftGetCommand
-	lastAddBatchDraftItem BatchDraftItemCommand
-	lastRemoveBatchDraft  BatchDraftRemoveItemCommand
-	lastClearBatchDraft   BatchDraftMutateCommand
-	lastSubmitBatchDraft  BatchDraftSubmitCommand
-	lastAgentRun          AgentRunCommand
-	lastReportJobID       string
-	lastReportReq         ChildCreateRequest
-	lastDeepResearchJobID string
-	lastDeepResearchReq   ChildCreateRequest
-	artifactResolution    storage.ArtifactResolution
-	events                []ws.JobEventEnvelope
+	uploadJobs             []JobSnapshot
+	uploadErr              error
+	combinedJob            JobSnapshot
+	batchJob               JobSnapshot
+	batchDraft             BatchDraft
+	batchDraftErr          error
+	agentRunJob            JobSnapshot
+	reportJob              JobSnapshot
+	deepResearchJob        JobSnapshot
+	lastUpload             UploadCommand
+	lastCombined           UploadCommand
+	lastBatch              BatchCommand
+	lastCreateBatchDraft   BatchDraftCreateCommand
+	lastGetBatchDraft      BatchDraftGetCommand
+	lastAddBatchDraftItem  BatchDraftItemCommand
+	lastRemoveBatchDraft   BatchDraftRemoveItemCommand
+	lastClearBatchDraft    BatchDraftMutateCommand
+	lastSubmitBatchDraft   BatchDraftSubmitCommand
+	lastAgentRun           AgentRunCommand
+	lastReportJobID        string
+	lastReportReq          ChildCreateRequest
+	lastDeepResearchJobID  string
+	lastDeepResearchReq    ChildCreateRequest
+	artifactResolution     storage.ArtifactResolution
+	internalArtifactAccess storage.ArtifactResolution
+	events                 []ws.JobEventEnvelope
 }
 
 func (f *fakePublicService) CreateUpload(_ context.Context, req UploadCommand) ([]JobSnapshot, error) {
@@ -1012,6 +1046,10 @@ func (f *fakePublicService) RetryJob(_ context.Context, _ string) (JobSnapshot, 
 
 func (f *fakePublicService) ResolveArtifact(_ context.Context, _ string) (storage.ArtifactResolution, error) {
 	return f.artifactResolution, nil
+}
+
+func (f *fakePublicService) ResolveInternalArtifactDownloadAccess(_ context.Context, _ string) (storage.ArtifactResolution, error) {
+	return f.internalArtifactAccess, nil
 }
 
 func (f *fakePublicService) ListJobEvents(_ context.Context, _ string) ([]ws.JobEventEnvelope, error) {

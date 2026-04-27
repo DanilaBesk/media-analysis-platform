@@ -396,6 +396,13 @@ type DownloadDescriptor struct {
 	ExpiresAt time.Time
 }
 
+type ArtifactDownloadAudience string
+
+const (
+	ArtifactDownloadAudiencePublic   ArtifactDownloadAudience = "public"
+	ArtifactDownloadAudienceInternal ArtifactDownloadAudience = "internal"
+)
+
 type ArtifactResolution struct {
 	ArtifactID   string
 	JobID        string
@@ -537,8 +544,18 @@ func (r *Repository) PersistJob(ctx context.Context, req PersistJobRequest) (Per
 }
 
 func (r *Repository) ResolveArtifact(ctx context.Context, artifactID string) (ArtifactResolution, error) {
+	return r.ResolveArtifactForAudience(ctx, artifactID, ArtifactDownloadAudiencePublic)
+}
+
+func (r *Repository) ResolveArtifactForAudience(ctx context.Context, artifactID string, audience ArtifactDownloadAudience) (ArtifactResolution, error) {
 	if strings.TrimSpace(artifactID) == "" {
 		return ArtifactResolution{}, fmt.Errorf("%w: artifact id is required", ErrContractViolation)
+	}
+	if audience == "" {
+		audience = ArtifactDownloadAudiencePublic
+	}
+	if audience != ArtifactDownloadAudiencePublic && audience != ArtifactDownloadAudienceInternal {
+		return ArtifactResolution{}, fmt.Errorf("%w: unsupported artifact download audience", ErrContractViolation)
 	}
 
 	artifact, err := r.state.LookupArtifact(ctx, artifactID)
@@ -549,7 +566,17 @@ func (r *Repository) ResolveArtifact(ctx context.Context, artifactID string) (Ar
 		return ArtifactResolution{}, fmt.Errorf("%w: lookup artifact: %v", ErrStorageUnavailable, err)
 	}
 
-	url, expiresAt, err := r.objects.PresignGetObject(ctx, ArtifactsBucket, artifact.ObjectKey, r.presignTTL)
+	var url string
+	var expiresAt time.Time
+	if audience == ArtifactDownloadAudienceInternal {
+		if internalPresigner, ok := r.objects.(internalObjectPresigner); ok {
+			url, expiresAt, err = internalPresigner.PresignInternalGetObject(ctx, ArtifactsBucket, artifact.ObjectKey, r.presignTTL)
+		} else {
+			url, expiresAt, err = r.objects.PresignGetObject(ctx, ArtifactsBucket, artifact.ObjectKey, r.presignTTL)
+		}
+	} else {
+		url, expiresAt, err = r.objects.PresignGetObject(ctx, ArtifactsBucket, artifact.ObjectKey, r.presignTTL)
+	}
 	if err != nil {
 		return ArtifactResolution{}, fmt.Errorf("%w: presign artifact: %v", ErrStorageUnavailable, err)
 	}

@@ -176,3 +176,17 @@ def test_add_batch_draft_upload_item_uses_contract_multipart_fields() -> None:
     assert '"source_kind":"telegram_upload"' in body
     assert 'name="file"; filename="voice.ogg"' in body
     assert "voice" in body
+
+
+def test_resolve_internal_artifact_download_access_uses_internal_route() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(json.dumps({"artifact_id": "artifact-1"}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    client.resolve_internal_artifact_download_access("artifact-1")
+
+    assert captured["request"].full_url == "http://api:8080/internal/v1/artifacts/artifact-1/download-access"
+    assert captured["request"].get_method() == "GET"

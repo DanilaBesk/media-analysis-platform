@@ -56,6 +56,7 @@ type PublicService interface {
 	CancelJob(ctx context.Context, jobID string) (JobSnapshot, error)
 	RetryJob(ctx context.Context, jobID string) (JobSnapshot, error)
 	ResolveArtifact(ctx context.Context, artifactID string) (storage.ArtifactResolution, error)
+	ResolveInternalArtifactDownloadAccess(ctx context.Context, artifactID string) (storage.ArtifactResolution, error)
 	ListJobEvents(ctx context.Context, jobID string) ([]ws.JobEventEnvelope, error)
 }
 
@@ -157,6 +158,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /internal/v1/jobs/{job_id}/finalize", s.withCORS(s.handleFinalizeJob))
 	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/cancel-check", s.withCORS(s.handleCancelCheck))
 	mux.HandleFunc("GET /internal/v1/jobs/{job_id}/request-access", s.withCORS(s.handleResolveAgentRunRequestAccess))
+	mux.HandleFunc("GET /internal/v1/artifacts/{artifact_id}/download-access", s.withCORS(s.handleResolveInternalArtifactDownloadAccess))
 }
 
 func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
@@ -1205,6 +1207,24 @@ func (s *Server) handleResolveArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resolution, err := s.deps.Public.ResolveArtifact(r.Context(), artifactID)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, artifactResolutionViewFromStorage(resolution))
+}
+
+func (s *Server) handleResolveInternalArtifactDownloadAccess(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	artifactID, err := parseUUIDPathValue(r, "artifact_id")
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	resolution, err := s.deps.Public.ResolveInternalArtifactDownloadAccess(r.Context(), artifactID)
 	if err != nil {
 		s.writeAPIError(w, err)
 		return

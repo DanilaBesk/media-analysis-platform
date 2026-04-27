@@ -103,7 +103,7 @@ class FakeGatewayApiClient:
     def get_job(self, job_id: str) -> dict[str, Any]:
         return {"job": self._jobs()[job_id]}
 
-    def resolve_artifact(self, artifact_id: str) -> dict[str, Any]:
+    def resolve_internal_artifact_download_access(self, artifact_id: str) -> dict[str, Any]:
         return self.resolutions[artifact_id]
 
     def download_bytes(self, url: str) -> bytes:

@@ -440,6 +440,9 @@ class TelegramApiClient:
     def resolve_artifact(self, artifact_id: str) -> JsonObject:
         return self._request_json(f"/v1/artifacts/{artifact_id}")
 
+    def resolve_internal_artifact_download_access(self, artifact_id: str) -> JsonObject:
+        return self._request_json(f"/internal/v1/artifacts/{artifact_id}/download-access")
+
     def download_bytes(self, url: str) -> bytes:
         request = Request(url)
         with self.urlopen_impl(request) as response:

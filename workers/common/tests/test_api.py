@@ -271,6 +271,37 @@ def test_resolve_agent_run_request_access_uses_query_contract() -> None:
     assert result.request_bytes == 321
 
 
+def test_resolve_artifact_uses_internal_download_access_contract() -> None:
+    config = InternalApiConfig(base_url="http://internal.local")
+    transport = StubTransport(
+        responses={
+            (
+                "GET",
+                "http://internal.local/internal/v1/artifacts/artifact-1/download-access",
+            ): {
+                "artifact_id": "artifact-1",
+                "job_id": "job-1",
+                "artifact_kind": "transcript_plain",
+                "filename": "transcript.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 17,
+                "created_at": "2026-04-25T12:00:00Z",
+                "download": {
+                    "provider": "minio_presigned_url",
+                    "url": "http://minio:9000/artifacts/transcript.txt",
+                    "expires_at": "2026-04-25T12:15:00Z",
+                },
+            }
+        }
+    )
+    client = JobApiClient(config, transport=transport)
+
+    result = client.resolve_artifact("artifact-1")
+
+    assert result.download_url == "http://minio:9000/artifacts/transcript.txt"
+    assert result.artifact_kind == "transcript_plain"
+
+
 def test_internal_api_failures_emit_required_marker(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO)
     client = JobApiClient(

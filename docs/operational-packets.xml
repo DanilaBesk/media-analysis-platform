@@ -2254,6 +2254,48 @@ Required verification now closed:
         <note-3>Do not change report/deep_research topology for this feature; the single worker-agent-runner remains the only AI worker path.</note-3>
       </notes>
     </ExecutionPacket>
+
+    <ExecutionPacket packet-id="media-9kk-internal-artifact-download-access" module="M-CONTRACTS,M-API-HTTP,M-API-STORAGE,M-WORKER-COMMON,M-TELEGRAM-ADAPTER,M-WORKER-AGENT-RUNNER" phase="Phase-10" step="3" verification-ref="V-M-API-HTTP,V-M-WORKER-COMMON,V-M-TELEGRAM-ADAPTER">
+      <module-id>M-ARTIFACT-DOWNLOAD-ACCESS</module-id>
+      <module-name>AudienceScopedArtifactDownloadAccess</module-name>
+      <purpose>Fix server-side artifact materialization without leaking object-store topology into Telegram or worker code.</purpose>
+      <packet-state>implemented-evidence-refreshed</packet-state>
+      <entry-condition>Live evidence showed the compose Telegram adapter can reach `api:8080` and `minio:9000`, while `localhost:9000` inside the adapter container fails with Errno 111. The fix must preserve public browser artifact links and add an internal API-owned materialization path.</entry-condition>
+      <write-scope>
+        <file-1>packages/contracts/openapi/openapi.yaml</file-1>
+        <file-2>packages/contracts/tests/test_contract_surfaces.py</file-2>
+        <file-3>apps/api/internal/storage/storage.go and tests</file-3>
+        <file-4>apps/api/internal/api/api.go and tests</file-4>
+        <file-5>workers/common/src/transcriber_workers_common/api.py and tests</file-5>
+        <file-6>workers/agent-runner/src/transcriber_worker_agent_runner.py and tests</file-6>
+        <file-7>apps/telegram-bot/src/telegram_adapter/api_client.py, gateway.py, and tests</file-7>
+        <file-8>canonical GRACE XML artifacts</file-8>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+Canonical architecture:
+- Public clients resolve artifacts through `/v1/artifacts/{artifact_id}` and receive public/browser/host presigned URLs generated from `MINIO_PUBLIC_ENDPOINT`.
+- Server-side adapters and workers resolve artifacts through `/internal/v1/artifacts/{artifact_id}/download-access` and receive internal service-to-service presigned URLs generated from `MINIO_ENDPOINT`.
+- The response envelope stays the existing artifact-resolution shape.
+- Telegram adapter, worker-common, worker-transcription aggregate logic, and worker-agent-runner must not rewrite MinIO hostnames, bucket paths, or schemes locally.
+- API remains the authority for which download endpoint is suitable for each consumer audience.
+      ]]></contract-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-API-STORAGE">Storage owns the public versus internal presign-client selection.</dependency-1>
+        <dependency-2 module="M-API-HTTP">HTTP keeps public and internal artifact access routes explicit instead of merging them with query flags.</dependency-2>
+        <dependency-3 module="M-WORKER-COMMON">Server-side worker helpers consume internal download-access by default.</dependency-3>
+        <dependency-4 module="M-TELEGRAM-ADAPTER">Telegram remains a thin API adapter and downloads returned artifact URLs without object-store topology knowledge.</dependency-4>
+      </dependency-contract-summaries>
+      <completion-evidence><![CDATA[
+- Storage and API focused Go tests passed, followed by the broader API gate: `cd apps/api && go test -count=1 ./internal/...`.
+- Server-side adapter and worker focused Python tests plus contract route tests passed with 47 passed, followed by the broader adapter/worker/contracts gate: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py apps/telegram-bot/tests workers/common/tests workers/agent-runner/tests packages/contracts/tests/test_contract_surfaces.py -q` with 163 passed.
+- XML validation passed for the six canonical GRACE artifacts.
+- Live compose runtime was restarted for `api`, `telegram-bot`, `worker-transcription`, and `worker-agent-runner`; inside `telegram-bot`, public artifact resolution returned `localhost:9000` and failed with Errno 111 when downloaded, while internal artifact download-access returned `minio:9000` and direct download read 32 bytes successfully.
+      ]]></completion-evidence>
+      <notes>
+        <note-1>This packet explicitly rejects Telegram-side `localhost` to `minio` URL rewriting and adapter-owned MinIO endpoint config.</note-1>
+        <note-2>API proxy streaming is deferred; it is a future data-plane option if presigned URL semantics are replaced globally.</note-2>
+      </notes>
+    </ExecutionPacket>
   </ProjectExecutionPackets>
 
   <ProjectFailurePackets>

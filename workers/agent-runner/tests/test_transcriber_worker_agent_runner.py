@@ -460,7 +460,7 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
         url = _request_url(value)
         if url == "https://minio.local/private/request.json":
             return FakeHTTPResponse(envelope_body)
-        if url == f"http://api.local/v1/artifacts/{artifact_id}":
+        if url == f"http://api.local/internal/v1/artifacts/{artifact_id}/download-access":
             return FakeHTTPResponse(
                 json.dumps(
                     {
@@ -657,7 +657,7 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
         url = _request_url(value)
         if url == "https://minio.local/private/request.json":
             return FakeHTTPResponse(envelope_body)
-        if url == f"http://api.local/v1/artifacts/{transcript_artifact_id}":
+        if url == f"http://api.local/internal/v1/artifacts/{transcript_artifact_id}/download-access":
             return FakeHTTPResponse(
                 artifact_resolution(
                     transcript_artifact_id,
@@ -666,7 +666,7 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
                     "https://minio.local/presigned/transcript.md",
                 )
             )
-        if url == f"http://api.local/v1/artifacts/{report_artifact_id}":
+        if url == f"http://api.local/internal/v1/artifacts/{report_artifact_id}/download-access":
             return FakeHTTPResponse(
                 artifact_resolution(
                     report_artifact_id,

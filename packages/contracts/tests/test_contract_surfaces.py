@@ -74,6 +74,7 @@ def test_openapi_contains_frozen_phase_1_paths() -> None:
         "/internal/v1/jobs/{job_id}/finalize",
         "/internal/v1/jobs/{job_id}/cancel-check",
         "/internal/v1/jobs/{job_id}/request-access",
+        "/internal/v1/artifacts/{artifact_id}/download-access",
     }
 
     assert expected_paths.issubset(spec["paths"])

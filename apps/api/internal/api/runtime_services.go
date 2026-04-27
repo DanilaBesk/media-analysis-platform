@@ -54,6 +54,7 @@ type runtimeStorageService interface {
 	ListChildJobs(ctx context.Context, parentJobID string) ([]storage.JobRecord, error)
 	ListJobEvents(ctx context.Context, jobID string) ([]storage.JobEvent, error)
 	ResolveArtifact(ctx context.Context, artifactID string) (storage.ArtifactResolution, error)
+	ResolveArtifactForAudience(ctx context.Context, artifactID string, audience storage.ArtifactDownloadAudience) (storage.ArtifactResolution, error)
 	ClaimJobExecution(ctx context.Context, req storage.ClaimJobExecutionRequest) (storage.ClaimJobExecutionResult, error)
 	GetActiveJobExecution(ctx context.Context, jobID, executionID string) (storage.JobExecutionRecord, error)
 	FinishJobExecution(ctx context.Context, req storage.FinishJobExecutionRequest) (storage.JobExecutionRecord, error)
@@ -484,6 +485,10 @@ func (s *publicRuntimeService) RetryJob(ctx context.Context, jobID string) (JobS
 
 func (s *publicRuntimeService) ResolveArtifact(ctx context.Context, artifactID string) (storage.ArtifactResolution, error) {
 	return s.store.ResolveArtifact(ctx, artifactID)
+}
+
+func (s *publicRuntimeService) ResolveInternalArtifactDownloadAccess(ctx context.Context, artifactID string) (storage.ArtifactResolution, error) {
+	return s.store.ResolveArtifactForAudience(ctx, artifactID, storage.ArtifactDownloadAudienceInternal)
 }
 
 func (s *publicRuntimeService) ListJobEvents(ctx context.Context, jobID string) ([]ws.JobEventEnvelope, error) {

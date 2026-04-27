@@ -1035,6 +1035,15 @@ func (d *runtimeStorageDouble) ResolveArtifact(_ context.Context, artifactID str
 	return storage.ArtifactResolution{ArtifactID: artifactID}, nil
 }
 
+func (d *runtimeStorageDouble) ResolveArtifactForAudience(_ context.Context, artifactID string, audience storage.ArtifactDownloadAudience) (storage.ArtifactResolution, error) {
+	return storage.ArtifactResolution{
+		ArtifactID: artifactID,
+		Download: storage.DownloadDescriptor{
+			URL: string(audience),
+		},
+	}, nil
+}
+
 func (d *runtimeStorageDouble) PersistAgentRunRequest(_ context.Context, requestRef string, body []byte) error {
 	d.persistedAgentRunRequestRef = requestRef
 	d.persistedAgentRunRequestBody = append([]byte(nil), body...)

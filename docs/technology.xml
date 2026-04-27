@@ -135,7 +135,7 @@
     <default-delivery-strategy>polling</default-delivery-strategy>
     <websocket-role>WebSocket is the live-update channel for Web UI only and does not replace polling correctness.</websocket-role>
     <webhook-role>Webhook is a per-job delivery strategy selected at creation time and requires a callback URL.</webhook-role>
-    <download-model>Artifact reads return MinIO presigned URLs from the API; clients never construct bucket paths themselves. The API uses `MINIO_ENDPOINT` for internal object IO and `MINIO_PUBLIC_ENDPOINT` for browser-reachable presigned URLs.</download-model>
+    <download-model>Artifact reads return MinIO presigned URLs from the API; clients never construct bucket paths themselves. The public route `/v1/artifacts/{artifact_id}` uses `MINIO_PUBLIC_ENDPOINT` for browser and host clients, while the internal route `/internal/v1/artifacts/{artifact_id}/download-access` uses `MINIO_ENDPOINT` for server-side adapters and workers inside the compose or service network.</download-model>
   </DeliveryModel>
 
   <EnvironmentVariables>
