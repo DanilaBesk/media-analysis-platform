@@ -273,7 +273,7 @@ First version must assume CPU-only transcription:
 - no CUDA dependency;
 - no GPU runtime assumptions in Docker Compose;
 - model cache persisted via Docker volume;
-- `WHISPER_MODEL=turbo` allowed but CPU-only performance must be considered in worker concurrency.
+- `WHISPER_MODEL=bond005/whisper-podlodka-turbo` is the default model; CPU-only performance must be considered in worker concurrency.
 
 ## 8. Domain Model
 

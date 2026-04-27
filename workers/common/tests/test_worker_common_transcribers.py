@@ -72,7 +72,7 @@ def test_youtube_transcriber_maps_segments_and_speakers(tmp_path: Path, monkeypa
 def test_default_transcriber_falls_back_to_whisper(tmp_path: Path, monkeypatch) -> None:
     default = DefaultTranscriber(
         youtube_languages=("en",),
-        whisper_model="turbo",
+        whisper_model="bond005/whisper-podlodka-turbo",
         whisper_device="auto",
         whisper_compute_type="default",
     )

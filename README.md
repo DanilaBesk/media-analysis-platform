@@ -55,7 +55,7 @@ docs/architecture/runtime-ops.md
 ## Переменные окружения
 
 - `TELEGRAM_BOT_TOKEN` — обязателен.
-- `WHISPER_MODEL` — по умолчанию `turbo`.
+- `WHISPER_MODEL` — по умолчанию `bond005/whisper-podlodka-turbo`.
 - `WHISPER_DEVICE` — по умолчанию `auto`.
 - `WHISPER_COMPUTE_TYPE` — по умолчанию `default`.
 - `YOUTUBE_TRANSCRIPT_LANGUAGES` — по умолчанию `ru,en`.

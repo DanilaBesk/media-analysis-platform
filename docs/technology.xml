@@ -170,6 +170,7 @@
     </worker-common>
     <transcription-worker>
       <var>WHISPER_MODEL</var>
+      <default>bond005/whisper-podlodka-turbo</default>
       <var>WHISPER_DEVICE</var>
       <var>WHISPER_COMPUTE_TYPE</var>
       <var>FFMPEG_BIN</var>

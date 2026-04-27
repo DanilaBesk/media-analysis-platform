@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -34,8 +35,13 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
 from transcriber_workers_common.source_extractor import extract_youtube_video_id
 
+PODLODKA_WHISPER_MODEL = "bond005/whisper-podlodka-turbo"
+_PODLODKA_CTRANSLATE2_DIR = "bond005-whisper-podlodka-turbo-ct2"
+_PODLODKA_CTRANSLATE2_QUANTIZATION = "int8"
+
 __all__ = [
     "DefaultTranscriber",
+    "PODLODKA_WHISPER_MODEL",
     "WhisperTranscriber",
     "YouTubeTranscriptTranscriber",
 ]
@@ -169,9 +175,10 @@ class WhisperTranscriber:
         return download_root
 
     def _load_model(self, download_root: Path) -> WhisperModel:
+        model_name = self._model_source(download_root)
         try:
             return WhisperModel(
-                self.model_name,
+                model_name,
                 device=self.device,
                 compute_type=self.compute_type,
                 download_root=str(download_root),
@@ -179,14 +186,28 @@ class WhisperTranscriber:
         except RuntimeError as exc:
             if not _is_broken_model_cache_error(exc):
                 raise
+            if self.model_name == PODLODKA_WHISPER_MODEL:
+                shutil.rmtree(download_root / _PODLODKA_CTRANSLATE2_DIR, ignore_errors=True)
+                model_name = self._model_source(download_root)
+                return WhisperModel(
+                    model_name,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    download_root=str(download_root),
+                )
             shutil.rmtree(download_root, ignore_errors=True)
             download_root.mkdir(parents=True, exist_ok=True)
             return WhisperModel(
-                self.model_name,
+                model_name,
                 device=self.device,
                 compute_type=self.compute_type,
                 download_root=str(download_root),
             )
+
+    def _model_source(self, download_root: Path) -> str:
+        if self.model_name != PODLODKA_WHISPER_MODEL:
+            return self.model_name
+        return str(_ensure_podlodka_ctranslate2_model(download_root))
 
 
 # START_CONTRACT: DefaultTranscriber
@@ -270,3 +291,48 @@ def _extract_speaker(text: str) -> tuple[str | None, str]:
 def _is_broken_model_cache_error(error: RuntimeError) -> bool:
     message = str(error)
     return "Unable to open file 'model.bin'" in message or "No such file or directory" in message
+
+
+def _ensure_podlodka_ctranslate2_model(download_root: Path) -> Path:
+    converted_dir = download_root / _PODLODKA_CTRANSLATE2_DIR
+    model_file = converted_dir / "model.bin"
+    if model_file.exists():
+        return converted_dir
+
+    shutil.rmtree(converted_dir, ignore_errors=True)
+    converted_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot_dir = _download_podlodka_snapshot(download_root)
+    converter = _build_podlodka_converter(
+        str(snapshot_dir),
+        copy_files=["tokenizer.json", "preprocessor_config.json"],
+        low_cpu_mem_usage=True,
+    )
+    converter.convert(
+        str(converted_dir),
+        quantization=_PODLODKA_CTRANSLATE2_QUANTIZATION,
+        force=True,
+    )
+
+    if not model_file.exists():
+        raise RuntimeError("Converted Podlodka Whisper model cache is missing model.bin")
+    return converted_dir
+
+
+def _download_podlodka_snapshot(download_root: Path) -> Path:
+    os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError("bond005/whisper-podlodka-turbo requires huggingface_hub to download the model") from exc
+    return Path(snapshot_download(PODLODKA_WHISPER_MODEL, cache_dir=download_root, max_workers=1))
+
+
+def _build_podlodka_converter(model_name: str, **kwargs):
+    try:
+        from ctranslate2.converters.transformers import TransformersConverter
+    except ImportError as exc:
+        raise RuntimeError(
+            "bond005/whisper-podlodka-turbo requires transformers and torch to build the local CTranslate2 cache"
+        ) from exc
+    return TransformersConverter(model_name, **kwargs)

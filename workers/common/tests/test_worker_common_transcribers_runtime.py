@@ -32,9 +32,12 @@ import pytest
 import transcriber_workers_common.transcribers as transcribers_module
 from transcriber_workers_common.transcribers import (
     DefaultTranscriber,
+    PODLODKA_WHISPER_MODEL,
     WhisperTranscriber,
     YouTubeTranscriptTranscriber,
+    _PODLODKA_CTRANSLATE2_DIR,
     _download_youtube_audio,
+    _ensure_podlodka_ctranslate2_model,
     _is_broken_model_cache_error,
     _snippet_value,
 )
@@ -84,7 +87,7 @@ def test_youtube_transcriber_failure_paths_are_deterministic(tmp_path: Path, mon
 def test_default_transcriber_uses_whisper_for_direct_audio(tmp_path: Path, monkeypatch) -> None:
     default = DefaultTranscriber(
         youtube_languages=("en",),
-        whisper_model="turbo",
+        whisper_model=PODLODKA_WHISPER_MODEL,
         whisper_device="auto",
         whisper_compute_type="default",
     )
@@ -135,7 +138,7 @@ def test_whisper_runtime_helpers_cover_download_and_model_branches(tmp_path: Pat
     with pytest.raises(RuntimeError, match="without producing an audio file"):
         _download_youtube_audio("https://youtu.be/demo123", tmp_path / "missing")
 
-    transcriber = WhisperTranscriber(model_name="turbo", device="auto", compute_type="default")
+    transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="auto", compute_type="default")
     with pytest.raises(ValueError, match="requires either a local file or a YouTube URL"):
         transcriber.transcribe(
             SourceCandidate(
@@ -189,7 +192,7 @@ def test_whisper_runtime_helpers_cover_download_and_model_branches(tmp_path: Pat
             created.append(kwargs["download_root"])
 
     monkeypatch.setattr(transcribers_module, "WhisperModel", FakeModel)
-    cached = WhisperTranscriber(model_name="turbo", device="auto", compute_type="default")
+    cached = WhisperTranscriber(model_name="openai/whisper-tiny", device="auto", compute_type="default")
     assert cached._get_model(tmp_path / "job-1") is cached._get_model(tmp_path / "job-2")
     assert len(created) == 1
 
@@ -214,7 +217,7 @@ def test_whisper_runtime_helpers_cover_download_and_model_branches(tmp_path: Pat
         return RecoveryModel()
 
     monkeypatch.setattr(transcribers_module, "WhisperModel", fake_whisper_model)
-    recovered = WhisperTranscriber(model_name="turbo", device="auto", compute_type="default")
+    recovered = WhisperTranscriber(model_name="openai/whisper-tiny", device="auto", compute_type="default")
     assert isinstance(recovered._load_model(broken_root), RecoveryModel)
     assert calls == [str(broken_root), str(broken_root)]
 
@@ -230,8 +233,37 @@ def test_low_level_helper_branches_are_covered() -> None:
     assert _is_broken_model_cache_error(RuntimeError("another error")) is False
 
 
+def test_podlodka_model_is_converted_before_faster_whisper_load(tmp_path: Path, monkeypatch) -> None:
+    conversions: list[dict[str, object]] = []
+
+    class FakeConverter:
+        def __init__(self, model_name: str, **kwargs) -> None:
+            conversions.append({"model_name": model_name, "kwargs": kwargs})
+
+        def convert(self, output_dir: str, **kwargs) -> None:
+            conversions.append({"output_dir": output_dir, "kwargs": kwargs})
+            Path(output_dir, "model.bin").write_bytes(b"converted")
+
+    monkeypatch.setattr(transcribers_module, "_build_podlodka_converter", FakeConverter)
+    monkeypatch.setattr(
+        transcribers_module,
+        "_download_podlodka_snapshot",
+        lambda download_root: download_root / "models--bond005--whisper-podlodka-turbo" / "snapshots" / "sha",
+    )
+
+    converted_dir = _ensure_podlodka_ctranslate2_model(tmp_path)
+
+    assert converted_dir == tmp_path / _PODLODKA_CTRANSLATE2_DIR
+    assert (converted_dir / "model.bin").exists()
+    assert str(conversions[0]["model_name"]).endswith("models--bond005--whisper-podlodka-turbo/snapshots/sha")
+    assert conversions[1]["kwargs"]["quantization"] == "int8"
+
+    transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="cpu", compute_type="default")
+    assert transcriber._model_source(tmp_path) == str(converted_dir)
+
+
 def test_whisper_transcriber_serializes_shared_model_usage(tmp_path: Path, monkeypatch) -> None:
-    transcriber = WhisperTranscriber(model_name="turbo", device="auto", compute_type="default")
+    transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="auto", compute_type="default")
     audio_a = tmp_path / "audio-a.ogg"
     audio_b = tmp_path / "audio-b.ogg"
     audio_a.write_bytes(b"a")

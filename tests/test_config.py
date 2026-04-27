@@ -41,7 +41,7 @@ def test_load_settings_reads_env_file_and_defaults(tmp_path: Path, monkeypatch) 
     assert settings.report_prompt_suffix == "extra instructions"
     assert settings.media_group_window_seconds == 3.5
     assert settings.youtube_languages == ("de", "en")
-    assert settings.whisper_model == "turbo"
+    assert settings.whisper_model == "bond005/whisper-podlodka-turbo"
 
 
 def test_load_settings_requires_token(tmp_path: Path, monkeypatch) -> None:

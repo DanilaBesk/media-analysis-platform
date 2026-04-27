@@ -28,7 +28,7 @@ from transcriber_worker_transcription import runTranscription, runTranscriptionA
 from transcriber_workers_common.api import JobApiClient
 from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
 from transcriber_workers_common.runtime import WorkerRuntimeConfig, run_worker_loop
-from transcriber_workers_common.transcribers import DefaultTranscriber
+from transcriber_workers_common.transcribers import DefaultTranscriber, PODLODKA_WHISPER_MODEL
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ def _build_transcriber(env: Mapping[str, str]) -> DefaultTranscriber:
     )
     return DefaultTranscriber(
         youtube_languages=languages or ("ru", "en"),
-        whisper_model=env.get("WHISPER_MODEL", "small").strip() or "small",
+        whisper_model=env.get("WHISPER_MODEL", PODLODKA_WHISPER_MODEL).strip() or PODLODKA_WHISPER_MODEL,
         whisper_device=env.get("WHISPER_DEVICE", "cpu").strip() or "cpu",
         whisper_compute_type=env.get("WHISPER_COMPUTE_TYPE", "default").strip() or "default",
     )
