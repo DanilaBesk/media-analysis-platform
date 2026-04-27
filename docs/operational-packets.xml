@@ -2302,6 +2302,63 @@ XML validation and `git diff --check` passed.
       </notes>
     </ExecutionPacket>
 
+    <ExecutionPacket packet-id="media-dac-telegram-i18n-e2e-grace-refresh" module="M-TELEGRAM-ADAPTER" phase="Phase-10" step="2c" verification-ref="V-M-TELEGRAM-ADAPTER,VF-001C">
+      <module-id>M-TELEGRAM-I18N</module-id>
+      <module-name>TelegramI18nGraceRefresh</module-name>
+      <purpose>Refresh canonical Telegram adapter verification and GRACE wording after the completed RU/EN packet-local i18n coverage delta.</purpose>
+      <packet-state>completed</packet-state>
+      <entry-condition>Use the existing API-owned draft, internal artifact download-access, and worker-agent-runner topology as fixed architecture. This packet extends verification coverage and GRACE evidence only; it does not reopen API, DB, or worker design.</entry-condition>
+      <write-scope>
+        <file-1>tests/test_bot.py</file-1>
+        <file-2>docs/requirements.xml</file-2>
+        <file-3>docs/technology.xml</file-3>
+        <file-4>docs/development-plan.xml</file-4>
+        <file-5>docs/verification-plan.xml</file-5>
+        <file-6>docs/knowledge-graph.xml</file-6>
+        <file-7>docs/operational-packets.xml</file-7>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+Canonical Telegram i18n contract:
+- RU is the default adapter locale; EN is the additional supported locale.
+- Locale is resolved from Telegram user language metadata per message or callback and remains packet-local adapter presentation state.
+- Localized surfaces include command registration, start/help copy, batch and basket keyboards, source-label fallbacks, stale callback responses, access-denied copy, basket summaries, report/deep-research flows, and representative error handling.
+- Locale must propagate through delayed basket summaries and buffered media-group flushes.
+- Locale must not alter API-owned draft identity, owner scope, expected_version handling, or DB-backed submit/replay semantics.
+      ]]></contract-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">No public contract or schema change is introduced; this packet verifies adapter presentation over the frozen API-owned draft and artifact contracts.</dependency-1>
+        <dependency-2 module="M-API-HTTP">Locale-specific adapter copy must not modify draft mutation, submit, or stale-outcome HTTP semantics.</dependency-2>
+        <dependency-3 module="M-API-STORAGE">DB-backed batch draft semantics remain the same; this packet proves locale-aware coverage does not change them.</dependency-3>
+      </dependency-contract-summaries>
+      <completion-evidence><![CDATA[
+Focused RU/EN i18n coverage passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q` -> `32 passed in 1.33s`.
+Broader Telegram adapter regression passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q` -> `46 passed in 1.71s`.
+Explicit DB-backed non-regression guard passed against the live compose API/PostgreSQL stack: `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchDraftMixedUploadURLPostgresE2E -count=1 -v'` -> `PASS`, `ok github.com/danila/media-analysis-platform/apps/api/internal/api 1.019s`.
+Coverage proves localized command registration, localized source-label presentation, localized stale/access-denied/report/deep-research copy, locale propagation through delayed summaries and media-group buffering, and unchanged API-owned draft semantics.
+      ]]></completion-evidence>
+      <verification-excerpt><![CDATA[
+Required verification to preserve:
+- Focused RU/EN adapter locale tests.
+- Broader Telegram adapter regression including batch, report, deep-research, gateway artifact materialization, and i18n catalogs/services.
+- Live DB-backed `TestApiBatchDraftMixedUploadURLPostgresE2E` guard when compose API/PostgreSQL are available.
+- XML lint over all six canonical GRACE files after evidence refresh.
+      ]]></verification-excerpt>
+      <expected-graph-delta-fields>
+        <field-1>exports: record locale-resolution, localized command building, and localized source-label presentation under M-TELEGRAM-ADAPTER.</field-1>
+        <field-2>annotations: preserve adapter-local locale flow and keep locale outside API-owned draft business state.</field-2>
+        <field-3>CrossLinks: do not add Telegram-to-storage or Telegram-to-worker ownership edges for i18n.</field-3>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: focused RU/EN tests in tests/test_bot.py plus packet-local i18n catalog/service tests.</field-1>
+        <field-2>module-checks: include focused Telegram i18n pytest, broader Telegram adapter pytest, DB-backed batch-draft guard, and XML lint.</field-2>
+        <field-3>follow-up-checks: none if focused, broader, DB guard, and XML validation all pass.</field-3>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This packet does not reopen API draft schema or storage design; it records verification expansion and GRACE synchronization only.</note-1>
+        <note-2>If compose API or PostgreSQL are unavailable in a future refresh, record the exact blocker rather than inferring DB safety from unit tests alone.</note-2>
+      </notes>
+    </ExecutionPacket>
+
     <ExecutionPacket packet-id="media-9kk-internal-artifact-download-access" module="M-CONTRACTS,M-API-HTTP,M-API-STORAGE,M-WORKER-COMMON,M-TELEGRAM-ADAPTER,M-WORKER-AGENT-RUNNER" phase="Phase-10" step="3" verification-ref="V-M-API-HTTP,V-M-WORKER-COMMON,V-M-TELEGRAM-ADAPTER">
       <module-id>M-ARTIFACT-DOWNLOAD-ACCESS</module-id>
       <module-name>AudienceScopedArtifactDownloadAccess</module-name>

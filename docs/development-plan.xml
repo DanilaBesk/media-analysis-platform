@@ -1501,7 +1501,7 @@
     <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" LAYER="4" ORDER="2" STATUS="implemented">
       <contract>
         <purpose>Preserve Telegram UX while delegating all business logic to the API.</purpose>
-        <scope>Telegram update parsing, temporary media download, API submission, polling wait flow, callback mapping, artifact sending, and bounded transcript presentation transport selection after artifact materialization.</scope>
+        <scope>Telegram update parsing, packet-local typed RU/EN locale resolution, temporary media download, API submission, polling wait flow, callback mapping, localized keyboard and source-label presentation, delayed basket-summary and media-group locale propagation, artifact sending, and bounded transcript presentation transport selection after artifact materialization.</scope>
         <inputs>
           <param name="telegram-update" type="telegram-event" />
         </inputs>
@@ -1519,7 +1519,9 @@
         <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, and URL sources through API-owned batch drafts, then submit the draft for API promotion into one batch root." />
         <export-renderDraftCallbacks PURPOSE="Render Telegram inline callback data with draft_id and version for draft mutate and submit actions." />
         <export-registerCommandMenu PURPOSE="Register `/start`, `/help`, `/batch`, `/basket`, and `/clear` commands for Telegram clients." />
+        <export-resolveLocale PURPOSE="Normalize Telegram user language metadata into packet-local RU/EN adapter locale for messages, callbacks, delayed summaries, and media-group flushes." />
         <export-toggleBatchMode PURPOSE="Switch per-chat/user presentation mode between API-owned draft collection and immediate single-source processing." />
+        <export-buildLocalizedCommands PURPOSE="Build localized command metadata and localized Telegram copy without moving text catalogs into the API or workers." />
         <export-deliverTranscriptResult PURPOSE="Choose inline Telegram text for short readable `transcript_plain` artifacts, an unavailable-artifact message for missing or non-file text paths, and document fallback for existing long, empty, or unreadable artifact files without changing API or worker contracts." />
       </interface>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
@@ -1538,6 +1540,7 @@
         <note-3>If `packages/sdk-py` is still absent during Phase-5, keep a thin packet-local API client under the Telegram adapter boundary and defer shared SDK extraction.</note-3>
         <note-4>`TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS=3500` is a Telegram UX limit only. It does not define transcript artifact size, API response shape, worker output policy, or batch aggregation semantics.</note-4>
         <note-5>Telegram must not treat in-memory BasketStore keyed by chat/user as canonical durable state; stale inline buttons are resolved by draft_id plus version through the API.</note-5>
+        <note-6>Telegram locale is adapter-local presentation state only. RU is the default locale, EN is supported, and locale must flow through delayed basket summaries and media-group buffering without being persisted as API-owned draft business state.</note-6>
       </notes>
     </M-TELEGRAM-ADAPTER>
 

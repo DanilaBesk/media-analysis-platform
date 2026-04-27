@@ -176,7 +176,7 @@
     </M-WEB-UI>
 
     <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="INTEGRATION" STATUS="implemented">
-      <purpose>Act as a thin Telegram transport client over the HTTP API while preserving current user-visible bot flows.</purpose>
+      <purpose>Act as a thin Telegram transport client over the HTTP API while preserving current user-visible bot flows through packet-local typed RU/EN i18n, localized source-label presentation, and API-owned batch draft semantics.</purpose>
       <path>apps/telegram-bot</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>V-M-TELEGRAM-ADAPTER</verification-ref>
@@ -186,9 +186,14 @@
         <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, uploaded files, and URL sources through API-owned batch drafts without owning business orchestration." />
         <export-renderDraftCallbacks PURPOSE="Render inline callback data with draft_id and version so stale buttons resolve against API draft state." />
         <export-registerCommandMenu PURPOSE="Register the Telegram command menu for start, help, batch toggle, basket view, and basket clear." />
+        <export-resolveTelegramLocale PURPOSE="Normalize Telegram user language metadata into the packet-local RU/EN locale used by messages, callbacks, delayed summaries, and media-group flushes." />
+        <export-buildLocalizedCommands PURPOSE="Build localized command metadata and localized adapter copy from the packet-local typed i18n registry." />
         <export-toggleBatchMode PURPOSE="Maintain adapter-local presentation mode only; API-owned batch drafts remain the canonical pre-submit basket state." />
         <export-serializeBasketOwnerMutation PURPOSE="Serialize draft load/create/mutate/pointer-update and debounced summary scheduling for one Telegram chat/user owner so forwarded single-source bursts coalesce into one API draft." />
+        <export-presentSourceLabelForLocale PURPOSE="Present localized Telegram source-label fallbacks without changing shared source-label or draft persistence contracts." />
         <export-deliverTranscriptResult PURPOSE="Present short readable `transcript_plain` artifacts after materializing them through the internal artifact download-access endpoint; use document fallback for existing long, empty, or unreadable artifact files, and show an unavailable-artifact message when the text file is missing or not a file." />
+        <type-TelegramLocaleCatalog PURPOSE="Typed RU/EN key registry, catalogs, and validation for Telegram adapter copy." />
+        <type-TelegramLocaleFlow PURPOSE="Adapter-local locale propagation across immediate replies, delayed basket summaries, media-group flushes, and callback-driven follow-up messages." />
         <type-TelegramDraftCallback PURPOSE="Callback payload carrying draft_id and version or a draft-scoped item token, never only basket:start or chat/user state." />
         <type-TelegramInlineTranscriptDelivery PURPOSE="Bounded adapter presentation rule over gateway-materialized `transcript_plain`; no bot-side stitching, new worker, or API contract change." />
       </annotations>

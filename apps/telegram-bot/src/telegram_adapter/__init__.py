@@ -24,10 +24,24 @@ from telegram_adapter.api_client import (
     UploadFilePart,
 )
 from telegram_adapter.gateway import TelegramApiProcessingGateway
+from telegram_adapter.i18n import (
+    DEFAULT_LOCALE,
+    SUPPORTED_LOCALES,
+    TelegramCommandKey,
+    TelegramLocaleService,
+    TelegramTextKey,
+    build_localized_commands,
+)
 
 __all__ = [
+    "DEFAULT_LOCALE",
+    "SUPPORTED_LOCALES",
     "TelegramApiClient",
     "TelegramApiClientError",
+    "TelegramCommandKey",
+    "TelegramLocaleService",
     "TelegramApiProcessingGateway",
+    "TelegramTextKey",
     "UploadFilePart",
+    "build_localized_commands",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
@@ -24,20 +25,21 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from media_analysis_platform.config import Settings
 from transcriber_workers_common.domain import MediaAttachment, ProcessedJob, SourceCandidate
 from transcriber_workers_common.media_groups import MediaGroupAccumulator
-from transcriber_workers_common.source_labels import humanize_source_label
+from transcriber_workers_common.source_labels import humanize_source_label, looks_like_machine_file_name
 from transcriber_workers_common.source_extractor import extract_sources
+
+try:
+    from telegram_adapter.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, SupportedLocale, TelegramLocaleService, TelegramTextKey, build_localized_commands
+except ModuleNotFoundError:  # pragma: no cover - workspace fallback for monorepo runtime/tests
+    ADAPTER_SRC = Path(__file__).resolve().parents[2] / "apps" / "telegram-bot" / "src"
+    if str(ADAPTER_SRC) not in sys.path:
+        sys.path.insert(0, str(ADAPTER_SRC))
+    from telegram_adapter.i18n import DEFAULT_LOCALE, SUPPORTED_LOCALES, SupportedLocale, TelegramLocaleService, TelegramTextKey, build_localized_commands
 
 LOGGER = logging.getLogger(__name__)
 HANDLE_MEDIA_MARKER = "[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]"
 TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS = 3500
-
-TELEGRAM_COMMANDS = (
-    BotCommand(command="start", description="Показать основное меню"),
-    BotCommand(command="help", description="Как пользоваться ботом"),
-    BotCommand(command="batch", description="Включить или выключить batch-режим"),
-    BotCommand(command="basket", description="Показать текущую корзину"),
-    BotCommand(command="clear", description="Очистить корзину"),
-)
+TELEGRAM_COMMANDS = build_localized_commands(DEFAULT_LOCALE)
 
 
 class TelegramProcessingGateway(Protocol):
@@ -145,6 +147,7 @@ class TelegramTranscriberApp:
         self.settings = settings
         self.processing_service = processing_service
         self.bot = bot or Bot(settings.telegram_bot_token)
+        self.locale_service = TelegramLocaleService()
         self.dispatcher = Dispatcher()
         self.router = Router()
         self.selection_store = CandidateSelectionStore()
@@ -154,8 +157,10 @@ class TelegramTranscriberApp:
         self.media_groups = MediaGroupAccumulator()
         self.media_group_tasks: dict[tuple[int, str], asyncio.Task[None]] = {}
         self.media_group_text: dict[tuple[int, str], str] = {}
+        self.media_group_locales: dict[tuple[int, str], SupportedLocale] = {}
         self.basket_summary_tasks: dict[tuple[int, int | None], asyncio.Task[None]] = {}
         self.basket_summary_added_counts: dict[tuple[int, int | None], int] = {}
+        self.basket_summary_locales: dict[tuple[int, int | None], SupportedLocale] = {}
         self.basket_locks: dict[tuple[int, int | None], asyncio.Lock] = {}
         self.report_locks: dict[str, asyncio.Lock] = {}
         self.deep_research_locks: dict[str, asyncio.Lock] = {}
@@ -192,17 +197,40 @@ class TelegramTranscriberApp:
         )
 
     async def _configure_commands(self) -> None:
-        await self.bot.set_my_commands(list(TELEGRAM_COMMANDS), scope=BotCommandScopeDefault())
+        default_scope = BotCommandScopeDefault()
+        default_commands = list(build_localized_commands(DEFAULT_LOCALE, locale_service=self.locale_service))
+        await self.bot.set_my_commands(default_commands, scope=default_scope)
+        for locale in SUPPORTED_LOCALES:
+            await self.bot.set_my_commands(
+                list(build_localized_commands(locale, locale_service=self.locale_service)),
+                scope=default_scope,
+                language_code=locale,
+            )
         await self.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
+
+    def _resolve_message_locale(self, message: Message) -> SupportedLocale:
+        return self.locale_service.resolve_locale(
+            user_locale=getattr(message.from_user, "language_code", None),
+            fallback_locale=DEFAULT_LOCALE,
+        )
+
+    def _resolve_callback_locale(self, callback: CallbackQuery) -> SupportedLocale:
+        return self.locale_service.resolve_locale(
+            user_locale=getattr(callback.from_user, "language_code", None),
+            fallback_locale=DEFAULT_LOCALE,
+        )
 
     async def _handle_start(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
             return
+        locale = self._resolve_message_locale(message)
         user_id = message.from_user.id if message.from_user else None
         draft = await self._load_current_draft(message.chat.id, user_id)
         await message.answer(
-            "Отправьте voice/audio/video/document или ссылку. В batch-режиме я собираю источники в корзину и запускаю одну общую задачу.",
+            self.locale_service.text(TelegramTextKey.START_PROMPT, locale=locale),
             reply_markup=_build_main_keyboard(
+                locale_service=self.locale_service,
+                locale=locale,
                 batch_enabled=self.batch_modes.is_enabled(message.chat.id, user_id),
                 draft=draft,
             ),
@@ -211,18 +239,22 @@ class TelegramTranscriberApp:
     async def _handle_help(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
             return
+        locale = self._resolve_message_locale(message)
         user_id = message.from_user.id if message.from_user else None
-        await self._send_command_menu(chat_id=message.chat.id, user_id=user_id, answer=message.answer)
+        await self._send_command_menu(chat_id=message.chat.id, user_id=user_id, answer=message.answer, locale=locale)
 
     async def _handle_batch_command(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
             return
+        locale = self._resolve_message_locale(message)
         user_id = message.from_user.id if message.from_user else None
         enabled = self.batch_modes.toggle(message.chat.id, user_id)
         draft = await self._load_current_draft(message.chat.id, user_id)
         await message.answer(
-            _build_batch_mode_text(enabled),
+            _build_batch_mode_text(self.locale_service, locale, enabled),
             reply_markup=_build_main_keyboard(
+                locale_service=self.locale_service,
+                locale=locale,
                 batch_enabled=enabled,
                 draft=draft,
             ),
@@ -231,16 +263,23 @@ class TelegramTranscriberApp:
     async def _handle_basket_command(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
             return
+        locale = self._resolve_message_locale(message)
         user_id = message.from_user.id if message.from_user else None
         async with self._basket_lock(message.chat.id, user_id):
             self._cancel_pending_basket_summary(message.chat.id, user_id)
             draft = await self._load_current_draft(message.chat.id, user_id)
-        text = _build_draft_text(draft) if _draft_items(draft) else "Корзина пуста."
+        text = (
+            _build_draft_text(self.locale_service, locale, draft)
+            if _draft_items(draft)
+            else self.locale_service.text(TelegramTextKey.BASKET_EMPTY, locale=locale)
+        )
         await message.answer(
             text,
-            reply_markup=self._build_draft_keyboard(draft)
+            reply_markup=self._build_draft_keyboard(draft, locale=locale)
             if _draft_items(draft)
             else _build_main_keyboard(
+                locale_service=self.locale_service,
+                locale=locale,
                 batch_enabled=self.batch_modes.is_enabled(message.chat.id, user_id),
                 draft=draft,
             ),
@@ -249,6 +288,7 @@ class TelegramTranscriberApp:
     async def _handle_clear_command(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
             return
+        locale = self._resolve_message_locale(message)
         user_id = message.from_user.id if message.from_user else None
         async with self._basket_lock(message.chat.id, user_id):
             self._cancel_pending_basket_summary(message.chat.id, user_id)
@@ -267,11 +307,15 @@ class TelegramTranscriberApp:
                     if _is_draft_stale_error(exc):
                         self._forget_draft(message.chat.id, user_id)
                     else:
-                        await message.answer(f"Не удалось очистить корзину: {exc}")
+                        await message.answer(
+                            self.locale_service.text(TelegramTextKey.BASKET_CLEAR_FAILED, locale=locale, error=exc)
+                        )
                         return
         await message.answer(
-            "Корзина очищена.",
+            self.locale_service.text(TelegramTextKey.BASKET_CLEARED, locale=locale),
             reply_markup=_build_main_keyboard(
+                locale_service=self.locale_service,
+                locale=locale,
                 batch_enabled=self.batch_modes.is_enabled(message.chat.id, user_id),
                 draft=None,
             ),
@@ -283,9 +327,10 @@ class TelegramTranscriberApp:
         attachments = _extract_attachments(message)
         text = message.text or message.caption or ""
         user_id = message.from_user.id if message.from_user else None
+        locale = self._resolve_message_locale(message)
 
         if _looks_like_command_menu_request(text) and not attachments:
-            await self._send_command_menu(chat_id=message.chat.id, user_id=user_id, answer=message.answer)
+            await self._send_command_menu(chat_id=message.chat.id, user_id=user_id, answer=message.answer, locale=locale)
             return
 
         if message.media_group_id and attachments:
@@ -294,6 +339,7 @@ class TelegramTranscriberApp:
                 self.media_groups.add(message.chat.id, message.media_group_id, attachment)
             if text and not self.media_group_text.get(key):
                 self.media_group_text[key] = text
+            self.media_group_locales[key] = locale
 
             existing = self.media_group_tasks.get(key)
             if existing and not existing.done():
@@ -313,21 +359,16 @@ class TelegramTranscriberApp:
             text=text,
             attachments=attachments,
             message_id=getattr(message, "message_id", None),
+            locale=locale,
         )
 
-    async def _send_command_menu(self, chat_id: int, user_id: int | None, answer) -> None:
+    async def _send_command_menu(self, chat_id: int, user_id: int | None, answer, *, locale: SupportedLocale) -> None:
         draft = await self._load_current_draft(chat_id, user_id)
         await answer(
-            "Команды доступны в меню Telegram рядом с полем ввода:\n"
-            "/start - основное меню\n"
-            "/help - помощь\n"
-            "/batch - включить или выключить batch-режим\n"
-            "/basket - показать корзину\n"
-            "/clear - очистить корзину\n\n"
-            "Корзина собирает несколько источников перед общим batch-запуском. "
-            "Кнопками можно убрать источник, очистить корзину или запустить одну batch-транскрибацию. "
-            "Кнопка batch включает сбор корзины или выключает его для одиночной обработки.",
+            self.locale_service.text(TelegramTextKey.HELP_MENU, locale=locale),
             reply_markup=_build_main_keyboard(
+                locale_service=self.locale_service,
+                locale=locale,
                 batch_enabled=self.batch_modes.is_enabled(chat_id, user_id),
                 draft=draft,
             ),
@@ -342,6 +383,7 @@ class TelegramTranscriberApp:
 
         attachments = self.media_groups.pop(chat_id, media_group_id)
         text = self.media_group_text.pop(key, "")
+        locale = self.media_group_locales.pop(key, DEFAULT_LOCALE)
         self.media_group_tasks.pop(key, None)
         await self._process_candidate_set(
             chat_id=chat_id,
@@ -349,6 +391,7 @@ class TelegramTranscriberApp:
             text=text,
             attachments=attachments,
             message_id=None,
+            locale=locale,
         )
 
     async def _process_candidate_set(
@@ -358,12 +401,19 @@ class TelegramTranscriberApp:
         text: str,
         attachments: list[MediaAttachment],
         message_id: int | None = None,
+        locale: SupportedLocale | None = None,
     ) -> None:
+        resolved_locale = self.locale_service.normalize_locale(locale)
         result = extract_sources(text=text, attachments=attachments)
         if not result.candidates:
-            message = "Не нашёл поддерживаемых источников. Поддерживается YouTube, URL и Telegram media/document."
+            message = self.locale_service.text(TelegramTextKey.BASKET_UNSUPPORTED_SOURCES, locale=resolved_locale)
             if result.rejected_urls:
-                message += "\n\nНеподдерживаемые ссылки:\n" + "\n".join(f"- {item}" for item in result.rejected_urls)
+                message = _append_rejected_urls(
+                    self.locale_service,
+                    resolved_locale,
+                    message,
+                    result.rejected_urls,
+                )
             await self.bot.send_message(chat_id, message)
             return
 
@@ -371,15 +421,27 @@ class TelegramTranscriberApp:
         if not self.batch_modes.is_enabled(chat_id, user_id):
             self._cancel_pending_basket_summary(chat_id, user_id)
             if len(candidates) == 1:
-                await self.bot.send_message(chat_id, "Batch-режим выключен. Запускаю одиночную обработку.")
-                await self._start_processing(chat_id, candidates[0])
+                await self.bot.send_message(
+                    chat_id,
+                    self.locale_service.text(TelegramTextKey.BASKET_SINGLE_MODE_PROCESS_NOW, locale=resolved_locale),
+                )
+                await self._start_processing(chat_id, candidates[0], locale=resolved_locale)
                 return
 
             selection_id = self.selection_store.save(chat_id=chat_id, user_id=user_id, candidates=candidates)
-            message = "Batch-режим выключен. Выберите один источник для обработки:"
+            message = self.locale_service.text(TelegramTextKey.BASKET_SINGLE_MODE_SELECT_ONE, locale=resolved_locale)
             if result.rejected_urls:
-                message += "\n\nПропущены неподдерживаемые ссылки:\n" + "\n".join(f"- {item}" for item in result.rejected_urls)
-            await self.bot.send_message(chat_id, message, reply_markup=_build_candidate_keyboard(selection_id, candidates))
+                message = _append_rejected_urls(
+                    self.locale_service,
+                    resolved_locale,
+                    message,
+                    result.rejected_urls,
+                )
+            await self.bot.send_message(
+                chat_id,
+                message,
+                reply_markup=_build_candidate_keyboard(self.locale_service, resolved_locale, selection_id, candidates),
+            )
             return
 
         should_debounce = len(candidates) == 1 and not result.rejected_urls
@@ -388,18 +450,25 @@ class TelegramTranscriberApp:
         try:
             async with self._basket_lock(chat_id, user_id):
                 if should_debounce:
-                    self._mark_basket_summary_added(chat_id, user_id, added_count=1)
+                    self._mark_basket_summary_added(chat_id, user_id, added_count=1, locale=resolved_locale)
 
                 try:
-                    draft = await self._add_candidates_to_draft(chat_id=chat_id, user_id=user_id, candidates=candidates)
+                    draft = await self._add_candidates_to_draft(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        candidates=candidates,
+                    )
                 except Exception:
                     if should_debounce:
                         self._cancel_pending_basket_summary(chat_id, user_id)
                     raise
-                message = _build_draft_text(draft, added_count=len(candidates))
+                message = _build_draft_text(self.locale_service, resolved_locale, draft, added_count=len(candidates))
                 if result.rejected_urls:
-                    message += "\n\nПропущены неподдерживаемые ссылки:\n" + "\n".join(
-                        f"- {item}" for item in result.rejected_urls
+                    message = _append_rejected_urls(
+                        self.locale_service,
+                        resolved_locale,
+                        message,
+                        result.rejected_urls,
                     )
 
                 if should_debounce:
@@ -410,9 +479,12 @@ class TelegramTranscriberApp:
 
                 self._cancel_pending_basket_summary(chat_id, user_id)
                 send_message = message
-                send_markup = self._build_draft_keyboard(draft)
+                send_markup = self._build_draft_keyboard(draft, locale=resolved_locale)
         except Exception as exc:
-            await self.bot.send_message(chat_id, f"Не удалось обновить корзину: {exc}")
+            await self.bot.send_message(
+                chat_id,
+                self.locale_service.text(TelegramTextKey.BASKET_UPDATE_FAILED, locale=resolved_locale, error=exc),
+            )
             return
 
         if send_message is not None:
@@ -431,7 +503,7 @@ class TelegramTranscriberApp:
             draft = await asyncio.to_thread(
                 self.processing_service.create_batch_draft,
                 owner=owner,
-                display_name="Telegram basket",
+                display_name="telegram_collection",
             )
         for candidate in candidates:
             prepared_candidate = await self._download_attachment_if_needed(candidate)
@@ -444,13 +516,28 @@ class TelegramTranscriberApp:
         self._remember_draft(chat_id, user_id, draft)
         return draft
 
-    def _schedule_basket_summary(self, chat_id: int, user_id: int | None, *, added_count: int) -> None:
-        self._mark_basket_summary_added(chat_id, user_id, added_count=added_count)
+    def _schedule_basket_summary(
+        self,
+        chat_id: int,
+        user_id: int | None,
+        *,
+        added_count: int,
+        locale: SupportedLocale,
+    ) -> None:
+        self._mark_basket_summary_added(chat_id, user_id, added_count=added_count, locale=locale)
         self.basket_summary_tasks[(chat_id, user_id)] = asyncio.create_task(self._flush_basket_summary(chat_id, user_id))
 
-    def _mark_basket_summary_added(self, chat_id: int, user_id: int | None, *, added_count: int) -> None:
+    def _mark_basket_summary_added(
+        self,
+        chat_id: int,
+        user_id: int | None,
+        *,
+        added_count: int,
+        locale: SupportedLocale,
+    ) -> None:
         key = (chat_id, user_id)
         self.basket_summary_added_counts[key] = self.basket_summary_added_counts.get(key, 0) + added_count
+        self.basket_summary_locales[key] = locale
         existing = self.basket_summary_tasks.get(key)
         if existing and not existing.done():
             existing.cancel()
@@ -461,6 +548,7 @@ class TelegramTranscriberApp:
         if existing and not existing.done():
             existing.cancel()
         self.basket_summary_added_counts.pop(key, None)
+        self.basket_summary_locales.pop(key, None)
 
     def _basket_lock(self, chat_id: int, user_id: int | None) -> asyncio.Lock:
         key = (chat_id, user_id)
@@ -480,13 +568,14 @@ class TelegramTranscriberApp:
         async with self._basket_lock(chat_id, user_id):
             self.basket_summary_tasks.pop(key, None)
             added_count = self.basket_summary_added_counts.pop(key, 0)
+            locale = self.basket_summary_locales.pop(key, DEFAULT_LOCALE)
             draft = await self._load_current_draft(chat_id, user_id)
         if not _draft_items(draft):
             return
         await self.bot.send_message(
             chat_id,
-            _build_draft_text(draft, added_count=added_count or None),
-            reply_markup=self._build_draft_keyboard(draft),
+            _build_draft_text(self.locale_service, locale, draft, added_count=added_count or None),
+            reply_markup=self._build_draft_keyboard(draft, locale=locale),
         )
 
     async def _handle_source_selection(self, callback: CallbackQuery) -> None:
@@ -494,12 +583,13 @@ class TelegramTranscriberApp:
             return
         if not await self._ensure_callback_allowed(callback):
             return
+        locale = self._resolve_callback_locale(callback)
 
         try:
             _, selection_id, index_raw = callback.data.split(":", 2)
             index = int(index_raw)
         except ValueError:
-            await callback.answer("Некорректный выбор источника.", show_alert=True)
+            await callback.answer(self.locale_service.text(TelegramTextKey.SELECTION_INVALID, locale=locale), show_alert=True)
             return
 
         candidate = self.selection_store.get(
@@ -509,11 +599,11 @@ class TelegramTranscriberApp:
             index=index,
         )
         if candidate is None:
-            await callback.answer("Источник уже недоступен.", show_alert=True)
+            await callback.answer(self.locale_service.text(TelegramTextKey.SELECTION_MISSING, locale=locale), show_alert=True)
             return
 
-        await callback.answer("Запускаю обработку...")
-        await self._start_processing(callback.message.chat.id, candidate)
+        await callback.answer(self.locale_service.text(TelegramTextKey.SELECTION_ACK, locale=locale))
+        await self._start_processing(callback.message.chat.id, candidate, locale=locale)
 
     async def _handle_batch_mode_toggle(self, callback: CallbackQuery) -> None:
         if callback.message is None:
@@ -521,14 +611,20 @@ class TelegramTranscriberApp:
         if not await self._ensure_callback_allowed(callback):
             return
 
+        locale = self._resolve_callback_locale(callback)
         chat_id = callback.message.chat.id
         user_id = callback.from_user.id if callback.from_user else None
         enabled = self.batch_modes.toggle(chat_id, user_id)
         draft = await self._load_current_draft(chat_id, user_id)
-        await _safe_callback_answer(callback, _build_batch_mode_text(enabled))
+        await _safe_callback_answer(callback, _build_batch_mode_text(self.locale_service, locale, enabled))
         await callback.message.edit_text(
-            _build_batch_mode_text(enabled),
-            reply_markup=_build_main_keyboard(batch_enabled=enabled, draft=draft),
+            _build_batch_mode_text(self.locale_service, locale, enabled),
+            reply_markup=_build_main_keyboard(
+                locale_service=self.locale_service,
+                locale=locale,
+                batch_enabled=enabled,
+                draft=draft,
+            ),
         )
 
     async def _handle_basket_callback(self, callback: CallbackQuery) -> None:
@@ -537,15 +633,19 @@ class TelegramTranscriberApp:
         if not await self._ensure_callback_allowed(callback):
             return
 
+        locale = self._resolve_callback_locale(callback)
         chat_id = callback.message.chat.id
         user_id = callback.from_user.id if callback.from_user else None
         if callback.data.startswith("basket:"):
-            await callback.answer(_stale_button_text(), show_alert=True)
+            await callback.answer(_stale_button_text(self.locale_service, locale), show_alert=True)
             return
 
         parsed = _parse_draft_callback(callback.data)
         if parsed is None:
-            await callback.answer("Некорректное действие корзины.", show_alert=True)
+            await callback.answer(
+                self.locale_service.text(TelegramTextKey.BASKET_ACTION_INVALID, locale=locale),
+                show_alert=True,
+            )
             return
 
         command, draft_id, expected_version, token = parsed
@@ -554,12 +654,13 @@ class TelegramTranscriberApp:
         if command == "s":
             async with self._basket_lock(chat_id, user_id):
                 self._cancel_pending_basket_summary(chat_id, user_id)
-            await _safe_callback_answer(callback, "Запускаю batch-транскрибацию...")
+            await _safe_callback_answer(callback, self.locale_service.text(TelegramTextKey.BASKET_START_ACK, locale=locale))
             await self._start_basket_processing(
                 chat_id=chat_id,
                 user_id=user_id,
                 draft_id=draft_id,
                 expected_version=expected_version,
+                locale=locale,
             )
             return
 
@@ -574,17 +675,18 @@ class TelegramTranscriberApp:
                         expected_version=expected_version,
                     )
                 except Exception as exc:
-                    await self._answer_draft_error(callback, exc)
+                    await self._answer_draft_error(callback, exc, locale=locale)
                     return
                 self._remember_draft(chat_id, user_id, draft)
-            await _safe_callback_answer(callback, "Корзина очищена.")
-            await callback.message.edit_text("Корзина очищена.")
+            cleared_text = self.locale_service.text(TelegramTextKey.BASKET_CLEARED, locale=locale)
+            await _safe_callback_answer(callback, cleared_text)
+            await callback.message.edit_text(cleared_text)
             return
 
         if command == "r" and token:
             item_id = self._item_callback_tokens.get((draft_id, token))
             if item_id is None:
-                await callback.answer(_stale_button_text(), show_alert=True)
+                await callback.answer(_stale_button_text(self.locale_service, locale), show_alert=True)
                 return
             async with self._basket_lock(chat_id, user_id):
                 self._cancel_pending_basket_summary(chat_id, user_id)
@@ -597,50 +699,71 @@ class TelegramTranscriberApp:
                         item_id=item_id,
                     )
                 except Exception as exc:
-                    await self._answer_draft_error(callback, exc)
+                    await self._answer_draft_error(callback, exc, locale=locale)
                     return
                 self._remember_draft(chat_id, user_id, draft)
-            await _safe_callback_answer(callback, "Источник удалён.")
+            await _safe_callback_answer(callback, self.locale_service.text(TelegramTextKey.BASKET_REMOVE_ACK, locale=locale))
             if _draft_items(draft):
-                await callback.message.edit_text(_build_draft_text(draft), reply_markup=self._build_draft_keyboard(draft))
+                await callback.message.edit_text(
+                    _build_draft_text(self.locale_service, locale, draft),
+                    reply_markup=self._build_draft_keyboard(draft, locale=locale),
+                )
             else:
-                await callback.message.edit_text("Корзина пуста.")
+                await callback.message.edit_text(self.locale_service.text(TelegramTextKey.BASKET_EMPTY, locale=locale))
             return
 
-        await callback.answer("Некорректное действие корзины.", show_alert=True)
+        await callback.answer(self.locale_service.text(TelegramTextKey.BASKET_ACTION_INVALID, locale=locale), show_alert=True)
 
-    async def _start_processing(self, chat_id: int, candidate: SourceCandidate) -> None:
-        status_message = await self.bot.send_message(chat_id, _build_processing_status_text(candidate))
+    async def _start_processing(self, chat_id: int, candidate: SourceCandidate, *, locale: SupportedLocale) -> None:
+        status_message = await self.bot.send_message(
+            chat_id,
+            _build_processing_status_text(self.locale_service, locale, candidate),
+        )
         try:
             prepared_candidate = await self._download_attachment_if_needed(candidate)
             LOGGER.info("%s mode=single source_kind=%s", HANDLE_MEDIA_MARKER, prepared_candidate.kind)
             job = await asyncio.to_thread(self.processing_service.process_source, prepared_candidate)
         except Exception as exc:
-            await status_message.edit_text(f"Не удалось обработать источник: {exc}")
+            await status_message.edit_text(
+                self.locale_service.text(TelegramTextKey.PROCESSING_FAILED_SOURCE, locale=locale, error=exc)
+            )
             return
 
-        await status_message.edit_text("Транскрибация готова.")
+        await status_message.edit_text(self.locale_service.text(TelegramTextKey.PROCESSING_DONE, locale=locale))
         await self._send_transcript_result(
             status_message,
             job,
-            fallback_caption="Готовая цельная транскрибация без сегментов.",
+            fallback_caption=self.locale_service.text(TelegramTextKey.TRANSCRIPT_FALLBACK_CAPTION_SINGLE, locale=locale),
+            locale=locale,
         )
 
-    async def _start_processing_group(self, chat_id: int, candidates: list[SourceCandidate]) -> None:
-        status_message = await self.bot.send_message(chat_id, _build_group_processing_status_text(candidates))
+    async def _start_processing_group(
+        self,
+        chat_id: int,
+        candidates: list[SourceCandidate],
+        *,
+        locale: SupportedLocale,
+    ) -> None:
+        status_message = await self.bot.send_message(
+            chat_id,
+            _build_group_processing_status_text(self.locale_service, locale, candidates),
+        )
         try:
             prepared_candidates = [await self._download_attachment_if_needed(candidate) for candidate in candidates]
             LOGGER.info("%s mode=combined source_count=%s", HANDLE_MEDIA_MARKER, len(prepared_candidates))
             job = await asyncio.to_thread(self.processing_service.process_source_group, prepared_candidates)
         except Exception as exc:
-            await status_message.edit_text(f"Не удалось обработать источники: {exc}")
+            await status_message.edit_text(
+                self.locale_service.text(TelegramTextKey.PROCESSING_FAILED_GROUP, locale=locale, error=exc)
+            )
             return
 
-        await status_message.edit_text("Транскрибация готова.")
+        await status_message.edit_text(self.locale_service.text(TelegramTextKey.PROCESSING_DONE, locale=locale))
         await self._send_transcript_result(
             status_message,
             job,
-            fallback_caption="Готовая цельная транскрибация без сегментов.",
+            fallback_caption=self.locale_service.text(TelegramTextKey.TRANSCRIPT_FALLBACK_CAPTION_SINGLE, locale=locale),
+            locale=locale,
         )
 
     async def _start_basket_processing(
@@ -650,15 +773,19 @@ class TelegramTranscriberApp:
         user_id: int | None,
         draft_id: str,
         expected_version: int,
+        locale: SupportedLocale,
     ) -> None:
         owner = _build_telegram_owner(chat_id, user_id)
         async with self._basket_lock(chat_id, user_id):
             draft = await self._load_current_draft(chat_id, user_id, draft_id=draft_id)
             if draft is not None and not _draft_items(draft):
-                await self.bot.send_message(chat_id, "Корзина пуста.")
+                await self.bot.send_message(chat_id, self.locale_service.text(TelegramTextKey.BASKET_EMPTY, locale=locale))
                 return
 
-            status_message = await self.bot.send_message(chat_id, _build_draft_processing_status_text(draft))
+            status_message = await self.bot.send_message(
+                chat_id,
+                _build_draft_processing_status_text(self.locale_service, locale, draft),
+            )
             try:
                 LOGGER.info("%s mode=batch draft_id=%s expected_version=%s", HANDLE_MEDIA_MARKER, draft_id, expected_version)
                 job = await asyncio.to_thread(
@@ -669,25 +796,35 @@ class TelegramTranscriberApp:
                 )
             except Exception as exc:
                 if _is_draft_stale_error(exc):
-                    await status_message.edit_text(_draft_error_text(exc))
+                    await status_message.edit_text(_draft_error_text(self.locale_service, locale, exc))
                     return
-                await status_message.edit_text(f"Не удалось обработать корзину: {exc}")
+                await status_message.edit_text(
+                    self.locale_service.text(TelegramTextKey.PROCESSING_FAILED_BASKET, locale=locale, error=exc)
+                )
                 return
 
             self._forget_draft(chat_id, user_id)
-        await status_message.edit_text("Пакетная транскрибация готова.")
+        await status_message.edit_text(self.locale_service.text(TelegramTextKey.PROCESSING_DONE_BASKET, locale=locale))
         await self._send_transcript_result(
             status_message,
             job,
-            fallback_caption="Готовая пакетная транскрибация без сегментов.",
+            fallback_caption=self.locale_service.text(TelegramTextKey.TRANSCRIPT_FALLBACK_CAPTION_BASKET, locale=locale),
+            locale=locale,
         )
 
-    async def _send_transcript_result(self, status_message: Message, job: ProcessedJob, *, fallback_caption: str) -> None:
-        reply_markup = _build_result_keyboard(job.job_id)
+    async def _send_transcript_result(
+        self,
+        status_message: Message,
+        job: ProcessedJob,
+        *,
+        fallback_caption: str,
+        locale: SupportedLocale,
+    ) -> None:
+        reply_markup = _build_result_keyboard(self.locale_service, locale, job.job_id)
         text_path = job.transcript.text_path
         if not text_path.is_file():
             await status_message.answer(
-                "Транскрибация готова, но текстовый файл артефакта недоступен.",
+                self.locale_service.text(TelegramTextKey.TRANSCRIPT_TEXT_UNAVAILABLE, locale=locale),
                 reply_markup=reply_markup,
             )
             return
@@ -768,17 +905,29 @@ class TelegramTranscriberApp:
         for key in [key for key in self._item_callback_tokens if key[0] == draft_id]:
             self._item_callback_tokens.pop(key, None)
 
-    def _build_draft_keyboard(self, draft: dict) -> InlineKeyboardMarkup:
+    def _build_draft_keyboard(self, draft: dict, *, locale: SupportedLocale) -> InlineKeyboardMarkup:
         builder = InlineKeyboardBuilder()
-        builder.button(text="Batch: включен", callback_data="mode:batch:toggle")
+        builder.button(
+            text=self.locale_service.text(TelegramTextKey.MODE_BUTTON_ENABLED, locale=locale),
+            callback_data="mode:batch:toggle",
+        )
         draft_id = str(draft["draft_id"])
         version = int(draft["version"])
-        builder.button(text="Запустить batch", callback_data=f"b:s:{draft_id}:{version}")
-        builder.button(text="Очистить", callback_data=f"b:c:{draft_id}:{version}")
+        builder.button(
+            text=self.locale_service.text(TelegramTextKey.BASKET_BUTTON_PROCESS, locale=locale),
+            callback_data=f"b:s:{draft_id}:{version}",
+        )
+        builder.button(
+            text=self.locale_service.text(TelegramTextKey.BASKET_BUTTON_CLEAR, locale=locale),
+            callback_data=f"b:c:{draft_id}:{version}",
+        )
         for index, item in enumerate(_draft_items(draft), start=1):
             item_id = str(item["item_id"])
             token = self._callback_token_for_item(draft_id, item_id)
-            builder.button(text=f"Убрать {index}", callback_data=f"b:r:{draft_id}:{version}:{token}")
+            builder.button(
+                text=self.locale_service.text(TelegramTextKey.BASKET_BUTTON_REMOVE, locale=locale, index=index),
+                callback_data=f"b:r:{draft_id}:{version}:{token}",
+            )
         builder.adjust(1, 2, *([1] * len(_draft_items(draft))))
         return builder.as_markup()
 
@@ -790,9 +939,9 @@ class TelegramTranscriberApp:
         self._item_callback_tokens[(draft_id, token)] = item_id
         return token
 
-    async def _answer_draft_error(self, callback: CallbackQuery, exc: Exception) -> None:
+    async def _answer_draft_error(self, callback: CallbackQuery, exc: Exception, *, locale: SupportedLocale) -> None:
         if _is_draft_stale_error(exc):
-            await callback.answer(_draft_error_text(exc), show_alert=True)
+            await callback.answer(_draft_error_text(self.locale_service, locale, exc), show_alert=True)
             return
         raise exc
 
@@ -801,21 +950,25 @@ class TelegramTranscriberApp:
             return
         if not await self._ensure_callback_allowed(callback):
             return
+        locale = self._resolve_callback_locale(callback)
         try:
             _, job_id = callback.data.split(":", 1)
         except ValueError:
-            await callback.answer("Некорректный идентификатор задачи.", show_alert=True)
+            await callback.answer(self.locale_service.text(TelegramTextKey.JOB_INVALID, locale=locale), show_alert=True)
             return
         try:
             job = await asyncio.to_thread(self.processing_service.load_job, job_id)
         except FileNotFoundError:
-            await callback.answer("Артефакты не найдены.", show_alert=True)
+            await callback.answer(
+                self.locale_service.text(TelegramTextKey.TRANSCRIPT_ARTIFACTS_NOT_FOUND, locale=locale),
+                show_alert=True,
+            )
             return
 
-        await callback.answer("Отправляю транскрибацию по сегментам...")
+        await callback.answer(self.locale_service.text(TelegramTextKey.TRANSCRIPT_ACK, locale=locale))
         await callback.message.answer_document(
             FSInputFile(job.transcript.markdown_path),
-            caption="Транскрибация по сегментам в формате Markdown.",
+            caption=self.locale_service.text(TelegramTextKey.TRANSCRIPT_SEGMENTS_CAPTION, locale=locale),
         )
 
     async def _handle_generate_report(self, callback: CallbackQuery) -> None:
@@ -823,18 +976,19 @@ class TelegramTranscriberApp:
             return
         if not await self._ensure_callback_allowed(callback):
             return
+        locale = self._resolve_callback_locale(callback)
         try:
             _, job_id = callback.data.split(":", 1)
         except ValueError:
-            await callback.answer("Некорректный идентификатор задачи.", show_alert=True)
+            await callback.answer(self.locale_service.text(TelegramTextKey.JOB_INVALID, locale=locale), show_alert=True)
             return
         lock = self.report_locks.setdefault(job_id, asyncio.Lock())
         if lock.locked():
-            await callback.answer("Отчёт уже формируется, дождитесь завершения.", show_alert=False)
+            await callback.answer(self.locale_service.text(TelegramTextKey.REPORT_LOCKED, locale=locale), show_alert=False)
             return
 
-        await _safe_callback_answer(callback, "Запускаю генерацию отчёта...")
-        status_message = await callback.message.answer("Готовлю исследовательский отчёт через настроенную AI-упряжку...")
+        await _safe_callback_answer(callback, self.locale_service.text(TelegramTextKey.REPORT_ACK, locale=locale))
+        status_message = await callback.message.answer(self.locale_service.text(TelegramTextKey.REPORT_STATUS, locale=locale))
         async with lock:
             try:
                 job = await asyncio.to_thread(
@@ -843,20 +997,24 @@ class TelegramTranscriberApp:
                     self.settings.report_prompt_suffix,
                 )
             except Exception as exc:
-                await status_message.edit_text(f"Не удалось сформировать отчёт: {exc}")
+                await status_message.edit_text(
+                    self.locale_service.text(TelegramTextKey.REPORT_FAILED, locale=locale, error=exc)
+                )
                 return
 
-        await status_message.edit_text("Исследовательский отчёт готов.")
+        await status_message.edit_text(self.locale_service.text(TelegramTextKey.REPORT_READY, locale=locale))
         if job.report is None:
-            await callback.message.answer("Отчёт не был сохранён.")
+            await callback.message.answer(self.locale_service.text(TelegramTextKey.REPORT_MISSING, locale=locale))
             return
         if not job.report.job_id:
-            await callback.message.answer("Отчёт сохранён без идентификатора report job; глубокое исследование недоступно.")
+            await callback.message.answer(
+                self.locale_service.text(TelegramTextKey.REPORT_MISSING_JOB_ID, locale=locale)
+            )
             return
         await callback.message.answer_document(
             FSInputFile(job.report.markdown_path),
-            caption="Исследовательский отчёт в формате Markdown.",
-            reply_markup=_build_deep_research_keyboard(job.report.job_id),
+            caption=self.locale_service.text(TelegramTextKey.REPORT_CAPTION, locale=locale),
+            reply_markup=_build_deep_research_keyboard(self.locale_service, locale, job.report.job_id),
         )
 
     async def _handle_deep_research(self, callback: CallbackQuery) -> None:
@@ -864,46 +1022,55 @@ class TelegramTranscriberApp:
             return
         if not await self._ensure_callback_allowed(callback):
             return
+        locale = self._resolve_callback_locale(callback)
         try:
             _, job_id = callback.data.split(":", 1)
         except ValueError:
-            await callback.answer("Некорректный идентификатор задачи.", show_alert=True)
+            await callback.answer(self.locale_service.text(TelegramTextKey.JOB_INVALID, locale=locale), show_alert=True)
             return
 
         lock = self.deep_research_locks.setdefault(job_id, asyncio.Lock())
         if lock.locked():
-            await callback.answer("Глубокое исследование уже запущено, дождитесь завершения.", show_alert=False)
+            await callback.answer(
+                self.locale_service.text(TelegramTextKey.DEEP_RESEARCH_LOCKED, locale=locale),
+                show_alert=False,
+            )
             return
 
-        await _safe_callback_answer(callback, "Запускаю глубокое исследование...")
+        await _safe_callback_answer(callback, self.locale_service.text(TelegramTextKey.DEEP_RESEARCH_ACK, locale=locale))
         status_message = await callback.message.answer(
-            "Готовлю глубокое исследование по evidence-first пайплайну. Это может занять заметно больше времени."
+            self.locale_service.text(TelegramTextKey.DEEP_RESEARCH_STATUS, locale=locale)
         )
         async with lock:
             try:
                 report_path = await asyncio.to_thread(self.processing_service.ensure_deep_research, job_id)
             except Exception as exc:
-                await status_message.edit_text(f"Не удалось запустить глубокое исследование: {exc}")
+                await status_message.edit_text(
+                    self.locale_service.text(TelegramTextKey.DEEP_RESEARCH_FAILED, locale=locale, error=exc)
+                )
                 return
 
-        await status_message.edit_text("Глубокое исследование готово.")
+        await status_message.edit_text(self.locale_service.text(TelegramTextKey.DEEP_RESEARCH_READY, locale=locale))
         await callback.message.answer_document(
             FSInputFile(report_path),
-            caption="Глубокое исследование в формате Markdown.",
+            caption=self.locale_service.text(TelegramTextKey.DEEP_RESEARCH_CAPTION, locale=locale),
         )
 
     async def _ensure_message_allowed(self, message: Message) -> bool:
         user_id = message.from_user.id if message.from_user else None
         if self._is_allowed_user(user_id):
             return True
-        await message.answer("Доступ к этому боту ограничен.")
+        await message.answer(self.locale_service.text(TelegramTextKey.ACCESS_DENIED, locale=self._resolve_message_locale(message)))
         return False
 
     async def _ensure_callback_allowed(self, callback: CallbackQuery) -> bool:
         user_id = callback.from_user.id if callback.from_user else None
         if self._is_allowed_user(user_id):
             return True
-        await callback.answer("Доступ к этому боту ограничен.", show_alert=True)
+        await callback.answer(
+            self.locale_service.text(TelegramTextKey.ACCESS_DENIED, locale=self._resolve_callback_locale(callback)),
+            show_alert=True,
+        )
         return False
 
     def _is_allowed_user(self, user_id: int | None) -> bool:
@@ -914,47 +1081,85 @@ class TelegramTranscriberApp:
         return user_id in self.settings.allowed_user_ids
 
 
-def _build_candidate_keyboard(selection_id: str, candidates: list[SourceCandidate]) -> InlineKeyboardMarkup:
+def _build_candidate_keyboard(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    selection_id: str,
+    candidates: list[SourceCandidate],
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for index, candidate in enumerate(candidates):
-        builder.button(text=candidate.display_name[:48], callback_data=f"pick:{selection_id}:{index}")
+        builder.button(
+            text=_present_source_label_for_telegram(locale_service, locale, candidate.display_name)[:48],
+            callback_data=f"pick:{selection_id}:{index}",
+        )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def _build_main_keyboard(*, batch_enabled: bool, draft: dict | None = None) -> InlineKeyboardMarkup:
+def _build_main_keyboard(
+    *,
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    batch_enabled: bool,
+    draft: dict | None = None,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="Batch: включен" if batch_enabled else "Batch: выключен",
+        text=locale_service.text(
+            TelegramTextKey.MODE_BUTTON_ENABLED if batch_enabled else TelegramTextKey.MODE_BUTTON_DISABLED,
+            locale=locale,
+        ),
         callback_data="mode:batch:toggle",
     )
     if _draft_items(draft):
         draft_id = str(draft["draft_id"])
         version = int(draft["version"])
-        builder.button(text="Запустить batch", callback_data=f"b:s:{draft_id}:{version}")
-        builder.button(text="Очистить корзину", callback_data=f"b:c:{draft_id}:{version}")
+        builder.button(
+            text=locale_service.text(TelegramTextKey.BASKET_BUTTON_PROCESS, locale=locale),
+            callback_data=f"b:s:{draft_id}:{version}",
+        )
+        builder.button(
+            text=locale_service.text(TelegramTextKey.BASKET_BUTTON_CLEAR, locale=locale),
+            callback_data=f"b:c:{draft_id}:{version}",
+        )
     builder.adjust(1, 2)
     return builder.as_markup()
 
 
-def _build_batch_mode_text(enabled: bool) -> str:
-    if enabled:
-        return "Batch-режим включен. Новые источники будут добавляться в корзину для одного общего запуска."
-    return "Batch-режим выключен. Один источник будет обрабатываться сразу; для нескольких источников появится выбор."
-
-
-def _build_draft_text(draft: dict | None, added_count: int | None = None) -> str:
-    items = _draft_items(draft)
-    prefix = f"Добавлено источников: {added_count}.\n" if added_count is not None else ""
-    lines = [
-        f"{index}. {humanize_source_label(_draft_item_display_name(item))}"
-        for index, item in enumerate(items, start=1)
-    ]
-    return (
-        f"{prefix}В корзине {len(items)} источника(ов):\n"
-        + "\n".join(lines)
-        + "\n\nЗапуск создаст одну batch-задачу в API."
+def _build_batch_mode_text(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    enabled: bool,
+) -> str:
+    return locale_service.text(
+        TelegramTextKey.MODE_STATUS_ENABLED if enabled else TelegramTextKey.MODE_STATUS_DISABLED,
+        locale=locale,
     )
+
+
+def _build_draft_text(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    draft: dict | None,
+    added_count: int | None = None,
+) -> str:
+    items = _draft_items(draft)
+    parts: list[str] = []
+    if added_count is not None:
+        parts.append(locale_service.text(TelegramTextKey.BASKET_SUMMARY_ADDED, locale=locale, count=added_count))
+    parts.append(locale_service.text(TelegramTextKey.BASKET_SUMMARY_HEADER, locale=locale, count=len(items)))
+    parts.extend(
+        locale_service.text(
+            TelegramTextKey.BASKET_SUMMARY_ITEM,
+            locale=locale,
+            index=index,
+            label=_present_source_label_for_telegram(locale_service, locale, _draft_item_display_name(item)),
+        )
+        for index, item in enumerate(items, start=1)
+    )
+    parts.append(locale_service.text(TelegramTextKey.BASKET_SUMMARY_FOOTER, locale=locale))
+    return "\n".join(parts)
 
 
 def _draft_items(draft: dict | None) -> list[dict]:
@@ -970,7 +1175,7 @@ def _draft_item_display_name(item: dict) -> str:
         display_name = source.get("display_name") or source.get("url") or source.get("original_filename")
         if display_name:
             return str(display_name)
-    return str(item.get("source_label") or item.get("item_id") or "Источник")
+    return str(item.get("source_label") or item.get("item_id") or "")
 
 
 def _build_telegram_owner(chat_id: int, user_id: int | None) -> dict[str, str]:
@@ -999,19 +1204,19 @@ def _parse_draft_callback(data: str) -> tuple[str, str, int, str | None] | None:
     return command, draft_id, version, rest[0] if rest else None
 
 
-def _stale_button_text() -> str:
-    return "Эта кнопка устарела. Откройте /basket или отправьте новый источник."
+def _stale_button_text(locale_service: TelegramLocaleService, locale: SupportedLocale) -> str:
+    return locale_service.text(TelegramTextKey.BASKET_STALE_BUTTON, locale=locale)
 
 
-def _draft_error_text(exc: Exception) -> str:
+def _draft_error_text(locale_service: TelegramLocaleService, locale: SupportedLocale, exc: Exception) -> str:
     code = getattr(exc, "code", None)
     if code == "draft_empty":
-        return "Корзина пуста."
+        return locale_service.text(TelegramTextKey.BASKET_EMPTY, locale=locale)
     if code == "version_conflict":
-        return "Корзина изменилась. Откройте актуальную корзину через /basket."
+        return locale_service.text(TelegramTextKey.BASKET_VERSION_CONFLICT, locale=locale)
     if code in {"draft_submitted", "draft_expired", "draft_canceled", "draft_owner_mismatch", "batch_draft_not_found"}:
-        return _stale_button_text()
-    return f"Не удалось обновить корзину: {exc}"
+        return _stale_button_text(locale_service, locale)
+    return locale_service.text(TelegramTextKey.BASKET_UPDATE_FAILED, locale=locale, error=exc)
 
 
 def _is_draft_stale_error(exc: Exception) -> bool:
@@ -1059,47 +1264,111 @@ async def _safe_callback_answer(callback: CallbackQuery, text: str, show_alert: 
         raise
 
 
-def _build_result_keyboard(job_id: str) -> InlineKeyboardMarkup:
+def _build_result_keyboard(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    job_id: str,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Получить по сегментам", callback_data=f"get:{job_id}")
-    builder.button(text="Создать исследовательский отчет", callback_data=f"report:{job_id}")
+    builder.button(text=locale_service.text(TelegramTextKey.RESULT_BUTTON_SEGMENTS, locale=locale), callback_data=f"get:{job_id}")
+    builder.button(text=locale_service.text(TelegramTextKey.RESULT_BUTTON_REPORT, locale=locale), callback_data=f"report:{job_id}")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def _build_processing_status_text(candidate: SourceCandidate) -> str:
-    humanized_source = humanize_source_label(candidate.display_name)
+def _build_processing_status_text(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    candidate: SourceCandidate,
+) -> str:
+    humanized_source = _present_source_label_for_telegram(locale_service, locale, candidate.display_name)
     if candidate.kind in {"telegram_audio", "telegram_video"}:
-        return (
-            f"Обрабатываю источник: {humanized_source}\n\n"
-            "Скачиваю файл из Telegram и запускаю транскрибацию. Это может занять несколько минут."
+        return locale_service.text(
+            TelegramTextKey.PROCESSING_STATUS_MEDIA,
+            locale=locale,
+            label=humanized_source,
         )
-    return (
-        f"Обрабатываю источник: {humanized_source}\n\n"
-        "Проверяю доступные субтитры и при необходимости запущу транскрибацию."
+    return locale_service.text(
+        TelegramTextKey.PROCESSING_STATUS_LINK,
+        locale=locale,
+        label=humanized_source,
     )
 
 
-def _build_deep_research_keyboard(job_id: str) -> InlineKeyboardMarkup:
+def _build_deep_research_keyboard(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    job_id: str,
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="Запустить глубокое исследование", callback_data=f"deep:{job_id}")
+    builder.button(
+        text=locale_service.text(TelegramTextKey.REPORT_BUTTON_DEEP_RESEARCH, locale=locale),
+        callback_data=f"deep:{job_id}",
+    )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def _build_group_processing_status_text(candidates: list[SourceCandidate]) -> str:
+def _build_group_processing_status_text(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    candidates: list[SourceCandidate],
+) -> str:
     attachment_count = len(candidates)
-    return (
-        f"Обрабатываю корзину: {attachment_count} источника(ов).\n\n"
-        "Скачиваю Telegram-файлы и отправляю весь набор одним batch-запросом в API. Это может занять несколько минут."
+    return locale_service.text(
+        TelegramTextKey.PROCESSING_STATUS_GROUP,
+        locale=locale,
+        count=attachment_count,
     )
 
 
-def _build_draft_processing_status_text(draft: dict | None) -> str:
+def _build_draft_processing_status_text(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    draft: dict | None,
+) -> str:
     attachment_count = len(_draft_items(draft))
+    return locale_service.text(
+        TelegramTextKey.PROCESSING_STATUS_BASKET,
+        locale=locale,
+        count=attachment_count,
+    )
+
+
+def _present_source_label_for_telegram(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    source_label: str,
+) -> str:
+    normalized = source_label.strip()
+    if not normalized:
+        return locale_service.text(TelegramTextKey.SOURCE_LABEL_UNKNOWN, locale=locale)
+
+    if normalized.startswith("Audio:"):
+        value = normalized.split(":", 1)[1].strip()
+        if not value or looks_like_machine_file_name(value):
+            return locale_service.text(TelegramTextKey.SOURCE_LABEL_TELEGRAM_AUDIO, locale=locale)
+    if normalized.startswith("Video:"):
+        value = normalized.split(":", 1)[1].strip()
+        if not value or looks_like_machine_file_name(value):
+            return locale_service.text(TelegramTextKey.SOURCE_LABEL_TELEGRAM_VIDEO, locale=locale)
+
+    humanized = humanize_source_label(normalized)
+    if humanized == locale_service.text(TelegramTextKey.SOURCE_LABEL_UNKNOWN, locale="ru"):
+        return locale_service.text(TelegramTextKey.SOURCE_LABEL_UNKNOWN, locale=locale)
+    return humanized
+
+
+def _append_rejected_urls(
+    locale_service: TelegramLocaleService,
+    locale: SupportedLocale,
+    base_message: str,
+    rejected_urls: list[str],
+) -> str:
     return (
-        f"Обрабатываю корзину: {attachment_count} источника(ов).\n\n"
-        "Отправляю API draft на batch-транскрибацию. Это может занять несколько минут."
+        f"{base_message}\n\n"
+        f"{locale_service.text(TelegramTextKey.BASKET_REJECTED_LINKS_HEADER, locale=locale)}\n"
+        + "\n".join(f"- {item}" for item in rejected_urls)
     )
 
 
