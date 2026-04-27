@@ -242,6 +242,7 @@
     <constraint-18>Telegram inline transcript presentation is a bounded adapter delivery choice over the canonical API/worker `transcript_plain` artifact. It must not introduce a new transcription architecture, bot-side transcript assembly, AI worker, artifact kind, or API response contract.</constraint-18>
     <constraint-19>API-owned batch drafts must be the canonical pre-submit Telegram basket state. Adapter-local durable state, callback payloads without draft identity, bot-side transcript or batch business orchestration, and dedicated AI worker services are not part of this architecture.</constraint-19>
     <constraint-20>Server-side artifact materialization must use the internal API download-access contract and internal object-store endpoint. Public browser/host artifact resolution must remain reachable through the public MinIO endpoint.</constraint-20>
+    <constraint-21>Telegram adapter mutations for one basket owner, identified by chat_id plus user_id, must be serialized around API draft load, create, add, remove, clear, submit, pointer update, and delayed summary scheduling. Telegram may coalesce burst notifications for UX, but it must not maintain a durable adapter-local basket or split concurrent forwarded single-source updates into multiple API drafts.</constraint-21>
   </Constraints>
 
   <Risks>
@@ -252,6 +253,7 @@
     <risk-5>Premature Go rewrites of ML or report logic would add risk without architectural gain.</risk-5>
     <risk-6>Compose stack fragility can obscure whether failures come from contracts, workers, or runtime topology.</risk-6>
     <risk-7>Inline Telegram buttons can outlive the draft snapshot they were rendered from; without draft_id plus version validation, stale callbacks can submit or mutate a different basket owned by the same chat/user key.</risk-7>
+    <risk-8>Telegram polling can dispatch several forwarded voice or media messages concurrently without a shared media_group_id; without per-owner serialization, each handler can observe no current draft, create a separate API draft, and emit multiple basket summaries while showing only one source in the visible basket.</risk-8>
   </Risks>
 
   <ResolvedQuestions>
@@ -267,6 +269,7 @@
     <resolution-10>The `media-9dy` stale inline button fix is architectural, not a bot-local workaround: API-owned batch drafts are the sole canonical pre-submit state, Telegram callback data must carry draft_id and version or an item token scoped to that draft, old `basket:*` callbacks are stale compatibility inputs only, and submit promotes the same ordered draft items into the existing `/v1/transcription-jobs/batch` root/children/aggregate graph without adding bot-side orchestration, adapter-local durable state, or any dedicated AI worker.</resolution-10>
     <resolution-11>The `media-2oz` evidence refresh records the implemented API-owned draft model: draft add-item stores uploaded Telegram bodies through the API at add-item time, source labels and per-source boundaries survive promotion into the batch graph, the final combined transcript remains one aggregate result with per-source blocks owned by worker-transcription, and report/deep_research continue through `agent_run` plus worker-agent-runner only.</resolution-11>
     <resolution-12>The `media-9kk` artifact materialization fix is an API contract split, not a Telegram workaround: `/v1/artifacts/{artifact_id}` remains the public browser/host presign surface, `/internal/v1/artifacts/{artifact_id}/download-access` returns the same artifact-resolution envelope using the internal object-store endpoint for server-side adapters and workers, and Telegram plus worker materialization paths consume the internal route without local URL rewriting.</resolution-12>
+    <resolution-13>The `media-1vz` Telegram forwarded-burst fix is an adapter concurrency guard over API-owned drafts: concurrent single-source updates for the same chat/user are serialized through one owner lock, so the API receives one draft mutation sequence, the current draft pointer advances monotonically, and the user receives one debounced basket summary containing all accepted sources. This does not add bot-side batch business logic, transcript stitching, local durable basket storage, or any AI worker topology change.</resolution-13>
   </ResolvedQuestions>
 
   <PreservationPolicy>

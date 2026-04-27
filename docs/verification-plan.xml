@@ -108,6 +108,7 @@
         <item>upload flow through API mock or live API test double</item>
         <item>Telegram basket flow through `/v1/transcription-jobs/batch`</item>
         <item>Telegram API-owned batch draft flow through draft_id plus version callback data</item>
+        <item>concurrent forwarded single-source Telegram updates for one chat/user coalesce into one API-owned draft and one delayed basket summary</item>
         <item>Telegram command registry and batch-mode toggle behavior</item>
         <item>URL flow through API mock or live API test double</item>
         <item>button callbacks map to API child-job or artifact actions</item>
@@ -122,6 +123,7 @@
         <proof>Telegram adapter no longer imports or executes the local execution core.</proof>
         <proof>Default delivery strategy is polling in bot flows.</proof>
         <proof>Media groups and user-curated baskets map to one batch root job instead of unrelated per-file jobs.</proof>
+        <proof>Forwarded voice or media bursts without media_group_id do not create multiple API drafts for the same owner and do not spam duplicate basket summaries.</proof>
         <proof>Stale inline buttons never process an unrelated chat/user basket and never report false empty state caused by adapter-local memory.</proof>
         <proof>Inline short transcript presentation uses the gateway-materialized `transcript_plain` artifact exactly, preserving batch aggregate content boundaries and avoiding bot-side stitching.</proof>
       </must-prove>

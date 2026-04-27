@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -217,6 +218,55 @@ class FakeProcessingService:
         if self.raise_on_deep_research:
             raise RuntimeError("deep boom")
         return self.deep_research_path
+
+
+class UniqueDraftProcessingService(FakeProcessingService):
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(tmp_path)
+        self._lock = threading.Lock()
+        self._draft_counter = 0
+        self.drafts: dict[str, dict] = {}
+
+    def create_batch_draft(self, *, owner: dict[str, str], display_name: str | None = None) -> dict:
+        with self._lock:
+            self._draft_counter += 1
+            draft_id = f"11111111-1111-1111-1111-{self._draft_counter:012d}"
+            draft = _make_draft(draft_id, version=1, items=[])
+            self.drafts[draft_id] = draft
+            self.draft = draft
+            self.created_draft_owners.append(owner)
+            return draft
+
+    def load_batch_draft(self, *, draft_id: str, owner: dict[str, str]) -> dict:
+        self.loaded_drafts.append({"draft_id": draft_id, "owner": owner})
+        return self.drafts[draft_id]
+
+    def add_source_to_draft(self, draft: dict, *, owner: dict[str, str], source: SourceCandidate) -> dict:
+        self.draft_additions.append({"draft": draft, "owner": owner, "source": source})
+        with self._lock:
+            current = self.drafts[draft["draft_id"]]
+            source_payload: dict[str, object] = {
+                "source_kind": source.kind,
+                "display_name": source.display_name,
+            }
+            if source.url:
+                source_payload["url"] = source.url
+            if source.file_name:
+                source_payload["original_filename"] = source.file_name
+            item = {
+                "item_id": f"22222222-2222-2222-2222-22222222222{len(current['items']) + 1}",
+                "position": len(current["items"]),
+                "source_label": f"source_{len(current['items']) + 1}",
+                "source": source_payload,
+            }
+            next_draft = _make_draft(
+                current["draft_id"],
+                version=int(current["version"]) + 1,
+                items=[*current["items"], item],
+            )
+            self.drafts[current["draft_id"]] = next_draft
+            self.draft = next_draft
+            return next_draft
 
 
 class FakeCallback:
@@ -1119,7 +1169,7 @@ async def test_forwarded_single_sources_are_coalesced_into_one_basket_summary(tm
         whisper_device=app.settings.whisper_device,
         whisper_compute_type=app.settings.whisper_compute_type,
         report_prompt_suffix=app.settings.report_prompt_suffix,
-        media_group_window_seconds=0,
+        media_group_window_seconds=0.01,
         data_dir=app.settings.data_dir,
         youtube_languages=app.settings.youtube_languages,
     )
@@ -1155,6 +1205,56 @@ async def test_forwarded_single_sources_are_coalesced_into_one_basket_summary(tm
     keyboard = fake_bot.sent_messages[0]["reply_markup"].inline_keyboard
     assert keyboard[0][0].callback_data == "mode:batch:toggle"
     assert keyboard[1][0].callback_data.startswith("b:s:")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_forwarded_single_sources_share_one_api_draft_and_one_summary(
+    tmp_path: Path,
+) -> None:
+    fake_bot = FakeBot()
+    fake_service = UniqueDraftProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    app.settings = app.settings.__class__(
+        telegram_bot_token=app.settings.telegram_bot_token,
+        allowed_user_ids=app.settings.allowed_user_ids,
+        whisper_model=app.settings.whisper_model,
+        whisper_device=app.settings.whisper_device,
+        whisper_compute_type=app.settings.whisper_compute_type,
+        report_prompt_suffix=app.settings.report_prompt_suffix,
+        media_group_window_seconds=0.01,
+        data_dir=app.settings.data_dir,
+        youtube_languages=app.settings.youtube_languages,
+    )
+
+    await asyncio.gather(
+        *[
+            app._process_candidate_set(
+                chat_id=10,
+                user_id=11,
+                text="",
+                attachments=[
+                    SimpleNamespace(
+                        telegram_file_id=f"voice-{index}",
+                        kind="telegram_audio",
+                        file_name=f"voice-{index}.ogg",
+                        mime_type="audio/ogg",
+                        file_unique_id=f"uniq-{index}",
+                    )
+                ],
+                message_id=100 + index,
+            )
+            for index in range(7)
+        ]
+    )
+
+    await asyncio.sleep(0.05)
+
+    assert len(fake_service.drafts) == 1
+    draft = next(iter(fake_service.drafts.values()))
+    assert len(draft["items"]) == 7
+    assert len(fake_bot.sent_messages) == 1
+    assert "Добавлено источников: 7" in fake_bot.sent_messages[0]["text"]
+    assert "В корзине 7 источника(ов)" in fake_bot.sent_messages[0]["text"]
 
 
 @pytest.mark.asyncio

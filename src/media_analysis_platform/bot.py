@@ -156,6 +156,7 @@ class TelegramTranscriberApp:
         self.media_group_text: dict[tuple[int, str], str] = {}
         self.basket_summary_tasks: dict[tuple[int, int | None], asyncio.Task[None]] = {}
         self.basket_summary_added_counts: dict[tuple[int, int | None], int] = {}
+        self.basket_locks: dict[tuple[int, int | None], asyncio.Lock] = {}
         self.report_locks: dict[str, asyncio.Lock] = {}
         self.deep_research_locks: dict[str, asyncio.Lock] = {}
         self._register_handlers()
@@ -231,8 +232,9 @@ class TelegramTranscriberApp:
         if not await self._ensure_message_allowed(message):
             return
         user_id = message.from_user.id if message.from_user else None
-        self._cancel_pending_basket_summary(message.chat.id, user_id)
-        draft = await self._load_current_draft(message.chat.id, user_id)
+        async with self._basket_lock(message.chat.id, user_id):
+            self._cancel_pending_basket_summary(message.chat.id, user_id)
+            draft = await self._load_current_draft(message.chat.id, user_id)
         text = _build_draft_text(draft) if _draft_items(draft) else "Корзина пуста."
         await message.answer(
             text,
@@ -248,24 +250,25 @@ class TelegramTranscriberApp:
         if not await self._ensure_message_allowed(message):
             return
         user_id = message.from_user.id if message.from_user else None
-        self._cancel_pending_basket_summary(message.chat.id, user_id)
-        owner = _build_telegram_owner(message.chat.id, user_id)
-        draft = await self._load_current_draft(message.chat.id, user_id)
-        if draft is not None:
-            try:
-                draft = await asyncio.to_thread(
-                    self.processing_service.clear_batch_draft,
-                    draft_id=draft["draft_id"],
-                    owner=owner,
-                    expected_version=int(draft["version"]),
-                )
-                self._remember_draft(message.chat.id, user_id, draft)
-            except Exception as exc:
-                if _is_draft_stale_error(exc):
-                    self._forget_draft(message.chat.id, user_id)
-                else:
-                    await message.answer(f"Не удалось очистить корзину: {exc}")
-                    return
+        async with self._basket_lock(message.chat.id, user_id):
+            self._cancel_pending_basket_summary(message.chat.id, user_id)
+            owner = _build_telegram_owner(message.chat.id, user_id)
+            draft = await self._load_current_draft(message.chat.id, user_id)
+            if draft is not None:
+                try:
+                    draft = await asyncio.to_thread(
+                        self.processing_service.clear_batch_draft,
+                        draft_id=draft["draft_id"],
+                        owner=owner,
+                        expected_version=int(draft["version"]),
+                    )
+                    self._remember_draft(message.chat.id, user_id, draft)
+                except Exception as exc:
+                    if _is_draft_stale_error(exc):
+                        self._forget_draft(message.chat.id, user_id)
+                    else:
+                        await message.answer(f"Не удалось очистить корзину: {exc}")
+                        return
         await message.answer(
             "Корзина очищена.",
             reply_markup=_build_main_keyboard(
@@ -380,29 +383,40 @@ class TelegramTranscriberApp:
             return
 
         should_debounce = len(candidates) == 1 and not result.rejected_urls
-        if should_debounce:
-            self._mark_basket_summary_added(chat_id, user_id, added_count=1)
-
+        send_message: str | None = None
+        send_markup = None
         try:
-            draft = await self._add_candidates_to_draft(chat_id=chat_id, user_id=user_id, candidates=candidates)
-        except Exception as exc:
-            if should_debounce:
+            async with self._basket_lock(chat_id, user_id):
+                if should_debounce:
+                    self._mark_basket_summary_added(chat_id, user_id, added_count=1)
+
+                try:
+                    draft = await self._add_candidates_to_draft(chat_id=chat_id, user_id=user_id, candidates=candidates)
+                except Exception:
+                    if should_debounce:
+                        self._cancel_pending_basket_summary(chat_id, user_id)
+                    raise
+                message = _build_draft_text(draft, added_count=len(candidates))
+                if result.rejected_urls:
+                    message += "\n\nПропущены неподдерживаемые ссылки:\n" + "\n".join(
+                        f"- {item}" for item in result.rejected_urls
+                    )
+
+                if should_debounce:
+                    self.basket_summary_tasks[(chat_id, user_id)] = asyncio.create_task(
+                        self._flush_basket_summary(chat_id, user_id)
+                    )
+                    return
+
                 self._cancel_pending_basket_summary(chat_id, user_id)
+                send_message = message
+                send_markup = self._build_draft_keyboard(draft)
+        except Exception as exc:
             await self.bot.send_message(chat_id, f"Не удалось обновить корзину: {exc}")
             return
 
-        message = _build_draft_text(draft, added_count=len(candidates))
-        if result.rejected_urls:
-            message += "\n\nПропущены неподдерживаемые ссылки:\n" + "\n".join(f"- {item}" for item in result.rejected_urls)
-
-        if should_debounce:
-            self.basket_summary_tasks[(chat_id, user_id)] = asyncio.create_task(
-                self._flush_basket_summary(chat_id, user_id)
-            )
-            return
-
-        self._cancel_pending_basket_summary(chat_id, user_id)
-        await self.bot.send_message(chat_id, message, reply_markup=self._build_draft_keyboard(draft))
+        if send_message is not None:
+            await self.bot.send_message(chat_id, send_message, reply_markup=send_markup)
 
     async def _add_candidates_to_draft(
         self,
@@ -448,6 +462,14 @@ class TelegramTranscriberApp:
             existing.cancel()
         self.basket_summary_added_counts.pop(key, None)
 
+    def _basket_lock(self, chat_id: int, user_id: int | None) -> asyncio.Lock:
+        key = (chat_id, user_id)
+        lock = self.basket_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.basket_locks[key] = lock
+        return lock
+
     async def _flush_basket_summary(self, chat_id: int, user_id: int | None) -> None:
         key = (chat_id, user_id)
         try:
@@ -455,9 +477,10 @@ class TelegramTranscriberApp:
         except asyncio.CancelledError:
             return
 
-        self.basket_summary_tasks.pop(key, None)
-        added_count = self.basket_summary_added_counts.pop(key, 0)
-        draft = await self._load_current_draft(chat_id, user_id)
+        async with self._basket_lock(chat_id, user_id):
+            self.basket_summary_tasks.pop(key, None)
+            added_count = self.basket_summary_added_counts.pop(key, 0)
+            draft = await self._load_current_draft(chat_id, user_id)
         if not _draft_items(draft):
             return
         await self.bot.send_message(
@@ -529,7 +552,8 @@ class TelegramTranscriberApp:
         owner = _build_telegram_owner(chat_id, user_id)
 
         if command == "s":
-            self._cancel_pending_basket_summary(chat_id, user_id)
+            async with self._basket_lock(chat_id, user_id):
+                self._cancel_pending_basket_summary(chat_id, user_id)
             await _safe_callback_answer(callback, "Запускаю batch-транскрибацию...")
             await self._start_basket_processing(
                 chat_id=chat_id,
@@ -540,18 +564,19 @@ class TelegramTranscriberApp:
             return
 
         if command == "c":
-            self._cancel_pending_basket_summary(chat_id, user_id)
-            try:
-                draft = await asyncio.to_thread(
-                    self.processing_service.clear_batch_draft,
-                    draft_id=draft_id,
-                    owner=owner,
-                    expected_version=expected_version,
-                )
-            except Exception as exc:
-                await self._answer_draft_error(callback, exc)
-                return
-            self._remember_draft(chat_id, user_id, draft)
+            async with self._basket_lock(chat_id, user_id):
+                self._cancel_pending_basket_summary(chat_id, user_id)
+                try:
+                    draft = await asyncio.to_thread(
+                        self.processing_service.clear_batch_draft,
+                        draft_id=draft_id,
+                        owner=owner,
+                        expected_version=expected_version,
+                    )
+                except Exception as exc:
+                    await self._answer_draft_error(callback, exc)
+                    return
+                self._remember_draft(chat_id, user_id, draft)
             await _safe_callback_answer(callback, "Корзина очищена.")
             await callback.message.edit_text("Корзина очищена.")
             return
@@ -561,19 +586,20 @@ class TelegramTranscriberApp:
             if item_id is None:
                 await callback.answer(_stale_button_text(), show_alert=True)
                 return
-            self._cancel_pending_basket_summary(chat_id, user_id)
-            try:
-                draft = await asyncio.to_thread(
-                    self.processing_service.remove_draft_item,
-                    draft_id=draft_id,
-                    owner=owner,
-                    expected_version=expected_version,
-                    item_id=item_id,
-                )
-            except Exception as exc:
-                await self._answer_draft_error(callback, exc)
-                return
-            self._remember_draft(chat_id, user_id, draft)
+            async with self._basket_lock(chat_id, user_id):
+                self._cancel_pending_basket_summary(chat_id, user_id)
+                try:
+                    draft = await asyncio.to_thread(
+                        self.processing_service.remove_draft_item,
+                        draft_id=draft_id,
+                        owner=owner,
+                        expected_version=expected_version,
+                        item_id=item_id,
+                    )
+                except Exception as exc:
+                    await self._answer_draft_error(callback, exc)
+                    return
+                self._remember_draft(chat_id, user_id, draft)
             await _safe_callback_answer(callback, "Источник удалён.")
             if _draft_items(draft):
                 await callback.message.edit_text(_build_draft_text(draft), reply_markup=self._build_draft_keyboard(draft))
@@ -626,28 +652,29 @@ class TelegramTranscriberApp:
         expected_version: int,
     ) -> None:
         owner = _build_telegram_owner(chat_id, user_id)
-        draft = await self._load_current_draft(chat_id, user_id, draft_id=draft_id)
-        if draft is not None and not _draft_items(draft):
-            await self.bot.send_message(chat_id, "Корзина пуста.")
-            return
-
-        status_message = await self.bot.send_message(chat_id, _build_draft_processing_status_text(draft))
-        try:
-            LOGGER.info("%s mode=batch draft_id=%s expected_version=%s", HANDLE_MEDIA_MARKER, draft_id, expected_version)
-            job = await asyncio.to_thread(
-                self.processing_service.submit_batch_draft,
-                draft_id=draft_id,
-                owner=owner,
-                expected_version=expected_version,
-            )
-        except Exception as exc:
-            if _is_draft_stale_error(exc):
-                await status_message.edit_text(_draft_error_text(exc))
+        async with self._basket_lock(chat_id, user_id):
+            draft = await self._load_current_draft(chat_id, user_id, draft_id=draft_id)
+            if draft is not None and not _draft_items(draft):
+                await self.bot.send_message(chat_id, "Корзина пуста.")
                 return
-            await status_message.edit_text(f"Не удалось обработать корзину: {exc}")
-            return
 
-        self._forget_draft(chat_id, user_id)
+            status_message = await self.bot.send_message(chat_id, _build_draft_processing_status_text(draft))
+            try:
+                LOGGER.info("%s mode=batch draft_id=%s expected_version=%s", HANDLE_MEDIA_MARKER, draft_id, expected_version)
+                job = await asyncio.to_thread(
+                    self.processing_service.submit_batch_draft,
+                    draft_id=draft_id,
+                    owner=owner,
+                    expected_version=expected_version,
+                )
+            except Exception as exc:
+                if _is_draft_stale_error(exc):
+                    await status_message.edit_text(_draft_error_text(exc))
+                    return
+                await status_message.edit_text(f"Не удалось обработать корзину: {exc}")
+                return
+
+            self._forget_draft(chat_id, user_id)
         await status_message.edit_text("Пакетная транскрибация готова.")
         await self._send_transcript_result(
             status_message,

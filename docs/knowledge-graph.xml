@@ -187,6 +187,7 @@
         <export-renderDraftCallbacks PURPOSE="Render inline callback data with draft_id and version so stale buttons resolve against API draft state." />
         <export-registerCommandMenu PURPOSE="Register the Telegram command menu for start, help, batch toggle, basket view, and basket clear." />
         <export-toggleBatchMode PURPOSE="Maintain adapter-local presentation mode only; API-owned batch drafts remain the canonical pre-submit basket state." />
+        <export-serializeBasketOwnerMutation PURPOSE="Serialize draft load/create/mutate/pointer-update and debounced summary scheduling for one Telegram chat/user owner so forwarded single-source bursts coalesce into one API draft." />
         <export-deliverTranscriptResult PURPOSE="Present short readable `transcript_plain` artifacts after materializing them through the internal artifact download-access endpoint; use document fallback for existing long, empty, or unreadable artifact files, and show an unavailable-artifact message when the text file is missing or not a file." />
         <type-TelegramDraftCallback PURPOSE="Callback payload carrying draft_id and version or a draft-scoped item token, never only basket:start or chat/user state." />
         <type-TelegramInlineTranscriptDelivery PURPOSE="Bounded adapter presentation rule over gateway-materialized `transcript_plain`; no bot-side stitching, new worker, or API contract change." />

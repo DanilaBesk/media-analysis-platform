@@ -1909,6 +1909,21 @@
       </files>
       <Phase-13-1 status="done">Verify API-owned batch draft contracts, DB/storage behavior, HTTP route behavior, job graph promotion, Telegram stale callback handling, no dedicated AI worker topology drift, and compose PostgreSQL E2E evidence. Commands and results are recorded under `VF-001C`, `V-M-CONTRACTS`, `V-M-API-STORAGE`, `V-M-API-JOBS`, `V-M-API-HTTP`, and `V-M-TELEGRAM-ADAPTER`.</Phase-13-1>
     </Wave-13>
+
+    <Wave-14 name="Telegram Batch Owner Concurrency Hardening" status="done">
+      <goal>Fix forwarded voice or media bursts that arrive as concurrent single-source Telegram updates so one chat/user basket maps to one API draft and one debounced summary message.</goal>
+      <files>
+        <file>src/media_analysis_platform/bot.py</file>
+        <file>tests/test_bot.py</file>
+        <file>docs/requirements.xml</file>
+        <file>docs/technology.xml</file>
+        <file>docs/development-plan.xml</file>
+        <file>docs/verification-plan.xml</file>
+        <file>docs/knowledge-graph.xml</file>
+        <file>docs/operational-packets.xml</file>
+      </files>
+      <Phase-14-1 status="done">Add per-owner Telegram basket serialization around API draft load/create/mutate, current draft pointer updates, and delayed summary scheduling; prove the prior race with a concurrent forwarded single-source regression test.</Phase-14-1>
+    </Wave-14>
   </ImplementationWaves>
 
   <ImplementationOrder>

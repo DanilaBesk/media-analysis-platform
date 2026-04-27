@@ -2255,6 +2255,53 @@ Required verification now closed:
       </notes>
     </ExecutionPacket>
 
+    <ExecutionPacket packet-id="media-1vz-telegram-batch-owner-concurrency" module="M-TELEGRAM-ADAPTER" phase="Phase-10" step="2b" verification-ref="V-M-TELEGRAM-ADAPTER">
+      <module-id>M-TELEGRAM-ADAPTER</module-id>
+      <module-name>TelegramBatchOwnerConcurrency</module-name>
+      <purpose>Fix forwarded Telegram voice or media bursts that arrive as concurrent single-source updates so they mutate one API-owned draft and produce one delayed basket summary.</purpose>
+      <packet-state>implemented</packet-state>
+      <entry-condition>Live evidence showed seven forwarded voice updates processed concurrently; each handler could observe no current draft, create a separate API draft, and later render a basket summary that counted seven added sources but displayed only one stored source.</entry-condition>
+      <write-scope>
+        <file-1>src/media_analysis_platform/bot.py</file-1>
+        <file-2>tests/test_bot.py</file-2>
+        <file-3>canonical GRACE XML artifacts</file-3>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+API-owned batch drafts remain the canonical pre-submit basket state.
+Telegram adapter may keep only transient owner locks, current draft pointers, callback tokens, and debounce counters.
+For one owner `(chat_id, user_id)`, draft load/create/add/remove/clear/submit-relevant pointer mutation and summary scheduling must be serialized.
+A burst of independent forwarded single-source updates without media_group_id must coalesce into one API draft and one user-visible basket summary after the debounce window.
+The adapter must not stitch transcripts, own durable basket state, or add a dedicated worker.
+      ]]></contract-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-API-HTTP">The adapter still mutates drafts only through API/gateway contracts.</dependency-1>
+        <dependency-2 module="M-CONTRACTS">Draft identity, owner scope, version, and stale outcomes remain unchanged.</dependency-2>
+        <dependency-3 module="M-WORKER-TRANSCRIPTION">Batch aggregation remains worker-owned after draft submit; this packet only hardens pre-submit adapter concurrency.</dependency-3>
+      </dependency-contract-summaries>
+      <completion-evidence><![CDATA[
+Added a regression test using a unique-draft fake API service and asyncio.gather over seven single-source Telegram attachments. Before the fix the test failed with seven API drafts, proving the root cause.
+Added per-owner basket locks in the Telegram adapter so draft mutation and debounced summary scheduling are linearized for one chat/user owner.
+Focused Telegram basket regression command passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py -k 'concurrent_forwarded_single_sources or forwarded_single_sources or process_candidate_set_adds_single_source or process_candidate_set_adds_multiple_attachments or basket' -q` with 11 passed.
+Full Telegram runtime tests passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py -q` with 69 passed.
+Broader Python adapter/worker/contracts gate passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py apps/telegram-bot/tests workers/common/tests workers/agent-runner/tests packages/contracts/tests/test_contract_surfaces.py -q` with 164 passed.
+XML validation and `git diff --check` passed.
+      ]]></completion-evidence>
+      <expected-graph-delta-fields>
+        <field-1>imports: no new adapter-to-worker, adapter-to-storage, Redis, or dedicated AI worker edge.</field-1>
+        <field-2>exports: record Telegram owner mutation serialization as an adapter concurrency guard.</field-2>
+        <field-3>annotations: preserve API-owned draft and root/children/aggregate batch semantics.</field-3>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: concurrent forwarded single-source Telegram batch test in tests/test_bot.py.</field-1>
+        <field-2>module-checks: focused Telegram basket pytest, broad Telegram adapter pytest, XML lint, and diff whitespace gate.</field-2>
+        <field-3>follow-up-checks: live Telegram compose replay if the running bot must be updated in the same session.</field-3>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>This is an adapter concurrency fix, not a batch architecture replacement.</note-1>
+        <note-2>The lock is scoped by Telegram owner and is intentionally transient; PostgreSQL remains the durable basket state through API-owned drafts.</note-2>
+      </notes>
+    </ExecutionPacket>
+
     <ExecutionPacket packet-id="media-9kk-internal-artifact-download-access" module="M-CONTRACTS,M-API-HTTP,M-API-STORAGE,M-WORKER-COMMON,M-TELEGRAM-ADAPTER,M-WORKER-AGENT-RUNNER" phase="Phase-10" step="3" verification-ref="V-M-API-HTTP,V-M-WORKER-COMMON,V-M-TELEGRAM-ADAPTER">
       <module-id>M-ARTIFACT-DOWNLOAD-ACCESS</module-id>
       <module-name>AudienceScopedArtifactDownloadAccess</module-name>
