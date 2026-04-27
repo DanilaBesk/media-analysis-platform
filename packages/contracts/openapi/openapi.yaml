@@ -191,6 +191,267 @@
         }
       }
     },
+    "/v1/batch-drafts": {
+      "post": {
+        "operationId": "createBatchDraft",
+        "summary": "Create an API-owned pre-submit batch draft.",
+        "description": "Creates a durable pre-submit draft with draft_id, version, owner scope, ordered items, and status=open. Telegram callbacks must carry draft_id and version rather than chat/user keyed basket state.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/batch-draft.schema.json#/$defs/createBatchDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. Returns the open draft snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/batch-draft.schema.json#/$defs/batchDraftResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/batch-drafts/{draft_id}": {
+      "get": {
+        "operationId": "getBatchDraft",
+        "summary": "Return the authoritative batch draft snapshot.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DraftId"
+          },
+          {
+            "name": "owner_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "telegram"
+              ]
+            }
+          },
+          {
+            "name": "telegram_chat_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "telegram_user_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Draft snapshot for callback rendering or stale-button diagnosis.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/batch-draft.schema.json#/$defs/batchDraftResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/batch-drafts/{draft_id}/items": {
+      "post": {
+        "operationId": "addBatchDraftItem",
+        "summary": "Add one ordered item to an open batch draft.",
+        "description": "Requires owner scope and expected_version. application/json accepts URL/external URL items only. uploaded_file and telegram_upload items must use multipart/form-data so the API stores the upload body and generates uploaded_source_ref. Version mismatch, submitted, expired, canceled, and owner mismatch responses are stale-button outcomes and must not process adapter-local basket state.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DraftId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/batch-draft.schema.json#/$defs/addBatchDraftItemRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "../schemas/http/batch-draft.schema.json#/$defs/addBatchDraftItemMultipartRequest"
+              },
+              "encoding": {
+                "owner": {
+                  "contentType": "application/json"
+                },
+                "item": {
+                  "contentType": "application/json"
+                },
+                "expected_version": {
+                  "contentType": "text/plain"
+                },
+                "file": {
+                  "contentType": "application/octet-stream"
+                },
+                "files": {
+                  "contentType": "application/octet-stream"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated draft snapshot with incremented version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/batch-draft.schema.json#/$defs/batchDraftResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/batch-drafts/{draft_id}/items/{item_id}": {
+      "delete": {
+        "operationId": "removeBatchDraftItem",
+        "summary": "Remove one ordered item from an open batch draft.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DraftId"
+          },
+          {
+            "$ref": "#/components/parameters/ItemId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/batch-draft.schema.json#/$defs/mutateBatchDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated draft snapshot with compacted ordering and incremented version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/batch-draft.schema.json#/$defs/batchDraftResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/batch-drafts/{draft_id}/clear": {
+      "post": {
+        "operationId": "clearBatchDraft",
+        "summary": "Clear all items from an open batch draft.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DraftId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/batch-draft.schema.json#/$defs/mutateBatchDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Empty draft snapshot with incremented version.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/batch-draft.schema.json#/$defs/batchDraftResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/batch-drafts/{draft_id}/submit": {
+      "post": {
+        "operationId": "submitBatchDraft",
+        "summary": "Promote an open batch draft into the existing batch transcription graph.",
+        "description": "Atomically validates owner, expected_version, open status, and non-empty ordered items; creates the existing batch root/children/aggregate graph; marks the draft submitted; and stores submitted_root_job_id. Repeated submit returns the same root job or submitted draft response.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DraftId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/batch-draft.schema.json#/$defs/submitBatchDraftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted. Returns submitted draft and root aggregate job snapshot, or the existing submitted root on replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/batch-draft.schema.json#/$defs/submitBatchDraftResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
     "/v1/agent-runs": {
       "post": {
         "operationId": "createAgentRun",
@@ -729,6 +990,22 @@
         "schema": {
           "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
         }
+      },
+      "DraftId": {
+        "name": "draft_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "ItemId": {
+        "name": "item_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
       }
     },
     "responses": {
@@ -761,6 +1038,9 @@
       },
       "BatchTranscriptionRequest": {
         "$ref": "../schemas/http/create-transcription-batch.schema.json"
+      },
+      "BatchDraft": {
+        "$ref": "../schemas/http/batch-draft.schema.json#/$defs/batchDraft"
       },
       "CreateReportRequest": {
         "$ref": "../schemas/http/create-report.schema.json"

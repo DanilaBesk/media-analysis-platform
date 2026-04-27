@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	neturl "net/url"
 	"os"
@@ -18,6 +19,161 @@ import (
 	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
+
+func TestApiBatchDraftMixedUploadURLPostgresE2E(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("API_STORAGE_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("set API_STORAGE_POSTGRES_DSN to run live PostgreSQL batch draft E2E")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	runtime := newLiveBatchE2ERuntime(t, ctx, dsn)
+	owner := BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"}
+
+	created, err := runtime.public.CreateBatchDraft(ctx, BatchDraftCreateCommand{
+		Owner:       owner,
+		DisplayName: "Telegram basket",
+		ClientRef:   "draft-client-ref",
+	})
+	if err != nil {
+		t.Fatalf("CreateBatchDraft() error = %v", err)
+	}
+	draft := created.Draft
+	if draft.Version != 1 || draft.Status != BatchDraftStatusOpen || len(draft.Items) != 0 {
+		t.Fatalf("created draft = %#v, want open empty v1", draft)
+	}
+
+	voiceBytes := []byte("telegram voice bytes")
+	uploadRef := "sources/batch-drafts/" + draft.DraftID + "/uploads/digest/voice.ogg"
+	uploaded, err := runtime.public.AddBatchDraftItem(ctx, BatchDraftItemCommand{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Item: BatchDraftItemSource{
+			SourceKind:        storage.SourceKindTelegramUpload,
+			UploadedSourceRef: uploadRef,
+			DisplayName:       "Voice A",
+			OriginalFilename:  "voice.ogg",
+			ContentType:       "audio/ogg",
+			SizeBytes:         int64(len(voiceBytes)),
+			ObjectBody:        voiceBytes,
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddBatchDraftItem(upload) error = %v", err)
+	}
+	draft = uploaded.Draft
+	if got := string(runtime.objects.bodies[storage.SourcesBucket+"::"+uploadRef]); got != string(voiceBytes) {
+		t.Fatalf("persisted upload body = %q, want %q", got, string(voiceBytes))
+	}
+	if draft.Version != 2 || len(draft.Items) != 1 || draft.Items[0].Source.UploadedSourceRef != uploadRef {
+		t.Fatalf("draft after upload = %#v, want uploaded item v2", draft)
+	}
+
+	addedURL, err := runtime.public.AddBatchDraftItem(ctx, BatchDraftItemCommand{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Item: BatchDraftItemSource{
+			SourceKind:  storage.SourceKindYouTubeURL,
+			URL:         "https://youtu.be/draft-demo",
+			DisplayName: "YouTube: draft demo",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddBatchDraftItem(url) error = %v", err)
+	}
+	draft = addedURL.Draft
+	if draft.Version != 3 || len(draft.Items) != 2 || draft.Items[1].Source.URL != "https://youtu.be/draft-demo" {
+		t.Fatalf("draft after URL = %#v, want URL item retained v3", draft)
+	}
+
+	submitted, err := runtime.public.SubmitBatchDraft(ctx, BatchDraftSubmitCommand{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Delivery:        DeliveryConfig{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft() error = %v", err)
+	}
+	if submitted.Job == nil {
+		t.Fatalf("SubmitBatchDraft() job is nil")
+	}
+	root := *submitted.Job
+	if submitted.Draft.Status != BatchDraftStatusSubmitted || submitted.Draft.SubmittedRootJobID != root.JobID {
+		t.Fatalf("submitted draft = %#v root=%q, want submitted draft linked to root", submitted.Draft, root.JobID)
+	}
+	if root.Status != "queued" || root.Progress == nil || root.Progress.Stage != "waiting_for_sources" {
+		t.Fatalf("root after draft submit = status %q progress %#v, want queued waiting_for_sources", root.Status, root.Progress)
+	}
+	if got, want := len(root.Children), 2; got != want {
+		t.Fatalf("root children = %d, want %d", got, want)
+	}
+	if root.SourceSet.Items[0].Source.SourceKind != storage.SourceKindTelegramUpload || ptrValue(root.SourceSet.Items[0].Source.OriginalFilename) != "voice.ogg" {
+		t.Fatalf("root uploaded source = %#v, want telegram upload metadata", root.SourceSet.Items[0].Source)
+	}
+	if root.SourceSet.Items[1].Source.SourceKind != storage.SourceKindYouTubeURL || ptrValue(root.SourceSet.Items[1].Source.SourceURL) != "https://youtu.be/draft-demo" {
+		t.Fatalf("root URL source = %#v, want retained URL", root.SourceSet.Items[1].Source)
+	}
+	assertQueuedTaskTypes(t, runtime.queueClient.specs, []string{
+		queue.TaskTypeTranscription,
+		queue.TaskTypeTranscription,
+	})
+
+	replayed, err := runtime.public.SubmitBatchDraft(ctx, BatchDraftSubmitCommand{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Delivery:        DeliveryConfig{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft(replay) error = %v", err)
+	}
+	if replayed.Job == nil || replayed.Job.JobID != root.JobID || replayed.StaleOutcome != "draft_submitted" {
+		t.Fatalf("replay = %#v, want same root with submitted stale outcome", replayed)
+	}
+	assertQueuedTaskTypes(t, runtime.queueClient.specs, []string{
+		queue.TaskTypeTranscription,
+		queue.TaskTypeTranscription,
+	})
+
+	if _, err := runtime.public.ClearBatchDraft(ctx, BatchDraftMutateCommand{DraftID: draft.DraftID, Owner: owner, ExpectedVersion: submitted.Draft.Version}); !errors.Is(err, storage.ErrBatchDraftSubmitted) {
+		t.Fatalf("ClearBatchDraft(after submit) error = %v, want ErrBatchDraftSubmitted", err)
+	}
+	if _, err := runtime.public.RemoveBatchDraftItem(ctx, BatchDraftRemoveItemCommand{DraftID: draft.DraftID, ItemID: draft.Items[0].ItemID, Owner: owner, ExpectedVersion: submitted.Draft.Version}); !errors.Is(err, storage.ErrBatchDraftSubmitted) {
+		t.Fatalf("RemoveBatchDraftItem(after submit) error = %v, want ErrBatchDraftSubmitted", err)
+	}
+	if _, err := runtime.public.GetBatchDraft(ctx, BatchDraftGetCommand{
+		DraftID: draft.DraftID,
+		Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "other-user"},
+	}); !errors.Is(err, storage.ErrBatchDraftOwnerMismatch) {
+		t.Fatalf("GetBatchDraft(wrong owner) error = %v, want ErrBatchDraftOwnerMismatch", err)
+	}
+
+	children := runtime.children(t, ctx, root.JobID)
+	runtime.claimFinalizeTranscription(t, ctx, children[0].JobID, []ArtifactDescriptor{
+		e2eArtifact("transcript_plain", "draft-voice.txt"),
+		e2eArtifact("transcript_segmented_markdown", "draft-voice.md"),
+		e2eArtifact("transcript_docx", "draft-voice.docx"),
+	})
+	runtime.claimFinalizeTranscription(t, ctx, children[1].JobID, []ArtifactDescriptor{
+		e2eArtifact("transcript_plain", "draft-url.txt"),
+		e2eArtifact("transcript_segmented_markdown", "draft-url.md"),
+		e2eArtifact("transcript_docx", "draft-url.docx"),
+	})
+	aggregateQueued := runtime.snapshot(t, ctx, root.JobID)
+	if aggregateQueued.Progress == nil || aggregateQueued.Progress.Stage != "aggregate_queued" {
+		t.Fatalf("root progress after draft children = %#v, want aggregate_queued", aggregateQueued.Progress)
+	}
+	assertQueuedTaskTypes(t, runtime.queueClient.specs, []string{
+		queue.TaskTypeTranscription,
+		queue.TaskTypeTranscription,
+		queue.TaskTypeTranscriptionAggregate,
+	})
+}
 
 func TestApiBatchTranscriptionE2EWithLivePostgresControlPlane(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("API_STORAGE_POSTGRES_DSN"))

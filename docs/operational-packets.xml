@@ -2169,6 +2169,91 @@ Completed evidence to preserve:
         <note-2>If future implementation reopens batch semantics, update this packet and the six GRACE artifacts together.</note-2>
       </notes>
     </ExecutionPacket>
+
+    <ExecutionPacket packet-id="media-9dy-api-owned-batch-drafts" module="M-CONTRACTS,M-API-HTTP,M-API-JOBS,M-API-STORAGE,M-TELEGRAM-ADAPTER" phase="Phase-10" step="2" verification-ref="VF-001C">
+      <module-id>M-BATCH-DRAFTS</module-id>
+      <module-name>ApiOwnedBatchDrafts</module-name>
+      <purpose>Implement API-owned Telegram batch drafts so stale inline buttons cannot submit or mutate an unrelated adapter-local basket.</purpose>
+      <packet-state>implemented-evidence-refreshed</packet-state>
+      <entry-condition>Start from the canonical GRACE and OpenAPI contract in `media-9dy`; preserve the existing `/v1/transcription-jobs/batch` root/children/aggregate graph and worker-agent-runner topology.</entry-condition>
+      <write-scope>
+        <file-1>packages/contracts/openapi/openapi.yaml</file-1>
+        <file-2>packages/contracts/schemas/http/batch-draft.schema.json</file-2>
+        <file-3>apps/api/internal/storage/migrations/*batch_drafts*.sql</file-3>
+        <file-4>apps/api/internal/storage/*batch_draft*</file-4>
+        <file-5>apps/api/internal/jobs/*batch_draft*</file-5>
+        <file-6>apps/api/internal/api/*batch_draft*</file-6>
+        <file-7>apps/telegram-bot/src/telegram_adapter/*</file-7>
+        <file-8>tests/test_bot.py and apps/telegram-bot/tests/* only for stale callback coverage</file-8>
+      </write-scope>
+      <contract-excerpt><![CDATA[
+Canonical architecture:
+- API owns pre-submit batch drafts with draft_id, version, owner scope, ordered items, and status open/submitted/expired/canceled.
+- Telegram callback data carries draft_id and version for add, remove, clear, and submit buttons.
+- Add/remove/clear/submit validate owner scope and expected_version before any mutation.
+- Submit atomically promotes the open draft into the existing batch transcription graph: one aggregate root, per-source children, stable source labels, per-source transcription tasks, later worker-transcription aggregate task.
+- Repeated submit of a submitted draft returns the same submitted root job or submitted draft response.
+- Version mismatch, submitted draft, expired draft, canceled draft, and owner mismatch produce explicit stale-button responses.
+- No dedicated AI worker, no bot-side transcript or batch business orchestration, and no adapter-local durable state are canonical.
+      ]]></contract-excerpt>
+      <graph-entry-excerpt><![CDATA[
+KnowledgeGraph deltas to keep:
+- M-CONTRACTS type-BatchDraftContract.
+- M-API-HTTP export-createBatchDraftRoutes.
+- M-API-JOBS export-createBatchDraft, export-mutateBatchDraft, export-submitBatchDraft.
+- M-API-STORAGE type-BatchDraftRecord.
+- M-TELEGRAM-ADAPTER export-renderDraftCallbacks and type-TelegramDraftCallback.
+      ]]></graph-entry-excerpt>
+      <dependency-contract-summaries>
+        <dependency-1 module="M-CONTRACTS">Freeze draft endpoints and schema names before API implementation.</dependency-1>
+        <dependency-2 module="M-API-STORAGE">DB is the source of truth for draft status, owner scope, version, item order, and submitted_root_job_id.</dependency-2>
+        <dependency-3 module="M-API-JOBS">Draft submit owns the transaction that creates the existing batch root/child graph and marks the draft submitted.</dependency-3>
+        <dependency-4 module="M-TELEGRAM-ADAPTER">Adapter renders and interprets draft_id plus version callbacks only; it does not own durable basket state.</dependency-4>
+      </dependency-contract-summaries>
+      <completion-evidence><![CDATA[
+media-2oz canonical evidence refresh:
+- Architecture is implemented as API-owned batch drafts/source-set drafts with owner scope, monotonic version, status open/submitted/expired/canceled, ordered items, API-stored upload body at add-item time, and atomic submit promotion into the existing batch transcription root/children/aggregate graph.
+- Telegram is a thin adapter: it downloads Telegram files only to a transient local path, uploads the body into an API draft item, renders callbacks with draft_id/version or draft-scoped item token, and treats old basket:* callbacks as stale without processing a local/current basket.
+- No dedicated AI worker was added; report and deep_research continue through agent_run plus worker-agent-runner.
+- Source boundaries are preserved in source labels and the final combined transcript remains one aggregate result with per-source blocks handled by existing worker-transcription aggregate behavior.
+- Verification passed: apps/api `go test ./internal/storage ./internal/api ./internal/jobs`; apps/api `go test -count=1 ./internal/storage ./internal/api ./internal/jobs`; `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py` with 9 passed; `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py` with 78 passed; live compose DB E2E inside api container with API_STORAGE_POSTGRES_DSN=postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable passed TestApiBatchDraftMixedUploadURLPostgresE2E; `git diff --check` clean.
+- Known limitation: Telegram adapter tests from repo root still need explicit PYTHONPATH=apps/telegram-bot/src:workers/common/src:src; root pytest config was not changed.
+      ]]></completion-evidence>
+      <verification-excerpt><![CDATA[
+Required verification now closed:
+- Contract tests cover /v1/batch-drafts create/get/add/remove/clear/submit shapes and stale outcome enum.
+- DB tests prove monotonic version increments, expected-version compare-and-swap, owner mismatch rejection, terminal status mutation rejection, ordered item persistence, submitted_root_job_id persistence, repeated submit idempotence, and API-owned uploaded source object persistence at add-item time.
+- API tests prove submit creates exactly one existing batch root/children/aggregate graph and returns the same root on replay.
+- Telegram tests prove stale inline buttons with old version do not inspect or process any current chat/user basket and do not say empty due to local state.
+- XML validation must pass after any GRACE update.
+      ]]></verification-excerpt>
+      <step-local-verification>
+        <command-1>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</command-1>
+        <command-2>uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py # 9 passed</command-2>
+        <command-3>cd apps/api &amp;&amp; go test ./internal/storage ./internal/api ./internal/jobs # passed</command-3>
+        <command-4>cd apps/api &amp;&amp; go test -count=1 ./internal/storage ./internal/api ./internal/jobs # passed</command-4>
+        <command-5>PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py # 78 passed</command-5>
+        <command-6>docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchDraftMixedUploadURLPostgresE2E -count=1 -v' # PASS</command-6>
+        <command-7>git diff --check # clean</command-7>
+      </step-local-verification>
+      <expected-graph-delta-fields>
+        <field-1>imports: do not add Telegram-to-worker, Telegram-to-storage, or dedicated AI worker edges.</field-1>
+        <field-2>exports: add draft route, storage, job, and callback exports only where the module owns them.</field-2>
+        <field-3>annotations: preserve root/children/aggregate batch semantics and worker-agent-runner report/deep-research topology.</field-3>
+        <field-4>CrossLinks: Telegram consumes API draft routes; API returns stale draft outcomes.</field-4>
+      </expected-graph-delta-fields>
+      <expected-verification-delta-fields>
+        <field-1>test-files: contract, DB, API, and Telegram stale-callback tests.</field-1>
+        <field-2>module-checks: include XML lint, contract tests, API focused tests, and Telegram focused tests.</field-2>
+        <field-3>required-log-markers: [ApiJobs][submitBatchDraft][BLOCK_VALIDATE_AND_TRANSITION_JOB] and [TelegramAdapter][handleDraftCallback][BLOCK_SUBMIT_AND_WAIT_FOR_JOB].</field-3>
+        <field-4>follow-up-checks: run full batch transcription regression if draft submit touches shared batch creation code.</field-4>
+      </expected-verification-delta-fields>
+      <notes>
+        <note-1>`media-2oz` refreshed canonical GRACE evidence after implementation and tests; this packet is no longer only planned architecture.</note-1>
+        <note-2>Do not regress the stale inline button fix by renaming `basket:start` into another local basket callback or by adding durable adapter-local storage.</note-2>
+        <note-3>Do not change report/deep_research topology for this feature; the single worker-agent-runner remains the only AI worker path.</note-3>
+      </notes>
+    </ExecutionPacket>
   </ProjectExecutionPackets>
 
   <ProjectFailurePackets>

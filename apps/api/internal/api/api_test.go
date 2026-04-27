@@ -184,6 +184,279 @@ func TestApiHttpBatchTranscriptionRejectsInvalidManifest(t *testing.T) {
 	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_source_manifest")
 }
 
+func TestApiHttpBatchDraftRoutesParseOwnerVersionAndReturnStaleErrors(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{
+		batchDraft: BatchDraft{
+			DraftID: "11111111-1111-1111-1111-111111111111",
+			Version: 1,
+			Status:  BatchDraftStatusOpen,
+			Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
+			Items:   []BatchDraftItem{},
+		},
+		batchDraftErr: apiError{status: http.StatusConflict, code: "version_conflict", message: "batch draft version conflict"},
+	}
+	mux := newMux(t, Dependencies{Public: public})
+
+	createReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"display_name": "Telegram batch",
+		"client_ref":   "client-1",
+	})
+	createRec := httptest.NewRecorder()
+	mux.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+	if public.lastCreateBatchDraft.Owner.TelegramChatID != "chat-1" || public.lastCreateBatchDraft.DisplayName != "Telegram batch" {
+		t.Fatalf("create draft request = %#v", public.lastCreateBatchDraft)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111?owner_type=telegram&telegram_chat_id=chat-1&telegram_user_id=user-1", nil)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("get status = %d, want %d body=%s", getRec.Code, http.StatusOK, getRec.Body.String())
+	}
+	if public.lastGetBatchDraft.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastGetBatchDraft.Owner.TelegramUserID != "user-1" {
+		t.Fatalf("get draft request = %#v", public.lastGetBatchDraft)
+	}
+
+	addReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"expected_version": 1,
+		"item": map[string]any{
+			"source_kind":  "youtube_url",
+			"url":          "https://youtu.be/video",
+			"display_name": "Video",
+		},
+	})
+	addRec := httptest.NewRecorder()
+	mux.ServeHTTP(addRec, addReq)
+	assertErrorEnvelope(t, addRec, http.StatusConflict, "version_conflict")
+	if public.lastAddBatchDraftItem.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastAddBatchDraftItem.ExpectedVersion != 1 {
+		t.Fatalf("add draft item request = %#v", public.lastAddBatchDraftItem)
+	}
+
+	public.batchDraftErr = nil
+	removeReq := jsonRequest(t, http.MethodDelete, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items/22222222-2222-2222-2222-222222222222", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"expected_version": 2,
+	})
+	removeRec := httptest.NewRecorder()
+	mux.ServeHTTP(removeRec, removeReq)
+	if removeRec.Code != http.StatusOK {
+		t.Fatalf("remove status = %d, want %d body=%s", removeRec.Code, http.StatusOK, removeRec.Body.String())
+	}
+	if public.lastRemoveBatchDraft.ItemID != "22222222-2222-2222-2222-222222222222" || public.lastRemoveBatchDraft.ExpectedVersion != 2 {
+		t.Fatalf("remove draft request = %#v", public.lastRemoveBatchDraft)
+	}
+
+	clearReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/clear", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"expected_version": 3,
+	})
+	clearRec := httptest.NewRecorder()
+	mux.ServeHTTP(clearRec, clearReq)
+	if clearRec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, want %d body=%s", clearRec.Code, http.StatusOK, clearRec.Body.String())
+	}
+	if public.lastClearBatchDraft.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastClearBatchDraft.ExpectedVersion != 3 {
+		t.Fatalf("clear draft request = %#v", public.lastClearBatchDraft)
+	}
+
+	submitReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/submit", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"expected_version": 4,
+	})
+	submitRec := httptest.NewRecorder()
+	mux.ServeHTTP(submitRec, submitReq)
+	if submitRec.Code != http.StatusAccepted {
+		t.Fatalf("submit status = %d, want %d body=%s", submitRec.Code, http.StatusAccepted, submitRec.Body.String())
+	}
+	if public.lastSubmitBatchDraft.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastSubmitBatchDraft.ExpectedVersion != 4 {
+		t.Fatalf("submit draft request = %#v", public.lastSubmitBatchDraft)
+	}
+}
+
+func TestApiHttpBatchDraftMultipartAddParsesOwnerVersionMetadataAndFile(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{
+		batchDraft: BatchDraft{
+			DraftID: "11111111-1111-1111-1111-111111111111",
+			Version: 2,
+			Status:  BatchDraftStatusOpen,
+			Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
+			Items:   []BatchDraftItem{},
+		},
+	}
+	mux := newMux(t, Dependencies{Public: public})
+
+	body, contentType := buildMultipart(t, multipartInput{
+		Fields: map[string]string{
+			"owner":            `{"owner_type":"telegram","telegram_chat_id":"chat-1","telegram_user_id":"user-1"}`,
+			"expected_version": "1",
+			"item":             `{"source_kind":"telegram_upload","display_name":"Voice note"}`,
+		},
+		Files: []multipartFile{{
+			Name:     "file",
+			Filename: "Voice Note.ogg",
+			Body:     []byte("voice-bytes"),
+		}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	got := public.lastAddBatchDraftItem
+	if got.DraftID != "11111111-1111-1111-1111-111111111111" || got.ExpectedVersion != 1 {
+		t.Fatalf("draft mutation = %#v, want draft/version parsed", got)
+	}
+	if got.Owner.TelegramChatID != "chat-1" || got.Owner.TelegramUserID != "user-1" {
+		t.Fatalf("owner = %#v, want telegram scope", got.Owner)
+	}
+	if got.Item.SourceKind != storage.SourceKindTelegramUpload || got.Item.UploadedSourceRef == "" {
+		t.Fatalf("item source = %#v, want generated uploaded source ref", got.Item)
+	}
+	if !strings.Contains(got.Item.UploadedSourceRef, "11111111-1111-1111-1111-111111111111") || !strings.Contains(got.Item.UploadedSourceRef, "Voice_Note.ogg") {
+		t.Fatalf("uploaded_source_ref = %q, want draft-scoped sanitized object key", got.Item.UploadedSourceRef)
+	}
+	if got.Item.DisplayName != "Voice note" || got.Item.OriginalFilename != "Voice Note.ogg" {
+		t.Fatalf("metadata = %#v, want display/original filename propagated", got.Item)
+	}
+	if got.Item.SizeBytes != int64(len("voice-bytes")) || string(got.Item.ObjectBody) != "voice-bytes" {
+		t.Fatalf("file metadata/body = size %d body %q", got.Item.SizeBytes, string(got.Item.ObjectBody))
+	}
+}
+
+func TestApiHttpBatchDraftJSONURLAddStillWorks(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{
+		batchDraft: BatchDraft{
+			DraftID: "11111111-1111-1111-1111-111111111111",
+			Version: 2,
+			Status:  BatchDraftStatusOpen,
+			Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
+			Items:   []BatchDraftItem{},
+		},
+	}
+	mux := newMux(t, Dependencies{Public: public})
+	req := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"expected_version": 1,
+		"item": map[string]any{
+			"source_kind":  "youtube_url",
+			"url":          "https://youtu.be/video",
+			"display_name": "Video",
+		},
+	})
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if public.lastAddBatchDraftItem.Item.SourceKind != storage.SourceKindYouTubeURL || public.lastAddBatchDraftItem.Item.URL != "https://youtu.be/video" {
+		t.Fatalf("json url item = %#v, want URL item preserved", public.lastAddBatchDraftItem.Item)
+	}
+}
+
+func TestApiHttpBatchDraftJSONUploadedAddRequiresMultipart(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{}
+	mux := newMux(t, Dependencies{Public: public})
+	req := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", map[string]any{
+		"owner": map[string]any{
+			"owner_type":       "telegram",
+			"telegram_chat_id": "chat-1",
+			"telegram_user_id": "user-1",
+		},
+		"expected_version": 1,
+		"item": map[string]any{
+			"source_kind":         "telegram_upload",
+			"uploaded_source_ref": "attacker-controlled-ref",
+			"display_name":        "Voice",
+		},
+	})
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_batch_draft_item")
+	if !strings.Contains(rec.Body.String(), "uploaded draft items require multipart upload") {
+		t.Fatalf("error body = %s, want multipart upload guidance", rec.Body.String())
+	}
+	if public.lastAddBatchDraftItem.DraftID != "" {
+		t.Fatalf("JSON uploaded draft item reached service: %#v", public.lastAddBatchDraftItem)
+	}
+}
+
+func TestApiHttpBatchDraftMultipartAddRequiresUploadedSourceKind(t *testing.T) {
+	t.Parallel()
+
+	public := &fakePublicService{}
+	mux := newMux(t, Dependencies{Public: public})
+	body, contentType := buildMultipart(t, multipartInput{
+		Fields: map[string]string{
+			"owner":            `{"owner_type":"telegram","telegram_chat_id":"chat-1","telegram_user_id":"user-1"}`,
+			"expected_version": "1",
+			"item":             `{"source_kind":"youtube_url","url":"https://youtu.be/video","display_name":"Video"}`,
+		},
+		Files: []multipartFile{{
+			Name:     "file",
+			Filename: "voice.ogg",
+			Body:     []byte("voice-bytes"),
+		}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", body)
+	req.Header.Set("Content-Type", contentType)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_batch_draft_item")
+	if !strings.Contains(rec.Body.String(), "multipart draft uploads require uploaded_file or telegram_upload source_kind") {
+		t.Fatalf("error body = %s, want uploaded source kind guidance", rec.Body.String())
+	}
+	if public.lastAddBatchDraftItem.DraftID != "" {
+		t.Fatalf("multipart URL draft item reached service: %#v", public.lastAddBatchDraftItem)
+	}
+}
+
 func TestApiHttpCreateAgentRunParsesIdempotencyHarnessAndRequest(t *testing.T) {
 	t.Parallel()
 
@@ -623,12 +896,20 @@ type fakePublicService struct {
 	uploadErr             error
 	combinedJob           JobSnapshot
 	batchJob              JobSnapshot
+	batchDraft            BatchDraft
+	batchDraftErr         error
 	agentRunJob           JobSnapshot
 	reportJob             JobSnapshot
 	deepResearchJob       JobSnapshot
 	lastUpload            UploadCommand
 	lastCombined          UploadCommand
 	lastBatch             BatchCommand
+	lastCreateBatchDraft  BatchDraftCreateCommand
+	lastGetBatchDraft     BatchDraftGetCommand
+	lastAddBatchDraftItem BatchDraftItemCommand
+	lastRemoveBatchDraft  BatchDraftRemoveItemCommand
+	lastClearBatchDraft   BatchDraftMutateCommand
+	lastSubmitBatchDraft  BatchDraftSubmitCommand
 	lastAgentRun          AgentRunCommand
 	lastReportJobID       string
 	lastReportReq         ChildCreateRequest
@@ -657,6 +938,39 @@ func (f *fakePublicService) CreateCombined(_ context.Context, req UploadCommand)
 func (f *fakePublicService) CreateBatch(_ context.Context, req BatchCommand) (JobSnapshot, error) {
 	f.lastBatch = req
 	return f.batchJob, nil
+}
+
+func (f *fakePublicService) CreateBatchDraft(_ context.Context, req BatchDraftCreateCommand) (BatchDraftResponse, error) {
+	f.lastCreateBatchDraft = req
+	return BatchDraftResponse{Draft: f.batchDraft}, nil
+}
+
+func (f *fakePublicService) GetBatchDraft(_ context.Context, req BatchDraftGetCommand) (BatchDraftResponse, error) {
+	f.lastGetBatchDraft = req
+	return BatchDraftResponse{Draft: f.batchDraft}, nil
+}
+
+func (f *fakePublicService) AddBatchDraftItem(_ context.Context, req BatchDraftItemCommand) (BatchDraftResponse, error) {
+	f.lastAddBatchDraftItem = req
+	if f.batchDraftErr != nil {
+		return BatchDraftResponse{}, f.batchDraftErr
+	}
+	return BatchDraftResponse{Draft: f.batchDraft}, nil
+}
+
+func (f *fakePublicService) RemoveBatchDraftItem(_ context.Context, req BatchDraftRemoveItemCommand) (BatchDraftResponse, error) {
+	f.lastRemoveBatchDraft = req
+	return BatchDraftResponse{Draft: f.batchDraft}, nil
+}
+
+func (f *fakePublicService) ClearBatchDraft(_ context.Context, req BatchDraftMutateCommand) (BatchDraftResponse, error) {
+	f.lastClearBatchDraft = req
+	return BatchDraftResponse{Draft: f.batchDraft}, nil
+}
+
+func (f *fakePublicService) SubmitBatchDraft(_ context.Context, req BatchDraftSubmitCommand) (BatchDraftSubmitResponse, error) {
+	f.lastSubmitBatchDraft = req
+	return BatchDraftSubmitResponse{Draft: f.batchDraft, Job: &f.batchJob}, nil
 }
 
 func (f *fakePublicService) CreateFromURL(_ context.Context, _ URLCommand) (JobSnapshot, error) {

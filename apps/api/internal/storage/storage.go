@@ -35,12 +35,19 @@ const (
 )
 
 var (
-	ErrStorageUnavailable = errors.New("storage_unavailable")
-	ErrArtifactNotFound   = errors.New("artifact_not_found")
-	ErrJobNotFound        = errors.New("job_not_found")
-	ErrContractViolation  = errors.New("storage_contract_violation")
-	ErrExecutionNotFound  = errors.New("execution_not_found")
-	ErrAgentRunRequestRef = errors.New("agent_run_request_unavailable")
+	ErrStorageUnavailable        = errors.New("storage_unavailable")
+	ErrArtifactNotFound          = errors.New("artifact_not_found")
+	ErrJobNotFound               = errors.New("job_not_found")
+	ErrContractViolation         = errors.New("storage_contract_violation")
+	ErrExecutionNotFound         = errors.New("execution_not_found")
+	ErrAgentRunRequestRef        = errors.New("agent_run_request_unavailable")
+	ErrBatchDraftNotFound        = errors.New("batch_draft_not_found")
+	ErrBatchDraftOwnerMismatch   = errors.New("batch_draft_owner_mismatch")
+	ErrBatchDraftVersionConflict = errors.New("batch_draft_version_conflict")
+	ErrBatchDraftSubmitted       = errors.New("batch_draft_submitted")
+	ErrBatchDraftExpired         = errors.New("batch_draft_expired")
+	ErrBatchDraftCanceled        = errors.New("batch_draft_canceled")
+	ErrBatchDraftEmpty           = errors.New("batch_draft_empty")
 )
 
 type Logger interface {
@@ -150,16 +157,17 @@ type Delivery struct {
 }
 
 type SourceRecord struct {
-	ID               string
-	SourceKind       string
-	DisplayName      string
-	OriginalFilename string
-	MIMEType         string
-	SourceURL        string
-	ObjectKey        string
-	SizeBytes        int64
-	CreatedAt        time.Time
-	ObjectBody       []byte
+	ID                     string
+	SourceKind             string
+	DisplayName            string
+	OriginalFilename       string
+	MIMEType               string
+	SourceURL              string
+	ObjectKey              string
+	SizeBytes              int64
+	CreatedAt              time.Time
+	ObjectBody             []byte
+	ObjectAlreadyPersisted bool
 }
 
 type SourceSetItem struct {
@@ -249,6 +257,91 @@ type JobExecutionRecord struct {
 	ClaimedAt   time.Time
 	FinishedAt  *time.Time
 	Outcome     string
+}
+
+const (
+	BatchDraftStatusOpen      = "open"
+	BatchDraftStatusSubmitted = "submitted"
+	BatchDraftStatusExpired   = "expired"
+	BatchDraftStatusCanceled  = "canceled"
+)
+
+type BatchDraftOwner struct {
+	OwnerType      string
+	TelegramChatID string
+	TelegramUserID string
+}
+
+type BatchDraftItemSource struct {
+	SourceKind        string
+	UploadedSourceRef string
+	URL               string
+	DisplayName       string
+	OriginalFilename  string
+	MIMEType          string
+	SizeBytes         int64
+	ObjectBody        []byte
+}
+
+type BatchDraftItem struct {
+	ItemID      string
+	SourceID    string
+	Position    int
+	SourceLabel string
+	Source      BatchDraftItemSource
+	CreatedAt   time.Time
+}
+
+type BatchDraftRecord struct {
+	DraftID            string
+	Version            int64
+	Owner              BatchDraftOwner
+	Status             string
+	Items              []BatchDraftItem
+	DisplayName        string
+	ClientRef          string
+	ExpiresAt          *time.Time
+	SubmittedRootJobID string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type BatchDraftCreate struct {
+	DraftID     string
+	Owner       BatchDraftOwner
+	DisplayName string
+	ClientRef   string
+	ExpiresAt   *time.Time
+}
+
+type BatchDraftItemMutation struct {
+	DraftID         string
+	Owner           BatchDraftOwner
+	ExpectedVersion int64
+	Source          BatchDraftItemSource
+}
+
+type BatchDraftItemRemove struct {
+	DraftID         string
+	ItemID          string
+	Owner           BatchDraftOwner
+	ExpectedVersion int64
+}
+
+type BatchDraftMutation struct {
+	DraftID         string
+	Owner           BatchDraftOwner
+	ExpectedVersion int64
+}
+
+type BatchDraftGraphSubmission struct {
+	DraftID         string
+	Owner           BatchDraftOwner
+	ExpectedVersion int64
+	Submission      JobSubmission
+	Sources         []SourceRecord
+	SourceSets      []SourceSetRecord
+	Jobs            []JobRecord
 }
 
 type ClaimJobExecutionRequest struct {
@@ -373,13 +466,22 @@ type runtimeArtifactUpserter interface {
 	UpsertArtifacts(ctx context.Context, artifacts []ArtifactRecord) error
 }
 
+type batchDraftStateStore interface {
+	CreateBatchDraft(ctx context.Context, draft BatchDraftRecord) (BatchDraftRecord, error)
+	GetBatchDraft(ctx context.Context, draftID string) (BatchDraftRecord, error)
+	AddBatchDraftItem(ctx context.Context, req BatchDraftItemMutation, item BatchDraftItem) (BatchDraftRecord, error)
+	RemoveBatchDraftItem(ctx context.Context, req BatchDraftItemRemove) (BatchDraftRecord, error)
+	ClearBatchDraft(ctx context.Context, req BatchDraftMutation) (BatchDraftRecord, error)
+	SubmitBatchDraftGraph(ctx context.Context, req BatchDraftGraphSubmission) (BatchDraftRecord, error)
+}
+
 func (r *Repository) PersistSource(ctx context.Context, source SourceRecord) (SourceRecord, error) {
 	source = ensureSourceDefaults(source, r.now)
 	if err := validateSource(source); err != nil {
 		return SourceRecord{}, err
 	}
 
-	if requiresSourceObject(source.SourceKind) {
+	if requiresSourceObject(source.SourceKind) && !source.ObjectAlreadyPersisted {
 		if err := r.objects.PutObject(ctx, SourcesBucket, source.ObjectKey, source.MIMEType, source.ObjectBody); err != nil {
 			return SourceRecord{}, fmt.Errorf("%w: persist source object: %v", ErrStorageUnavailable, err)
 		}
@@ -400,7 +502,7 @@ func (r *Repository) PersistJob(ctx context.Context, req PersistJobRequest) (Per
 	}
 
 	for _, source := range bundle.Sources {
-		if requiresSourceObject(source.SourceKind) {
+		if requiresSourceObject(source.SourceKind) && !source.ObjectAlreadyPersisted {
 			if err := r.objects.PutObject(ctx, SourcesBucket, source.ObjectKey, source.MIMEType, source.ObjectBody); err != nil {
 				return PersistJobResult{}, fmt.Errorf("%w: persist source object: %v", ErrStorageUnavailable, err)
 			}
@@ -553,7 +655,7 @@ func (r *Repository) SaveSubmissionGraph(ctx context.Context, submission JobSubm
 	}
 
 	for _, source := range normalizedSources {
-		if requiresSourceObject(source.SourceKind) {
+		if requiresSourceObject(source.SourceKind) && !source.ObjectAlreadyPersisted {
 			if err := r.objects.PutObject(ctx, SourcesBucket, source.ObjectKey, source.MIMEType, source.ObjectBody); err != nil {
 				return fmt.Errorf("%w: persist source object: %v", ErrStorageUnavailable, err)
 			}
@@ -1107,7 +1209,7 @@ func validateSource(source SourceRecord) error {
 		if strings.TrimSpace(source.ObjectKey) == "" {
 			return fmt.Errorf("%w: uploaded and telegram sources require object_key", ErrContractViolation)
 		}
-		if source.ObjectBody == nil {
+		if source.ObjectBody == nil && !source.ObjectAlreadyPersisted {
 			return fmt.Errorf("%w: object-backed sources require object payload", ErrContractViolation)
 		}
 	default:

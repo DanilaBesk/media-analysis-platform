@@ -50,7 +50,7 @@
       <file path="workers/agent-runner/src/transcriber_worker_agent_runner.py" role="Single generic AI worker runtime for report and deep-research operations backed by agent_run jobs" />
     </current-files>
     <current-storage>
-      <item>PostgreSQL is the system of record for jobs, events, source sets, and artifacts</item>
+      <item>PostgreSQL is the system of record for jobs, events, source sets, API-owned batch drafts, and artifacts</item>
       <item>MinIO stores uploaded sources and produced artifacts</item>
       <item>Redis backs asynq queues only</item>
       <item>Go HTTP API owns orchestration and delivery semantics</item>
@@ -90,6 +90,7 @@
     <decision id="D-020">Worker-control contracts remain explicit HTTP routes for the migration and first platform version.</decision>
     <decision id="D-021">Redis is reserved for asynq queueing only; event delivery is driven from persisted job events, WebSocket broadcast, and webhook dispatch inside the API.</decision>
     <decision id="D-022">Batch transcription supersedes the old concat-first combined flow: the public route is `/v1/transcription-jobs/batch`, the API creates a root aggregate transcription job plus per-source transcription children, and worker-transcription assembles aggregate artifacts through `job:transcription.aggregate`.</decision>
+    <decision id="D-023">Pre-submit Telegram batch baskets are API-owned batch drafts with draft_id, version, owner scope, ordered items, and open/submitted/expired/canceled status. Telegram callback data carries draft_id and version or a draft-scoped item token; adapter-local durable basket state and chat/user keyed `basket:start` callbacks are stale compatibility inputs, not canonical processing inputs.</decision>
   </DecisionProvenance>
 
   <GuidingArchitecture>
@@ -110,6 +111,7 @@
       <control-plane-responsibilities>
         <item>accept uploads and source creation requests</item>
         <item>create jobs and child jobs</item>
+        <item>create, read, mutate, clear, cancel, expire, and submit pre-submit batch drafts</item>
         <item>resolve delivery strategy polling or webhook for create requests</item>
         <item>persist job state in PostgreSQL</item>
         <item>store source files in MinIO</item>
@@ -312,6 +314,59 @@
         <rule>position defines the final transcription order.</rule>
         <rule>The same source may appear in only one position within one source set in normal API flows.</rule>
         <rule>Batch source labels must match the contract shape, be unique within the source set, and carry `source_label_version=batch-transcription.v1`.</rule>
+      </rules>
+    </Table>
+    <Table name="batch_drafts">
+      <purpose>Represent API-owned pre-submit source-set drafts used by Telegram and any other adapter that needs callback-safe ordered batch assembly before job creation.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>owner_type text not null</column>
+        <column>owner_chat_id text null</column>
+        <column>owner_user_id text null</column>
+        <column>status text not null check in open, submitted, expired, canceled</column>
+        <column>version bigint not null default 1</column>
+        <column>submitted_root_job_id uuid null references jobs</column>
+        <column>client_ref text null</column>
+        <column>display_name text null</column>
+        <column>expires_at timestamptz null</column>
+        <column>created_at timestamptz not null default now()</column>
+        <column>updated_at timestamptz not null default now()</column>
+        <column>submitted_at timestamptz null</column>
+        <column>canceled_at timestamptz null</column>
+      </columns>
+      <constraints>
+        <constraint>submitted status requires submitted_root_job_id and submitted_at</constraint>
+        <constraint>canceled status requires canceled_at</constraint>
+        <constraint>indexes on owner_type plus owner_chat_id plus owner_user_id plus status, status plus expires_at, and submitted_root_job_id</constraint>
+      </constraints>
+      <rules>
+        <rule>Drafts are the only canonical pre-submit Telegram batch state; Redis, adapter-local memory, and callback text are not durable sources of truth.</rule>
+        <rule>Every mutation checks owner scope and expected version, increments version on success, and returns the current draft snapshot for button rendering.</rule>
+        <rule>Submitted, expired, and canceled drafts are terminal for mutation; stale callbacks return explicit submitted, expired, canceled, version_conflict, or owner_mismatch outcomes.</rule>
+        <rule>Repeated submit for a submitted draft returns the same submitted_root_job_id or submitted draft response instead of creating another root job.</rule>
+      </rules>
+    </Table>
+    <Table name="batch_draft_items">
+      <purpose>Represent ordered draft sources before promotion into source_sets and source_set_items.</purpose>
+      <columns>
+        <column>id uuid primary key</column>
+        <column>draft_id uuid not null references batch_drafts on delete cascade</column>
+        <column>position int not null</column>
+        <column>source_kind text not null</column>
+        <column>source_label text not null</column>
+        <column>display_name text null</column>
+        <column>source_ref jsonb not null</column>
+        <column>created_at timestamptz not null default now()</column>
+      </columns>
+      <constraints>
+        <constraint>unique on draft_id and position</constraint>
+        <constraint>unique on draft_id and source_label</constraint>
+        <constraint>index on draft_id ascending plus position ascending</constraint>
+      </constraints>
+      <rules>
+        <rule>position defines the later batch source order and must be preserved when submit builds `ordered_source_labels`.</rule>
+        <rule>source_ref stores only API-owned references to uploaded temporary source objects or validated URL source data; it must not require bot-local files at submit time.</rule>
+        <rule>Submit promotes items atomically into the existing batch source-set, root job, per-source children, and aggregate queue flow.</rule>
       </rules>
     </Table>
     <Table name="jobs">
@@ -542,6 +597,75 @@
         <rule>Per-source children are enqueued as `job:transcription.run`; the root is later enqueued as `job:transcription.aggregate` when the completion policy permits aggregation.</rule>
         <rule>Root aggregate success requires transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, and batch_diagnostics_json.</rule>
         <rule>Batch flow does not change the semantics of POST /v1/transcription-jobs or the single URL flow.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/batch-drafts">
+      <purpose>Create an API-owned pre-submit batch draft for Telegram or another adapter.</purpose>
+      <content-type>application/json</content-type>
+      <fields>
+        <field>owner object required with owner_type and Telegram chat/user scope when owner_type is telegram</field>
+        <field>display_name optional</field>
+        <field>client_ref optional</field>
+        <field>expires_at optional server-bounded expiration timestamp</field>
+      </fields>
+      <response>201 Created returns draft snapshot with draft_id, version, owner, status, ordered items, and callback-safe state.</response>
+      <behavior>
+        <rule>New drafts start with status open and version 1.</rule>
+        <rule>Draft creation does not enqueue worker tasks and does not create jobs.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="GET" path="/v1/batch-drafts/{draft_id}">
+      <purpose>Read the authoritative draft snapshot for button rendering or stale-callback diagnosis.</purpose>
+      <rule>Caller must supply owner scope; owner mismatch returns a stable error and never leaks draft contents.</rule>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/batch-drafts/{draft_id}/items">
+      <purpose>Add one uploaded-file, Telegram-upload, YouTube URL, or external URL item to an open draft.</purpose>
+      <request-fields>
+        <field>owner object required</field>
+        <field>expected_version required</field>
+        <field>item required with source_kind, display_name optional, and API-owned uploaded_source_ref or URL data</field>
+      </request-fields>
+      <behavior>
+        <rule>API rejects version mismatch, submitted draft, expired draft, canceled draft, and owner mismatch with explicit stale-button outcomes.</rule>
+        <rule>Successful upload add stores the file body through the API into the source object store at add-item time, strips transient body bytes from the returned draft item, appends a stable source_label, and increments version.</rule>
+        <rule>Successful URL add persists URL metadata only and increments version without creating worker tasks.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="DELETE" path="/v1/batch-drafts/{draft_id}/items/{item_id}">
+      <purpose>Remove one item from an open draft using optimistic version checks.</purpose>
+      <request-fields>
+        <field>owner object required</field>
+        <field>expected_version required</field>
+      </request-fields>
+      <behavior>
+        <rule>Removal preserves remaining item order after compaction and increments version.</rule>
+        <rule>Stale, terminal, or wrong-owner callbacks return explicit errors instead of mutating a current chat/user basket.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/batch-drafts/{draft_id}/clear">
+      <purpose>Remove all items from an open draft while preserving the draft identity for already-rendered buttons.</purpose>
+      <request-fields>
+        <field>owner object required</field>
+        <field>expected_version required</field>
+      </request-fields>
+      <behavior>
+        <rule>Clear increments version and returns the empty draft snapshot.</rule>
+        <rule>A stale clear callback must report version_conflict rather than clearing an unrelated current basket.</rule>
+      </behavior>
+    </Endpoint>
+    <Endpoint method="POST" path="/v1/batch-drafts/{draft_id}/submit">
+      <purpose>Atomically promote an open draft to the existing batch transcription root/children/aggregate graph.</purpose>
+      <request-fields>
+        <field>owner object required</field>
+        <field>expected_version required from Telegram callback data</field>
+        <field>delivery optional default polling</field>
+      </request-fields>
+      <response>202 Accepted returns submitted draft snapshot plus the root aggregate job snapshot or existing submitted root job.</response>
+      <behavior>
+        <rule>Submit validates owner, status open, version match, non-empty ordered items, and source availability inside one transaction.</rule>
+        <rule>Submit creates the same source_manifest shape as `/v1/transcription-jobs/batch`, persists the root source set, creates one aggregate root job plus per-source children, enqueues per-source transcription tasks, marks the draft submitted, stores submitted_root_job_id, and increments version atomically.</rule>
+        <rule>Repeated submit for an already submitted draft returns the same submitted_root_job_id or submitted draft response and never creates a second root job.</rule>
+        <rule>Submitted, expired, canceled, version-conflict, and owner-mismatch callbacks produce explicit responses suitable for Telegram stale-button copy.</rule>
       </behavior>
     </Endpoint>
     <Endpoint method="POST" path="/v1/transcription-jobs/from-url">
@@ -823,9 +947,11 @@
       <item>receive Telegram user input</item>
         <item>download attachments from Telegram when needed</item>
         <item>upload files to the API</item>
-        <item>submit Telegram media groups and explicit baskets through the batch transcription endpoint</item>
+        <item>create and mutate API-owned batch drafts for Telegram media groups and explicit baskets</item>
+        <item>submit API-owned batch drafts so the API promotes them through the batch transcription endpoint</item>
         <item>register Telegram commands for start, help, batch toggle, basket view, and basket clear</item>
         <item>expose a batch-mode inline toggle that switches between basket collection and immediate single-source processing</item>
+        <item>render inline callback data with draft_id and version for draft actions</item>
         <item>create URL jobs through the API</item>
       <item>poll for result readiness by default</item>
       <item>send resulting artifacts back to Telegram users</item>
@@ -838,6 +964,8 @@
       <item>run transcription locally</item>
       <item>generate reports locally</item>
       <item>write direct job metadata</item>
+      <item>treat chat/user keyed memory as the canonical basket state</item>
+      <item>process stale `basket:start` callbacks without draft_id and version</item>
       <item>own artifact lifecycle</item>
     </TelegramBotForbidden>
     <McpServer>
@@ -894,8 +1022,8 @@
       <recommended-stack>Python, aiogram, packages/sdk-py or thin internal API client</recommended-stack>
       <behavior-mapping>
         <map>upload media to POST /v1/transcription-jobs</map>
-        <map>batch basket to POST /v1/transcription-jobs/batch</map>
-        <map>batch toggle command or button to adapter-local mode state without moving orchestration out of the API</map>
+        <map>batch basket to /v1/batch-drafts create, add item, remove item, clear, get, and submit endpoints before the API promotes it to POST /v1/transcription-jobs/batch</map>
+        <map>batch toggle command or button to adapter-local presentation mode only; durable draft state remains API-owned</map>
         <map>YouTube URL to POST /v1/transcription-jobs/from-url</map>
         <map>short readable `transcript_plain` artifact to exact inline Telegram text with the result keyboard</map>
         <map>missing or non-file `transcript_plain` text path to an unavailable-artifact Telegram message with the result keyboard</map>
@@ -910,7 +1038,8 @@
         <rule>Bot chooses its delivery strategy explicitly per request and defaults to polling.</rule>
         <rule>Bot registers `/start`, `/help`, `/batch`, `/basket`, and `/clear` as the public Telegram command menu.</rule>
         <rule>Batch mode defaults to enabled, can be toggled per chat/user, and when disabled the adapter processes a single source immediately or asks the user to select one source from a multi-source message.</rule>
-        <rule>Telegram media groups and user-curated baskets map to the batch transcription flow; sequential standalone media enter the batch flow only after an explicit user action such as Обработать вместе.</rule>
+        <rule>Telegram media groups and user-curated baskets map to API-owned batch drafts first; sequential standalone media enter the batch flow only after an explicit user action such as Обработать вместе.</rule>
+        <rule>Every draft inline button carries draft_id and version; stale callbacks must display submitted, expired, canceled, version-conflict, or owner-mismatch copy rather than inspecting or processing any current adapter-local basket.</rule>
         <rule>`TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS` is an adapter presentation guard, currently 3500 characters, chosen below Telegram message-size pressure so the bot can keep short transcripts readable in chat without changing artifact ownership.</rule>
         <rule>Inline transcript delivery must use the exact gateway-materialized `transcript_plain` content; the adapter must not stitch batch pieces, re-render transcripts, or call a worker.</rule>
       </runtime-policy>
@@ -976,7 +1105,7 @@
           <param name="openapi" type="schema-set" />
           <param name="shared-enums" type="schema-set" />
         </outputs>
-        <links>M-CONTRACTS, V-M-CONTRACTS, DF-001, DF-003</links>
+        <links>M-CONTRACTS, V-M-CONTRACTS, DF-001, DF-003, DF-009</links>
         <errors>
           <error code="contract_drift" />
         </errors>
@@ -984,6 +1113,7 @@
       <interface>
         <export-openapi PURPOSE="Describe public and internal HTTP routes." />
         <export-validationSchemas PURPOSE="Describe request and response validation surfaces." />
+        <export-batchDraftSchemas PURPOSE="Describe API-owned batch draft create, read, mutate, clear, submit, stale-callback, and submitted-root response shapes." />
       </interface>
       <depends>none</depends>
       <target>
@@ -1012,7 +1142,7 @@
           <param name="job-records" type="persistent-state" />
           <param name="artifact-resolution" type="metadata-plus-presigned-url" />
         </outputs>
-        <links>M-API-STORAGE, V-M-API-STORAGE, DF-001, DF-003, DF-006, DF-007</links>
+        <links>M-API-STORAGE, V-M-API-STORAGE, DF-001, DF-003, DF-006, DF-007, DF-009</links>
         <errors>
           <error code="storage_unavailable" />
         </errors>
@@ -1023,6 +1153,9 @@
         <export-listJobs PURPOSE="List authoritative job rows for polling, UI, and adapter reads." />
         <export-getSourceSet PURPOSE="Read the persisted source-set shell for job snapshot shaping." />
         <export-listOrderedSources PURPOSE="Resolve the stable ordered source inputs bound to a source set." />
+        <export-createBatchDraft PURPOSE="Persist an API-owned open batch draft with owner scope and version 1." />
+        <export-updateBatchDraftItems PURPOSE="Apply owner-checked optimistic-version add, remove, and clear mutations to ordered draft items." />
+        <export-submitBatchDraft PURPOSE="Atomically mark a draft submitted and bind it to the promoted batch root job." />
         <export-listArtifactsByJob PURPOSE="Read canonical artifact metadata for one job." />
         <export-listChildJobs PURPOSE="Read canonical child jobs for lineage-aware snapshot shaping." />
         <export-listJobEvents PURPOSE="Read the append-only timeline rows for one job." />
@@ -1131,7 +1264,7 @@
         <outputs>
           <param name="job-snapshot" type="versioned-job-snapshot" />
         </outputs>
-        <links>M-API-JOBS, V-M-API-JOBS, DF-001, DF-002, DF-004, DF-005, DF-006, DF-007</links>
+        <links>M-API-JOBS, V-M-API-JOBS, DF-001, DF-002, DF-004, DF-005, DF-006, DF-007, DF-009</links>
         <errors>
           <error code="invalid_job_state" />
           <error code="idempotency_conflict" />
@@ -1140,6 +1273,9 @@
       <interface>
         <export-createTranscriptionJobs PURPOSE="Create one job per uploaded file or one job from a supported URL." />
         <export-createBatchTranscriptionJob PURPOSE="Create one root aggregate transcription job plus per-source transcription children for a stable source-label manifest." />
+        <export-createBatchDraft PURPOSE="Create and read API-owned pre-submit draft snapshots for adapter rendering." />
+        <export-mutateBatchDraft PURPOSE="Add, remove, or clear draft items with owner and expected-version checks." />
+        <export-submitBatchDraft PURPOSE="Promote an open draft into the existing batch transcription root/children/aggregate graph idempotently." />
         <export-scheduleBatchAggregate PURPOSE="Schedule the root `job:transcription.aggregate` task after source children satisfy completion policy." />
         <export-createChildJob PURPOSE="Create or reuse canonical report or deep-research child jobs." />
         <export-cancelJob PURPOSE="Apply cooperative cancellation semantics." />
@@ -1159,6 +1295,7 @@
       <notes>
         <note-1>Workers must never bypass this module’s transition rules.</note-1>
         <note-2>Internal worker claim and finalize logic must consume storage-backed execution authority rather than reconstructing ownership from route-local state.</note-2>
+        <note-3>Draft submit is orchestration inside the API control plane; it must not call a dedicated AI worker, bot-side batch business code, or adapter-local durable store.</note-3>
       </notes>
     </M-API-JOBS>
 
@@ -1172,7 +1309,7 @@
         <outputs>
           <param name="http-response" type="validated-contract-response" />
         </outputs>
-        <links>M-API-HTTP, V-M-API-HTTP, DF-001, DF-002, DF-003, DF-004, DF-005, DF-006, DF-007</links>
+        <links>M-API-HTTP, V-M-API-HTTP, DF-001, DF-002, DF-003, DF-004, DF-005, DF-006, DF-007, DF-009</links>
         <errors>
           <error code="validation_failed" />
           <error code="dependency_unavailable" />
@@ -1180,6 +1317,7 @@
       </contract>
       <interface>
         <export-registerRoutes PURPOSE="Bind external and internal routes." />
+        <export-registerBatchDraftRoutes PURPOSE="Bind create, get, add item, remove item, clear, and submit routes for API-owned batch drafts." />
         <export-validateRequest PURPOSE="Apply request validation and canonical error shaping." />
         <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
         <export-buildRuntimeDependencies PURPOSE="Assemble concrete public and internal worker services for the executable API runtime." />
@@ -1368,7 +1506,7 @@
         <outputs>
           <param name="telegram-reply" type="user-facing-bot-message-or-file" />
         </outputs>
-        <links>M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER, DF-001, DF-004, DF-005, DF-007</links>
+        <links>M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER, DF-001, DF-004, DF-005, DF-007, DF-009</links>
         <errors>
           <error code="telegram_upload_failed" />
         </errors>
@@ -1376,9 +1514,10 @@
       <interface>
         <export-handleIncomingMedia PURPOSE="Download Telegram media temporarily and submit it to the API." />
         <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, and segmented-artifact actions." />
-        <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, and URL sources as one API batch basket." />
+        <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, and URL sources through API-owned batch drafts, then submit the draft for API promotion into one batch root." />
+        <export-renderDraftCallbacks PURPOSE="Render Telegram inline callback data with draft_id and version for draft mutate and submit actions." />
         <export-registerCommandMenu PURPOSE="Register `/start`, `/help`, `/batch`, `/basket`, and `/clear` commands for Telegram clients." />
-        <export-toggleBatchMode PURPOSE="Switch per-chat/user batch collection mode between basket submission and immediate single-source processing." />
+        <export-toggleBatchMode PURPOSE="Switch per-chat/user presentation mode between API-owned draft collection and immediate single-source processing." />
         <export-deliverTranscriptResult PURPOSE="Choose inline Telegram text for short readable `transcript_plain` artifacts, an unavailable-artifact message for missing or non-file text paths, and document fallback for existing long, empty, or unreadable artifact files without changing API or worker contracts." />
       </interface>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
@@ -1396,6 +1535,7 @@
         <note-2>If `apps/telegram-bot` is absent, materialize it inside the adapter packet while using the current `bot.py` and Telegram tests as the migration source; no separate shell packet is required.</note-2>
         <note-3>If `packages/sdk-py` is still absent during Phase-5, keep a thin packet-local API client under the Telegram adapter boundary and defer shared SDK extraction.</note-3>
         <note-4>`TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS=3500` is a Telegram UX limit only. It does not define transcript artifact size, API response shape, worker output policy, or batch aggregation semantics.</note-4>
+        <note-5>Telegram must not treat in-memory BasketStore keyed by chat/user as canonical durable state; stale inline buttons are resolved by draft_id plus version through the API.</note-5>
       </notes>
     </M-TELEGRAM-ADAPTER>
 
@@ -1487,6 +1627,16 @@
       <step-5>API emits versioned events, exposes one authoritative root polling snapshot with child lineage, and schedules webhook deliveries only when the batch root uses webhook delivery.</step-5>
       <evidence>V-M-CONTRACTS, V-M-API-STORAGE, V-M-API-JOBS, V-M-WORKER-TRANSCRIPTION, V-M-TELEGRAM-ADAPTER</evidence>
     </DF-007>
+
+    <DF-009 NAME="ApiOwnedBatchDraftSubmit" TRIGGER="Telegram draft callback with draft_id and version">
+      <step-1>Telegram adapter creates or reads an API-owned batch draft, uploads draft item source material through API-owned references, and renders inline buttons whose callback data includes draft_id and version.</step-1>
+      <step-2>Add item, remove item, and clear callbacks call the draft endpoints with owner scope and expected_version; API rejects owner mismatch, version mismatch, submitted, expired, or canceled drafts with explicit stale-button outcomes.</step-2>
+      <step-3>Submit callback calls the draft submit endpoint with owner scope and expected_version; API validates that the draft is open and non-empty, then atomically builds the existing `batch-transcription.v1` source manifest and source-set rows from ordered draft items.</step-3>
+      <step-4>Inside the same transactional boundary, API creates the existing batch aggregate root and per-source transcription children, enqueues per-source `job:transcription.run` tasks, marks the draft submitted, stores submitted_root_job_id, and increments version.</step-4>
+      <step-5>Repeated submit for a submitted draft returns the same root job or submitted draft snapshot, while stale buttons for submitted, expired, canceled, version-conflict, or owner-mismatch states produce user-facing stale responses and never process a current unrelated adapter basket.</step-5>
+      <evidence>V-M-CONTRACTS, V-M-API-STORAGE, V-M-API-JOBS, V-M-API-HTTP, V-M-TELEGRAM-ADAPTER, DF-007</evidence>
+      <implementation-evidence status="verified" verified-at="2026-04-27">Implemented surfaces are `apps/api/internal/api/api.go`, `apps/api/internal/storage/batch_drafts.go`, `apps/api/internal/jobs/jobs.go`, `src/media_analysis_platform/bot.py`, and `apps/telegram-bot/src/telegram_adapter/gateway.py`. Storage persists uploaded draft bodies into the API-owned source bucket during add-item, jobs submit builds the existing `batch-transcription.v1` root/children/aggregate graph from ordered draft items, Telegram downloads files only to transient local paths before uploading them into API draft items, and old `basket:*` callbacks answer as stale without processing local/current basket state.</implementation-evidence>
+    </DF-009>
 
     <DF-008 NAME="TelegramInlineTranscriptPresentation" TRIGGER="Telegram polling observes succeeded transcription job">
       <step-1>Telegram adapter waits for job readiness through the API-backed gateway and receives a processed job whose plain transcript path points to the materialized `transcript_plain` artifact.</step-1>
@@ -1734,6 +1884,22 @@
       <Phase-12-2 status="done">Implement generic `agent-runner` dispatch by `harness_name` with artifact-backed logs and redacted summary persistence; verified by focused worker tests, contract tests, API tests, XML lint, GRACE lint, and reviewer approval on 2026-04-24.</Phase-12-2>
       <Phase-12-3 status="done">Implement container-local Claude Code provider settings generation, private request envelope resolution, and per-harness concurrency enforcement; verified by focused `workers/agent-runner` and worker-common tests on 2026-04-26.</Phase-12-3>
     </Wave-12>
+
+    <Wave-13 name="API-Owned Batch Draft Implementation Evidence" status="done">
+      <goal>Refresh the canonical GRACE evidence after API-owned batch drafts, stale Telegram callbacks, and draft submit promotion were implemented.</goal>
+      <files>
+        <file>apps/api/internal/api/api.go</file>
+        <file>apps/api/internal/storage/batch_drafts.go</file>
+        <file>apps/api/internal/jobs/jobs.go</file>
+        <file>src/media_analysis_platform/bot.py</file>
+        <file>apps/telegram-bot/src/telegram_adapter/gateway.py</file>
+        <file>tests/test_bot.py</file>
+        <file>apps/telegram-bot/tests/test_api_client.py</file>
+        <file>apps/telegram-bot/tests/test_gateway.py</file>
+        <file>packages/contracts/tests/test_contract_surfaces.py</file>
+      </files>
+      <Phase-13-1 status="done">Verify API-owned batch draft contracts, DB/storage behavior, HTTP route behavior, job graph promotion, Telegram stale callback handling, no dedicated AI worker topology drift, and compose PostgreSQL E2E evidence. Commands and results are recorded under `VF-001C`, `V-M-CONTRACTS`, `V-M-API-STORAGE`, `V-M-API-JOBS`, `V-M-API-HTTP`, and `V-M-TELEGRAM-ADAPTER`.</Phase-13-1>
+    </Wave-13>
   </ImplementationWaves>
 
   <ImplementationOrder>

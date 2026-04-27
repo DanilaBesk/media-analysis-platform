@@ -196,6 +196,96 @@ class FakeGatewayApiClient:
         }
 
 
+class FakeDraftGatewayApiClient(FakeGatewayApiClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.add_url_requests: list[dict[str, Any]] = []
+        self.add_upload_requests: list[dict[str, Any]] = []
+        self.submit_requests: list[dict[str, Any]] = []
+
+    def add_batch_draft_url_item(
+        self,
+        *,
+        draft_id: str,
+        owner: dict[str, str],
+        expected_version: int,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.add_url_requests.append(
+            {
+                "draft_id": draft_id,
+                "owner": owner,
+                "expected_version": expected_version,
+                "item": item,
+            }
+        )
+        return {"draft": _draft_snapshot(draft_id=draft_id, version=expected_version + 1)}
+
+    def add_batch_draft_upload_item(
+        self,
+        *,
+        draft_id: str,
+        owner: dict[str, str],
+        expected_version: int,
+        item: dict[str, Any],
+        file,
+    ) -> dict[str, Any]:
+        self.add_upload_requests.append(
+            {
+                "draft_id": draft_id,
+                "owner": owner,
+                "expected_version": expected_version,
+                "item": item,
+                "file": file,
+            }
+        )
+        return {"draft": _draft_snapshot(draft_id=draft_id, version=expected_version + 1)}
+
+    def submit_batch_draft(
+        self,
+        *,
+        draft_id: str,
+        owner: dict[str, str],
+        expected_version: int,
+        delivery_strategy: str,
+    ) -> dict[str, Any]:
+        self.submit_requests.append(
+            {
+                "draft_id": draft_id,
+                "owner": owner,
+                "expected_version": expected_version,
+                "delivery_strategy": delivery_strategy,
+            }
+        )
+        return {
+            "draft": _draft_snapshot(draft_id=draft_id, version=expected_version + 1, status="submitted"),
+            "job": {
+                "job_id": "batch-root-1",
+                "job_type": "transcription",
+                "status": "queued",
+            },
+        }
+
+
+def _draft_snapshot(
+    *,
+    draft_id: str = "11111111-1111-1111-1111-111111111111",
+    version: int = 1,
+    status: str = "open",
+) -> dict[str, Any]:
+    return {
+        "draft_id": draft_id,
+        "version": version,
+        "owner": {
+            "owner_type": "telegram",
+            "telegram_chat_id": "10",
+            "telegram_user_id": "7",
+        },
+        "status": status,
+        "items": [],
+    }
+
+
 def test_gateway_package_reexport_matches_module_class() -> None:
     gateway_module = importlib.import_module("telegram_adapter.gateway")
     package_module = importlib.import_module("telegram_adapter")
@@ -284,6 +374,79 @@ def test_gateway_submits_mixed_sources_to_batch_endpoint_and_polls_root(tmp_path
     assert manifest["sources"][labels[1]]["url"] == "https://youtu.be/demo"
     assert request["files"][0].field_name == labels[0]
     assert request["files"][0].content_bytes == b"voice"
+
+
+def test_gateway_adds_mixed_sources_to_api_draft_and_materializes_submit_root(tmp_path: Path) -> None:
+    media_path = tmp_path / "call.ogg"
+    media_path.write_bytes(b"voice")
+    api_client = FakeDraftGatewayApiClient()
+    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
+    owner = {
+        "owner_type": "telegram",
+        "telegram_chat_id": "10",
+        "telegram_user_id": "7",
+    }
+    draft = _draft_snapshot(version=1)
+
+    draft = gateway.add_source_to_draft(
+        draft,
+        owner=owner,
+        source=SourceCandidate(
+            source_id="telegram-message:42:call.ogg",
+            kind="telegram_audio",
+            display_name="Audio: call.ogg",
+            url=None,
+            telegram_file_id="file-1",
+            mime_type="audio/ogg",
+            file_name="call.ogg",
+            local_path=media_path,
+        ),
+    )
+    draft = gateway.add_source_to_draft(
+        draft,
+        owner=owner,
+        source=SourceCandidate(
+            source_id="url:https://youtu.be/demo",
+            kind="youtube_url",
+            display_name="YouTube: demo",
+            url="https://youtu.be/demo",
+            telegram_file_id=None,
+            mime_type=None,
+            file_name=None,
+        ),
+    )
+    processed = gateway.submit_batch_draft(
+        draft_id=draft["draft_id"],
+        owner=owner,
+        expected_version=draft["version"],
+    )
+
+    assert api_client.add_upload_requests[0]["expected_version"] == 1
+    assert api_client.add_upload_requests[0]["item"] == {
+        "source_kind": "telegram_upload",
+        "display_name": "Audio: call.ogg",
+        "original_filename": "call.ogg",
+        "content_type": "audio/ogg",
+        "size_bytes": 5,
+    }
+    assert api_client.add_upload_requests[0]["file"].field_name == "file"
+    assert api_client.add_upload_requests[0]["file"].content_bytes == b"voice"
+    assert api_client.add_url_requests[0]["expected_version"] == 2
+    assert api_client.add_url_requests[0]["item"] == {
+        "source_kind": "youtube_url",
+        "url": "https://youtu.be/demo",
+        "display_name": "YouTube: demo",
+    }
+    assert api_client.submit_requests == [
+        {
+            "draft_id": "11111111-1111-1111-1111-111111111111",
+            "owner": owner,
+            "expected_version": 3,
+            "delivery_strategy": "polling",
+        }
+    ]
+    assert processed.job_id == "batch-root-1"
+    assert processed.transcript.text_path.read_text(encoding="utf-8") == "Transcript text\n"
 
 
 def test_gateway_creates_deep_research_from_agent_run_report_job(tmp_path) -> None:

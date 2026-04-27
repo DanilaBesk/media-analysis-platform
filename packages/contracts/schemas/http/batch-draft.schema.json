@@ -1,0 +1,435 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/batch-draft.schema.json",
+  "title": "BatchDraftContracts",
+  "$defs": {
+    "uuid": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "draftVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "draftStatus": {
+      "type": "string",
+      "enum": [
+        "open",
+        "submitted",
+        "expired",
+        "canceled"
+      ]
+    },
+    "staleOutcome": {
+      "type": "string",
+      "enum": [
+        "version_conflict",
+        "draft_submitted",
+        "draft_expired",
+        "draft_canceled",
+        "draft_owner_mismatch"
+      ]
+    },
+    "ownerScope": {
+      "type": "object",
+      "required": [
+        "owner_type"
+      ],
+      "properties": {
+        "owner_type": {
+          "type": "string",
+          "enum": [
+            "telegram"
+          ]
+        },
+        "telegram_chat_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "telegram_user_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "owner_type": {
+                "const": "telegram"
+              }
+            },
+            "required": [
+              "owner_type"
+            ]
+          },
+          "then": {
+            "required": [
+              "telegram_chat_id",
+              "telegram_user_id"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "draftItemSource": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/uploadedDraftItemSource"
+        },
+        {
+          "$ref": "#/$defs/urlDraftItemSource"
+        }
+      ]
+    },
+    "uploadedDraftItemSource": {
+      "type": "object",
+      "required": [
+        "source_kind",
+        "uploaded_source_ref"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "uploaded_file",
+            "telegram_upload"
+          ]
+        },
+        "uploaded_source_ref": {
+          "type": "string",
+          "description": "API-owned persisted source object key generated when the item was added through multipart upload.",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "uploadedDraftItemMultipartMetadata": {
+      "type": "object",
+      "required": [
+        "source_kind"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "uploaded_file",
+            "telegram_upload"
+          ]
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "urlDraftItemSource": {
+      "type": "object",
+      "required": [
+        "source_kind",
+        "url"
+      ],
+      "properties": {
+        "source_kind": {
+          "type": "string",
+          "enum": [
+            "youtube_url",
+            "external_url"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "batchDraftItem": {
+      "type": "object",
+      "required": [
+        "item_id",
+        "position",
+        "source_label",
+        "source"
+      ],
+      "properties": {
+        "item_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_label": {
+          "$ref": "./create-transcription-batch.schema.json#/$defs/sourceLabel"
+        },
+        "source": {
+          "$ref": "#/$defs/draftItemSource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "batchDraft": {
+      "type": "object",
+      "required": [
+        "draft_id",
+        "version",
+        "owner",
+        "status",
+        "items"
+      ],
+      "properties": {
+        "draft_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "version": {
+          "$ref": "#/$defs/draftVersion"
+        },
+        "owner": {
+          "$ref": "#/$defs/ownerScope"
+        },
+        "status": {
+          "$ref": "#/$defs/draftStatus"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/batchDraftItem"
+          }
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "client_ref": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "submitted_root_job_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "createBatchDraftRequest": {
+      "type": "object",
+      "required": [
+        "owner"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ownerScope"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ownerCheckedRequest": {
+      "type": "object",
+      "required": [
+        "owner"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ownerScope"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mutateBatchDraftRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "expected_version"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ownerScope"
+        },
+        "expected_version": {
+          "$ref": "#/$defs/draftVersion"
+        }
+      },
+      "additionalProperties": false
+    },
+    "addBatchDraftItemRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "expected_version",
+        "item"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ownerScope"
+        },
+        "expected_version": {
+          "$ref": "#/$defs/draftVersion"
+        },
+        "item": {
+          "$ref": "#/$defs/urlDraftItemSource"
+        }
+      },
+      "additionalProperties": false
+    },
+    "addBatchDraftItemMultipartRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "expected_version",
+        "item"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "contentMediaType": "application/json",
+          "description": "JSON-encoded ownerScope."
+        },
+        "expected_version": {
+          "$ref": "#/$defs/draftVersion"
+        },
+        "item": {
+          "type": "string",
+          "contentMediaType": "application/json",
+          "contentSchema": {
+            "$ref": "#/$defs/uploadedDraftItemMultipartMetadata"
+          },
+          "description": "JSON-encoded uploadedDraftItemMultipartMetadata. uploaded_source_ref is generated by the API from the multipart file body."
+        },
+        "file": {
+          "$ref": "#/$defs/binaryDraftUpload"
+        },
+        "files": {
+          "$ref": "#/$defs/binaryDraftUpload"
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "file"
+          ],
+          "not": {
+            "required": [
+              "files"
+            ]
+          }
+        },
+        {
+          "required": [
+            "files"
+          ],
+          "not": {
+            "required": [
+              "file"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "binaryDraftUpload": {
+      "type": "string",
+      "format": "binary",
+      "minLength": 1
+    },
+    "submitBatchDraftRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "expected_version"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "#/$defs/ownerScope"
+        },
+        "expected_version": {
+          "$ref": "#/$defs/draftVersion"
+        },
+        "delivery": {
+          "$ref": "./create-transcription-upload.schema.json#/$defs/deliveryRequest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "batchDraftResponse": {
+      "type": "object",
+      "required": [
+        "draft"
+      ],
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/batchDraft"
+        },
+        "stale_outcome": {
+          "$ref": "#/$defs/staleOutcome"
+        }
+      },
+      "additionalProperties": false
+    },
+    "submitBatchDraftResponse": {
+      "type": "object",
+      "required": [
+        "draft"
+      ],
+      "properties": {
+        "draft": {
+          "$ref": "#/$defs/batchDraft"
+        },
+        "job": {
+          "$ref": "../common/job-snapshot.schema.json"
+        },
+        "stale_outcome": {
+          "$ref": "#/$defs/staleOutcome"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -100,6 +100,111 @@ class TelegramApiProcessingGateway:
         )
         return self._materialize_transcription_job(terminal_job, synthetic_source)
 
+    def create_batch_draft(self, *, owner: dict[str, str], display_name: str | None = None) -> dict:
+        response = self.api_client.create_batch_draft(owner=owner, display_name=display_name)
+        return self._unwrap_draft(response)
+
+    def load_batch_draft(self, *, draft_id: str, owner: dict[str, str]) -> dict:
+        response = self.api_client.get_batch_draft(draft_id=draft_id, owner=owner)
+        return self._unwrap_draft(response)
+
+    def add_source_to_draft(self, draft: dict, *, owner: dict[str, str], source: SourceCandidate) -> dict:
+        expected_version = int(draft["version"])
+        draft_id = draft["draft_id"]
+        if source.kind == "youtube_url":
+            if not source.url:
+                raise RuntimeError("Draft URL source is missing a URL")
+            response = self.api_client.add_batch_draft_url_item(
+                draft_id=draft_id,
+                owner=owner,
+                expected_version=expected_version,
+                item={
+                    "source_kind": "youtube_url",
+                    "url": source.url,
+                    "display_name": source.display_name,
+                },
+            )
+            return self._unwrap_draft(response)
+
+        upload_part = self._build_upload_part(source)
+        response = self.api_client.add_batch_draft_upload_item(
+            draft_id=draft_id,
+            owner=owner,
+            expected_version=expected_version,
+            item={
+                "source_kind": "telegram_upload",
+                "display_name": source.display_name,
+                "original_filename": upload_part.filename,
+                "content_type": upload_part.content_type,
+                "size_bytes": len(upload_part.content_bytes),
+            },
+            file=UploadFilePart(
+                filename=upload_part.filename,
+                content_type=upload_part.content_type,
+                content_bytes=upload_part.content_bytes,
+                field_name="file",
+            ),
+        )
+        return self._unwrap_draft(response)
+
+    def remove_draft_item(
+        self,
+        *,
+        draft_id: str,
+        owner: dict[str, str],
+        expected_version: int,
+        item_id: str,
+    ) -> dict:
+        return self._unwrap_draft(
+            self.api_client.remove_batch_draft_item(
+                draft_id=draft_id,
+                owner=owner,
+                expected_version=expected_version,
+                item_id=item_id,
+            )
+        )
+
+    def clear_batch_draft(self, *, draft_id: str, owner: dict[str, str], expected_version: int) -> dict:
+        return self._unwrap_draft(
+            self.api_client.clear_batch_draft(
+                draft_id=draft_id,
+                owner=owner,
+                expected_version=expected_version,
+            )
+        )
+
+    def submit_batch_draft(
+        self,
+        *,
+        draft_id: str,
+        owner: dict[str, str],
+        expected_version: int,
+    ) -> ProcessedJob:
+        response = self.api_client.submit_batch_draft(
+            draft_id=draft_id,
+            owner=owner,
+            expected_version=expected_version,
+            delivery_strategy="polling",
+        )
+        job_snapshot = response.get("job") or {}
+        if not job_snapshot:
+            draft = self._unwrap_draft(response)
+            submitted_root_job_id = draft.get("submitted_root_job_id")
+            if not submitted_root_job_id:
+                raise RuntimeError("API did not return submitted batch root job")
+            job_snapshot = self._unwrap_job(self.api_client.get_job(submitted_root_job_id))
+        terminal_job = self._wait_for_terminal_job(job_snapshot["job_id"])
+        synthetic_source = SourceCandidate(
+            source_id=draft_id,
+            kind="telegram_audio",
+            display_name=terminal_job.get("display_name") or "Telegram basket",
+            url=None,
+            telegram_file_id=None,
+            mime_type=None,
+            file_name=None,
+        )
+        return self._materialize_transcription_job(terminal_job, synthetic_source)
+
     def load_job(self, job_id: str) -> ProcessedJob:
         job_snapshot = self._unwrap_job(self.api_client.get_job(job_id))
         source = self._source_from_job(job_snapshot)
@@ -309,6 +414,12 @@ class TelegramApiProcessingGateway:
         if isinstance(job, dict):
             return job
         return payload
+
+    def _unwrap_draft(self, payload: dict) -> dict:
+        draft = payload.get("draft")
+        if not isinstance(draft, dict):
+            raise RuntimeError("API did not return batch draft")
+        return draft
 
 
 def _build_batch_display_name(sources: list[SourceCandidate]) -> str:

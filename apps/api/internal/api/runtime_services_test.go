@@ -162,6 +162,55 @@ func TestApiHttpRuntimeCreateBatchReturnsRootSnapshotWithSourceLabels(t *testing
 	}
 }
 
+func TestApiHttpRuntimeSubmitBatchDraftReplayReturnsExistingRoot(t *testing.T) {
+	t.Parallel()
+
+	root := runtimeJobRecord("11111111-1111-1111-1111-111111111111", queue.JobTypeTranscription, "queued", 1)
+	sourceSet := runtimeSourceSet(root.SourceSetID, storage.SourceSetInputBatchTranscription)
+	draft := storage.BatchDraftRecord{
+		DraftID:            "22222222-2222-2222-2222-222222222222",
+		Version:            3,
+		Owner:              storage.BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
+		Status:             storage.BatchDraftStatusSubmitted,
+		SubmittedRootJobID: root.ID,
+		Items:              []storage.BatchDraftItem{},
+	}
+	jobsService := &runtimeJobsDouble{
+		submitBatchResult: jobs.SubmitBatchDraftResult{Draft: draft, Job: root, Reused: true},
+	}
+	store := &runtimeStorageDouble{
+		jobs:       map[string]storage.JobRecord{root.ID: root},
+		sourceSets: map[string]storage.SourceSetRecord{sourceSet.ID: sourceSet},
+		orderedSourcesByID: map[string][]storage.OrderedSource{
+			sourceSet.ID: {},
+		},
+		artifactsByJob:   map[string][]storage.ArtifactRecord{},
+		childrenByParent: map[string][]storage.JobRecord{},
+	}
+	service := newPublicRuntimeService(jobsService, store, &runtimeEventsDouble{})
+
+	response, err := service.SubmitBatchDraft(context.Background(), BatchDraftSubmitCommand{
+		DraftID:         draft.DraftID,
+		Owner:           BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
+		ExpectedVersion: 3,
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft() error = %v", err)
+	}
+	if response.StaleOutcome != "draft_submitted" {
+		t.Fatalf("stale_outcome = %q, want draft_submitted", response.StaleOutcome)
+	}
+	if response.Job == nil || response.Job.JobID != root.ID {
+		t.Fatalf("job = %#v, want root %q", response.Job, root.ID)
+	}
+	if jobsService.submitBatch.DraftID != draft.DraftID || jobsService.submitBatch.ExpectedVersion != 3 {
+		t.Fatalf("submit request = %#v", jobsService.submitBatch)
+	}
+	if jobsService.submitBatch.Delivery.Strategy != storage.DeliveryStrategyPolling {
+		t.Fatalf("submit delivery = %#v, want default polling", jobsService.submitBatch.Delivery)
+	}
+}
+
 func TestApiHttpRuntimeCreateReportAcceptsSucceededBatchAggregateRoot(t *testing.T) {
 	t.Parallel()
 
@@ -854,6 +903,7 @@ type runtimeJobsDouble struct {
 	createJobsResult     jobs.CreateJobsResult
 	createCombinedResult jobs.ChildResult
 	createBatchResult    jobs.ChildResult
+	submitBatchResult    jobs.SubmitBatchDraftResult
 	createAgentRunResult jobs.ChildResult
 	createChildResult    jobs.ChildResult
 	cancelResult         storage.JobRecord
@@ -863,6 +913,7 @@ type runtimeJobsDouble struct {
 	createUpload      jobs.CreateTranscriptionRequest
 	createCombined    jobs.CreateCombinedTranscriptionRequest
 	createBatch       jobs.CreateBatchTranscriptionRequest
+	submitBatch       jobs.SubmitBatchDraftRequest
 	createAgentRun    jobs.CreateAgentRunRequest
 	createChild       jobs.CreateChildRequest
 	cancelJobID       string
@@ -884,6 +935,11 @@ func (d *runtimeJobsDouble) CreateCombinedTranscriptionJob(_ context.Context, re
 func (d *runtimeJobsDouble) CreateBatchTranscriptionJob(_ context.Context, req jobs.CreateBatchTranscriptionRequest) (jobs.ChildResult, error) {
 	d.createBatch = req
 	return d.createBatchResult, nil
+}
+
+func (d *runtimeJobsDouble) SubmitBatchDraft(_ context.Context, req jobs.SubmitBatchDraftRequest) (jobs.SubmitBatchDraftResult, error) {
+	d.submitBatch = req
+	return d.submitBatchResult, nil
 }
 
 func (d *runtimeJobsDouble) CreateAgentRun(_ context.Context, req jobs.CreateAgentRunRequest) (jobs.ChildResult, error) {
@@ -933,6 +989,7 @@ type runtimeStorageDouble struct {
 	persistedAgentRunRequestRef  string
 	persistedAgentRunRequestBody []byte
 	agentRunRequestAccess        storage.AgentRunRequestAccess
+	batchDrafts                  map[string]storage.BatchDraftRecord
 }
 
 func (d *runtimeStorageDouble) GetJob(_ context.Context, jobID string) (storage.JobRecord, error) {
@@ -1053,6 +1110,57 @@ func (d *runtimeStorageDouble) FindArtifactByKind(_ context.Context, jobID, arti
 		}
 	}
 	return nil, nil
+}
+
+func (d *runtimeStorageDouble) CreateBatchDraft(_ context.Context, req storage.BatchDraftCreate) (storage.BatchDraftRecord, error) {
+	draft := storage.BatchDraftRecord{
+		DraftID:     "11111111-1111-1111-1111-111111111111",
+		Version:     1,
+		Owner:       req.Owner,
+		Status:      storage.BatchDraftStatusOpen,
+		DisplayName: req.DisplayName,
+		ClientRef:   req.ClientRef,
+		ExpiresAt:   req.ExpiresAt,
+		Items:       []storage.BatchDraftItem{},
+	}
+	if d.batchDrafts == nil {
+		d.batchDrafts = map[string]storage.BatchDraftRecord{}
+	}
+	d.batchDrafts[draft.DraftID] = draft
+	return draft, nil
+}
+
+func (d *runtimeStorageDouble) GetBatchDraft(_ context.Context, draftID string, owner storage.BatchDraftOwner) (storage.BatchDraftRecord, error) {
+	draft, ok := d.batchDrafts[draftID]
+	if !ok {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftNotFound
+	}
+	if draft.Owner != owner {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftOwnerMismatch
+	}
+	return draft, nil
+}
+
+func (d *runtimeStorageDouble) AddBatchDraftItem(_ context.Context, req storage.BatchDraftItemMutation) (storage.BatchDraftRecord, error) {
+	draft := d.batchDrafts[req.DraftID]
+	draft.Version++
+	d.batchDrafts[req.DraftID] = draft
+	return draft, nil
+}
+
+func (d *runtimeStorageDouble) RemoveBatchDraftItem(_ context.Context, req storage.BatchDraftItemRemove) (storage.BatchDraftRecord, error) {
+	draft := d.batchDrafts[req.DraftID]
+	draft.Version++
+	d.batchDrafts[req.DraftID] = draft
+	return draft, nil
+}
+
+func (d *runtimeStorageDouble) ClearBatchDraft(_ context.Context, req storage.BatchDraftMutation) (storage.BatchDraftRecord, error) {
+	draft := d.batchDrafts[req.DraftID]
+	draft.Items = []storage.BatchDraftItem{}
+	draft.Version++
+	d.batchDrafts[req.DraftID] = draft
+	return draft, nil
 }
 
 type runtimeEventsDouble struct {

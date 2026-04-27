@@ -119,3 +119,60 @@ def test_create_batch_uses_manifest_and_source_label_file_parts() -> None:
     assert '"ordered_source_labels":["voice_abc123","url_def456"]' in body
     assert 'name="voice_abc123"; filename="voice.ogg"' in body
     assert 'name="files"' not in body
+
+
+def test_add_batch_draft_upload_item_uses_contract_multipart_fields() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(
+            json.dumps(
+                {
+                    "draft": {
+                        "draft_id": "11111111-1111-1111-1111-111111111111",
+                        "version": 2,
+                        "owner": {
+                            "owner_type": "telegram",
+                            "telegram_chat_id": "10",
+                            "telegram_user_id": "7",
+                        },
+                        "status": "open",
+                        "items": [],
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+    client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
+    client.add_batch_draft_upload_item(
+        draft_id="11111111-1111-1111-1111-111111111111",
+        owner={
+            "owner_type": "telegram",
+            "telegram_chat_id": "10",
+            "telegram_user_id": "7",
+        },
+        expected_version=1,
+        item={
+            "source_kind": "telegram_upload",
+            "display_name": "Audio: voice.ogg",
+            "original_filename": "voice.ogg",
+            "content_type": "audio/ogg",
+            "size_bytes": 5,
+        },
+        file=UploadFilePart("voice.ogg", "audio/ogg", b"voice", field_name="file"),
+    )
+
+    request = captured["request"]
+    body = request.data.decode("utf-8", errors="replace")
+    assert request.full_url == "http://localhost:8080/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items"
+    assert request.get_method() == "POST"
+    assert "multipart/form-data" in request.headers["Content-type"]
+    assert 'name="owner"' in body
+    assert '"owner_type":"telegram"' in body
+    assert 'name="expected_version"' in body
+    assert "\r\n1\r\n" in body
+    assert 'name="item"' in body
+    assert '"source_kind":"telegram_upload"' in body
+    assert 'name="file"; filename="voice.ogg"' in body
+    assert "voice" in body

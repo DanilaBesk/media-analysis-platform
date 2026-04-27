@@ -39,6 +39,8 @@ type Store interface {
 	FindCanonicalChild(ctx context.Context, parentJobID, jobType string) (*storage.JobRecord, error)
 	ListChildJobs(ctx context.Context, parentJobID string) ([]storage.JobRecord, error)
 	FindArtifactByKind(ctx context.Context, jobID, artifactKind string) (*storage.ArtifactRecord, error)
+	GetBatchDraft(ctx context.Context, draftID string, owner storage.BatchDraftOwner) (storage.BatchDraftRecord, error)
+	SubmitBatchDraftGraph(ctx context.Context, req storage.BatchDraftGraphSubmission) (storage.BatchDraftRecord, error)
 }
 
 type Enqueuer interface {
@@ -136,6 +138,7 @@ const (
 	BatchManifestVersion             = "batch-transcription.v1"
 	BatchCompletionPolicyAllSources  = "succeed_when_all_sources_succeed"
 	BatchCompletionPolicyAnySource   = "succeed_when_any_source_succeeds"
+	batchChildEnqueuedProgressStage  = "queued_for_execution"
 )
 
 type CreateBatchTranscriptionRequest struct {
@@ -149,6 +152,23 @@ type CreateBatchTranscriptionRequest struct {
 	Delivery           storage.Delivery
 	ClientRef          string
 	DisplayName        string
+}
+
+type SubmitBatchDraftRequest struct {
+	DraftID          string
+	Owner            storage.BatchDraftOwner
+	ExpectedVersion  int64
+	SubmissionKind   string
+	IdempotencyKey   string
+	Delivery         storage.Delivery
+	ClientRef        string
+	CompletionPolicy string
+}
+
+type SubmitBatchDraftResult struct {
+	Draft  storage.BatchDraftRecord
+	Job    storage.JobRecord
+	Reused bool
 }
 
 type CreateAgentRunRequest struct {
@@ -381,6 +401,296 @@ func (s *Service) CreateBatchTranscriptionJob(ctx context.Context, req CreateBat
 		}
 	}
 	return ChildResult{Job: root}, nil
+}
+
+func (s *Service) SubmitBatchDraft(ctx context.Context, req SubmitBatchDraftRequest) (SubmitBatchDraftResult, error) {
+	if strings.TrimSpace(req.SubmissionKind) == "" {
+		req.SubmissionKind = SubmissionKindTranscriptionBatch
+	}
+	if strings.TrimSpace(req.CompletionPolicy) == "" {
+		req.CompletionPolicy = BatchCompletionPolicyAllSources
+	}
+	if strings.TrimSpace(req.DraftID) == "" || req.ExpectedVersion <= 0 {
+		return SubmitBatchDraftResult{}, fmt.Errorf("%w: draft id and expected version are required", ErrInvalidJobState)
+	}
+	draft, err := s.store.GetBatchDraft(ctx, strings.TrimSpace(req.DraftID), req.Owner)
+	if err != nil {
+		return SubmitBatchDraftResult{}, err
+	}
+	if draft.Status == storage.BatchDraftStatusSubmitted {
+		if strings.TrimSpace(draft.SubmittedRootJobID) == "" {
+			return SubmitBatchDraftResult{}, fmt.Errorf("%w: submitted draft missing root job id", ErrInvalidJobState)
+		}
+		root, err := s.store.GetJob(ctx, draft.SubmittedRootJobID)
+		if err != nil {
+			return SubmitBatchDraftResult{}, err
+		}
+		if err := s.enqueueQueuedBatchDraftChildren(ctx, root.ID); err != nil {
+			return SubmitBatchDraftResult{}, err
+		}
+		return SubmitBatchDraftResult{Draft: draft, Job: root, Reused: true}, nil
+	}
+	if len(draft.Items) == 0 {
+		return SubmitBatchDraftResult{}, storage.ErrBatchDraftEmpty
+	}
+
+	sources := make([]storage.SourceRecord, 0, len(draft.Items))
+	labels := make([]string, 0, len(draft.Items))
+	for _, item := range draft.Items {
+		source, err := sourceFromBatchDraftItem(item)
+		if err != nil {
+			return SubmitBatchDraftResult{}, err
+		}
+		sources = append(sources, source)
+		labels = append(labels, item.SourceLabel)
+	}
+	manifestJSON, err := batchDraftManifestJSON(labels, draft.Items, req.CompletionPolicy)
+	if err != nil {
+		return SubmitBatchDraftResult{}, err
+	}
+	clientRef := strings.TrimSpace(req.ClientRef)
+	if clientRef == "" {
+		clientRef = strings.TrimSpace(draft.ClientRef)
+	}
+	graph, err := s.buildBatchGraph(CreateBatchTranscriptionRequest{
+		SubmissionKind:     req.SubmissionKind,
+		IdempotencyKey:     draftSubmissionIdempotencyKey(req.IdempotencyKey, draft.DraftID),
+		RequestFingerprint: fingerprintBatchDraft(draft, req.CompletionPolicy),
+		Sources:            sources,
+		SourceLabels:       labels,
+		CompletionPolicy:   req.CompletionPolicy,
+		ManifestJSON:       manifestJSON,
+		Delivery:           req.Delivery,
+		ClientRef:          clientRef,
+		DisplayName:        strings.TrimSpace(draft.DisplayName),
+	})
+	if err != nil {
+		return SubmitBatchDraftResult{}, err
+	}
+
+	submitted, err := s.store.SubmitBatchDraftGraph(ctx, storage.BatchDraftGraphSubmission{
+		DraftID:         draft.DraftID,
+		Owner:           req.Owner,
+		ExpectedVersion: req.ExpectedVersion,
+		Submission:      graph.submission,
+		Sources:         graph.sources,
+		SourceSets:      graph.sourceSets,
+		Jobs:            graph.jobs,
+	})
+	if err != nil {
+		return SubmitBatchDraftResult{}, err
+	}
+	if submitted.SubmittedRootJobID != graph.root.ID {
+		root, err := s.store.GetJob(ctx, submitted.SubmittedRootJobID)
+		if err != nil {
+			return SubmitBatchDraftResult{}, err
+		}
+		if err := s.enqueueQueuedBatchDraftChildren(ctx, root.ID); err != nil {
+			return SubmitBatchDraftResult{}, err
+		}
+		return SubmitBatchDraftResult{Draft: submitted, Job: root, Reused: true}, nil
+	}
+	if err := s.enqueueQueuedBatchDraftChildren(ctx, submitted.SubmittedRootJobID); err != nil {
+		return SubmitBatchDraftResult{}, err
+	}
+	return SubmitBatchDraftResult{Draft: submitted, Job: graph.root}, nil
+}
+
+func (s *Service) enqueueQueuedBatchDraftChildren(ctx context.Context, rootJobID string) error {
+	children, err := s.store.ListChildJobs(ctx, rootJobID)
+	if err != nil {
+		return err
+	}
+	for _, job := range children {
+		if job.JobType != queue.JobTypeTranscription || job.Status != "queued" {
+			continue
+		}
+		if job.ProgressStage == batchChildEnqueuedProgressStage {
+			continue
+		}
+		if _, err := s.queue.Enqueue(ctx, queue.EnqueueRequest{JobID: job.ID, JobType: job.JobType, Attempt: 1}); err != nil {
+			return err
+		}
+		job.ProgressStage = batchChildEnqueuedProgressStage
+		job.ProgressMessage = "queued for transcription worker"
+		if err := s.store.UpdateJob(ctx, job); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type batchGraph struct {
+	submission storage.JobSubmission
+	sources    []storage.SourceRecord
+	sourceSets []storage.SourceSetRecord
+	jobs       []storage.JobRecord
+	root       storage.JobRecord
+}
+
+func (s *Service) buildBatchGraph(req CreateBatchTranscriptionRequest) (batchGraph, error) {
+	if err := validateBatchCreate(req); err != nil {
+		return batchGraph{}, err
+	}
+	submissionID := s.nextID()
+	submission := storage.JobSubmission{
+		ID:                 submissionID,
+		SubmissionKind:     req.SubmissionKind,
+		IdempotencyKey:     submissionIdempotencyKey(req.IdempotencyKey, submissionID),
+		RequestFingerprint: req.RequestFingerprint,
+		CreatedAt:          s.now(),
+	}
+
+	rootSourceSetID := s.nextID()
+	rootItems := make([]storage.SourceSetItem, 0, len(req.Sources))
+	for idx, source := range req.Sources {
+		rootItems = append(rootItems, storage.SourceSetItem{
+			Position:           idx,
+			SourceID:           source.ID,
+			SourceLabel:        req.SourceLabels[idx],
+			SourceLabelVersion: BatchManifestVersion,
+		})
+	}
+	sourceSets := []storage.SourceSetRecord{{
+		ID:          rootSourceSetID,
+		InputKind:   storage.SourceSetInputBatchTranscription,
+		DisplayName: strings.TrimSpace(req.DisplayName),
+		Items:       rootItems,
+		CreatedAt:   s.now(),
+	}}
+
+	rootID := s.nextID()
+	rootParams, err := batchParamsJSON("aggregate", req.CompletionPolicy, "", req.SourceLabels, req.ManifestJSON)
+	if err != nil {
+		return batchGraph{}, err
+	}
+	root := newRootJobWithType(rootID, submission.ID, rootSourceSetID, queue.JobTypeTranscription, req.ClientRef, req.Delivery, rootParams, s.now())
+	root.ProgressStage = "waiting_for_sources"
+
+	jobs := []storage.JobRecord{root}
+	for idx, source := range req.Sources {
+		childSourceSetID := s.nextID()
+		sourceSets = append(sourceSets, storage.SourceSetRecord{
+			ID:        childSourceSetID,
+			InputKind: storage.SourceSetInputSingleSource,
+			Items: []storage.SourceSetItem{
+				{Position: 0, SourceID: source.ID, SourceLabel: req.SourceLabels[idx], SourceLabelVersion: BatchManifestVersion},
+			},
+			CreatedAt: s.now(),
+		})
+		childParams, err := batchParamsJSON("source", req.CompletionPolicy, req.SourceLabels[idx], nil, nil)
+		if err != nil {
+			return batchGraph{}, err
+		}
+		jobs = append(jobs, storage.JobRecord{
+			ID:              s.nextID(),
+			SubmissionID:    submission.ID,
+			RootJobID:       root.ID,
+			ParentJobID:     root.ID,
+			SourceSetID:     childSourceSetID,
+			JobType:         queue.JobTypeTranscription,
+			Status:          "queued",
+			Delivery:        req.Delivery,
+			Version:         1,
+			ClientRef:       req.ClientRef,
+			ProgressStage:   "queued",
+			ProgressMessage: "",
+			ParamsJSON:      childParams,
+			CreatedAt:       s.now(),
+		})
+	}
+	return batchGraph{
+		submission: submission,
+		sources:    req.Sources,
+		sourceSets: sourceSets,
+		jobs:       jobs,
+		root:       root,
+	}, nil
+}
+
+func sourceFromBatchDraftItem(item storage.BatchDraftItem) (storage.SourceRecord, error) {
+	displayName := strings.TrimSpace(item.Source.DisplayName)
+	if displayName == "" {
+		displayName = item.SourceLabel
+	}
+	source := storage.SourceRecord{
+		ID:          item.SourceID,
+		SourceKind:  item.Source.SourceKind,
+		DisplayName: displayName,
+	}
+	switch item.Source.SourceKind {
+	case storage.SourceKindYouTubeURL, "external_url":
+		source.SourceKind = storage.SourceKindYouTubeURL
+		source.SourceURL = strings.TrimSpace(item.Source.URL)
+	case storage.SourceKindUploadedFile, storage.SourceKindTelegramUpload:
+		source.ObjectKey = strings.TrimSpace(item.Source.UploadedSourceRef)
+		source.OriginalFilename = strings.TrimSpace(item.Source.OriginalFilename)
+		source.MIMEType = strings.TrimSpace(item.Source.MIMEType)
+		source.SizeBytes = item.Source.SizeBytes
+		source.ObjectAlreadyPersisted = true
+	default:
+		return storage.SourceRecord{}, fmt.Errorf("%w: unsupported draft source kind %q", ErrInvalidJobState, item.Source.SourceKind)
+	}
+	return source, nil
+}
+
+func batchDraftManifestJSON(labels []string, items []storage.BatchDraftItem, completionPolicy string) ([]byte, error) {
+	type sourceSpec struct {
+		SourceKind        string `json:"source_kind"`
+		URL               string `json:"url,omitempty"`
+		UploadedSourceRef string `json:"uploaded_source_ref,omitempty"`
+		DisplayName       string `json:"display_name,omitempty"`
+		OriginalFilename  string `json:"original_filename,omitempty"`
+		ContentType       string `json:"content_type,omitempty"`
+		SizeBytes         int64  `json:"size_bytes,omitempty"`
+	}
+	payload := struct {
+		ManifestVersion     string                `json:"manifest_version"`
+		OrderedSourceLabels []string              `json:"ordered_source_labels"`
+		Sources             map[string]sourceSpec `json:"sources"`
+		CompletionPolicy    string                `json:"completion_policy"`
+	}{
+		ManifestVersion:     BatchManifestVersion,
+		OrderedSourceLabels: append([]string(nil), labels...),
+		Sources:             map[string]sourceSpec{},
+		CompletionPolicy:    completionPolicy,
+	}
+	for _, item := range items {
+		payload.Sources[item.SourceLabel] = sourceSpec{
+			SourceKind:        item.Source.SourceKind,
+			URL:               strings.TrimSpace(item.Source.URL),
+			UploadedSourceRef: strings.TrimSpace(item.Source.UploadedSourceRef),
+			DisplayName:       strings.TrimSpace(item.Source.DisplayName),
+			OriginalFilename:  strings.TrimSpace(item.Source.OriginalFilename),
+			ContentType:       strings.TrimSpace(item.Source.MIMEType),
+			SizeBytes:         item.Source.SizeBytes,
+		}
+	}
+	return json.Marshal(payload)
+}
+
+func fingerprintBatchDraft(draft storage.BatchDraftRecord, completionPolicy string) string {
+	payload := struct {
+		Kind             string                   `json:"kind"`
+		DraftID          string                   `json:"draft_id"`
+		CompletionPolicy string                   `json:"completion_policy"`
+		Items            []storage.BatchDraftItem `json:"items"`
+	}{
+		Kind:             "batch_draft_submit",
+		DraftID:          draft.DraftID,
+		CompletionPolicy: strings.TrimSpace(completionPolicy),
+		Items:            draft.Items,
+	}
+	encoded, _ := json.Marshal(payload)
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+func draftSubmissionIdempotencyKey(idempotencyKey, draftID string) string {
+	if strings.TrimSpace(idempotencyKey) != "" {
+		return strings.TrimSpace(idempotencyKey)
+	}
+	return "batch-draft:" + strings.TrimSpace(draftID)
 }
 
 func (s *Service) CreateAgentRun(ctx context.Context, req CreateAgentRunRequest) (ChildResult, error) {

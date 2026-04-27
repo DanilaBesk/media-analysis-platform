@@ -651,6 +651,166 @@ RETURNING id, job_id, worker_kind, task_type, claimed_at, finished_at, outcome
 	return execution, nil
 }
 
+func (s *SQLStateStore) CreateBatchDraft(ctx context.Context, draft BatchDraftRecord) (BatchDraftRecord, error) {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO batch_drafts (id, owner_type, telegram_chat_id, telegram_user_id, version, status, display_name, client_ref, expires_at, submitted_root_job_id, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL, $10, $11)
+`, draft.DraftID, draft.Owner.OwnerType, draft.Owner.TelegramChatID, draft.Owner.TelegramUserID, draft.Version, draft.Status, nullString(draft.DisplayName), nullString(draft.ClientRef), draft.ExpiresAt, draft.CreatedAt, draft.UpdatedAt)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	return loadBatchDraft(ctx, s.db, draft.DraftID)
+}
+
+func (s *SQLStateStore) GetBatchDraft(ctx context.Context, draftID string) (BatchDraftRecord, error) {
+	return loadBatchDraft(ctx, s.db, draftID)
+}
+
+func (s *SQLStateStore) AddBatchDraftItem(ctx context.Context, req BatchDraftItemMutation, item BatchDraftItem) (BatchDraftRecord, error) {
+	var draft BatchDraftRecord
+	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+		locked, err := lockBatchDraft(ctx, tx, req.DraftID)
+		if err != nil {
+			return err
+		}
+		if err := checkBatchDraftMutation(locked, req.Owner, req.ExpectedVersion); err != nil {
+			return err
+		}
+		var position int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM batch_draft_items WHERE draft_id = $1`, req.DraftID).Scan(&position); err != nil {
+			return err
+		}
+		item.Position = position
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO batch_draft_items (id, draft_id, source_id, position, source_label, source_kind, uploaded_source_ref, url, display_name, original_filename, content_type, size_bytes, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+`, item.ItemID, req.DraftID, item.SourceID, item.Position, item.SourceLabel, item.Source.SourceKind, nullString(item.Source.UploadedSourceRef), nullString(item.Source.URL), nullString(item.Source.DisplayName), nullString(item.Source.OriginalFilename), nullString(item.Source.MIMEType), nullInt64(item.Source.SizeBytes), item.CreatedAt); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE batch_drafts SET version = version + 1, updated_at = $2 WHERE id = $1`, req.DraftID, item.CreatedAt); err != nil {
+			return err
+		}
+		draft, err = loadBatchDraft(ctx, tx, req.DraftID)
+		return err
+	})
+	return draft, err
+}
+
+func (s *SQLStateStore) RemoveBatchDraftItem(ctx context.Context, req BatchDraftItemRemove) (BatchDraftRecord, error) {
+	var draft BatchDraftRecord
+	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+		locked, err := lockBatchDraft(ctx, tx, req.DraftID)
+		if err != nil {
+			return err
+		}
+		if err := checkBatchDraftMutation(locked, req.Owner, req.ExpectedVersion); err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `DELETE FROM batch_draft_items WHERE draft_id = $1 AND id = $2`, req.DraftID, req.ItemID)
+		if err != nil {
+			return err
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rowsAffected == 0 {
+			return ErrBatchDraftNotFound
+		}
+		if err := compactBatchDraftItems(ctx, tx, req.DraftID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE batch_drafts SET version = version + 1, updated_at = now() WHERE id = $1`, req.DraftID); err != nil {
+			return err
+		}
+		draft, err = loadBatchDraft(ctx, tx, req.DraftID)
+		return err
+	})
+	return draft, err
+}
+
+func (s *SQLStateStore) ClearBatchDraft(ctx context.Context, req BatchDraftMutation) (BatchDraftRecord, error) {
+	var draft BatchDraftRecord
+	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+		locked, err := lockBatchDraft(ctx, tx, req.DraftID)
+		if err != nil {
+			return err
+		}
+		if err := checkBatchDraftMutation(locked, req.Owner, req.ExpectedVersion); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM batch_draft_items WHERE draft_id = $1`, req.DraftID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE batch_drafts SET version = version + 1, updated_at = now() WHERE id = $1`, req.DraftID); err != nil {
+			return err
+		}
+		draft, err = loadBatchDraft(ctx, tx, req.DraftID)
+		return err
+	})
+	return draft, err
+}
+
+func (s *SQLStateStore) SubmitBatchDraftGraph(ctx context.Context, req BatchDraftGraphSubmission) (BatchDraftRecord, error) {
+	var draft BatchDraftRecord
+	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+		locked, err := lockBatchDraft(ctx, tx, req.DraftID)
+		if err != nil {
+			return err
+		}
+		if !sameBatchDraftOwner(locked.Owner, req.Owner) {
+			return ErrBatchDraftOwnerMismatch
+		}
+		if locked.Status == BatchDraftStatusSubmitted {
+			draft, err = loadBatchDraft(ctx, tx, req.DraftID)
+			return err
+		}
+		if err := checkBatchDraftMutation(locked, req.Owner, req.ExpectedVersion); err != nil {
+			return err
+		}
+		if len(locked.Items) == 0 {
+			return ErrBatchDraftEmpty
+		}
+		if len(req.Jobs) == 0 {
+			return ErrContractViolation
+		}
+		if err := insertSubmission(ctx, tx, req.Submission); err != nil {
+			return err
+		}
+		for _, source := range req.Sources {
+			if err := insertSource(ctx, tx, source); err != nil {
+				return err
+			}
+		}
+		for _, sourceSet := range req.SourceSets {
+			if err := insertSourceSet(ctx, tx, sourceSet); err != nil {
+				return err
+			}
+			if err := insertSourceSetItems(ctx, tx, sourceSet); err != nil {
+				return err
+			}
+		}
+		for _, job := range req.Jobs {
+			if err := insertJob(ctx, tx, job); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE batch_drafts
+SET status = 'submitted',
+    version = version + 1,
+    submitted_root_job_id = $2,
+    updated_at = now()
+WHERE id = $1
+`, req.DraftID, req.Jobs[0].ID); err != nil {
+			return err
+		}
+		draft, err = loadBatchDraft(ctx, tx, req.DraftID)
+		return err
+	})
+	return draft, err
+}
+
 func (s *MinioObjectStore) PutObject(ctx context.Context, bucket, objectKey, contentType string, body []byte) error {
 	_, err := s.client.PutObject(ctx, bucket, objectKey, bytes.NewReader(body), int64(len(body)), minio.PutObjectOptions{
 		ContentType: contentType,
@@ -845,6 +1005,161 @@ func scanJobEvent(scanner interface {
 		return JobEvent{}, err
 	}
 	return event, nil
+}
+
+func loadBatchDraft(ctx context.Context, execer sqlExecer, draftID string) (BatchDraftRecord, error) {
+	draft, err := scanBatchDraft(execer.QueryRowContext(ctx, `
+SELECT id, owner_type, telegram_chat_id, telegram_user_id, version, status, display_name, client_ref, expires_at, submitted_root_job_id, created_at, updated_at
+FROM batch_drafts
+WHERE id = $1
+`, draftID))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return BatchDraftRecord{}, ErrBatchDraftNotFound
+		}
+		return BatchDraftRecord{}, err
+	}
+	items, err := loadBatchDraftItems(ctx, execer, draftID)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	draft.Items = items
+	return draft, nil
+}
+
+func lockBatchDraft(ctx context.Context, tx *sql.Tx, draftID string) (BatchDraftRecord, error) {
+	draft, err := scanBatchDraft(tx.QueryRowContext(ctx, `
+SELECT id, owner_type, telegram_chat_id, telegram_user_id, version, status, display_name, client_ref, expires_at, submitted_root_job_id, created_at, updated_at
+FROM batch_drafts
+WHERE id = $1
+FOR UPDATE
+`, draftID))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return BatchDraftRecord{}, ErrBatchDraftNotFound
+		}
+		return BatchDraftRecord{}, err
+	}
+	items, err := loadBatchDraftItems(ctx, tx, draftID)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	draft.Items = items
+	return draft, nil
+}
+
+func loadBatchDraftItems(ctx context.Context, execer sqlExecer, draftID string) ([]BatchDraftItem, error) {
+	rows, err := execer.QueryContext(ctx, `
+SELECT id, source_id, position, source_label, source_kind, uploaded_source_ref, url, display_name, original_filename, content_type, size_bytes, created_at
+FROM batch_draft_items
+WHERE draft_id = $1
+ORDER BY position ASC, id ASC
+`, draftID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []BatchDraftItem{}
+	for rows.Next() {
+		item, err := scanBatchDraftItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanBatchDraft(scanner interface {
+	Scan(dest ...any) error
+}) (BatchDraftRecord, error) {
+	var (
+		draft              BatchDraftRecord
+		displayName        sql.NullString
+		clientRef          sql.NullString
+		expiresAt          sql.NullTime
+		submittedRootJobID sql.NullString
+	)
+	err := scanner.Scan(
+		&draft.DraftID,
+		&draft.Owner.OwnerType,
+		&draft.Owner.TelegramChatID,
+		&draft.Owner.TelegramUserID,
+		&draft.Version,
+		&draft.Status,
+		&displayName,
+		&clientRef,
+		&expiresAt,
+		&submittedRootJobID,
+		&draft.CreatedAt,
+		&draft.UpdatedAt,
+	)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	draft.DisplayName = nullStringValue(displayName)
+	draft.ClientRef = nullStringValue(clientRef)
+	if expiresAt.Valid {
+		draft.ExpiresAt = &expiresAt.Time
+	}
+	draft.SubmittedRootJobID = nullStringValue(submittedRootJobID)
+	return draft, nil
+}
+
+func scanBatchDraftItem(scanner interface {
+	Scan(dest ...any) error
+}) (BatchDraftItem, error) {
+	var (
+		item              BatchDraftItem
+		uploadedSourceRef sql.NullString
+		url               sql.NullString
+		displayName       sql.NullString
+		originalFilename  sql.NullString
+		contentType       sql.NullString
+		sizeBytes         sql.NullInt64
+	)
+	err := scanner.Scan(
+		&item.ItemID,
+		&item.SourceID,
+		&item.Position,
+		&item.SourceLabel,
+		&item.Source.SourceKind,
+		&uploadedSourceRef,
+		&url,
+		&displayName,
+		&originalFilename,
+		&contentType,
+		&sizeBytes,
+		&item.CreatedAt,
+	)
+	if err != nil {
+		return BatchDraftItem{}, err
+	}
+	item.Source.UploadedSourceRef = nullStringValue(uploadedSourceRef)
+	item.Source.URL = nullStringValue(url)
+	item.Source.DisplayName = nullStringValue(displayName)
+	item.Source.OriginalFilename = nullStringValue(originalFilename)
+	item.Source.MIMEType = nullStringValue(contentType)
+	if sizeBytes.Valid {
+		item.Source.SizeBytes = sizeBytes.Int64
+	}
+	return item, nil
+}
+
+func compactBatchDraftItems(ctx context.Context, execer sqlExecer, draftID string) error {
+	_, err := execer.ExecContext(ctx, `
+WITH ordered AS (
+    SELECT id, row_number() OVER (ORDER BY position ASC, id ASC) - 1 AS new_position
+    FROM batch_draft_items
+    WHERE draft_id = $1
+)
+UPDATE batch_draft_items AS item
+SET position = ordered.new_position
+FROM ordered
+WHERE item.id = ordered.id
+`, draftID)
+	return err
 }
 
 func scanWebhookDelivery(scanner interface {

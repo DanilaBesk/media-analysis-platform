@@ -1351,6 +1351,7 @@ type memoryStateStore struct {
 	artifactPersistCalls int
 	events               []JobEvent
 	deliveries           []WebhookDelivery
+	batchDrafts          map[string]BatchDraftRecord
 }
 
 func newMemoryStateStore() *memoryStateStore {
@@ -1360,6 +1361,7 @@ func newMemoryStateStore() *memoryStateStore {
 		executions:           map[string]JobExecutionRecord{},
 		activeExecutionByJob: map[string]string{},
 		persistedArtifacts:   map[string]ArtifactRecord{},
+		batchDrafts:          map[string]BatchDraftRecord{},
 	}
 }
 
@@ -1598,9 +1600,126 @@ func (m *memoryStateStore) FinishJobExecution(_ context.Context, req FinishJobEx
 	return execution, nil
 }
 
+func (m *memoryStateStore) CreateBatchDraft(_ context.Context, draft BatchDraftRecord) (BatchDraftRecord, error) {
+	draft.Items = []BatchDraftItem{}
+	m.batchDrafts[draft.DraftID] = draft
+	return draft, nil
+}
+
+func (m *memoryStateStore) GetBatchDraft(_ context.Context, draftID string) (BatchDraftRecord, error) {
+	draft, ok := m.batchDrafts[draftID]
+	if !ok {
+		return BatchDraftRecord{}, ErrBatchDraftNotFound
+	}
+	return copyBatchDraft(draft), nil
+}
+
+func (m *memoryStateStore) AddBatchDraftItem(_ context.Context, req BatchDraftItemMutation, item BatchDraftItem) (BatchDraftRecord, error) {
+	draft, err := m.lockDraftForMutation(req.DraftID, req.Owner, req.ExpectedVersion)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	item.Position = len(draft.Items)
+	draft.Items = append(draft.Items, item)
+	draft.Version++
+	draft.UpdatedAt = item.CreatedAt
+	m.batchDrafts[draft.DraftID] = draft
+	return copyBatchDraft(draft), nil
+}
+
+func (m *memoryStateStore) RemoveBatchDraftItem(_ context.Context, req BatchDraftItemRemove) (BatchDraftRecord, error) {
+	draft, err := m.lockDraftForMutation(req.DraftID, req.Owner, req.ExpectedVersion)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	next := make([]BatchDraftItem, 0, len(draft.Items))
+	removed := false
+	for _, item := range draft.Items {
+		if item.ItemID == req.ItemID {
+			removed = true
+			continue
+		}
+		item.Position = len(next)
+		next = append(next, item)
+	}
+	if !removed {
+		return BatchDraftRecord{}, ErrBatchDraftNotFound
+	}
+	draft.Items = next
+	draft.Version++
+	m.batchDrafts[draft.DraftID] = draft
+	return copyBatchDraft(draft), nil
+}
+
+func (m *memoryStateStore) ClearBatchDraft(_ context.Context, req BatchDraftMutation) (BatchDraftRecord, error) {
+	draft, err := m.lockDraftForMutation(req.DraftID, req.Owner, req.ExpectedVersion)
+	if err != nil {
+		return BatchDraftRecord{}, err
+	}
+	draft.Items = []BatchDraftItem{}
+	draft.Version++
+	m.batchDrafts[draft.DraftID] = draft
+	return copyBatchDraft(draft), nil
+}
+
+func (m *memoryStateStore) SubmitBatchDraftGraph(_ context.Context, req BatchDraftGraphSubmission) (BatchDraftRecord, error) {
+	draft, ok := m.batchDrafts[req.DraftID]
+	if !ok {
+		return BatchDraftRecord{}, ErrBatchDraftNotFound
+	}
+	if !sameBatchDraftOwner(draft.Owner, req.Owner) {
+		return BatchDraftRecord{}, ErrBatchDraftOwnerMismatch
+	}
+	if draft.Status == BatchDraftStatusSubmitted {
+		return copyBatchDraft(draft), nil
+	}
+	if err := batchDraftTerminalError(draft); err != nil {
+		return BatchDraftRecord{}, err
+	}
+	if draft.Version != req.ExpectedVersion {
+		return BatchDraftRecord{}, ErrBatchDraftVersionConflict
+	}
+	if len(draft.Items) == 0 {
+		return BatchDraftRecord{}, ErrBatchDraftEmpty
+	}
+	if len(req.Jobs) == 0 {
+		return BatchDraftRecord{}, ErrContractViolation
+	}
+	m.SaveSubmissionGraph(context.Background(), req.Submission, req.Sources, req.SourceSets, req.Jobs)
+	draft.Status = BatchDraftStatusSubmitted
+	draft.Version++
+	draft.SubmittedRootJobID = req.Jobs[0].ID
+	m.batchDrafts[draft.DraftID] = draft
+	return copyBatchDraft(draft), nil
+}
+
+func (m *memoryStateStore) lockDraftForMutation(draftID string, owner BatchDraftOwner, expectedVersion int64) (BatchDraftRecord, error) {
+	draft, ok := m.batchDrafts[draftID]
+	if !ok {
+		return BatchDraftRecord{}, ErrBatchDraftNotFound
+	}
+	if !sameBatchDraftOwner(draft.Owner, owner) {
+		return BatchDraftRecord{}, ErrBatchDraftOwnerMismatch
+	}
+	if err := batchDraftTerminalError(draft); err != nil {
+		return BatchDraftRecord{}, err
+	}
+	if draft.Version != expectedVersion {
+		return BatchDraftRecord{}, ErrBatchDraftVersionConflict
+	}
+	return draft, nil
+}
+
+func copyBatchDraft(draft BatchDraftRecord) BatchDraftRecord {
+	draft.Items = append([]BatchDraftItem(nil), draft.Items...)
+	return draft
+}
+
 type putCall struct {
-	bucket    string
-	objectKey string
+	bucket      string
+	objectKey   string
+	contentType string
+	body        []byte
 }
 
 type fakeObjectStore struct {
@@ -1622,12 +1741,12 @@ func newFakeObjectStore() *fakeObjectStore {
 	}
 }
 
-func (f *fakeObjectStore) PutObject(_ context.Context, bucket, objectKey, _ string, _ []byte) error {
+func (f *fakeObjectStore) PutObject(_ context.Context, bucket, objectKey, contentType string, body []byte) error {
 	key := bucket + "::" + objectKey
 	if err, ok := f.failPutFor[key]; ok {
 		return err
 	}
-	f.puts = append(f.puts, putCall{bucket: bucket, objectKey: objectKey})
+	f.puts = append(f.puts, putCall{bucket: bucket, objectKey: objectKey, contentType: contentType, body: append([]byte(nil), body...)})
 	return nil
 }
 

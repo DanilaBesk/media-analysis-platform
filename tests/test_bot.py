@@ -101,6 +101,14 @@ class FakeProcessingService:
         self.tmp_path = tmp_path
         self.processed_sources: list[SourceCandidate] = []
         self.processed_groups: list[list[SourceCandidate]] = []
+        self.created_draft_owners: list[dict[str, str]] = []
+        self.loaded_drafts: list[dict[str, object]] = []
+        self.draft_additions: list[dict[str, object]] = []
+        self.draft_removals: list[dict[str, object]] = []
+        self.draft_clears: list[dict[str, object]] = []
+        self.submitted_drafts: list[dict[str, object]] = []
+        self.next_draft_id = "11111111-1111-1111-1111-111111111111"
+        self.draft = _make_draft(self.next_draft_id, version=1, items=[])
         self.loaded_job_id: str | None = None
         self.report_job_id: str | None = None
         self.deep_research_job_id: str | None = None
@@ -118,6 +126,78 @@ class FakeProcessingService:
 
     def process_source_group(self, sources: list[SourceCandidate]) -> ProcessedJob:
         self.processed_groups.append(sources)
+        return self.job
+
+    def create_batch_draft(self, *, owner: dict[str, str], display_name: str | None = None) -> dict:
+        self.created_draft_owners.append(owner)
+        self.draft = _make_draft(self.next_draft_id, version=1, items=[])
+        return self.draft
+
+    def load_batch_draft(self, *, draft_id: str, owner: dict[str, str]) -> dict:
+        self.loaded_drafts.append({"draft_id": draft_id, "owner": owner})
+        return self.draft
+
+    def add_source_to_draft(self, draft: dict, *, owner: dict[str, str], source: SourceCandidate) -> dict:
+        self.draft_additions.append({"draft": draft, "owner": owner, "source": source})
+        source_payload: dict[str, object] = {
+            "source_kind": source.kind,
+            "display_name": source.display_name,
+        }
+        if source.url:
+            source_payload["url"] = source.url
+        if source.file_name:
+            source_payload["original_filename"] = source.file_name
+        item = {
+            "item_id": f"22222222-2222-2222-2222-22222222222{len(self.draft['items']) + 1}",
+            "position": len(self.draft["items"]),
+            "source_label": f"source_{len(self.draft['items']) + 1}",
+            "source": source_payload,
+        }
+        self.draft = _make_draft(
+            self.draft["draft_id"],
+            version=int(self.draft["version"]) + 1,
+            items=[*self.draft["items"], item],
+        )
+        return self.draft
+
+    def remove_draft_item(
+        self,
+        *,
+        draft_id: str,
+        owner: dict[str, str],
+        expected_version: int,
+        item_id: str,
+    ) -> dict:
+        self.draft_removals.append(
+            {
+                "draft_id": draft_id,
+                "owner": owner,
+                "expected_version": expected_version,
+                "item_id": item_id,
+            }
+        )
+        self.draft = _make_draft(draft_id, version=expected_version + 1, items=[])
+        return self.draft
+
+    def clear_batch_draft(self, *, draft_id: str, owner: dict[str, str], expected_version: int) -> dict:
+        self.draft_clears.append(
+            {
+                "draft_id": draft_id,
+                "owner": owner,
+                "expected_version": expected_version,
+            }
+        )
+        self.draft = _make_draft(draft_id, version=expected_version + 1, items=[])
+        return self.draft
+
+    def submit_batch_draft(self, *, draft_id: str, owner: dict[str, str], expected_version: int) -> ProcessedJob:
+        self.submitted_drafts.append(
+            {
+                "draft_id": draft_id,
+                "owner": owner,
+                "expected_version": expected_version,
+            }
+        )
         return self.job
 
     def load_job(self, job_id: str) -> ProcessedJob:
@@ -197,6 +277,26 @@ def _make_job(tmp_path: Path) -> ProcessedJob:
         report=ReportArtifacts(job_id="report-job-123", markdown_path=report_md, docx_path=report_docx),
         metadata_path=workspace / "job.json",
     )
+
+
+def _make_draft(draft_id: str, *, version: int, items: list[dict]) -> dict:
+    return {
+        "draft_id": draft_id,
+        "version": version,
+        "owner": {
+            "owner_type": "telegram",
+            "telegram_chat_id": "10",
+            "telegram_user_id": "7",
+        },
+        "status": "open",
+        "items": items,
+    }
+
+
+class DraftConflictError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
 
 
 def _document_entries(message: FakeStatusMessage) -> list[dict[str, object]]:
@@ -424,9 +524,10 @@ async def test_process_candidate_set_sends_unsupported_message(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_process_candidate_set_adds_multiple_sources_to_basket(tmp_path: Path) -> None:
+async def test_process_candidate_set_adds_multiple_sources_to_api_draft(tmp_path: Path) -> None:
     fake_bot = FakeBot()
-    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
 
     await app._process_candidate_set(
         chat_id=10,
@@ -438,14 +539,17 @@ async def test_process_candidate_set_adds_multiple_sources_to_basket(tmp_path: P
 
     payload = fake_bot.sent_messages[0]
     assert "В корзине 2 источника" in payload["text"]
-    assert app.baskets.list(10, 11)[0].source_id == "url:https://youtu.be/one"
+    assert [entry["source"].source_id for entry in fake_service.draft_additions] == [
+        "url:https://youtu.be/one",
+        "url:https://youtu.be/two",
+    ]
     keyboard = payload["reply_markup"]
     assert keyboard is not None
     buttons = keyboard.inline_keyboard
     assert buttons[0][0].text == "Batch: включен"
     assert buttons[1][0].text == "Запустить batch"
     assert buttons[1][1].text == "Очистить"
-    assert buttons[2][0].callback_data == "basket:remove:0"
+    assert buttons[2][0].callback_data.startswith("b:r:")
 
 
 @pytest.mark.asyncio
@@ -490,32 +594,35 @@ async def test_batch_command_and_toggle_button_switch_mode(tmp_path: Path) -> No
 @pytest.mark.asyncio
 async def test_basket_and_clear_commands_show_controls(tmp_path: Path) -> None:
     fake_bot = FakeBot()
-    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
     message = FakeStatusMessage(10)
-    app.baskets.add(
-        chat_id=10,
-        user_id=7,
-        candidates=[
-            SourceCandidate(
-                source_id="url:https://youtu.be/demo",
-                kind="youtube_url",
-                display_name="YouTube: demo",
-                url="https://youtu.be/demo",
-                telegram_file_id=None,
-                mime_type=None,
-                file_name=None,
-            )
+    fake_service.draft = _make_draft(
+        fake_service.draft["draft_id"],
+        version=2,
+        items=[
+            {
+                "item_id": "22222222-2222-2222-2222-222222222221",
+                "position": 0,
+                "source_label": "source_1",
+                "source": {
+                    "source_kind": "youtube_url",
+                    "display_name": "YouTube: demo",
+                    "url": "https://youtu.be/demo",
+                },
+            }
         ],
     )
+    app._remember_draft(10, 7, fake_service.draft)
 
     await app._handle_basket_command(message)  # type: ignore[arg-type]
 
     assert "В корзине 1" in message.documents[-1]["answer_text"]
-    assert message.documents[-1]["reply_markup"].inline_keyboard[1][0].callback_data == "basket:start"
+    assert message.documents[-1]["reply_markup"].inline_keyboard[1][0].callback_data.startswith("b:s:")
 
     await app._handle_clear_command(message)  # type: ignore[arg-type]
 
-    assert app.baskets.list(10, 7) == []
+    assert fake_service.draft_clears[-1]["expected_version"] == 2
     assert message.documents[-1]["answer_text"] == "Корзина очищена."
 
 
@@ -528,7 +635,7 @@ async def test_batch_disabled_processes_single_source_immediately(tmp_path: Path
 
     await app._process_candidate_set(chat_id=10, user_id=11, text="https://youtu.be/demo", attachments=[])
 
-    assert app.baskets.list(10, 11) == []
+    assert fake_service.draft_additions == []
     assert fake_service.processed_sources[0].url == "https://youtu.be/demo"
     assert fake_bot.sent_messages[0]["text"] == "Batch-режим выключен. Запускаю одиночную обработку."
 
@@ -536,7 +643,8 @@ async def test_batch_disabled_processes_single_source_immediately(tmp_path: Path
 @pytest.mark.asyncio
 async def test_batch_disabled_offers_source_selection_for_multiple_sources(tmp_path: Path) -> None:
     fake_bot = FakeBot()
-    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
     app.batch_modes.set_enabled(chat_id=10, user_id=11, enabled=False)
 
     await app._process_candidate_set(
@@ -546,7 +654,7 @@ async def test_batch_disabled_offers_source_selection_for_multiple_sources(tmp_p
         attachments=[],
     )
 
-    assert app.baskets.list(10, 11) == []
+    assert fake_service.draft_additions == []
     payload = fake_bot.sent_messages[0]
     assert "Выберите один источник" in payload["text"]
     keyboard = payload["reply_markup"]
@@ -980,9 +1088,10 @@ async def test_flush_media_group_stops_on_cancellation(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_process_candidate_set_adds_single_source_to_basket(tmp_path: Path, monkeypatch) -> None:
+async def test_process_candidate_set_adds_single_source_to_api_draft(tmp_path: Path, monkeypatch) -> None:
     fake_bot = FakeBot()
-    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
     scheduled = FakeTask(done=False)
 
     def fake_create_task(coro):
@@ -993,8 +1102,7 @@ async def test_process_candidate_set_adds_single_source_to_basket(tmp_path: Path
 
     await app._process_candidate_set(chat_id=10, user_id=11, text="https://youtu.be/demo", attachments=[])
 
-    basket = app.baskets.list(10, 11)
-    assert basket[0].display_name == "YouTube: demo"
+    assert fake_service.draft_additions[0]["source"].display_name == "YouTube: demo"
     assert fake_bot.sent_messages == []
     assert app.basket_summary_added_counts[(10, 11)] == 1
     assert app.basket_summary_tasks[(10, 11)] is scheduled
@@ -1046,13 +1154,14 @@ async def test_forwarded_single_sources_are_coalesced_into_one_basket_summary(tm
     assert "В корзине 7 источника(ов)" in fake_bot.sent_messages[0]["text"]
     keyboard = fake_bot.sent_messages[0]["reply_markup"].inline_keyboard
     assert keyboard[0][0].callback_data == "mode:batch:toggle"
-    assert keyboard[1][0].callback_data == "basket:start"
+    assert keyboard[1][0].callback_data.startswith("b:s:")
 
 
 @pytest.mark.asyncio
 async def test_process_candidate_set_adds_multiple_attachments_to_basket(tmp_path: Path, monkeypatch) -> None:
     fake_bot = FakeBot()
-    app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
 
     await app._process_candidate_set(
         chat_id=10,
@@ -1076,7 +1185,7 @@ async def test_process_candidate_set_adds_multiple_attachments_to_basket(tmp_pat
         ],
     )
 
-    assert [candidate.telegram_file_id for candidate in app.baskets.list(10, 11)] == ["voice-1", "voice-2"]
+    assert [entry["source"].telegram_file_id for entry in fake_service.draft_additions] == ["voice-1", "voice-2"]
 
 
 @pytest.mark.asyncio
@@ -1136,83 +1245,314 @@ async def test_handle_source_selection_starts_processing_for_valid_candidate(tmp
 
 
 @pytest.mark.asyncio
-async def test_handle_basket_callback_removes_and_clears_items(tmp_path: Path) -> None:
+async def test_handle_old_basket_remove_and_clear_callbacks_are_stale(tmp_path: Path) -> None:
     fake_bot = FakeBot()
     app = TelegramTranscriberApp(make_settings(tmp_path), FakeProcessingService(tmp_path), bot=fake_bot)  # type: ignore[arg-type]
-    candidates = [
-        SourceCandidate(
-            source_id="url:https://youtu.be/one",
-            kind="youtube_url",
-            display_name="YouTube: one",
-            url="https://youtu.be/one",
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=None,
-        ),
-        SourceCandidate(
-            source_id="url:https://youtu.be/two",
-            kind="youtube_url",
-            display_name="YouTube: two",
-            url="https://youtu.be/two",
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=None,
-        ),
-    ]
-    app.baskets.add(chat_id=10, user_id=7, candidates=candidates)
     message = FakeStatusMessage(10)
 
-    await app._handle_basket_callback(FakeCallback(data="basket:remove:0", message=message))  # type: ignore[arg-type]
+    remove_callback = FakeCallback(data="basket:remove:0", message=message)
+    await app._handle_basket_callback(remove_callback)  # type: ignore[arg-type]
 
-    assert app.baskets.list(10, 7) == [candidates[1]]
-    assert message.edits[-1]["text"].startswith("В корзине 1")
+    assert remove_callback.answers == [
+        {
+            "text": "Эта кнопка устарела. Откройте /basket или отправьте новый источник.",
+            "show_alert": True,
+        }
+    ]
 
-    await app._handle_basket_callback(FakeCallback(data="basket:clear", message=message))  # type: ignore[arg-type]
+    clear_callback = FakeCallback(data="basket:clear", message=message)
+    await app._handle_basket_callback(clear_callback)  # type: ignore[arg-type]
 
-    assert app.baskets.list(10, 7) == []
-    assert message.edits[-1]["text"] == "Корзина очищена."
+    assert clear_callback.answers == [
+        {
+            "text": "Эта кнопка устарела. Откройте /basket или отправьте новый источник.",
+            "show_alert": True,
+        }
+    ]
 
 
 @pytest.mark.asyncio
-async def test_start_basket_processing_downloads_mixed_sources_and_calls_one_batch_gateway(tmp_path: Path) -> None:
+async def test_old_static_basket_start_callback_is_rejected_as_stale(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    callback = FakeCallback(data="basket:start", message=FakeStatusMessage(10))
+
+    await app._handle_basket_callback(callback)  # type: ignore[arg-type]
+
+    assert callback.answers == [
+        {
+            "text": "Эта кнопка устарела. Откройте /basket или отправьте новый источник.",
+            "show_alert": True,
+        }
+    ]
+    assert fake_service.processed_groups == []
+    assert fake_service.submitted_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_old_basket_start_callback_does_not_mutate_current_api_draft(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    draft = _make_draft(
+        fake_service.draft["draft_id"],
+        version=3,
+        items=[
+            {
+                "item_id": "22222222-2222-2222-2222-222222222221",
+                "position": 0,
+                "source_label": "source_1",
+                "source": {"source_kind": "youtube_url", "display_name": "YouTube: current", "url": "https://youtu.be/current"},
+            }
+        ],
+    )
+    fake_service.draft = draft
+    app._remember_draft(10, 7, draft)
+    callback = FakeCallback(data="basket:start", message=FakeStatusMessage(10))
+
+    await app._handle_basket_callback(callback)  # type: ignore[arg-type]
+
+    assert callback.answers == [
+        {
+            "text": "Эта кнопка устарела. Откройте /basket или отправьте новый источник.",
+            "show_alert": True,
+        }
+    ]
+    assert fake_service.submitted_drafts == []
+    assert fake_service.draft_removals == []
+    assert fake_service.draft_clears == []
+    assert app._current_drafts[(10, 7)] == (draft["draft_id"], 3)
+
+
+@pytest.mark.asyncio
+async def test_process_candidate_set_adds_sources_to_api_draft_and_renders_compact_callbacks(tmp_path: Path) -> None:
     fake_bot = FakeBot()
     fake_service = FakeProcessingService(tmp_path)
     app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
-    app.baskets.add(
+
+    await app._process_candidate_set(
         chat_id=10,
         user_id=7,
-        candidates=[
-            SourceCandidate(
-                source_id="telegram-message:42:call.ogg",
-                kind="telegram_audio",
-                display_name="Audio: call.ogg",
-                url=None,
-                telegram_file_id="file-telegram",
-                mime_type="audio/ogg",
-                file_name="call.ogg",
-            ),
-            SourceCandidate(
-                source_id="url:https://youtu.be/demo",
-                kind="youtube_url",
-                display_name="YouTube: demo",
-                url="https://youtu.be/demo",
-                telegram_file_id=None,
-                mime_type=None,
-                file_name=None,
-            ),
-        ],
+        text="https://youtu.be/one https://youtu.be/two",
+        attachments=[],
     )
 
-    await app._handle_basket_callback(FakeCallback(data="basket:start", message=FakeStatusMessage(10)))  # type: ignore[arg-type]
+    assert fake_service.created_draft_owners == [
+        {
+            "owner_type": "telegram",
+            "telegram_chat_id": "10",
+            "telegram_user_id": "7",
+        }
+    ]
+    assert [entry["source"].url for entry in fake_service.draft_additions] == [
+        "https://youtu.be/one",
+        "https://youtu.be/two",
+    ]
+    payload = fake_bot.sent_messages[0]
+    assert "В корзине 2 источника" in payload["text"]
+    keyboard = payload["reply_markup"].inline_keyboard
+    callback_data = [button.callback_data for row in keyboard for button in row]
+    assert any(data.startswith("b:s:11111111-1111-1111-1111-111111111111:3") for data in callback_data)
+    assert any(data.startswith("b:c:11111111-1111-1111-1111-111111111111:3") for data in callback_data)
+    assert any(data.startswith("b:r:11111111-1111-1111-1111-111111111111:3:") for data in callback_data)
+    assert all(len(data) <= 64 for data in callback_data)
+
+
+@pytest.mark.asyncio
+async def test_new_draft_start_callback_submits_api_draft_not_local_basket(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    draft = fake_service.create_batch_draft(owner={"owner_type": "telegram", "telegram_chat_id": "10", "telegram_user_id": "7"})
+    fake_service.draft = _make_draft(
+        draft["draft_id"],
+        version=2,
+        items=[
+            {
+                "item_id": "22222222-2222-2222-2222-222222222221",
+                "position": 0,
+                "source_label": "source_1",
+                "source": {"source_kind": "youtube_url", "display_name": "YouTube: demo", "url": "https://youtu.be/demo"},
+            }
+        ],
+    )
+    callback = FakeCallback(data=f"b:s:{draft['draft_id']}:2", message=FakeStatusMessage(10))
+
+    await app._handle_basket_callback(callback)  # type: ignore[arg-type]
+
+    assert fake_service.processed_groups == []
+    assert fake_service.submitted_drafts == [
+        {
+            "draft_id": draft["draft_id"],
+            "owner": {
+                "owner_type": "telegram",
+                "telegram_chat_id": "10",
+                "telegram_user_id": "7",
+            },
+            "expected_version": 2,
+        }
+    ]
+    status = fake_bot.sent_messages[0]["status"]
+    assert status.edits[-1]["text"] == "Пакетная транскрибация готова."
+
+
+@pytest.mark.asyncio
+async def test_new_draft_remove_callback_without_token_is_clear_and_safe(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    callback = FakeCallback(data=f"b:r:{fake_service.draft['draft_id']}:2", message=FakeStatusMessage(10))
+
+    await app._handle_basket_callback(callback)  # type: ignore[arg-type]
+
+    assert callback.answers == [{"text": "Некорректное действие корзины.", "show_alert": True}]
+    assert fake_service.draft_removals == []
+    assert fake_service.draft_clears == []
+    assert fake_service.submitted_drafts == []
+
+
+@pytest.mark.asyncio
+async def test_remove_and_clear_draft_callbacks_pass_version_and_show_stale_conflict(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    draft_id = fake_service.draft["draft_id"]
+    item_id = "22222222-2222-2222-2222-222222222221"
+    app._item_callback_tokens[(draft_id, "itemtok")] = item_id
+    message = FakeStatusMessage(10)
+
+    await app._handle_basket_callback(FakeCallback(data=f"b:r:{draft_id}:4:itemtok", message=message))  # type: ignore[arg-type]
+
+    assert fake_service.draft_removals == [
+        {
+            "draft_id": draft_id,
+            "owner": {
+                "owner_type": "telegram",
+                "telegram_chat_id": "10",
+                "telegram_user_id": "7",
+            },
+            "expected_version": 4,
+            "item_id": item_id,
+        }
+    ]
+    assert message.edits[-1]["text"] == "Корзина пуста."
+
+    def conflict_clear(*, draft_id: str, owner: dict[str, str], expected_version: int) -> dict:
+        raise DraftConflictError("version_conflict")
+
+    fake_service.clear_batch_draft = conflict_clear  # type: ignore[assignment]
+    conflict = FakeCallback(data=f"b:c:{draft_id}:4", message=message)
+
+    await app._handle_basket_callback(conflict)  # type: ignore[arg-type]
+
+    assert conflict.answers == [
+        {
+            "text": "Корзина изменилась. Откройте актуальную корзину через /basket.",
+            "show_alert": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_remove_and_clear_callbacks_show_stale_after_submitted_conflict(tmp_path: Path) -> None:
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=FakeBot())  # type: ignore[arg-type]
+    draft_id = fake_service.draft["draft_id"]
+    item_id = "22222222-2222-2222-2222-222222222221"
+    app._item_callback_tokens[(draft_id, "itemtok")] = item_id
+    message = FakeStatusMessage(10)
+
+    def submitted_remove(*, draft_id: str, owner: dict[str, str], expected_version: int, item_id: str) -> dict:
+        raise DraftConflictError("draft_submitted")
+
+    def submitted_clear(*, draft_id: str, owner: dict[str, str], expected_version: int) -> dict:
+        raise DraftConflictError("draft_submitted")
+
+    fake_service.remove_draft_item = submitted_remove  # type: ignore[assignment]
+    fake_service.clear_batch_draft = submitted_clear  # type: ignore[assignment]
+
+    remove_callback = FakeCallback(data=f"b:r:{draft_id}:4:itemtok", message=message)
+    clear_callback = FakeCallback(data=f"b:c:{draft_id}:4", message=message)
+
+    await app._handle_basket_callback(remove_callback)  # type: ignore[arg-type]
+    await app._handle_basket_callback(clear_callback)  # type: ignore[arg-type]
+
+    assert remove_callback.answers == [
+        {
+            "text": "Эта кнопка устарела. Откройте /basket или отправьте новый источник.",
+            "show_alert": True,
+        }
+    ]
+    assert clear_callback.answers == [
+        {
+            "text": "Эта кнопка устарела. Откройте /basket или отправьте новый источник.",
+            "show_alert": True,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_start_draft_callback_owner_mismatch_is_handled_as_stale(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+
+    def owner_mismatch_submit(*, draft_id: str, owner: dict[str, str], expected_version: int) -> ProcessedJob:
+        raise DraftConflictError("draft_owner_mismatch")
+
+    fake_service.submit_batch_draft = owner_mismatch_submit  # type: ignore[assignment]
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    draft = _make_draft(
+        fake_service.draft["draft_id"],
+        version=2,
+        items=[
+            {
+                "item_id": "22222222-2222-2222-2222-222222222221",
+                "position": 0,
+                "source_label": "source_1",
+                "source": {"source_kind": "youtube_url", "display_name": "YouTube: demo", "url": "https://youtu.be/demo"},
+            }
+        ],
+    )
+    fake_service.draft = draft
+    callback = FakeCallback(data=f"b:s:{draft['draft_id']}:2", message=FakeStatusMessage(10), user_id=999)
+
+    await app._handle_basket_callback(callback)  # type: ignore[arg-type]
+
+    status = fake_bot.sent_messages[0]["status"]
+    assert status.edits[-1]["text"] == "Эта кнопка устарела. Откройте /basket или отправьте новый источник."
+    assert _document_entries(status) == []
+
+
+@pytest.mark.asyncio
+async def test_start_basket_processing_submits_api_draft_after_mixed_sources(tmp_path: Path) -> None:
+    fake_bot = FakeBot()
+    fake_service = FakeProcessingService(tmp_path)
+    app = TelegramTranscriberApp(make_settings(tmp_path), fake_service, bot=fake_bot)  # type: ignore[arg-type]
+    await app._process_candidate_set(
+        chat_id=10,
+        user_id=7,
+        text="https://youtu.be/demo",
+        attachments=[
+            SimpleNamespace(
+                telegram_file_id="file-telegram",
+                kind="telegram_audio",
+                file_name="call.ogg",
+                mime_type="audio/ogg",
+                file_unique_id="call-uniq",
+            ),
+        ],
+        message_id=42,
+    )
+    callback_data = fake_bot.sent_messages[0]["reply_markup"].inline_keyboard[1][0].callback_data
+
+    await app._handle_basket_callback(FakeCallback(data=callback_data, message=FakeStatusMessage(10)))  # type: ignore[arg-type]
 
     assert fake_service.processed_sources == []
-    assert len(fake_service.processed_groups) == 1
-    prepared = fake_service.processed_groups[0]
-    assert prepared[0].local_path is not None
-    assert prepared[0].local_path.exists()
-    assert prepared[1].url == "https://youtu.be/demo"
-    assert app.baskets.list(10, 7) == []
-    status = fake_bot.sent_messages[0]["status"]
+    assert fake_service.processed_groups == []
+    assert fake_service.submitted_drafts[-1]["draft_id"] == fake_service.draft["draft_id"]
+    uploaded_source = next(entry["source"] for entry in fake_service.draft_additions if entry["source"].telegram_file_id)
+    url_source = next(entry["source"] for entry in fake_service.draft_additions if entry["source"].url)
+    assert uploaded_source.local_path is not None
+    assert uploaded_source.local_path.exists()
+    assert url_source.url == "https://youtu.be/demo"
+    status = fake_bot.sent_messages[1]["status"]
     assert status.edits[-1]["text"] == "Пакетная транскрибация готова."
     assert status.answers[0]["text"] == "hello\n"
     assert _document_entries(status) == []

@@ -114,6 +114,54 @@ def build_multipart_body(
     return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
 
 
+def build_batch_draft_item_multipart_body(
+    *,
+    owner: JsonObject,
+    expected_version: int,
+    item: JsonObject,
+    file: UploadFilePart,
+) -> tuple[bytes, str]:
+    boundary = f"----telegram-draft-{uuid4().hex}"
+    chunks: list[bytes] = []
+
+    def append_header(name: str, value: str) -> None:
+        chunks.append(f"{name}: {value}\r\n".encode("utf-8"))
+
+    def attach_text(name: str, value: str, content_type: str | None = None) -> None:
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        append_header("Content-Disposition", f'form-data; name="{name}"')
+        if content_type:
+            append_header("Content-Type", content_type)
+        chunks.append(b"\r\n")
+        chunks.append(value.encode("utf-8"))
+        chunks.append(b"\r\n")
+
+    chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+    append_header(
+        "Content-Disposition",
+        f'form-data; name="{file.field_name}"; filename="{file.filename}"',
+    )
+    append_header("Content-Type", file.content_type)
+    chunks.append(b"\r\n")
+    chunks.append(file.content_bytes)
+    chunks.append(b"\r\n")
+
+    attach_text(
+        "owner",
+        json.dumps(owner, ensure_ascii=False, separators=(",", ":")),
+        "application/json",
+    )
+    attach_text("expected_version", str(expected_version))
+    attach_text(
+        "item",
+        json.dumps(item, ensure_ascii=False, separators=(",", ":")),
+        "application/json",
+    )
+
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
 class TelegramApiClient:
     def __init__(self, base_url: str, urlopen_impl: UrlopenLike | None = None) -> None:
         self.base_url = base_url.rstrip("/")
@@ -233,6 +281,125 @@ class TelegramApiClient:
         if client_ref:
             payload["client_ref"] = client_ref
         return self._request_json("/v1/transcription-jobs/from-url", method="POST", json_body=payload)
+
+    def create_batch_draft(
+        self,
+        *,
+        owner: JsonObject,
+        display_name: str | None = None,
+        client_ref: str | None = None,
+        expires_at: str | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {"owner": owner}
+        if display_name:
+            payload["display_name"] = display_name
+        if client_ref:
+            payload["client_ref"] = client_ref
+        if expires_at:
+            payload["expires_at"] = expires_at
+        return self._request_json("/v1/batch-drafts", method="POST", json_body=payload)
+
+    def get_batch_draft(self, *, draft_id: str, owner: JsonObject) -> JsonObject:
+        params = urlencode(
+            {
+                "owner_type": owner["owner_type"],
+                "telegram_chat_id": owner["telegram_chat_id"],
+                "telegram_user_id": owner["telegram_user_id"],
+            }
+        )
+        return self._request_json(f"/v1/batch-drafts/{draft_id}?{params}")
+
+    def add_batch_draft_url_item(
+        self,
+        *,
+        draft_id: str,
+        owner: JsonObject,
+        expected_version: int,
+        item: JsonObject,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/batch-drafts/{draft_id}/items",
+            method="POST",
+            json_body={
+                "owner": owner,
+                "expected_version": expected_version,
+                "item": item,
+            },
+        )
+
+    def add_batch_draft_upload_item(
+        self,
+        *,
+        draft_id: str,
+        owner: JsonObject,
+        expected_version: int,
+        item: JsonObject,
+        file: UploadFilePart,
+    ) -> JsonObject:
+        body, content_type = build_batch_draft_item_multipart_body(
+            owner=owner,
+            expected_version=expected_version,
+            item=item,
+            file=file,
+        )
+        return self._request_json(
+            f"/v1/batch-drafts/{draft_id}/items",
+            method="POST",
+            body=body,
+            headers={"Content-Type": content_type},
+        )
+
+    def remove_batch_draft_item(
+        self,
+        *,
+        draft_id: str,
+        owner: JsonObject,
+        expected_version: int,
+        item_id: str,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/batch-drafts/{draft_id}/items/{item_id}",
+            method="DELETE",
+            json_body={
+                "owner": owner,
+                "expected_version": expected_version,
+            },
+        )
+
+    def clear_batch_draft(
+        self,
+        *,
+        draft_id: str,
+        owner: JsonObject,
+        expected_version: int,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/batch-drafts/{draft_id}/clear",
+            method="POST",
+            json_body={
+                "owner": owner,
+                "expected_version": expected_version,
+            },
+        )
+
+    def submit_batch_draft(
+        self,
+        *,
+        draft_id: str,
+        owner: JsonObject,
+        expected_version: int,
+        delivery_strategy: str = "polling",
+        delivery_webhook_url: str | None = None,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/batch-drafts/{draft_id}/submit",
+            method="POST",
+            json_body={
+                "owner": owner,
+                "expected_version": expected_version,
+                "delivery": build_delivery_payload(delivery_strategy, delivery_webhook_url),
+            },
+        )
 
     def create_report(
         self,

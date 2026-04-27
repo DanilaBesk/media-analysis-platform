@@ -74,6 +74,7 @@
     <decision-17>First-version file uploads go through the API and support multiple files in one request.</decision-17>
     <decision-18>There is no legacy compatibility track; the repository is restructured directly toward the target architecture.</decision-18>
     <decision-19>The current batch transcription contract is root/children/aggregate: `POST /v1/transcription-jobs/batch` creates a root aggregate transcription job, per-source transcription children keyed by stable source labels, and a worker-transcription aggregate task after eligible children complete.</decision-19>
+    <decision-20>Telegram batch basket state is API-owned before submission. The API persists a draft_id, version, owner scope, ordered items, and status open/submitted/expired/canceled; Telegram callback data carries draft_id plus version and never addresses an adapter-local current basket by chat/user alone.</decision-20>
   </FrozenDecisions>
 
   <Actors>
@@ -106,6 +107,16 @@
       <Priority>high</Priority>
       <RelatedFlows>DF-007, DF-006</RelatedFlows>
     </UC-001B>
+
+    <UC-001C>
+      <Actor>TelegramBot</Actor>
+      <Action>Creates, mutates, clears, and submits an API-owned Telegram batch draft through callback-safe HTTP contracts.</Action>
+      <Goal>Prevent stale inline buttons from operating on an unrelated current basket or returning false empty-basket messages after adapter restart or user context drift.</Goal>
+      <Preconditions>API and PostgreSQL are reachable; Telegram adapter supplies owner scope from chat_id and user_id; each callback contains draft_id and version.</Preconditions>
+      <AcceptanceCriteria>API persists pre-submit batch drafts with draft_id, monotonic version, owner scope, ordered items, and status open/submitted/expired/canceled; add/remove/clear operations require matching owner and current version; submit atomically promotes an open draft into the existing batch transcription root/children/aggregate graph; repeated submit returns the same root job or submitted draft response; stale callbacks return explicit version_conflict, draft_submitted, draft_expired, draft_canceled, or draft_owner_mismatch outcomes without processing a chat/user-local basket.</AcceptanceCriteria>
+      <Priority>high</Priority>
+      <RelatedFlows>DF-009, DF-007</RelatedFlows>
+    </UC-001C>
 
     <UC-002>
       <Actor>EndUser</Actor>
@@ -172,7 +183,7 @@
       <Action>Acts as a thin transport adapter over the API.</Action>
       <Goal>Preserve current Telegram UX while removing business logic from the bot runtime.</Goal>
       <Preconditions>API is reachable; Telegram media can be downloaded temporarily by the adapter.</Preconditions>
-      <AcceptanceCriteria>Bot remains a thin adapter: it registers `/start`, `/help`, `/batch`, `/basket`, and `/clear`, lets the user toggle batch basket mode on or off through a command or inline button, collects sources in a Telegram basket when batch mode is enabled, downloads Telegram files only long enough to submit them, posts the whole basket to `/v1/transcription-jobs/batch`, waits by polling by default, sends returned artifacts to the user, and triggers report or deep-research only through API-owned `agent_run` operation children.</AcceptanceCriteria>
+      <AcceptanceCriteria>Bot remains a thin adapter: it registers `/start`, `/help`, `/batch`, `/basket`, and `/clear`, lets the user toggle batch draft mode on or off through a command or inline button, creates and mutates API-owned batch drafts while downloading Telegram files only long enough to upload draft items, renders inline buttons carrying draft_id plus version, submits drafts through the API so the API atomically promotes them into `/v1/transcription-jobs/batch` root/children/aggregate execution, waits by polling by default, sends returned artifacts to the user, and triggers report or deep-research only through API-owned `agent_run` operation children.</AcceptanceCriteria>
       <Priority>high</Priority>
       <RelatedFlows>DF-001, DF-004, DF-005, DF-007, DF-008</RelatedFlows>
     </UC-008>
@@ -228,6 +239,7 @@
     <constraint-16>Generic agent execution must expose per-harness concurrency as explicit configuration or policy, so admission control is set per `harness_name` instead of by separate worker type.</constraint-16>
     <constraint-17>The `agent_run_create` control-plane surface must treat agent runs as request-only jobs: clients may pass `harness_name` and request content, but must not provide job type, source-set id, root id, provider-specific worker identity, or raw session credentials.</constraint-17>
     <constraint-18>Telegram inline transcript presentation is a bounded adapter delivery choice over the canonical API/worker `transcript_plain` artifact. It must not introduce a new transcription architecture, bot-side transcript assembly, AI worker, artifact kind, or API response contract.</constraint-18>
+    <constraint-19>API-owned batch drafts must be the canonical pre-submit Telegram basket state. Adapter-local durable state, callback payloads without draft identity, bot-side transcript or batch business orchestration, and dedicated AI worker services are not part of this architecture.</constraint-19>
   </Constraints>
 
   <Risks>
@@ -237,6 +249,7 @@
     <risk-4>Webhook delivery can appear reliable during happy paths but lose retry durability if not persisted across API restarts.</risk-4>
     <risk-5>Premature Go rewrites of ML or report logic would add risk without architectural gain.</risk-5>
     <risk-6>Compose stack fragility can obscure whether failures come from contracts, workers, or runtime topology.</risk-6>
+    <risk-7>Inline Telegram buttons can outlive the draft snapshot they were rendered from; without draft_id plus version validation, stale callbacks can submit or mutate a different basket owned by the same chat/user key.</risk-7>
   </Risks>
 
   <ResolvedQuestions>
@@ -249,6 +262,8 @@
     <resolution-7>Per-harness concurrency is an explicit policy surface owned by configuration, for example `claude-code` limits, and not a reason to split the worker topology.</resolution-7>
     <resolution-8>The completed batch transcription implementation supersedes concat-first combined transcription as active architecture. The active contract uses `/v1/transcription-jobs/batch`, stable `source_label` values in a `batch-transcription.v1` source manifest, per-source transcription children, a root aggregate transcription task, aggregate artifacts `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json`, and report/deep-research handoff from the aggregate root through `agent_run` children handled only by worker-agent-runner. Earlier `/combined` and ordered concatenation wording is historical lineage, not the current runtime contract.</resolution-8>
     <resolution-9>The `media-20e` Telegram inline transcript delta is closed as presentation transport only: short readable `transcript_plain` artifacts are sent inline as exact Telegram text with the result keyboard, missing or non-file `transcript_plain` text paths send an unavailable-artifact message with the result keyboard, and existing long, empty, or unreadable artifact files continue to use document delivery. API/worker artifact ownership, batch aggregate boundaries, and report/deep-research follow-up semantics remain unchanged.</resolution-9>
+    <resolution-10>The `media-9dy` stale inline button fix is architectural, not a bot-local workaround: API-owned batch drafts are the sole canonical pre-submit state, Telegram callback data must carry draft_id and version or an item token scoped to that draft, old `basket:*` callbacks are stale compatibility inputs only, and submit promotes the same ordered draft items into the existing `/v1/transcription-jobs/batch` root/children/aggregate graph without adding bot-side orchestration, adapter-local durable state, or any dedicated AI worker.</resolution-10>
+    <resolution-11>The `media-2oz` evidence refresh records the implemented API-owned draft model: draft add-item stores uploaded Telegram bodies through the API at add-item time, source labels and per-source boundaries survive promotion into the batch graph, the final combined transcript remains one aggregate result with per-source blocks owned by worker-transcription, and report/deep_research continue through `agent_run` plus worker-agent-runner only.</resolution-11>
   </ResolvedQuestions>
 
   <PreservationPolicy>

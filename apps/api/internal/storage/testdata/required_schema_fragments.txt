@@ -8,8 +8,17 @@ CREATE TABLE job_executions
 CREATE TABLE job_artifacts
 CREATE TABLE job_events
 CREATE TABLE webhook_deliveries
+CREATE TABLE batch_drafts
+CREATE TABLE batch_draft_items
+owner_type = 'telegram'
+status IN ('open', 'submitted', 'expired', 'canceled')
+submitted_root_job_id uuid NULL REFERENCES jobs(id)
+CREATE INDEX batch_drafts_owner_status_updated_at_idx
+CREATE INDEX batch_draft_items_draft_position_idx
 source_kind = 'youtube_url'
 source_kind IN ('uploaded_file', 'telegram_upload')
+content_type text NULL
+size_bytes bigint NULL
 input_kind IN ('single_source', 'combined_upload', 'combined_telegram', 'batch_transcription', 'agent_run')
 source_label text NULL
 source_label_version text NULL

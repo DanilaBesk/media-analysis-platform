@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	neturl "net/url"
 	"path/filepath"
@@ -39,6 +41,12 @@ type PublicService interface {
 	CreateUpload(ctx context.Context, req UploadCommand) ([]JobSnapshot, error)
 	CreateCombined(ctx context.Context, req UploadCommand) (JobSnapshot, error)
 	CreateBatch(ctx context.Context, req BatchCommand) (JobSnapshot, error)
+	CreateBatchDraft(ctx context.Context, req BatchDraftCreateCommand) (BatchDraftResponse, error)
+	GetBatchDraft(ctx context.Context, req BatchDraftGetCommand) (BatchDraftResponse, error)
+	AddBatchDraftItem(ctx context.Context, req BatchDraftItemCommand) (BatchDraftResponse, error)
+	RemoveBatchDraftItem(ctx context.Context, req BatchDraftRemoveItemCommand) (BatchDraftResponse, error)
+	ClearBatchDraft(ctx context.Context, req BatchDraftMutateCommand) (BatchDraftResponse, error)
+	SubmitBatchDraft(ctx context.Context, req BatchDraftSubmitCommand) (BatchDraftSubmitResponse, error)
 	CreateFromURL(ctx context.Context, req URLCommand) (JobSnapshot, error)
 	CreateAgentRun(ctx context.Context, req AgentRunCommand) (JobSnapshot, error)
 	GetJob(ctx context.Context, jobID string) (JobSnapshot, error)
@@ -107,6 +115,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs/combined", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs/batch", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/batch-drafts", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/batch-drafts/{draft_id}", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/batch-drafts/{draft_id}/items", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/batch-drafts/{draft_id}/items/{item_id}", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/batch-drafts/{draft_id}/clear", s.handleCORSPreflight)
+	mux.HandleFunc("OPTIONS /v1/batch-drafts/{draft_id}/submit", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/transcription-jobs/from-url", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/agent-runs", s.handleCORSPreflight)
 	mux.HandleFunc("OPTIONS /v1/jobs/{job_id}", s.handleCORSPreflight)
@@ -120,6 +134,12 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/transcription-jobs", s.withCORS(s.handleCreateUpload))
 	mux.HandleFunc("POST /v1/transcription-jobs/combined", s.withCORS(s.handleCreateCombinedUpload))
 	mux.HandleFunc("POST /v1/transcription-jobs/batch", s.withCORS(s.handleCreateBatch))
+	mux.HandleFunc("POST /v1/batch-drafts", s.withCORS(s.handleCreateBatchDraft))
+	mux.HandleFunc("GET /v1/batch-drafts/{draft_id}", s.withCORS(s.handleGetBatchDraft))
+	mux.HandleFunc("POST /v1/batch-drafts/{draft_id}/items", s.withCORS(s.handleAddBatchDraftItem))
+	mux.HandleFunc("DELETE /v1/batch-drafts/{draft_id}/items/{item_id}", s.withCORS(s.handleRemoveBatchDraftItem))
+	mux.HandleFunc("POST /v1/batch-drafts/{draft_id}/clear", s.withCORS(s.handleClearBatchDraft))
+	mux.HandleFunc("POST /v1/batch-drafts/{draft_id}/submit", s.withCORS(s.handleSubmitBatchDraft))
 	mux.HandleFunc("POST /v1/transcription-jobs/from-url", s.withCORS(s.handleCreateFromURL))
 	mux.HandleFunc("POST /v1/agent-runs", s.withCORS(s.handleCreateAgentRun))
 	mux.HandleFunc("GET /v1/jobs/{job_id}", s.withCORS(s.handleGetJob))
@@ -164,7 +184,7 @@ func (s *Server) writeCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	return true
@@ -243,6 +263,99 @@ type BatchSource struct {
 	URL              string `json:"url,omitempty"`
 	DisplayName      string `json:"display_name,omitempty"`
 	OriginalFilename string `json:"original_filename,omitempty"`
+}
+
+const (
+	BatchDraftStatusOpen      = storage.BatchDraftStatusOpen
+	BatchDraftStatusSubmitted = storage.BatchDraftStatusSubmitted
+	BatchDraftStatusExpired   = storage.BatchDraftStatusExpired
+	BatchDraftStatusCanceled  = storage.BatchDraftStatusCanceled
+)
+
+type BatchDraftOwner struct {
+	OwnerType      string `json:"owner_type"`
+	TelegramChatID string `json:"telegram_chat_id,omitempty"`
+	TelegramUserID string `json:"telegram_user_id,omitempty"`
+}
+
+type BatchDraftItemSource struct {
+	SourceKind        string `json:"source_kind"`
+	UploadedSourceRef string `json:"uploaded_source_ref,omitempty"`
+	URL               string `json:"url,omitempty"`
+	DisplayName       string `json:"display_name,omitempty"`
+	OriginalFilename  string `json:"original_filename,omitempty"`
+	ContentType       string `json:"content_type,omitempty"`
+	SizeBytes         int64  `json:"size_bytes,omitempty"`
+	ObjectBody        []byte `json:"-"`
+}
+
+type BatchDraftItem struct {
+	ItemID      string               `json:"item_id"`
+	Position    int                  `json:"position"`
+	SourceLabel string               `json:"source_label"`
+	Source      BatchDraftItemSource `json:"source"`
+}
+
+type BatchDraft struct {
+	DraftID            string           `json:"draft_id"`
+	Version            int64            `json:"version"`
+	Owner              BatchDraftOwner  `json:"owner"`
+	Status             string           `json:"status"`
+	Items              []BatchDraftItem `json:"items"`
+	DisplayName        string           `json:"display_name,omitempty"`
+	ClientRef          string           `json:"client_ref,omitempty"`
+	ExpiresAt          *time.Time       `json:"expires_at,omitempty"`
+	SubmittedRootJobID string           `json:"submitted_root_job_id,omitempty"`
+}
+
+type BatchDraftCreateCommand struct {
+	Owner       BatchDraftOwner `json:"owner"`
+	DisplayName string          `json:"display_name,omitempty"`
+	ClientRef   string          `json:"client_ref,omitempty"`
+	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
+}
+
+type BatchDraftGetCommand struct {
+	DraftID string
+	Owner   BatchDraftOwner
+}
+
+type BatchDraftMutateCommand struct {
+	DraftID         string          `json:"-"`
+	Owner           BatchDraftOwner `json:"owner"`
+	ExpectedVersion int64           `json:"expected_version"`
+}
+
+type BatchDraftItemCommand struct {
+	DraftID         string               `json:"-"`
+	Owner           BatchDraftOwner      `json:"owner"`
+	ExpectedVersion int64                `json:"expected_version"`
+	Item            BatchDraftItemSource `json:"item"`
+}
+
+type BatchDraftRemoveItemCommand struct {
+	DraftID         string          `json:"-"`
+	ItemID          string          `json:"-"`
+	Owner           BatchDraftOwner `json:"owner"`
+	ExpectedVersion int64           `json:"expected_version"`
+}
+
+type BatchDraftSubmitCommand struct {
+	DraftID         string          `json:"-"`
+	Owner           BatchDraftOwner `json:"owner"`
+	ExpectedVersion int64           `json:"expected_version"`
+	Delivery        DeliveryConfig  `json:"delivery,omitempty"`
+}
+
+type BatchDraftResponse struct {
+	Draft        BatchDraft `json:"draft"`
+	StaleOutcome string     `json:"stale_outcome,omitempty"`
+}
+
+type BatchDraftSubmitResponse struct {
+	Draft        BatchDraft   `json:"draft"`
+	Job          *JobSnapshot `json:"job,omitempty"`
+	StaleOutcome string       `json:"stale_outcome,omitempty"`
 }
 
 type URLCommand struct {
@@ -516,6 +629,30 @@ func ValidateRequest(kind string, payload any) error {
 		return validateUploadCommand(kind, req)
 	case BatchCommand:
 		return validateBatchCommand(req)
+	case BatchDraftCreateCommand:
+		return validateBatchDraftOwner(req.Owner)
+	case BatchDraftGetCommand:
+		if !isUUID(req.DraftID) {
+			return apiError{status: http.StatusBadRequest, code: "invalid_uuid", message: "draft_id must be a valid UUID"}
+		}
+		return validateBatchDraftOwner(req.Owner)
+	case BatchDraftMutateCommand:
+		return validateBatchDraftMutation(req.DraftID, req.Owner, req.ExpectedVersion)
+	case BatchDraftItemCommand:
+		if err := validateBatchDraftMutation(req.DraftID, req.Owner, req.ExpectedVersion); err != nil {
+			return err
+		}
+		return validateBatchDraftItemSource(req.Item)
+	case BatchDraftRemoveItemCommand:
+		if !isUUID(req.ItemID) {
+			return apiError{status: http.StatusBadRequest, code: "invalid_uuid", message: "item_id must be a valid UUID"}
+		}
+		return validateBatchDraftMutation(req.DraftID, req.Owner, req.ExpectedVersion)
+	case BatchDraftSubmitCommand:
+		if err := validateBatchDraftMutation(req.DraftID, req.Owner, req.ExpectedVersion); err != nil {
+			return err
+		}
+		return validateDelivery(req.Delivery)
 	case URLCommand:
 		return validateURLCommand(req)
 	case ChildCreateRequest:
@@ -615,6 +752,253 @@ func (s *Server) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, http.StatusAccepted, JobAcceptedEnvelope{Job: job})
+}
+
+func (s *Server) handleCreateBatchDraft(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	var req BatchDraftCreateCommand
+	if err := decodeJSONBody(r, &req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	if err := s.validateRequest("create_batch_draft", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	response, err := s.deps.Public.CreateBatchDraft(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusCreated, response)
+}
+
+func (s *Server) handleGetBatchDraft(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	req := BatchDraftGetCommand{
+		DraftID: r.PathValue("draft_id"),
+		Owner: BatchDraftOwner{
+			OwnerType:      r.URL.Query().Get("owner_type"),
+			TelegramChatID: r.URL.Query().Get("telegram_chat_id"),
+			TelegramUserID: r.URL.Query().Get("telegram_user_id"),
+		},
+	}
+	if err := s.validateRequest("get_batch_draft", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	response, err := s.deps.Public.GetBatchDraft(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleAddBatchDraftItem(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	req, err := s.parseBatchDraftItemCommand(w, r)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	req.DraftID = r.PathValue("draft_id")
+	if err := s.validateRequest("add_batch_draft_item", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	response, err := s.deps.Public.AddBatchDraftItem(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) parseBatchDraftItemCommand(w http.ResponseWriter, r *http.Request) (BatchDraftItemCommand, error) {
+	if !isMultipartFormRequest(r) {
+		var req BatchDraftItemCommand
+		if err := decodeJSONBody(r, &req); err != nil {
+			return BatchDraftItemCommand{}, err
+		}
+		return req, nil
+	}
+	if r.ContentLength > s.maxRequestBytes {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusRequestEntityTooLarge, code: "request_too_large", message: "request exceeds the configured maximum size"}
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return BatchDraftItemCommand{}, apiError{status: http.StatusRequestEntityTooLarge, code: "request_too_large", message: "request exceeds the configured maximum size"}
+		}
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "request body must be valid multipart/form-data", details: err.Error()}
+	}
+
+	var owner BatchDraftOwner
+	if rawOwner := strings.TrimSpace(r.FormValue("owner")); rawOwner != "" {
+		if err := json.Unmarshal([]byte(rawOwner), &owner); err != nil {
+			return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_owner", message: "owner must be valid JSON", details: err.Error()}
+		}
+	}
+	var item BatchDraftItemSource
+	rawItem := strings.TrimSpace(r.FormValue("item"))
+	if rawItem == "" {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "item is required"}
+	}
+	if err := json.Unmarshal([]byte(rawItem), &item); err != nil {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "item must be valid JSON", details: err.Error()}
+	}
+
+	expectedVersion, err := strconv.ParseInt(strings.TrimSpace(r.FormValue("expected_version")), 10, 64)
+	if err != nil || expectedVersion <= 0 {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_expected_version", message: "expected_version must be >= 1"}
+	}
+
+	header, err := singleBatchDraftFilePart(r)
+	if err != nil {
+		return BatchDraftItemCommand{}, err
+	}
+	file, err := header.Open()
+	if err != nil {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "multipart file part could not be opened", details: err.Error()}
+	}
+	body, readErr := io.ReadAll(file)
+	file.Close()
+	if readErr != nil {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "multipart file part could not be read", details: readErr.Error()}
+	}
+	filename := filepath.Base(strings.TrimSpace(header.Filename))
+	if filename == "." || filename == "/" || filename == "" || len(body) == 0 {
+		return BatchDraftItemCommand{}, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "multipart file must be non-empty and named"}
+	}
+	if item.OriginalFilename == "" {
+		item.OriginalFilename = filename
+	} else {
+		item.OriginalFilename = filepath.Base(strings.TrimSpace(item.OriginalFilename))
+	}
+	if item.DisplayName == "" {
+		item.DisplayName = item.OriginalFilename
+	}
+	item.UploadedSourceRef = batchDraftUploadObjectKey(r.PathValue("draft_id"), checksum(body), item.OriginalFilename)
+	item.ContentType = strings.TrimSpace(header.Header.Get("Content-Type"))
+	item.SizeBytes = int64(len(body))
+	item.ObjectBody = body
+
+	return BatchDraftItemCommand{
+		Owner:           owner,
+		ExpectedVersion: expectedVersion,
+		Item:            item,
+	}, nil
+}
+
+func isMultipartFormRequest(r *http.Request) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return err == nil && strings.EqualFold(mediaType, "multipart/form-data")
+}
+
+func singleBatchDraftFilePart(r *http.Request) (*multipart.FileHeader, error) {
+	if r.MultipartForm == nil {
+		return nil, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "multipart form is required"}
+	}
+	files := append([]*multipart.FileHeader{}, r.MultipartForm.File["file"]...)
+	files = append(files, r.MultipartForm.File["files"]...)
+	if len(files) != 1 {
+		return nil, apiError{status: http.StatusBadRequest, code: "invalid_multipart", message: "exactly one file or files part is required"}
+	}
+	return files[0], nil
+}
+
+func batchDraftUploadObjectKey(draftID, sha256Hex, filename string) string {
+	name := sanitizeFilename(filename)
+	if name == "" {
+		name = "source.bin"
+	}
+	digest := strings.TrimSpace(sha256Hex)
+	if digest == "" {
+		digest = "unknown"
+	}
+	return fmt.Sprintf("sources/batch-drafts/%s/uploads/%s/%s", strings.TrimSpace(draftID), digest, name)
+}
+
+func (s *Server) handleRemoveBatchDraftItem(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	var req BatchDraftRemoveItemCommand
+	if err := decodeJSONBody(r, &req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	req.DraftID = r.PathValue("draft_id")
+	req.ItemID = r.PathValue("item_id")
+	if err := s.validateRequest("remove_batch_draft_item", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	response, err := s.deps.Public.RemoveBatchDraftItem(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleClearBatchDraft(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	var req BatchDraftMutateCommand
+	if err := decodeJSONBody(r, &req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	req.DraftID = r.PathValue("draft_id")
+	if err := s.validateRequest("clear_batch_draft", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	response, err := s.deps.Public.ClearBatchDraft(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleSubmitBatchDraft(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Public == nil {
+		s.writeAPIError(w, dependencyUnavailableError("public control plane is not configured"))
+		return
+	}
+	var req BatchDraftSubmitCommand
+	if err := decodeJSONBody(r, &req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	req.DraftID = r.PathValue("draft_id")
+	if err := s.validateRequest("submit_batch_draft", req); err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	response, err := s.deps.Public.SubmitBatchDraft(r.Context(), req)
+	if err != nil {
+		s.writeAPIError(w, err)
+		return
+	}
+	s.writeJSON(w, http.StatusAccepted, response)
 }
 
 func (s *Server) handleCreateFromURL(w http.ResponseWriter, r *http.Request) {
@@ -1249,6 +1633,45 @@ func validateBatchCommand(req BatchCommand) error {
 	return validateDelivery(req.Delivery)
 }
 
+func validateBatchDraftOwner(owner BatchDraftOwner) error {
+	if strings.TrimSpace(owner.OwnerType) != "telegram" || strings.TrimSpace(owner.TelegramChatID) == "" || strings.TrimSpace(owner.TelegramUserID) == "" {
+		return apiError{status: http.StatusBadRequest, code: "invalid_owner", message: "telegram owner scope requires owner_type, telegram_chat_id, and telegram_user_id"}
+	}
+	return nil
+}
+
+func validateBatchDraftMutation(draftID string, owner BatchDraftOwner, expectedVersion int64) error {
+	if !isUUID(draftID) {
+		return apiError{status: http.StatusBadRequest, code: "invalid_uuid", message: "draft_id must be a valid UUID"}
+	}
+	if expectedVersion <= 0 {
+		return apiError{status: http.StatusBadRequest, code: "invalid_expected_version", message: "expected_version must be >= 1"}
+	}
+	return validateBatchDraftOwner(owner)
+}
+
+func validateBatchDraftItemSource(source BatchDraftItemSource) error {
+	switch strings.TrimSpace(source.SourceKind) {
+	case storage.SourceKindUploadedFile, storage.SourceKindTelegramUpload:
+		if source.ObjectBody == nil {
+			return apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "uploaded draft items require multipart upload"}
+		}
+		if strings.TrimSpace(source.UploadedSourceRef) == "" {
+			return apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "uploaded batch draft items require uploaded_source_ref"}
+		}
+	case storage.SourceKindYouTubeURL, "external_url":
+		if source.ObjectBody != nil || strings.TrimSpace(source.UploadedSourceRef) != "" {
+			return apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "multipart draft uploads require uploaded_file or telegram_upload source_kind"}
+		}
+		if err := validateBatchURL(source.URL); err != nil {
+			return apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "url batch draft items require an absolute http or https URL"}
+		}
+	default:
+		return apiError{status: http.StatusBadRequest, code: "invalid_batch_draft_item", message: "unsupported batch draft item source_kind"}
+	}
+	return nil
+}
+
 func validateURLCommand(req URLCommand) error {
 	if req.SourceKind != storage.SourceKindYouTubeURL {
 		return apiError{status: http.StatusBadRequest, code: "unsupported_source_url", message: "source_kind must be youtube_url"}
@@ -1466,6 +1889,20 @@ func classifyError(err error) apiError {
 		return apiError{status: http.StatusConflict, code: "execution_not_found", message: "execution_id is not active for this job"}
 	case errors.Is(err, storage.ErrStorageUnavailable):
 		return apiError{status: http.StatusServiceUnavailable, code: "storage_unavailable", message: "storage dependency is unavailable"}
+	case errors.Is(err, storage.ErrBatchDraftNotFound):
+		return apiError{status: http.StatusNotFound, code: "batch_draft_not_found", message: "batch draft was not found"}
+	case errors.Is(err, storage.ErrBatchDraftOwnerMismatch):
+		return apiError{status: http.StatusConflict, code: "draft_owner_mismatch", message: "batch draft owner scope does not match"}
+	case errors.Is(err, storage.ErrBatchDraftVersionConflict):
+		return apiError{status: http.StatusConflict, code: "version_conflict", message: "batch draft version conflict"}
+	case errors.Is(err, storage.ErrBatchDraftSubmitted):
+		return apiError{status: http.StatusConflict, code: "draft_submitted", message: "batch draft is already submitted"}
+	case errors.Is(err, storage.ErrBatchDraftExpired):
+		return apiError{status: http.StatusConflict, code: "draft_expired", message: "batch draft is expired"}
+	case errors.Is(err, storage.ErrBatchDraftCanceled):
+		return apiError{status: http.StatusConflict, code: "draft_canceled", message: "batch draft is canceled"}
+	case errors.Is(err, storage.ErrBatchDraftEmpty):
+		return apiError{status: http.StatusConflict, code: "draft_empty", message: "batch draft has no items"}
 	case errors.Is(err, queue.ErrQueueUnavailable):
 		return apiError{status: http.StatusServiceUnavailable, code: "queue_unavailable", message: "queue dependency is unavailable"}
 	default:

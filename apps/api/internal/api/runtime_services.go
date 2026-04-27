@@ -36,6 +36,7 @@ type runtimeJobsService interface {
 	CreateTranscriptionJobs(ctx context.Context, req jobs.CreateTranscriptionRequest) (jobs.CreateJobsResult, error)
 	CreateCombinedTranscriptionJob(ctx context.Context, req jobs.CreateCombinedTranscriptionRequest) (jobs.ChildResult, error)
 	CreateBatchTranscriptionJob(ctx context.Context, req jobs.CreateBatchTranscriptionRequest) (jobs.ChildResult, error)
+	SubmitBatchDraft(ctx context.Context, req jobs.SubmitBatchDraftRequest) (jobs.SubmitBatchDraftResult, error)
 	CreateAgentRun(ctx context.Context, req jobs.CreateAgentRunRequest) (jobs.ChildResult, error)
 	CreateChildJob(ctx context.Context, req jobs.CreateChildRequest) (jobs.ChildResult, error)
 	CancelJob(ctx context.Context, jobID string) (storage.JobRecord, error)
@@ -59,6 +60,11 @@ type runtimeStorageService interface {
 	UpsertArtifacts(ctx context.Context, artifacts []storage.ArtifactRecord) error
 	UpdateJob(ctx context.Context, job storage.JobRecord) error
 	FindArtifactByKind(ctx context.Context, jobID, artifactKind string) (*storage.ArtifactRecord, error)
+	CreateBatchDraft(ctx context.Context, req storage.BatchDraftCreate) (storage.BatchDraftRecord, error)
+	GetBatchDraft(ctx context.Context, draftID string, owner storage.BatchDraftOwner) (storage.BatchDraftRecord, error)
+	AddBatchDraftItem(ctx context.Context, req storage.BatchDraftItemMutation) (storage.BatchDraftRecord, error)
+	RemoveBatchDraftItem(ctx context.Context, req storage.BatchDraftItemRemove) (storage.BatchDraftRecord, error)
+	ClearBatchDraft(ctx context.Context, req storage.BatchDraftMutation) (storage.BatchDraftRecord, error)
 	PersistAgentRunRequest(ctx context.Context, requestRef string, body []byte) error
 	ResolveAgentRunRequestAccess(ctx context.Context, job storage.JobRecord) (storage.AgentRunRequestAccess, error)
 }
@@ -208,6 +214,97 @@ func (s *publicRuntimeService) CreateBatch(ctx context.Context, req BatchCommand
 		}
 	}
 	return s.snapshotByID(ctx, result.Job.ID)
+}
+
+func (s *publicRuntimeService) CreateBatchDraft(ctx context.Context, req BatchDraftCreateCommand) (BatchDraftResponse, error) {
+	draft, err := s.store.CreateBatchDraft(ctx, storage.BatchDraftCreate{
+		Owner:       batchDraftOwnerToStorage(req.Owner),
+		DisplayName: strings.TrimSpace(req.DisplayName),
+		ClientRef:   strings.TrimSpace(req.ClientRef),
+		ExpiresAt:   req.ExpiresAt,
+	})
+	if err != nil {
+		return BatchDraftResponse{}, err
+	}
+	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
+}
+
+func (s *publicRuntimeService) GetBatchDraft(ctx context.Context, req BatchDraftGetCommand) (BatchDraftResponse, error) {
+	draft, err := s.store.GetBatchDraft(ctx, req.DraftID, batchDraftOwnerToStorage(req.Owner))
+	if err != nil {
+		return BatchDraftResponse{}, err
+	}
+	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
+}
+
+func (s *publicRuntimeService) AddBatchDraftItem(ctx context.Context, req BatchDraftItemCommand) (BatchDraftResponse, error) {
+	draft, err := s.store.AddBatchDraftItem(ctx, storage.BatchDraftItemMutation{
+		DraftID:         strings.TrimSpace(req.DraftID),
+		Owner:           batchDraftOwnerToStorage(req.Owner),
+		ExpectedVersion: req.ExpectedVersion,
+		Source:          batchDraftItemSourceToStorage(req.Item),
+	})
+	if err != nil {
+		return BatchDraftResponse{}, err
+	}
+	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
+}
+
+func (s *publicRuntimeService) RemoveBatchDraftItem(ctx context.Context, req BatchDraftRemoveItemCommand) (BatchDraftResponse, error) {
+	draft, err := s.store.RemoveBatchDraftItem(ctx, storage.BatchDraftItemRemove{
+		DraftID:         strings.TrimSpace(req.DraftID),
+		ItemID:          strings.TrimSpace(req.ItemID),
+		Owner:           batchDraftOwnerToStorage(req.Owner),
+		ExpectedVersion: req.ExpectedVersion,
+	})
+	if err != nil {
+		return BatchDraftResponse{}, err
+	}
+	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
+}
+
+func (s *publicRuntimeService) ClearBatchDraft(ctx context.Context, req BatchDraftMutateCommand) (BatchDraftResponse, error) {
+	draft, err := s.store.ClearBatchDraft(ctx, storage.BatchDraftMutation{
+		DraftID:         strings.TrimSpace(req.DraftID),
+		Owner:           batchDraftOwnerToStorage(req.Owner),
+		ExpectedVersion: req.ExpectedVersion,
+	})
+	if err != nil {
+		return BatchDraftResponse{}, err
+	}
+	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
+}
+
+func (s *publicRuntimeService) SubmitBatchDraft(ctx context.Context, req BatchDraftSubmitCommand) (BatchDraftSubmitResponse, error) {
+	result, err := s.jobs.SubmitBatchDraft(ctx, jobs.SubmitBatchDraftRequest{
+		DraftID:          strings.TrimSpace(req.DraftID),
+		Owner:            batchDraftOwnerToStorage(req.Owner),
+		ExpectedVersion:  req.ExpectedVersion,
+		SubmissionKind:   submissionKindTranscriptionBatch,
+		Delivery:         deliveryConfigToStorage(req.Delivery),
+		CompletionPolicy: BatchCompletionPolicyAllSources,
+	})
+	if err != nil {
+		return BatchDraftSubmitResponse{}, err
+	}
+	if !result.Reused {
+		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
+			return BatchDraftSubmitResponse{}, err
+		}
+	}
+	snapshot, err := s.snapshotByID(ctx, result.Job.ID)
+	if err != nil {
+		return BatchDraftSubmitResponse{}, err
+	}
+	staleOutcome := ""
+	if result.Reused {
+		staleOutcome = "draft_submitted"
+	}
+	return BatchDraftSubmitResponse{
+		Draft:        batchDraftFromStorage(result.Draft),
+		Job:          &snapshot,
+		StaleOutcome: staleOutcome,
+	}, nil
 }
 
 func (s *publicRuntimeService) CreateFromURL(ctx context.Context, req URLCommand) (JobSnapshot, error) {
@@ -852,9 +949,77 @@ func buildBatchSources(req BatchCommand) ([]storage.SourceRecord, []string, erro
 }
 
 func deliveryConfigToStorage(cfg DeliveryConfig) storage.Delivery {
+	strategy := strings.TrimSpace(cfg.Strategy)
+	if strategy == "" {
+		strategy = storage.DeliveryStrategyPolling
+	}
 	return storage.Delivery{
-		Strategy:   strings.TrimSpace(cfg.Strategy),
+		Strategy:   strategy,
 		WebhookURL: strings.TrimSpace(cfg.WebhookURL),
+	}
+}
+
+func batchDraftOwnerToStorage(owner BatchDraftOwner) storage.BatchDraftOwner {
+	return storage.BatchDraftOwner{
+		OwnerType:      strings.TrimSpace(owner.OwnerType),
+		TelegramChatID: strings.TrimSpace(owner.TelegramChatID),
+		TelegramUserID: strings.TrimSpace(owner.TelegramUserID),
+	}
+}
+
+func batchDraftOwnerFromStorage(owner storage.BatchDraftOwner) BatchDraftOwner {
+	return BatchDraftOwner{
+		OwnerType:      owner.OwnerType,
+		TelegramChatID: owner.TelegramChatID,
+		TelegramUserID: owner.TelegramUserID,
+	}
+}
+
+func batchDraftItemSourceToStorage(source BatchDraftItemSource) storage.BatchDraftItemSource {
+	return storage.BatchDraftItemSource{
+		SourceKind:        strings.TrimSpace(source.SourceKind),
+		UploadedSourceRef: strings.TrimSpace(source.UploadedSourceRef),
+		URL:               strings.TrimSpace(source.URL),
+		DisplayName:       strings.TrimSpace(source.DisplayName),
+		OriginalFilename:  strings.TrimSpace(source.OriginalFilename),
+		MIMEType:          strings.TrimSpace(source.ContentType),
+		SizeBytes:         source.SizeBytes,
+		ObjectBody:        source.ObjectBody,
+	}
+}
+
+func batchDraftItemSourceFromStorage(source storage.BatchDraftItemSource) BatchDraftItemSource {
+	return BatchDraftItemSource{
+		SourceKind:        source.SourceKind,
+		UploadedSourceRef: source.UploadedSourceRef,
+		URL:               source.URL,
+		DisplayName:       source.DisplayName,
+		OriginalFilename:  source.OriginalFilename,
+		ContentType:       source.MIMEType,
+		SizeBytes:         source.SizeBytes,
+	}
+}
+
+func batchDraftFromStorage(draft storage.BatchDraftRecord) BatchDraft {
+	items := make([]BatchDraftItem, 0, len(draft.Items))
+	for _, item := range draft.Items {
+		items = append(items, BatchDraftItem{
+			ItemID:      item.ItemID,
+			Position:    item.Position,
+			SourceLabel: item.SourceLabel,
+			Source:      batchDraftItemSourceFromStorage(item.Source),
+		})
+	}
+	return BatchDraft{
+		DraftID:            draft.DraftID,
+		Version:            draft.Version,
+		Owner:              batchDraftOwnerFromStorage(draft.Owner),
+		Status:             draft.Status,
+		Items:              items,
+		DisplayName:        draft.DisplayName,
+		ClientRef:          draft.ClientRef,
+		ExpiresAt:          draft.ExpiresAt,
+		SubmittedRootJobID: draft.SubmittedRootJobID,
 	}
 }
 

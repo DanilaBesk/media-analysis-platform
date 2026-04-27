@@ -23,6 +23,7 @@ def validate_contract_surface() -> dict[str, dict]:
         "upload": _load_json(SCHEMA_ROOT / "http" / "create-transcription-upload.schema.json"),
         "from_url": _load_json(SCHEMA_ROOT / "http" / "create-transcription-from-url.schema.json"),
         "batch": _load_json(SCHEMA_ROOT / "http" / "create-transcription-batch.schema.json"),
+        "batch_draft": _load_json(SCHEMA_ROOT / "http" / "batch-draft.schema.json"),
         "agent_run": _load_json(SCHEMA_ROOT / "http" / "create-agent-run.schema.json"),
         "report": _load_json(SCHEMA_ROOT / "http" / "create-report.schema.json"),
         "deep_research": _load_json(SCHEMA_ROOT / "http" / "create-deep-research.schema.json"),
@@ -161,6 +162,41 @@ def test_batch_transcription_contract_freezes_mixed_source_basket() -> None:
     assert uploaded["properties"]["file_part"]["minLength"] == 1
     assert url_source["required"] == ["source_kind", "url"]
     assert url_source["properties"]["source_kind"]["enum"] == ["youtube_url", "external_url"]
+
+
+def test_batch_draft_add_item_splits_json_url_and_multipart_upload_body() -> None:
+    surface = validate_contract_surface()
+    spec = surface["openapi"]
+    batch_draft = surface["batch_draft"]
+
+    add_item = _path_item(spec, "/v1/batch-drafts/{draft_id}/items", "post")
+    content = add_item["requestBody"]["content"]
+    assert content["application/json"]["schema"]["$ref"].endswith("batch-draft.schema.json#/$defs/addBatchDraftItemRequest")
+    assert content["multipart/form-data"]["schema"]["$ref"].endswith("batch-draft.schema.json#/$defs/addBatchDraftItemMultipartRequest")
+
+    uploaded = batch_draft["$defs"]["uploadedDraftItemSource"]
+    assert uploaded["required"] == ["source_kind", "uploaded_source_ref"]
+    assert uploaded["properties"]["source_kind"]["enum"] == ["uploaded_file", "telegram_upload"]
+    assert "content_type" in uploaded["properties"]
+    assert uploaded["properties"]["size_bytes"]["minimum"] == 1
+
+    json_request = batch_draft["$defs"]["addBatchDraftItemRequest"]
+    assert json_request["properties"]["item"]["$ref"] == "#/$defs/urlDraftItemSource"
+    assert batch_draft["$defs"]["urlDraftItemSource"]["properties"]["source_kind"]["enum"] == ["youtube_url", "external_url"]
+
+    multipart = batch_draft["$defs"]["addBatchDraftItemMultipartRequest"]
+    assert multipart["required"] == ["owner", "expected_version", "item"]
+    assert multipart["properties"]["owner"]["contentMediaType"] == "application/json"
+    assert multipart["properties"]["item"]["contentMediaType"] == "application/json"
+    assert multipart["properties"]["item"]["contentSchema"]["$ref"] == "#/$defs/uploadedDraftItemMultipartMetadata"
+    assert multipart["properties"]["file"]["$ref"] == "#/$defs/binaryDraftUpload"
+    assert multipart["properties"]["files"]["$ref"] == "#/$defs/binaryDraftUpload"
+    assert batch_draft["$defs"]["binaryDraftUpload"]["format"] == "binary"
+
+    metadata = batch_draft["$defs"]["uploadedDraftItemMultipartMetadata"]
+    assert metadata["required"] == ["source_kind"]
+    assert metadata["properties"]["source_kind"]["enum"] == ["uploaded_file", "telegram_upload"]
+    assert "uploaded_source_ref" not in metadata["properties"]
 
 
 def test_delivery_rules_and_v1_artifact_enum_are_frozen() -> None:

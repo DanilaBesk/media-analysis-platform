@@ -278,6 +278,231 @@ func TestApiJobsCreateBatchTranscriptionGraphAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestApiJobsSubmitBatchDraftPromotesOnceAndReplaysSubmittedRoot(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	owner := storage.BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"}
+	draft := storage.BatchDraftRecord{
+		DraftID:     "draft-1",
+		Version:     7,
+		Owner:       owner,
+		Status:      storage.BatchDraftStatusOpen,
+		DisplayName: "Telegram batch",
+		ClientRef:   "draft-client-ref",
+		Items: []storage.BatchDraftItem{
+			{
+				ItemID:      "item-a",
+				SourceID:    "source-a",
+				Position:    0,
+				SourceLabel: "voice_a",
+				Source: storage.BatchDraftItemSource{
+					SourceKind:        storage.SourceKindTelegramUpload,
+					UploadedSourceRef: "sources/telegram/file-a.ogg",
+					DisplayName:       "Voice A",
+					OriginalFilename:  "file-a.ogg",
+					MIMEType:          "audio/ogg",
+					SizeBytes:         123,
+				},
+			},
+			{
+				ItemID:      "item-b",
+				SourceID:    "source-b",
+				Position:    1,
+				SourceLabel: "video_b",
+				Source: storage.BatchDraftItemSource{
+					SourceKind:  storage.SourceKindYouTubeURL,
+					URL:         "https://youtu.be/example",
+					DisplayName: "Video B",
+				},
+			},
+		},
+	}
+	store.batchDrafts[draft.DraftID] = draft
+
+	created, err := service.SubmitBatchDraft(context.Background(), SubmitBatchDraftRequest{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Delivery:        storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft() error = %v", err)
+	}
+	if created.Reused {
+		t.Fatalf("first submit should not be reused")
+	}
+	if created.Job.ID == "" || created.Job.ParentJobID != "" || created.Job.ClientRef != "draft-client-ref" {
+		t.Fatalf("created root = %#v, want root with draft client_ref", created.Job)
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("submit enqueue count = %d, want child jobs only", got)
+	}
+	if got, want := len(store.sources), 2; got != want {
+		t.Fatalf("persisted sources = %d, want %d", got, want)
+	}
+	uploaded := store.sources[0]
+	if uploaded.ObjectKey != "sources/telegram/file-a.ogg" || !uploaded.ObjectAlreadyPersisted || len(uploaded.ObjectBody) != 0 {
+		t.Fatalf("uploaded source = %#v, want persisted object ref without submit-time body", uploaded)
+	}
+	if uploaded.OriginalFilename != "file-a.ogg" || uploaded.MIMEType != "audio/ogg" || uploaded.SizeBytes != 123 {
+		t.Fatalf("uploaded metadata = %#v, want draft metadata promoted", uploaded)
+	}
+	for id, job := range store.jobs {
+		if job.ParentJobID == created.Job.ID {
+			job.Status = "running"
+			store.jobs[id] = job
+		}
+	}
+
+	replayed, err := service.SubmitBatchDraft(context.Background(), SubmitBatchDraftRequest{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Delivery:        storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft(replay) error = %v", err)
+	}
+	if !replayed.Reused || replayed.Job.ID != created.Job.ID {
+		t.Fatalf("replay = %#v, want reused root %q", replayed, created.Job.ID)
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("replay without queued children should not enqueue again, got %d requests", got)
+	}
+}
+
+func TestApiJobsSubmitBatchDraftReplayReconcilesQueuedChildrenAfterEnqueueFailure(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{failAt: 2, failErr: errors.New("queue unavailable")}
+	service := newTestService(t, store, enqueuer)
+
+	owner := storage.BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"}
+	draft := storage.BatchDraftRecord{
+		DraftID:   "draft-retry",
+		Version:   3,
+		Owner:     owner,
+		Status:    storage.BatchDraftStatusOpen,
+		ClientRef: "retry-client-ref",
+		Items: []storage.BatchDraftItem{
+			{
+				ItemID:      "item-a",
+				SourceID:    "source-a",
+				Position:    0,
+				SourceLabel: "voice_a",
+				Source: storage.BatchDraftItemSource{
+					SourceKind:        storage.SourceKindTelegramUpload,
+					UploadedSourceRef: "sources/telegram/file-a.ogg",
+					DisplayName:       "Voice A",
+					OriginalFilename:  "file-a.ogg",
+					MIMEType:          "audio/ogg",
+					SizeBytes:         123,
+				},
+			},
+			{
+				ItemID:      "item-b",
+				SourceID:    "source-b",
+				Position:    1,
+				SourceLabel: "video_b",
+				Source: storage.BatchDraftItemSource{
+					SourceKind:  storage.SourceKindYouTubeURL,
+					URL:         "https://youtu.be/example",
+					DisplayName: "Video B",
+				},
+			},
+		},
+	}
+	store.batchDrafts[draft.DraftID] = draft
+
+	_, err := service.SubmitBatchDraft(context.Background(), SubmitBatchDraftRequest{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Delivery:        storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if !errors.Is(err, enqueuer.failErr) {
+		t.Fatalf("SubmitBatchDraft() error = %v, want queue failure", err)
+	}
+	submitted := store.batchDrafts[draft.DraftID]
+	if submitted.Status != storage.BatchDraftStatusSubmitted || submitted.SubmittedRootJobID == "" {
+		t.Fatalf("draft after failed enqueue = %#v, want committed submitted graph", submitted)
+	}
+	rootID := submitted.SubmittedRootJobID
+	if got, want := len(store.childrenOf(rootID)), 2; got != want {
+		t.Fatalf("committed child jobs = %d, want %d", got, want)
+	}
+	if got, want := len(enqueuer.requests), 2; got != want {
+		t.Fatalf("first enqueue attempts = %d, want %d", got, want)
+	}
+
+	enqueuer.failAt = 0
+	replayed, err := service.SubmitBatchDraft(context.Background(), SubmitBatchDraftRequest{
+		DraftID:         draft.DraftID,
+		Owner:           owner,
+		ExpectedVersion: draft.Version,
+		Delivery:        storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft(replay) error = %v", err)
+	}
+	if !replayed.Reused || replayed.Job.ID != rootID {
+		t.Fatalf("replay = %#v, want reused root %q", replayed, rootID)
+	}
+	if got, want := len(store.childrenOf(rootID)), 2; got != want {
+		t.Fatalf("child jobs after replay = %d, want no duplicate graph", got)
+	}
+	if got, want := len(enqueuer.requests), 3; got != want {
+		t.Fatalf("enqueue attempts after reconciliation = %d, want retry of queued children", got)
+	}
+}
+
+func TestApiJobsSubmitBatchDraftReplayIgnoresSubmittedRootWithoutQueuedChildren(t *testing.T) {
+	t.Parallel()
+
+	store := newMemoryStore()
+	enqueuer := &fakeEnqueuer{}
+	service := newTestService(t, store, enqueuer)
+
+	owner := storage.BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"}
+	root := storage.JobRecord{
+		ID:            "root-without-queued-children",
+		SubmissionID:  "submission-1",
+		JobType:       queue.JobTypeTranscription,
+		Status:        "queued",
+		ProgressStage: "waiting_for_sources",
+	}
+	store.jobs[root.ID] = root
+	store.jobOrder = append(store.jobOrder, root.ID)
+	store.batchDrafts["submitted-empty"] = storage.BatchDraftRecord{
+		DraftID:            "submitted-empty",
+		Version:            2,
+		Owner:              owner,
+		Status:             storage.BatchDraftStatusSubmitted,
+		SubmittedRootJobID: root.ID,
+	}
+
+	replayed, err := service.SubmitBatchDraft(context.Background(), SubmitBatchDraftRequest{
+		DraftID:         "submitted-empty",
+		Owner:           owner,
+		ExpectedVersion: 1,
+		Delivery:        storage.Delivery{Strategy: storage.DeliveryStrategyPolling},
+	})
+	if err != nil {
+		t.Fatalf("SubmitBatchDraft(replay without children) error = %v", err)
+	}
+	if !replayed.Reused || replayed.Job.ID != root.ID {
+		t.Fatalf("replay = %#v, want reused root %q", replayed, root.ID)
+	}
+	if got := len(enqueuer.requests); got != 0 {
+		t.Fatalf("replay without queued children enqueued %d jobs, want 0", got)
+	}
+}
+
 func TestApiJobsBatchCancelRetryAndAggregateScheduling(t *testing.T) {
 	t.Parallel()
 
@@ -799,7 +1024,9 @@ type memoryStore struct {
 	jobs             map[string]storage.JobRecord
 	jobOrder         []string
 	sourceSets       []storage.SourceSetRecord
+	sources          []storage.SourceRecord
 	artifacts        map[string]*storage.ArtifactRecord
+	batchDrafts      map[string]storage.BatchDraftRecord
 	lastSubmissionID string
 }
 
@@ -808,6 +1035,7 @@ func newMemoryStore() *memoryStore {
 		submissions: map[string]*storage.JobSubmission{},
 		jobs:        map[string]storage.JobRecord{},
 		artifacts:   map[string]*storage.ArtifactRecord{},
+		batchDrafts: map[string]storage.BatchDraftRecord{},
 	}
 }
 
@@ -819,10 +1047,11 @@ func (m *memoryStore) ListJobsBySubmission(_ context.Context, submissionID strin
 	return m.jobsBySubmission(submissionID), nil
 }
 
-func (m *memoryStore) SaveSubmissionGraph(_ context.Context, submission storage.JobSubmission, _ []storage.SourceRecord, sourceSets []storage.SourceSetRecord, jobs []storage.JobRecord) error {
+func (m *memoryStore) SaveSubmissionGraph(_ context.Context, submission storage.JobSubmission, sources []storage.SourceRecord, sourceSets []storage.SourceSetRecord, jobs []storage.JobRecord) error {
 	copySubmission := submission
 	m.submissions[submission.SubmissionKind+"::"+submission.IdempotencyKey] = &copySubmission
 	m.lastSubmissionID = submission.ID
+	m.sources = append(m.sources, sources...)
 	m.sourceSets = append(m.sourceSets, sourceSets...)
 	for _, job := range jobs {
 		m.jobs[job.ID] = job
@@ -868,6 +1097,44 @@ func (m *memoryStore) FindArtifactByKind(_ context.Context, jobID, artifactKind 
 	return m.artifacts[jobID+"::"+artifactKind], nil
 }
 
+func (m *memoryStore) GetBatchDraft(_ context.Context, draftID string, owner storage.BatchDraftOwner) (storage.BatchDraftRecord, error) {
+	draft, ok := m.batchDrafts[draftID]
+	if !ok {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftNotFound
+	}
+	if draft.Owner != owner {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftOwnerMismatch
+	}
+	return draft, nil
+}
+
+func (m *memoryStore) SubmitBatchDraftGraph(_ context.Context, req storage.BatchDraftGraphSubmission) (storage.BatchDraftRecord, error) {
+	draft, ok := m.batchDrafts[req.DraftID]
+	if !ok {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftNotFound
+	}
+	if draft.Status == storage.BatchDraftStatusSubmitted {
+		return draft, nil
+	}
+	if draft.Owner != req.Owner {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftOwnerMismatch
+	}
+	if draft.Version != req.ExpectedVersion {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftVersionConflict
+	}
+	if len(draft.Items) == 0 {
+		return storage.BatchDraftRecord{}, storage.ErrBatchDraftEmpty
+	}
+	if err := m.SaveSubmissionGraph(context.Background(), req.Submission, req.Sources, req.SourceSets, req.Jobs); err != nil {
+		return storage.BatchDraftRecord{}, err
+	}
+	draft.Status = storage.BatchDraftStatusSubmitted
+	draft.Version++
+	draft.SubmittedRootJobID = req.Jobs[0].ID
+	m.batchDrafts[draft.DraftID] = draft
+	return draft, nil
+}
+
 func (m *memoryStore) jobsBySubmission(submissionID string) []storage.JobRecord {
 	jobs := make([]storage.JobRecord, 0)
 	for _, jobID := range m.jobOrder {
@@ -892,10 +1159,18 @@ func (m *memoryStore) childrenOf(parentJobID string) []storage.JobRecord {
 
 type fakeEnqueuer struct {
 	requests []queue.EnqueueRequest
+	failAt   int
+	failErr  error
 }
 
 func (f *fakeEnqueuer) Enqueue(_ context.Context, req queue.EnqueueRequest) (queue.EnqueueResult, error) {
 	f.requests = append(f.requests, req)
+	if f.failAt > 0 && len(f.requests) == f.failAt {
+		if f.failErr != nil {
+			return queue.EnqueueResult{}, f.failErr
+		}
+		return queue.EnqueueResult{}, errors.New("enqueue failed")
+	}
 	return queue.EnqueueResult{}, nil
 }
 

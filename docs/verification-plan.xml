@@ -49,6 +49,7 @@
       <required>
         <item>create transcription job from multipart upload</item>
         <item>create batch transcription root from a mixed source manifest and referenced multipart file parts</item>
+        <item>create, read, mutate, clear, and submit API-owned batch drafts with owner and version checks</item>
         <item>create transcription job from supported YouTube URL</item>
         <item>get job</item>
         <item>list jobs</item>
@@ -65,6 +66,8 @@
         <proof>Retry creates a new job row and does not mutate historical rows.</proof>
         <proof>Polling remains authoritative for webhook-configured jobs.</proof>
         <proof>Batch upload creates one root aggregate transcription job, per-source transcription children, and a root aggregate artifact set.</proof>
+        <proof>Batch draft submit is idempotent and maps exactly once to the existing root aggregate graph.</proof>
+        <proof>Version mismatch, submitted draft, expired draft, canceled draft, and owner mismatch return explicit stale-button outcomes.</proof>
       </must-prove>
     </ApiIntegrationTests>
 
@@ -104,6 +107,7 @@
       <required>
         <item>upload flow through API mock or live API test double</item>
         <item>Telegram basket flow through `/v1/transcription-jobs/batch`</item>
+        <item>Telegram API-owned batch draft flow through draft_id plus version callback data</item>
         <item>Telegram command registry and batch-mode toggle behavior</item>
         <item>URL flow through API mock or live API test double</item>
         <item>button callbacks map to API child-job or artifact actions</item>
@@ -118,6 +122,7 @@
         <proof>Telegram adapter no longer imports or executes the local execution core.</proof>
         <proof>Default delivery strategy is polling in bot flows.</proof>
         <proof>Media groups and user-curated baskets map to one batch root job instead of unrelated per-file jobs.</proof>
+        <proof>Stale inline buttons never process an unrelated chat/user basket and never report false empty state caused by adapter-local memory.</proof>
         <proof>Inline short transcript presentation uses the gateway-materialized `transcript_plain` artifact exactly, preserving batch aggregate content boundaries and avoiding bot-side stitching.</proof>
       </must-prove>
     </TelegramBotTests>
@@ -162,6 +167,17 @@
         <trace-sequence>API_CREATE_BATCH_ROOT -&gt; SOURCE_CHILDREN_ENQUEUED -&gt; SOURCE_CHILDREN_FINALIZED -&gt; AGGREGATE_ENQUEUED -&gt; AGGREGATE_ARTIFACTS_REGISTERED -&gt; ROOT_FINALIZE_SUCCEEDED</trace-sequence>
       </required-signals>
     </VF-001B>
+
+    <VF-001C NAME="ApiOwnedTelegramBatchDraft" USE_CASES="UC-001C,UC-001B,UC-008" DATA_FLOW="DF-009" PRIORITY="high">
+      <scenario>Telegram renders a batch draft button, the draft changes or is submitted elsewhere, and the old button is clicked later.</scenario>
+      <expected-outcome>API validates draft_id, owner scope, status, and expected version before every mutation or submit; stale callbacks return version_conflict, draft_submitted, draft_expired, draft_canceled, or draft_owner_mismatch; repeated submit returns the same submitted root job; no callback mutates or submits a current unrelated chat/user basket.</expected-outcome>
+      <required-signals>
+        <log-marker>[ApiJobs][submitBatchDraft][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
+        <log-marker>[TelegramAdapter][handleDraftCallback][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</log-marker>
+        <trace-sequence>DRAFT_CREATE -&gt; DRAFT_MUTATE_VERSION_INCREMENT -&gt; STALE_CALLBACK_REJECTED_OR_SUBMITTED_REPLAY -&gt; SINGLE_BATCH_ROOT_PROMOTED</trace-sequence>
+      </required-signals>
+      <implementation-evidence status="verified" verified-at="2026-04-27">`go test ./internal/storage ./internal/api ./internal/jobs` from `apps/api` passed; `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` from `apps/api` passed; `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py` passed with 9 tests; `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py` passed with 78 tests; live compose DB E2E inside the `api` container with `API_STORAGE_POSTGRES_DSN=postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable` passed `TestApiBatchDraftMixedUploadURLPostgresE2E`; `git diff --check` was clean. Known limitation: repository-root Telegram adapter pytest still needs explicit `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src`.</implementation-evidence>
+    </VF-001C>
 
     <VF-002 NAME="YouTubeTranscription" USE_CASES="UC-002,UC-003" DATA_FLOW="DF-002" PRIORITY="high">
       <scenario>User submits a valid YouTube URL and receives transcript artifacts without local file upload.</scenario>
@@ -220,15 +236,18 @@
         <scenario-1 kind="success">Polling and webhook create requests share the same canonical job snapshot envelope.</scenario-1>
         <scenario-2 kind="failure">Invalid delivery strategy or missing webhook URL is rejected deterministically.</scenario-2>
         <scenario-3 kind="success">Batch transcription create freezes `/v1/transcription-jobs/batch`, source manifests, stable source labels, root aggregate jobs, per-source children, and aggregate artifact kinds.</scenario-3>
+        <scenario-4 kind="success">Batch draft contract freezes create, get, add item, remove item, clear, and submit endpoints with draft_id, version, owner scope, ordered items, status, stale outcomes, and submitted root job response.</scenario-4>
       </scenarios>
       <required-log-markers>
         <marker-1>[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]</marker-1>
       </required-log-markers>
       <required-trace-assertions>
         <assertion-1>Retry endpoint must remain non-idempotent while create endpoints support `Idempotency-Key`.</assertion-1>
+        <assertion-2>Telegram draft callback data must carry draft_id and version; contract wording must not allow `basket:start` without draft identity as canonical submit input.</assertion-2>
       </required-trace-assertions>
       <wave-follow-up>Regenerate any typed client stubs after contract changes.</wave-follow-up>
       <phase-follow-up>Freeze contract diffs before starting major code waves.</phase-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft contract evidence passed: `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py` reported 9 passed, covering `/v1/batch-drafts` surfaces, stale outcome enum, batch transcription source labels, artifact kinds, and single worker-agent-runner topology.</phase-follow-up>
     </V-M-CONTRACTS>
 
     <V-M-API-STORAGE MODULE="M-API-STORAGE" PRIORITY="high">
@@ -244,6 +263,7 @@
         <scenario-2 kind="failure">Artifact resolution fails cleanly when object store or DB is unavailable.</scenario-2>
         <scenario-3 kind="success">Batch transcription persistence creates root and child source sets with stable source labels, root aggregate job lineage, per-source children, and aggregate artifact metadata.</scenario-3>
         <scenario-4 kind="failure">Internal worker execution ids remain authoritative and storage-backed rather than being inferred from route-local or in-memory claim state.</scenario-4>
+        <scenario-5 kind="success">Batch draft tables persist owner scope, status, monotonic version, ordered item positions, submitted_root_job_id, and terminal timestamps with transactional submit.</scenario-5>
       </scenarios>
       <required-log-markers>
         <marker-1>[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]</marker-1>
@@ -251,9 +271,11 @@
       <required-trace-assertions>
         <assertion-1>Successful artifact uploads must create DB rows only after object persistence succeeds.</assertion-1>
         <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check flows must rely on authoritative execution-claim state instead of reconstructing ownership from `started_at` or process-local memory.</assertion-2>
+        <assertion-3>DB-backed draft tests must prove expected-version compare-and-swap, owner mismatch rejection, submitted/expired/canceled mutation rejection, and repeated submit returning the same submitted_root_job_id.</assertion-3>
       </required-trace-assertions>
       <wave-follow-up status="verified" verified-at="2026-04-23">Migration application and rollback smoke passed against compose PostgreSQL through `docker compose -f infra/docker-compose.yml exec -e API_STORAGE_POSTGRES_DSN=postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable api go test ./internal/storage -run ApiStorageMigration -count=1 -v`; the env-gated test created a temporary database, applied all Up tables including job_executions and webhook_deliveries, applied Down, verified the tables were removed, and dropped the temporary database.</wave-follow-up>
       <phase-follow-up status="verified" verified-at="2026-04-23">Presigned artifact URL validation passed against the compose MinIO container and host browser path: Web UI resolved job c018df69-65c3-4b90-9620-6051df367448 artifact f13d1902-bdf9-4fc8-be19-8a5d2ebc7c3b to `http://localhost:9000/...` with `X-Amz-Signature`, and host curl downloaded 2336 bytes with HTTP 200.</phase-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft storage evidence passed through `go test ./internal/storage ./internal/api ./internal/jobs` and `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` from `apps/api`. Focused storage coverage proves owner scope, monotonic version, ordered item persistence, terminal submitted mutation rejection, repeated submit idempotence, submitted_root_job_id persistence, and API-owned uploaded source object persistence at add-item time.</phase-follow-up>
     </V-M-API-STORAGE>
 
     <V-M-API-QUEUE MODULE="M-API-QUEUE" PRIORITY="high">
@@ -289,6 +311,8 @@
         <scenario-1 kind="success">Create root and child jobs under correct lineage and delivery rules.</scenario-1>
         <scenario-2 kind="failure">Reject invalid transitions, malformed idempotency replays, and missing artifact prerequisites.</scenario-2>
         <scenario-3 kind="success">Batch transcription create produces one root aggregate job plus per-source children without breaking one-file-to-one-job upload semantics.</scenario-3>
+        <scenario-4 kind="success">Batch draft submit atomically promotes open ordered draft items into one batch transcription root and marks the draft submitted with submitted_root_job_id.</scenario-4>
+        <scenario-5 kind="failure">Draft mutation and submit reject version mismatch, submitted, expired, canceled, and owner-mismatch callbacks without inspecting adapter-local basket state.</scenario-5>
       </scenarios>
       <required-log-markers>
         <marker-1>[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</marker-1>
@@ -296,9 +320,11 @@
       <required-trace-assertions>
         <assertion-1>Retry must create a new row and never mutate terminal historical rows.</assertion-1>
         <assertion-2>Batch transcription create must fan out only into the owned root aggregate plus per-source child graph, not unrelated top-level jobs.</assertion-2>
+        <assertion-3>Repeated submit of a submitted draft must return the same root job or submitted draft response and must not create another root or source-set graph.</assertion-3>
       </required-trace-assertions>
       <wave-follow-up>Exercise cancel and retry against real workers, not only storage mocks.</wave-follow-up>
       <phase-follow-up>Cross-check child reuse and retry lineage in UI and Telegram flows.</phase-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft job promotion evidence passed through both focused Go commands from `apps/api`. `SubmitBatchDraft` reads the API-owned draft, reuses an already submitted root when present, builds the existing `batch-transcription.v1` manifest from ordered draft items, promotes through the existing batch root/children graph, enqueues per-source transcription work, and keeps report/deep_research handoff on `agent_run` plus worker-agent-runner only.</phase-follow-up>
     </V-M-API-JOBS>
 
     <V-M-API-HTTP MODULE="M-API-HTTP" PRIORITY="high">
@@ -314,6 +340,7 @@
         <scenario-3 kind="success">Batch multipart plus source-manifest upload is validated independently from the per-file upload endpoint and returns one root job envelope.</scenario-3>
         <scenario-4 kind="failure">Internal worker routes reject missing or stale execution ids instead of accepting request-local ownership assumptions.</scenario-4>
         <scenario-5 kind="success">Local Web UI origins receive CORS headers for REST polling and action routes without opening non-local origins.</scenario-5>
+        <scenario-6 kind="failure">Batch draft endpoints shape stale callback responses for version mismatch, submitted, expired, canceled, and owner mismatch using the canonical error envelope or draft-state response.</scenario-6>
       </scenarios>
       <required-log-markers>
         <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
@@ -322,9 +349,11 @@
         <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
         <assertion-2>Internal worker routes validate `execution_id` against authoritative control-plane state rather than route-local memory.</assertion-2>
         <assertion-3>Browser CORS is an HTTP boundary concern and must remain limited to local development origins.</assertion-3>
+        <assertion-4>Draft submit route validates expected_version from callback data before calling batch promotion logic.</assertion-4>
       </required-trace-assertions>
       <wave-follow-up status="verified" verified-at="2026-04-23">Executable API runtime, authoritative execution-claim backing, and live route regression are verified against the compose stack.</wave-follow-up>
       <phase-follow-up status="verified" verified-at="2026-04-23">Historical `/combined` route regression passed with direct curl and browser evidence before the batch root/children/aggregate redesign. Current active route evidence is captured by `BATCH-TRANSCRIPTION-GRACE-REFRESH`; the older combined-upload job ids remain historical parity lineage only.</phase-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft HTTP route evidence passed through `go test ./internal/storage ./internal/api ./internal/jobs` and `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` from `apps/api`. Route coverage parses owner scope and expected_version, supports JSON URL add and multipart upload add, maps stale errors to version_conflict, draft_submitted, draft_expired, draft_canceled, and draft_owner_mismatch, and validates submit before promotion.</phase-follow-up>
     </V-M-API-HTTP>
 
     <V-M-API-EVENTS MODULE="M-API-EVENTS" PRIORITY="high">
@@ -451,6 +480,7 @@
         <scenario-4 kind="failure">Telegram adapter falls back to document delivery when an existing `transcript_plain` is longer than the inline limit, empty or whitespace-only, or unreadable.</scenario-4>
         <scenario-5 kind="failure">Telegram adapter falls back to document delivery when inline `status_message.answer` rejects the transcript with `TelegramBadRequest`.</scenario-5>
         <scenario-6 kind="failure">Telegram adapter sends a clear unavailable-artifact status message with the result keyboard, and no document upload, when the `transcript_plain` path is missing or not a file.</scenario-6>
+        <scenario-7 kind="failure">Telegram stale draft callbacks containing old draft_id plus version receive submitted, expired, canceled, version-conflict, or owner-mismatch copy from the API response and never call a chat/user keyed in-memory basket.</scenario-7>
       </scenarios>
       <required-log-markers>
         <marker-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</marker-1>
@@ -460,6 +490,7 @@
         <assertion-2>Media groups and user-curated baskets map to the batch transcription flow instead of the per-file upload flow.</assertion-2>
         <assertion-3>Telegram command registry exposes `/start`, `/help`, `/batch`, `/basket`, and `/clear`, and batch mode can be toggled without adding business orchestration to the adapter.</assertion-3>
         <assertion-4>Inline transcript delivery is a presentation transport choice over `transcript_plain`; it must not introduce an API contract change, worker change, bot-side transcript stitching, or altered batch aggregate content.</assertion-4>
+        <assertion-5>Draft callback buttons must carry draft_id and version, and the adapter must not treat adapter-local BasketStore as canonical durable state.</assertion-5>
       </required-trace-assertions>
       <wave-follow-up status="verified" verified-at="2026-04-23">Live Telegram adapter replay used `apps/telegram-bot` gateway against compose API `http://localhost:8080`: transcription job `b8a845c2-c713-4be4-871b-60e8c22257e3` loaded plain and segmented transcript artifacts successfully, `ensure_report(...)` downloaded report markdown or DOCX successfully, and the gateway now preserves the created report child id `0e991c7e-c7ad-495d-a0a8-39942abb590b` inside `ReportArtifacts.job_id` instead of collapsing everything back to the parent transcription id.</wave-follow-up>
       <phase-follow-up status="verified" verified-at="2026-04-25">Compose-stack Telegram UX parity exposed and closed a real callback-id drift. Before the fix, the report message built `deep:b8a845c2-c713-4be4-871b-60e8c22257e3` from the parent transcription job id; live `ensure_deep_research(b8a845c2-c713-4be4-871b-60e8c22257e3)` failed with API error `job state does not allow this operation`, while `ensure_deep_research(0e991c7e-c7ad-495d-a0a8-39942abb590b)` succeeded and materialized deep-research artifact `/tmp/telegram-adapter-parity-live-fixed/api-jobs/d674cb10-0d40-4d2b-b5a4-15b2961a9553/deep_research/evidence-research-final-report.md`. The strict contract is now: `ReportArtifacts.job_id` is the only authoritative deep-callback target. The former local compatibility shell used the parent transcription id there; the compose-owned API flow preserves the report child id instead. Regression evidence: `uv run pytest --no-cov tests/test_bot.py -k handle_generate_report` and `PYTHONPATH=apps/telegram-bot/src uv run pytest --no-cov apps/telegram-bot/tests/test_api_client.py`.</phase-follow-up>
@@ -468,6 +499,7 @@
       <phase-follow-up status="verified" verified-at="2026-04-26">Telegram command registry and batch-mode controls are verified. The bot registers `/start`, `/help`, `/batch`, `/basket`, and `/clear`; start/help surfaces include the batch toggle; `/batch` and the inline toggle switch per-chat/user mode; disabled mode processes one source immediately or asks the user to select one source from a multi-source message. Evidence command: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py apps/telegram-bot/tests -q` passed with 55 tests before the final gate replay.</phase-follow-up>
       <phase-follow-up status="verified" verified-at="2026-04-26">`media-20e` Telegram inline transcript presentation is verified as a bounded adapter delivery delta. Focused coverage proves a threshold-length readable `transcript_plain` artifact is sent as exact inline Telegram text with the result keyboard; long, empty or whitespace-only, unreadable existing files, and TelegramBadRequest inline-rejection paths fall back to document delivery with the same result keyboard; missing or non-file artifact paths send a clear unavailable-artifact status message with the same result keyboard and no document upload; batch processing paths continue to deliver the gateway-materialized `transcript_plain` content rather than bot-side stitched text. Evidence commands: `.venv/bin/pytest tests/test_bot.py -q` passed with 58 tests before hardening, and focused final-gate replay `.venv/bin/pytest tests/test_bot.py -k send_transcript_result -q` passed with 8 tests.</phase-follow-up>
       <phase-follow-up status="verified" verified-at="2026-04-26">Telegram gateway artifact materialization is verified for inline transcript delivery. `PYTHONPATH=workers/common/src:apps/telegram-bot/src .venv/bin/pytest apps/telegram-bot/tests/test_gateway.py -q` passed with 5 tests and proves API `transcript_plain` artifacts are resolved/downloaded into `ProcessedJob.transcript.text_path` before bot presentation.</phase-follow-up>
+      <phase-follow-up status="verified" verified-at="2026-04-27">API-owned draft Telegram evidence passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py` reported 78 passed. Coverage proves transient Telegram file download followed by API draft-item upload, callback rendering with draft_id/version or draft-scoped item token, old `basket:*` callbacks answering as stale without local/current basket processing, stale API outcomes surfaced to the user, and report/deep_research callbacks still routed through API-owned job lineage.</phase-follow-up>
     </V-M-TELEGRAM-ADAPTER>
 
     <V-M-MCP-ADAPTER MODULE="M-MCP-ADAPTER" PRIORITY="medium">
@@ -586,6 +618,12 @@
       <evidence-types>deterministic assertions, integration checks, compose topology assertions, live provider smoke</evidence-types>
       <forbidden-behavior>Do not reintroduce dedicated report/deep-research AI workers or host-side broker execution as the primary path.</forbidden-behavior>
     </Matrix-5>
+    <Matrix-6 MODULE="M-BATCH-DRAFTS">
+      <success-path>API-owned draft create, add, remove, clear, and submit preserve owner scope, monotonic version, ordered items, uploaded source object references, stale outcome semantics, and idempotent promotion to one existing batch root graph.</success-path>
+      <failure-path>Version mismatch, submitted, expired, canceled, owner mismatch, empty draft, or stale legacy `basket:*` callback fails without mutating or submitting a chat/user-local current basket.</failure-path>
+      <evidence-types>contract assertions, Go storage/API/jobs tests, Telegram adapter tests, live compose PostgreSQL E2E</evidence-types>
+      <forbidden-behavior>Do not restore adapter-local durable basket state, bot-side batch orchestration, a second batch graph, or a dedicated report/deep_research AI worker.</forbidden-behavior>
+    </Matrix-6>
   </VerificationMatrix>
 
   <TelemetryRequirements>
@@ -594,6 +632,7 @@
       <required-log-2>[ApiJobs][createChildJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-2>
       <required-log-3>[ApiJobs][cancelJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-3>
       <required-log-4>[ApiJobs][retryJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-4>
+      <required-log-5>[ApiJobs][submitBatchDraft][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-5>
     </Telemetry-1>
     <Telemetry-2 MODULE="M-API-EVENTS">
       <required-log-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</required-log-1>
@@ -615,6 +654,7 @@
     </Telemetry-7>
     <Telemetry-8 MODULE="M-TELEGRAM-ADAPTER">
       <required-log-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</required-log-1>
+      <required-log-2>[TelegramAdapter][handleDraftCallback][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</required-log-2>
     </Telemetry-8>
   </TelemetryRequirements>
 

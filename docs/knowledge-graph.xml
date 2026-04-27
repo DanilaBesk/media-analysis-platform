@@ -20,6 +20,7 @@
         <type-WorkerFinalizeRequest PURPOSE="Canonical worker finalization DTO used by all Python workers." />
         <type-SourceSet PURPOSE="Ordered input set backing one transcription job." />
         <type-BatchTranscriptionContract PURPOSE="Mixed-source `/v1/transcription-jobs/batch` contract with stable source labels, root aggregate transcription job, per-source transcription children, and aggregate artifact outputs." />
+        <type-BatchDraftContract PURPOSE="API-owned pre-submit batch draft contract with draft_id, version, owner scope, ordered items, open/submitted/expired/canceled status, uploaded body persistence at add-item time, stale-callback outcomes, and idempotent submit to the existing batch root graph." />
         <type-AgentRunContract PURPOSE="Request-only `agent_run_create` contract that creates root `agent_run` jobs keyed by `harness_name` without provider-specific worker routes." />
       </annotations>
     </M-CONTRACTS>
@@ -32,6 +33,7 @@
       <annotations>
         <export-registerRoutes PURPOSE="Bind public and internal HTTP routes." />
         <export-createBatchTranscriptionRoute PURPOSE="Accept `POST /v1/transcription-jobs/batch`, validate the source manifest plus multipart file parts, and return the root aggregate job snapshot." />
+        <export-createBatchDraftRoutes PURPOSE="Accept create, get, add item, remove item, clear, and submit requests for API-owned batch drafts; multipart add-item stores uploaded bodies through the API." />
         <export-createAgentRunRoute PURPOSE="Accept `POST /v1/agent-runs` and force the generic `agent_run_create` submission boundary." />
         <export-validateRequest PURPOSE="Apply request validation and idempotency rules." />
         <export-handleWebsocket PURPOSE="Accept WebSocket connections for UI live updates." />
@@ -47,6 +49,9 @@
       <annotations>
         <export-createTranscriptionJobs PURPOSE="Create one job per uploaded file or one job from a supported URL." />
         <export-createBatchTranscriptionJob PURPOSE="Create a root aggregate transcription job, per-source transcription children, and stable source-label lineage for one mixed-source batch." />
+        <export-createBatchDraft PURPOSE="Create and read API-owned pre-submit draft snapshots for Telegram batch assembly." />
+        <export-mutateBatchDraft PURPOSE="Add, remove, or clear ordered draft items with owner and optimistic version checks; uploaded draft bodies are persisted before the returned draft snapshot is shaped." />
+        <export-submitBatchDraft PURPOSE="Promote an open draft idempotently into the existing batch transcription root, child, and aggregate queue graph." />
         <export-scheduleBatchAggregate PURPOSE="Schedule `job:transcription.aggregate` for the root job after source children satisfy the batch completion policy." />
         <export-createAgentRun PURPOSE="Create one root `agent_run` job with request-only source-set semantics and redacted request metadata." />
         <export-createChildJob PURPOSE="Create or reuse canonical child jobs under validated business rules." />
@@ -81,6 +86,7 @@
         <type-JobSubmission PURPOSE="Idempotent create-request persistence including multi-file upload normalization." />
         <type-JobExecutionRecord PURPOSE="Storage-backed execution_id ownership record shared across claim, progress, artifact, finalize, and cancel-check flows." />
         <type-WebhookDelivery PURPOSE="Durable webhook retry state across API restarts." />
+        <type-BatchDraftRecord PURPOSE="Durable API-owned draft state with owner scope, version, ordered items, source object references, and terminal submitted/expired/canceled semantics." />
         <type-SourceSetRecord PURPOSE="Persistent ordered source set reused by single-file jobs, batch transcription roots/children, and historical combined lineage." />
         <type-BatchSourceLabel PURPOSE="Stable unique source label persisted on source_set_items with `batch-transcription.v1` label version for root and child lineage." />
         <type-AgentRunSourceSet PURPOSE="Request-only source-set shell with `input_kind=agent_run` and no source items." />
@@ -175,11 +181,13 @@
       <verification-ref>V-M-TELEGRAM-ADAPTER</verification-ref>
       <annotations>
         <export-handleIncomingMedia PURPOSE="Download Telegram media temporarily and submit it to the API." />
-        <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, and segmented-artifact actions." />
-        <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, uploaded files, and URL sources as one API batch basket without owning business orchestration." />
+        <export-handleCallbacks PURPOSE="Map Telegram button callbacks to report, deep-research, retry, segmented-artifact, and API-owned draft actions; old basket:* callbacks are stale only." />
+        <export-submitBatchBasket PURPOSE="Submit Telegram media groups, buffered sequential media, uploaded files, and URL sources through API-owned batch drafts without owning business orchestration." />
+        <export-renderDraftCallbacks PURPOSE="Render inline callback data with draft_id and version so stale buttons resolve against API draft state." />
         <export-registerCommandMenu PURPOSE="Register the Telegram command menu for start, help, batch toggle, basket view, and basket clear." />
-        <export-toggleBatchMode PURPOSE="Maintain adapter-local per-chat/user batch mode state without owning API orchestration." />
+        <export-toggleBatchMode PURPOSE="Maintain adapter-local presentation mode only; API-owned batch drafts remain the canonical pre-submit basket state." />
         <export-deliverTranscriptResult PURPOSE="Present short readable `transcript_plain` artifacts as exact inline Telegram text with the result keyboard, use document fallback for existing long, empty, or unreadable artifact files, and show an unavailable-artifact message when the text file is missing or not a file." />
+        <type-TelegramDraftCallback PURPOSE="Callback payload carrying draft_id and version or a draft-scoped item token, never only basket:start or chat/user state." />
         <type-TelegramInlineTranscriptDelivery PURPOSE="Bounded adapter presentation rule over gateway-materialized `transcript_plain`; no bot-side stitching, new worker, or API contract change." />
       </annotations>
     </M-TELEGRAM-ADAPTER>
@@ -229,6 +237,8 @@
     <CrossLink from="M-API-EVENTS" to="M-WEB-UI" relation="streams-events-to" />
     <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="consumes" />
     <CrossLink from="M-API-HTTP" to="M-TELEGRAM-ADAPTER" relation="serves-data-to" />
+    <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="mutates-api-owned-batch-drafts-through" />
+    <CrossLink from="M-API-JOBS" to="M-TELEGRAM-ADAPTER" relation="returns-stale-draft-outcomes-to" />
     <CrossLink from="M-TELEGRAM-ADAPTER" to="M-CONTRACTS" relation="presents-transcript_plain-artifact-defined-by" />
     <CrossLink from="M-TELEGRAM-ADAPTER" to="M-WORKER-TRANSCRIPTION" relation="presents-transcript_plain-artifacts-produced-by" />
     <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-TELEGRAM-ADAPTER" relation="provides-transcript_plain-content-for-presentation" />
