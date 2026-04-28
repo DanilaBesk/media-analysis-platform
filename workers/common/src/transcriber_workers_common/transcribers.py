@@ -169,6 +169,11 @@ class WhisperTranscriber:
         return self._model
 
     def _model_cache_root(self, workspace_dir: Path) -> Path:
+        configured_root = os.getenv("WHISPER_MODEL_CACHE_DIR", "").strip()
+        if configured_root:
+            download_root = Path(configured_root)
+            download_root.mkdir(parents=True, exist_ok=True)
+            return download_root
         data_dir = workspace_dir.parent.parent
         download_root = data_dir / "models"
         download_root.mkdir(parents=True, exist_ok=True)

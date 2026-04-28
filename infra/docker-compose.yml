@@ -120,6 +120,8 @@ services:
       PYTHONPATH: /workspace/workers/transcription/src:/workspace/workers/common/src
       WORKER_WORKSPACE_ROOT: /tmp/runtime/transcription
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
+      UV_HTTP_TIMEOUT: "600"
+      WHISPER_MODEL_CACHE_DIR: /var/cache/whisper
     env_file:
       - ./env/shared.env.example
       - ./env/worker-transcription.env.example

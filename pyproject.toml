@@ -23,6 +23,16 @@ dev = [
   "pytest-cov>=7.0.0",
 ]
 
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "platform_system == 'Linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [project.scripts]
 media-analysis-platform = "media_analysis_platform.__main__:main"
 

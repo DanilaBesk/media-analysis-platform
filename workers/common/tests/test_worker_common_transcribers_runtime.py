@@ -262,6 +262,15 @@ def test_podlodka_model_is_converted_before_faster_whisper_load(tmp_path: Path, 
     assert transcriber._model_source(tmp_path) == str(converted_dir)
 
 
+def test_whisper_model_cache_root_can_use_configured_directory(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / "configured-cache"
+    monkeypatch.setenv("WHISPER_MODEL_CACHE_DIR", str(cache_root))
+    transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="cpu", compute_type="default")
+
+    assert transcriber._model_cache_root(tmp_path / "jobs" / "job-1") == cache_root
+    assert cache_root.is_dir()
+
+
 def test_whisper_transcriber_serializes_shared_model_usage(tmp_path: Path, monkeypatch) -> None:
     transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="auto", compute_type="default")
     audio_a = tmp_path / "audio-a.ogg"
