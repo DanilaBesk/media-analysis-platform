@@ -919,7 +919,7 @@ export function RunsRouteShell(): JSX.Element {
         sourceCollectionId: sourceCollectionId || undefined,
         items: ids.map((media_item_id, position) => ({ media_item_id, position })),
         optionSnapshot: { source: sourceCollectionId ? "collection" : "manual" },
-        duplicatePolicy: "preserve",
+        duplicatePolicy: "reject",
         createdBy: "web",
       });
       const run = await apiClient.createAnalysisRun(DEFAULT_OWNER, {

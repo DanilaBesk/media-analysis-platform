@@ -111,6 +111,7 @@ describe("createWebUiApiClient", () => {
     const selection = await client.createSelection(owner, {
       items: [{ media_item_id: "media-1", position: 0 }],
       sourceCollectionId: "collection-1",
+      duplicatePolicy: "reject",
       createdBy: "web",
     });
     await expect(
@@ -126,6 +127,20 @@ describe("createWebUiApiClient", () => {
       "http://localhost:8080/v1/selections",
       "http://localhost:8080/v1/analysis-runs",
     ]);
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      1,
+      new URL("v1/selections", "http://localhost:8080/"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          owner,
+          source_collection_id: "collection-1",
+          items: [{ media_item_id: "media-1", position: 0 }],
+          duplicate_policy: "reject",
+          created_by: "web",
+        }),
+      }),
+    );
   });
 
   it("uses owner-scoped collection, artifact, and diagnostic reads", async () => {

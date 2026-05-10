@@ -303,7 +303,7 @@ export interface SelectionDraft {
   sourceCollectionId?: string;
   items: Array<{ media_item_id: string; position: number }>;
   optionSnapshot?: Record<string, unknown>;
-  duplicatePolicy?: "preserve" | "deduplicate";
+  duplicatePolicy?: "reject" | "allow";
   createdBy?: string;
 }
 

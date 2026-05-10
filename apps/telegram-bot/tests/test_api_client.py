@@ -143,8 +143,12 @@ def test_create_selection_and_analysis_run_use_final_identifiers() -> None:
     run_payload = json.loads(requests[1].data.decode("utf-8"))
     assert selection == {"selection_id": "sel-1"}
     assert run == {"analysis_run_id": "run-1"}
+    assert selection_payload["owner"] == OWNER
     assert selection_payload["source_collection_id"] == "inbox-1"
     assert selection_payload["items"] == [{"media_item_id": "media-1", "position": 0}]
+    assert selection_payload["option_snapshot"] == {"adapter": "telegram"}
+    assert selection_payload["duplicate_policy"] == "reject"
+    assert selection_payload["created_by"] == "telegram"
     assert run_payload == {
         "owner": OWNER,
         "selection_id": "sel-1",

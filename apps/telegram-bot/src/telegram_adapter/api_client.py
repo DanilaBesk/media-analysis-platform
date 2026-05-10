@@ -152,7 +152,7 @@ class TelegramApiClient:
         items: list[JsonObject],
         source_collection_id: str | None = None,
         option_snapshot: JsonObject | None = None,
-        duplicate_policy: str = "preserve",
+        duplicate_policy: str = "reject",
         created_by: str = "telegram",
     ) -> JsonObject:
         payload: JsonObject = {
