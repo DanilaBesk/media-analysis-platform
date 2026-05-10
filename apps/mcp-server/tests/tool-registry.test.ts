@@ -515,7 +515,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
       path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
     },
     {
-      path: withOwnerQuery(`/v1/artifacts?analysis_run_id=${RUN_ID}&cursor=next&page_size=5`),
+      path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`),
     },
     {
       path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
@@ -901,7 +901,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
       withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
       withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
-      withOwnerQuery(`/v1/artifacts?analysis_run_id=${RUN_ID}&cursor=a1&page_size=3`),
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`),
       withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
       withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       withOwnerQuery(`/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`),
