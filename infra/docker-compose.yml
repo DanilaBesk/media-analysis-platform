@@ -260,6 +260,8 @@ services:
   mcp-server:
     image: node:22-alpine
     restart: unless-stopped
+    stdin_open: true
+    tty: true
     env_file:
       - ./env/mcp-server.env.example
     environment:
