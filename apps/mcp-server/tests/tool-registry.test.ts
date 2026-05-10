@@ -44,6 +44,15 @@ const OWNER = {
     mcp_caller_id: "codex",
   },
 };
+const OWNER_QUERY = "owner_type=mcp&owner_id=assistant";
+
+function withOwnerQuery(path: string): string {
+  if (!path.includes("?")) {
+    return `${path}?${OWNER_QUERY}`;
+  }
+  const [basePath, query] = path.split("?", 2);
+  return `${basePath}?${OWNER_QUERY}&${query}`;
+}
 
 const MEDIA_ID = "00000000-0000-4000-8000-000000000001";
 const COLLECTION_ID = "00000000-0000-4000-8000-000000000002";
@@ -132,7 +141,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === "/v1/media-items?query=meeting&cursor=c1&page_size=10&kind=text&status=ready") {
+      if (request.path === withOwnerQuery("/v1/media-items?query=meeting&cursor=c1&page_size=10&kind=text&status=ready")) {
         return {
           status: 200,
           data: {
@@ -149,7 +158,19 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === `/v1/collections/${COLLECTION_ID}`) {
+      if (request.path === withOwnerQuery(`/v1/collections/${COLLECTION_ID}`)) {
+        return {
+          status: 200,
+          data: {
+            collection: {
+              collection_id: COLLECTION_ID,
+              name: "Research clips",
+              version: 2,
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === `/v1/collections/${COLLECTION_ID}` && request.method === "PATCH") {
         return {
           status: 200,
           data: {
@@ -183,7 +204,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === `/v1/analysis-runs/${RUN_ID}/retry`) {
+      if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`)) {
         return {
           status: 202,
           data: {
@@ -194,7 +215,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === `/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`) {
+      if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`)) {
         return {
           status: 200,
           data: {
@@ -212,7 +233,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === `/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`) {
+      if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`)) {
         return {
           status: 200,
           data: {
@@ -224,7 +245,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === `/v1/artifacts/${ARTIFACT_ID}/refresh`) {
+      if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`)) {
         return {
           status: 200,
           data: {
@@ -240,7 +261,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === "/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning") {
+      if (request.path === withOwnerQuery("/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning")) {
         return {
           status: 200,
           data: {
@@ -280,6 +301,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
     idempotency_key: "add-media-1",
   });
   const searchResult = await runtime.callTool("search_media", {
+    owner: OWNER,
     query: "meeting",
     cursor: "c1",
     page_size: 10,
@@ -311,23 +333,26 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
   const retryResult = await runtime.callTool("retry_run", {
     analysis_run_id: RUN_ID,
     owner: OWNER,
-    reason: "diagnostic fixed",
     idempotency_key: "retry-run-1",
   });
   const eventsResult = await runtime.callTool("list_run_events", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
     cursor: "e1",
     page_size: 3,
   });
   const artifactsResult = await runtime.callTool("list_artifacts", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
     cursor: "next",
     page_size: 5,
   });
   const refreshArtifactResult = await runtime.callTool("refresh_artifact", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
   });
   const diagnosticsResult = await runtime.callTool("get_diagnostics", {
+    owner: OWNER,
     subject_type: "analysis_run",
     subject_id: RUN_ID,
     severity: "warning",
@@ -441,7 +466,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
       },
     },
     {
-      path: "/v1/media-items?query=meeting&cursor=c1&page_size=10&kind=text&status=ready",
+      path: withOwnerQuery("/v1/media-items?query=meeting&cursor=c1&page_size=10&kind=text&status=ready"),
     },
     {
       path: `/v1/collections/${COLLECTION_ID}`,
@@ -477,28 +502,29 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
       },
     },
     {
-      path: `/v1/analysis-runs/${RUN_ID}/retry`,
+      path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
       method: "POST",
       headers: {
         "Idempotency-Key": "retry-run-1",
       },
       body: {
         owner: OWNER,
-        reason: "diagnostic fixed",
       },
     },
     {
-      path: `/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`,
+      path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
     },
     {
-      path: `/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`,
+      path: withOwnerQuery(`/v1/artifacts?analysis_run_id=${RUN_ID}&cursor=next&page_size=5`),
     },
     {
-      path: `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+      path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       method: "POST",
     },
     {
-      path: "/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning",
+      path: withOwnerQuery(
+        "/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning",
+      ),
     },
   ]);
   // END_BLOCK_BLOCK_VERIFY_TOOL_DISPATCH
@@ -518,22 +544,22 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      "/v1/media-items?cursor=m1&page_size=25&kind=text&status=ready",
+      withOwnerQuery("/v1/media-items?cursor=m1&page_size=25&kind=text&status=ready"),
       {
         items: [{ media_item_id: MEDIA_ID }],
         page: { page_size: 25, has_more: false },
       },
     ],
     [
-      "/v1/media-items?query=meeting&kind=url",
+      withOwnerQuery("/v1/media-items?query=meeting&kind=url"),
       {
         items: [{ media_item_id: MEDIA_ID }],
         page: { page_size: 50, has_more: false },
       },
     ],
-    [`/v1/media-items/${MEDIA_ID}`, { media_item: { media_item_id: MEDIA_ID } }],
+    [withOwnerQuery(`/v1/media-items/${MEDIA_ID}`), { media_item: { media_item_id: MEDIA_ID } }],
     [
-      "/v1/collections/inbox?cursor=i1&page_size=10",
+      withOwnerQuery("/v1/collections/inbox?cursor=i1&page_size=10"),
       {
         collection: {
           collection_id: COLLECTION_ID,
@@ -553,14 +579,14 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      "/v1/collections?cursor=c1&page_size=10",
+      withOwnerQuery("/v1/collections?cursor=c1&page_size=10"),
       {
         items: [{ collection_id: COLLECTION_ID }],
         page: { page_size: 10, has_more: false },
       },
     ],
     [
-      `/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`,
+      withOwnerQuery(`/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`),
       {
         collection: {
           collection_id: COLLECTION_ID,
@@ -596,7 +622,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
         },
       },
     ],
-    [`/v1/selections/${SELECTION_ID}`, { selection: { selection_id: SELECTION_ID } }],
+    [withOwnerQuery(`/v1/selections/${SELECTION_ID}`), { selection: { selection_id: SELECTION_ID } }],
     [
       "/v1/analysis-runs",
       {
@@ -607,15 +633,15 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      "/v1/analysis-runs?cursor=r1&page_size=10&status=queued",
+      withOwnerQuery("/v1/analysis-runs?cursor=r1&page_size=10&status=queued"),
       {
         items: [{ analysis_run_id: RUN_ID }],
         page: { page_size: 10, has_more: false },
       },
     ],
-    [`/v1/analysis-runs/${RUN_ID}`, { analysis_run: { analysis_run_id: RUN_ID } }],
+    [withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`), { analysis_run: { analysis_run_id: RUN_ID } }],
     [
-      `/v1/analysis-runs/${RUN_ID}/cancel`,
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
       {
         analysis_run: {
           analysis_run_id: RUN_ID,
@@ -624,7 +650,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      `/v1/analysis-runs/${RUN_ID}/retry`,
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
       {
         analysis_run: {
           analysis_run_id: "00000000-0000-4000-8000-000000000006",
@@ -633,22 +659,22 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      `/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`,
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
       {
         items: [{ event_id: "event-1", event_type: "run.started" }],
         page: { page_size: 3, has_more: false },
       },
     ],
     [
-      `/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`,
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`),
       {
         items: [{ artifact_id: ARTIFACT_ID }],
         page: { page_size: 3, has_more: false },
       },
     ],
-    [`/v1/artifacts/${ARTIFACT_ID}`, { artifact: { artifact_id: ARTIFACT_ID } }],
+    [withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`), { artifact: { artifact_id: ARTIFACT_ID } }],
     [
-      `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       {
         artifact: {
           artifact_id: ARTIFACT_ID,
@@ -662,7 +688,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      `/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`,
+      withOwnerQuery(`/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`),
       {
         items: [{ diagnostic_id: "diagnostic-1" }],
         page: { page_size: 50, has_more: false },
@@ -728,19 +754,23 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     display_name: "Interview clip",
   });
   await runtime.callTool("list_media", {
+    owner: OWNER,
     cursor: "m1",
     page_size: 25,
     kind: "text",
     status: "ready",
   });
   await runtime.callTool("search_media", {
+    owner: OWNER,
     query: "meeting",
     kind: "url",
   });
   await runtime.callTool("get_media", {
+    owner: OWNER,
     media_item_id: MEDIA_ID,
   });
   await runtime.callTool("get_inbox", {
+    owner: OWNER,
     cursor: "i1",
     page_size: 10,
   });
@@ -750,10 +780,12 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     items: [MEDIA_ID],
   });
   await runtime.callTool("list_collections", {
+    owner: OWNER,
     cursor: "c1",
     page_size: 10,
   });
   await runtime.callTool("get_collection", {
+    owner: OWNER,
     collection_id: COLLECTION_ID,
     cursor: "ci1",
     page_size: 5,
@@ -776,6 +808,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     items: [{ media_item_id: MEDIA_ID, position: 0 }],
   });
   await runtime.callTool("get_selection", {
+    owner: OWNER,
     selection_id: SELECTION_ID,
   });
   await runtime.callTool("run_analysis", {
@@ -784,43 +817,52 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     run_type: "summary",
   });
   await runtime.callTool("list_runs", {
+    owner: OWNER,
     cursor: "r1",
     page_size: 10,
     status: "queued",
   });
   await runtime.callTool("get_run", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
   });
   await runtime.callTool("cancel_run", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
-    reason: "user requested stop",
+    message: "user requested stop",
   });
   await runtime.callTool("retry_run", {
     analysis_run_id: RUN_ID,
     owner: OWNER,
   });
   await runtime.callTool("list_run_events", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
     cursor: "e1",
     page_size: 3,
   });
   await runtime.callTool("list_artifacts", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
     cursor: "a1",
     page_size: 3,
   });
   await runtime.callTool("get_artifact", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
   });
   await runtime.callTool("refresh_artifact", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
   });
   await runtime.callTool("get_diagnostics", {
+    owner: OWNER,
     subject_type: "media_item",
     subject_id: MEDIA_ID,
     severity: "info",
   });
   await runtime.callTool("remove_media", {
+    owner: OWNER,
     media_item_id: MEDIA_ID,
   });
 
@@ -842,28 +884,28 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       "/v1/media-items",
       "/v1/media-items",
       "/v1/media-items",
-      "/v1/media-items?cursor=m1&page_size=25&kind=text&status=ready",
-      "/v1/media-items?query=meeting&kind=url",
-      `/v1/media-items/${MEDIA_ID}`,
-      "/v1/collections/inbox?cursor=i1&page_size=10",
+      withOwnerQuery("/v1/media-items?cursor=m1&page_size=25&kind=text&status=ready"),
+      withOwnerQuery("/v1/media-items?query=meeting&kind=url"),
+      withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
+      withOwnerQuery("/v1/collections/inbox?cursor=i1&page_size=10"),
       "/v1/collections",
-      "/v1/collections?cursor=c1&page_size=10",
-      `/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`,
+      withOwnerQuery("/v1/collections?cursor=c1&page_size=10"),
+      withOwnerQuery(`/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`),
       `/v1/collections/${COLLECTION_ID}`,
       `/v1/collections/${COLLECTION_ID}/items`,
       "/v1/selections",
-      `/v1/selections/${SELECTION_ID}`,
+      withOwnerQuery(`/v1/selections/${SELECTION_ID}`),
       "/v1/analysis-runs",
-      "/v1/analysis-runs?cursor=r1&page_size=10&status=queued",
-      `/v1/analysis-runs/${RUN_ID}`,
-      `/v1/analysis-runs/${RUN_ID}/cancel`,
-      `/v1/analysis-runs/${RUN_ID}/retry`,
-      `/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`,
-      `/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`,
-      `/v1/artifacts/${ARTIFACT_ID}`,
-      `/v1/artifacts/${ARTIFACT_ID}/refresh`,
-      `/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`,
-      `/v1/media-items/${MEDIA_ID}`,
+      withOwnerQuery("/v1/analysis-runs?cursor=r1&page_size=10&status=queued"),
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`),
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
+      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
+      withOwnerQuery(`/v1/artifacts?analysis_run_id=${RUN_ID}&cursor=a1&page_size=3`),
+      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+      withOwnerQuery(`/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`),
+      withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
     ],
   );
   assert.deepEqual(requests[0]?.body, {
@@ -887,6 +929,13 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     },
     display_name: "Research note",
   });
+  assert.deepEqual(requests[17], {
+    path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+    method: "POST",
+    body: {
+      message: "user requested stop",
+    },
+  });
   assert.equal(requests[24]?.method, "DELETE");
   // END_BLOCK_BLOCK_VERIFY_FULL_INBOX_FIRST_LIFECYCLE
 });
@@ -896,7 +945,7 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
   const requests: McpAdapterApiRequest[] = [];
   const artifactByPath = new Map<string, unknown>([
     [
-      `/v1/artifacts/${ARTIFACT_ID}`,
+      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
       {
         artifact: {
           artifact_id: ARTIFACT_ID,
@@ -913,7 +962,7 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
       },
     ],
     [
-      `/v1/artifacts/${TEXT_ARTIFACT_ID}`,
+      withOwnerQuery(`/v1/artifacts/${TEXT_ARTIFACT_ID}`),
       {
         artifact: {
           artifact_id: TEXT_ARTIFACT_ID,
@@ -930,7 +979,7 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
       },
     ],
     [
-      `/v1/artifacts/${JSON_ARTIFACT_ID}`,
+      withOwnerQuery(`/v1/artifacts/${JSON_ARTIFACT_ID}`),
       {
         artifact: {
           artifact_id: JSON_ARTIFACT_ID,
@@ -964,15 +1013,18 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
   });
 
   const markdownResult = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
     format: "markdown",
     max_chars: 20,
   });
   const textResult = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
     artifact_id: TEXT_ARTIFACT_ID,
     format: "text",
   });
   const jsonResult = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
     artifact_id: JSON_ARTIFACT_ID,
     format: "json",
   });
@@ -1029,9 +1081,9 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
     },
   });
   assert.deepEqual(requests.map((request) => request.path), [
-    `/v1/artifacts/${ARTIFACT_ID}`,
-    `/v1/artifacts/${TEXT_ARTIFACT_ID}`,
-    `/v1/artifacts/${JSON_ARTIFACT_ID}`,
+    withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+    withOwnerQuery(`/v1/artifacts/${TEXT_ARTIFACT_ID}`),
+    withOwnerQuery(`/v1/artifacts/${JSON_ARTIFACT_ID}`),
   ]);
   // END_BLOCK_BLOCK_VERIFY_ARTIFACT_PREVIEWS
 });
@@ -1069,6 +1121,7 @@ test("createMcpDomainRuntime supports real SDK listTools and callTool protocol f
     const callResult = await client.callTool({
       name: "get_media",
       arguments: {
+        owner: OWNER,
         media_item_id: MEDIA_ID,
       },
     });
@@ -1099,7 +1152,7 @@ test("createMcpDomainRuntime supports real SDK listTools and callTool protocol f
     });
     assert.deepEqual(requests, [
       {
-        path: `/v1/media-items/${MEDIA_ID}`,
+        path: withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
       },
     ]);
   } finally {
@@ -1115,7 +1168,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       requests.push(request);
-      if (request.path === `/v1/media-items/${MEDIA_ID}` && request.method === "DELETE") {
+      if (request.path === withOwnerQuery(`/v1/media-items/${MEDIA_ID}`) && request.method === "DELETE") {
         return {
           status: 200,
           data: {
@@ -1130,7 +1183,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
           } as TPayload,
         };
       }
-      if (request.path === `/v1/artifacts/${ARTIFACT_ID}/refresh` && request.method === "POST") {
+      if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`) && request.method === "POST") {
         return {
           status: 200,
           data: {
@@ -1153,7 +1206,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
           } as TPayload,
         };
       }
-      if (request.path === "/v1/diagnostics?page_size=5&subject_type=retention&severity=error") {
+      if (request.path === withOwnerQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error")) {
         return {
           status: 200,
           data: {
@@ -1181,12 +1234,15 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   const runtime = createMcpDomainRuntime({ apiClient });
 
   const removeResult = await runtime.callTool("remove_media", {
+    owner: OWNER,
     media_item_id: MEDIA_ID,
   });
   const refreshResult = await runtime.callTool("refresh_artifact", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
   });
   const diagnosticsResult = await runtime.callTool("get_diagnostics", {
+    owner: OWNER,
     page_size: 5,
     subject_type: "retention",
     severity: "error",
@@ -1239,15 +1295,15 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   });
   assert.deepEqual(requests, [
     {
-      path: `/v1/media-items/${MEDIA_ID}`,
+      path: withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
       method: "DELETE",
     },
     {
-      path: `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+      path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       method: "POST",
     },
     {
-      path: "/v1/diagnostics?page_size=5&subject_type=retention&severity=error",
+      path: withOwnerQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error"),
     },
   ]);
   // END_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_PARITY
@@ -1259,7 +1315,7 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
     apiClient: {
       request: async () => {
         throw new McpAdapterApiClientError(
-          `/v1/analysis-runs/${RUN_ID}/cancel`,
+          withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
           409,
           "upstream rejected cancellation",
           "run_cancel_not_allowed",
@@ -1268,8 +1324,12 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
     },
   });
 
-  const validationResult = await runtime.callTool("get_media", {});
+  const validationResult = await runtime.callTool("get_media", {
+    owner: OWNER,
+  });
+  const ownerValidationResult = await runtime.callTool("list_media", {});
   const upstreamResult = await runtime.callTool("cancel_run", {
+    owner: OWNER,
     analysis_run_id: RUN_ID,
   });
   const unknownToolResult = await runtime.callTool("missing_tool");
@@ -1292,6 +1352,23 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
       },
     },
   });
+  assert.deepEqual(ownerValidationResult.structuredContent, {
+    error: {
+      code: "mcp_contract_violation",
+      message: "Tool input did not match the domain contract.",
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: {
+        issues: [
+          {
+            path: "owner",
+            message: "Invalid input: expected object, received undefined",
+          },
+        ],
+      },
+    },
+  });
   assert.deepEqual(upstreamResult.structuredContent, {
     error: {
       code: "run_cancel_not_allowed",
@@ -1300,7 +1377,7 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
       retryable: false,
       action: "inspect_run_state_before_retry",
       details: {
-        path: `/v1/analysis-runs/${RUN_ID}/cancel`,
+        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
         status: 409,
       },
     },
@@ -1325,17 +1402,17 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
   const runtime = createMcpDomainRuntime({
     apiClient: {
       request: async (request: McpAdapterApiRequest) => {
-        if (request.path === `/v1/media-items/${MEDIA_ID}` && request.method === "DELETE") {
+        if (request.path === withOwnerQuery(`/v1/media-items/${MEDIA_ID}`) && request.method === "DELETE") {
           throw new McpAdapterApiClientError(
-            `/v1/media-items/${MEDIA_ID}`,
+            withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
             404,
             "media item not found for this owner scope",
             "not_found",
           );
         }
-        if (request.path === `/v1/artifacts/${ARTIFACT_ID}/refresh` && request.method === "POST") {
+        if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`) && request.method === "POST") {
           throw new McpAdapterApiClientError(
-            `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+            withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
             404,
             "artifact not found for this owner scope",
             "not_found",
@@ -1347,9 +1424,11 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
   });
 
   const removeResult = await runtime.callTool("remove_media", {
+    owner: OWNER,
     media_item_id: MEDIA_ID,
   });
   const refreshResult = await runtime.callTool("refresh_artifact", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
   });
 
@@ -1361,7 +1440,7 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
       retryable: false,
       action: "check_resource_id_owner_scope",
       details: {
-        path: `/v1/media-items/${MEDIA_ID}`,
+        path: withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
         status: 404,
       },
     },
@@ -1374,7 +1453,7 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
       retryable: false,
       action: "check_resource_id_owner_scope",
       details: {
-        path: `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+        path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
         status: 404,
       },
     },
@@ -1405,6 +1484,7 @@ test("createMcpDomainRuntime returns actionable retry hints for preview failures
   });
 
   const result = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
     artifact_id: ARTIFACT_ID,
     format: "markdown",
   });

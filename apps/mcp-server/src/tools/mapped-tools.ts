@@ -177,6 +177,11 @@ const paginationInputShape = {
   page_size: z.number().int().min(1).optional(),
 };
 
+const ownerScopedPaginationInputShape = {
+  owner: ownerSchema,
+  ...paginationInputShape,
+};
+
 const mediaFilterInputShape = {
   kind: z.enum(["text", "url", "file", "photo", "image", "audio", "voice", "video", "document"]).optional(),
   status: z.enum(["validating", "ready", "quarantined", "deleted"]).optional(),
@@ -196,21 +201,26 @@ function defaultExamplesForTool(name: string): readonly DomainMcpToolExample[] {
       display_name: "Meeting notes",
     },
     list_media: {
+      owner: EXAMPLE_OWNER,
       page_size: 25,
       kind: "text",
       status: "ready",
     },
     search_media: {
+      owner: EXAMPLE_OWNER,
       query: "meeting",
       kind: "text",
     },
     get_media: {
+      owner: EXAMPLE_OWNER,
       media_item_id: EXAMPLE_MEDIA_ID,
     },
     remove_media: {
+      owner: EXAMPLE_OWNER,
       media_item_id: EXAMPLE_MEDIA_ID,
     },
     get_inbox: {
+      owner: EXAMPLE_OWNER,
       page_size: 10,
     },
     create_collection: {
@@ -219,9 +229,11 @@ function defaultExamplesForTool(name: string): readonly DomainMcpToolExample[] {
       items: [EXAMPLE_MEDIA_ID],
     },
     list_collections: {
+      owner: EXAMPLE_OWNER,
       page_size: 10,
     },
     get_collection: {
+      owner: EXAMPLE_OWNER,
       collection_id: EXAMPLE_COLLECTION_ID,
       page_size: 10,
     },
@@ -243,6 +255,7 @@ function defaultExamplesForTool(name: string): readonly DomainMcpToolExample[] {
       items: [{ media_item_id: EXAMPLE_MEDIA_ID, position: 0 }],
     },
     get_selection: {
+      owner: EXAMPLE_OWNER,
       selection_id: EXAMPLE_SELECTION_ID,
     },
     run_analysis: {
@@ -251,41 +264,49 @@ function defaultExamplesForTool(name: string): readonly DomainMcpToolExample[] {
       run_type: "summary",
     },
     list_runs: {
+      owner: EXAMPLE_OWNER,
       page_size: 10,
       status: "queued",
     },
     get_run: {
+      owner: EXAMPLE_OWNER,
       analysis_run_id: EXAMPLE_RUN_ID,
     },
     cancel_run: {
+      owner: EXAMPLE_OWNER,
       analysis_run_id: EXAMPLE_RUN_ID,
-      reason: "user requested stop",
+      message: "user requested stop",
     },
     retry_run: {
       analysis_run_id: EXAMPLE_RUN_ID,
       owner: EXAMPLE_OWNER,
-      reason: "diagnostic fixed",
     },
     list_run_events: {
+      owner: EXAMPLE_OWNER,
       analysis_run_id: EXAMPLE_RUN_ID,
       page_size: 10,
     },
     list_artifacts: {
+      owner: EXAMPLE_OWNER,
       analysis_run_id: EXAMPLE_RUN_ID,
       page_size: 10,
     },
     get_artifact: {
+      owner: EXAMPLE_OWNER,
       artifact_id: EXAMPLE_ARTIFACT_ID,
     },
     get_artifact_preview: {
+      owner: EXAMPLE_OWNER,
       artifact_id: EXAMPLE_ARTIFACT_ID,
       format: "markdown",
       max_chars: 4000,
     },
     refresh_artifact: {
+      owner: EXAMPLE_OWNER,
       artifact_id: EXAMPLE_ARTIFACT_ID,
     },
     get_diagnostics: {
+      owner: EXAMPLE_OWNER,
       subject_type: "analysis_run",
       subject_id: EXAMPLE_RUN_ID,
       severity: "warning",
@@ -441,6 +462,15 @@ function queryPath(path: string, params: Record<string, unknown>): string {
   return query ? `${path}?${query}` : path;
 }
 
+function ownerQueryPath(path: string, owner: JsonObject, params: Record<string, unknown> = {}): string {
+  return queryPath(path, {
+    owner_type: owner.owner_type,
+    owner_id: owner.owner_id,
+    ...(typeof owner.tenant_id === "string" && owner.tenant_id.length > 0 ? { tenant_id: owner.tenant_id } : {}),
+    ...params,
+  });
+}
+
 function idempotencyHeaders(args: JsonObject): Record<string, string> | undefined {
   return typeof args.idempotency_key === "string"
     ? { "Idempotency-Key": args.idempotency_key }
@@ -459,9 +489,6 @@ function toFormData(args: JsonObject): FormData {
   const formData = new FormData();
 
   formData.append("metadata", JSON.stringify(metadata));
-  if (args.owner) {
-    formData.append("owner", JSON.stringify(args.owner));
-  }
   formData.append(
     "file",
     new Blob([Buffer.from(String(file.content_base64), "base64")], {
@@ -570,14 +597,17 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
+          owner: ownerSchema,
           ...paginationInputShape,
           ...mediaFilterInputShape,
         })
         .strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath("/v1/media-items", args),
+            path: ownerQueryPath("/v1/media-items", owner, query),
           }),
         );
       },
@@ -595,15 +625,18 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
+          owner: ownerSchema,
           query: z.string().min(1),
           ...paginationInputShape,
           ...mediaFilterInputShape,
         })
         .strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath("/v1/media-items", args),
+            path: ownerQueryPath("/v1/media-items", owner, query),
           }),
         );
       },
@@ -619,11 +652,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ media_item_id: z.uuid() }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, media_item_id: z.uuid() }).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/media-items/${pathSegment(String(args.media_item_id))}`,
+            path: ownerQueryPath(`/v1/media-items/${pathSegment(String(args.media_item_id))}`, owner),
           }),
         );
       },
@@ -639,11 +673,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ media_item_id: z.uuid() }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, media_item_id: z.uuid() }).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/media-items/${pathSegment(String(args.media_item_id))}`,
+            path: ownerQueryPath(`/v1/media-items/${pathSegment(String(args.media_item_id))}`, owner),
             method: "DELETE",
           }),
         );
@@ -660,11 +695,13 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object(paginationInputShape).strict(),
+      inputSchema: z.object(ownerScopedPaginationInputShape).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath("/v1/collections/inbox", args),
+            path: ownerQueryPath("/v1/collections/inbox", owner, query),
           }),
         );
       },
@@ -714,11 +751,13 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object(paginationInputShape).strict(),
+      inputSchema: z.object(ownerScopedPaginationInputShape).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath("/v1/collections", args),
+            path: ownerQueryPath("/v1/collections", owner, query),
           }),
         );
       },
@@ -734,12 +773,13 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ collection_id: z.uuid(), ...paginationInputShape }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, collection_id: z.uuid(), ...paginationInputShape }).strict(),
       async call(client, args) {
-        const { collection_id, ...query } = args;
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, collection_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath(`/v1/collections/${pathSegment(String(collection_id))}`, query),
+            path: ownerQueryPath(`/v1/collections/${pathSegment(String(collection_id))}`, owner, query),
           }),
         );
       },
@@ -868,11 +908,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ selection_id: z.uuid() }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, selection_id: z.uuid() }).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/selections/${pathSegment(String(args.selection_id))}`,
+            path: ownerQueryPath(`/v1/selections/${pathSegment(String(args.selection_id))}`, owner),
           }),
         );
       },
@@ -934,6 +975,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
+          owner: ownerSchema,
           ...paginationInputShape,
           status: z
             .enum([
@@ -950,9 +992,11 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         })
         .strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath("/v1/analysis-runs", args),
+            path: ownerQueryPath("/v1/analysis-runs", owner, query),
           }),
         );
       },
@@ -968,11 +1012,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ analysis_run_id: z.uuid() }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, analysis_run_id: z.uuid() }).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}`,
+            path: ownerQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}`, owner),
           }),
         );
       },
@@ -990,17 +1035,18 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
+          owner: ownerSchema,
           analysis_run_id: z.uuid(),
-          reason: z.string().min(1).optional(),
+          message: z.string().min(1).optional(),
         })
         .strict(),
       async call(client, args) {
-        const body = args.reason ? { reason: args.reason } : undefined;
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/cancel`,
+            path: ownerQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/cancel`, owner),
             method: "POST",
-            ...(body ? { body } : {}),
+            body: args.message ? { message: args.message } : {},
           }),
         );
       },
@@ -1020,19 +1066,18 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         .object({
           analysis_run_id: z.uuid(),
           owner: ownerSchema,
-          reason: z.string().min(1).optional(),
           idempotency_key: idempotencyKeySchema.optional(),
         })
         .strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/retry`,
+            path: ownerQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/retry`, owner),
             method: "POST",
             headers: idempotencyHeaders(args),
             body: {
-              owner: args.owner,
-              ...(args.reason ? { reason: args.reason } : {}),
+              owner,
             },
           }),
         );
@@ -1049,12 +1094,17 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
       async call(client, args) {
-        const { analysis_run_id, ...query } = args;
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, analysis_run_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath(`/v1/analysis-runs/${pathSegment(String(analysis_run_id))}/events`, query),
+            path: ownerQueryPath(
+              `/v1/analysis-runs/${pathSegment(String(analysis_run_id))}/events`,
+              owner,
+              query,
+            ),
           }),
         );
       },
@@ -1063,19 +1113,24 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       name: "list_artifacts",
       title: "List Artifacts",
       description: "List artifact summaries produced by one analysis run, including preview metadata.",
-      apiPathHint: "GET /v1/analysis-runs/{analysis_run_id}/artifacts",
+      apiPathHint: "GET /v1/artifacts",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
       async call(client, args) {
-        const { analysis_run_id, ...query } = args;
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, analysis_run_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath(`/v1/analysis-runs/${pathSegment(String(analysis_run_id))}/artifacts`, query),
+            path: ownerQueryPath(
+              `/v1/analysis-runs/${pathSegment(String(analysis_run_id))}/artifacts`,
+              owner,
+              query,
+            ),
           }),
         );
       },
@@ -1091,11 +1146,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ artifact_id: z.uuid() }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, artifact_id: z.uuid() }).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/artifacts/${pathSegment(String(args.artifact_id))}`,
+            path: ownerQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}`, owner),
           }),
         );
       },
@@ -1115,14 +1171,16 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
+          owner: ownerSchema,
           artifact_id: z.uuid(),
           format: z.enum(["text", "markdown", "json"]).default("text"),
           max_chars: z.number().int().min(1).max(20000).default(4000),
         })
         .strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         const response = await client.request({
-          path: `/v1/artifacts/${pathSegment(String(args.artifact_id))}`,
+          path: ownerQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}`, owner),
         });
         return shapeArtifactPreview(args, artifactFromResponse(response));
       },
@@ -1138,11 +1196,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ artifact_id: z.uuid() }).strict(),
+      inputSchema: z.object({ owner: ownerSchema, artifact_id: z.uuid() }).strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: `/v1/artifacts/${pathSegment(String(args.artifact_id))}/refresh`,
+            path: ownerQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}/refresh`, owner),
             method: "POST",
           }),
         );
@@ -1161,6 +1220,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
+          owner: ownerSchema,
           ...paginationInputShape,
           subject_type: z
             .enum([
@@ -1179,9 +1239,11 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         })
         .strict(),
       async call(client, args) {
+        const owner = asRecord(args.owner, "owner");
+        const { owner: _owner, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: queryPath("/v1/diagnostics", args),
+            path: ownerQueryPath("/v1/diagnostics", owner, query),
           }),
         );
       },

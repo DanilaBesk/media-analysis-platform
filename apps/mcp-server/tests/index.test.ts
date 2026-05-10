@@ -34,6 +34,13 @@ import type {
   McpAdapterApiRequest,
 } from "../src/client/api-client.ts";
 
+const OWNER = {
+  owner_type: "mcp",
+  owner_id: "assistant",
+  adapter_identity: {
+    mcp_caller_id: "codex",
+  },
+};
 const MEDIA_ID = "00000000-0000-4000-8000-000000000001";
 
 test("bootstrapMcpServerRuntime composes the bounded SDK runtime surface", () => {
@@ -65,7 +72,7 @@ test("bootstrapMcpServerRuntime exposes domain tool entrypoints and mapping mark
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       assert.deepEqual(request, {
-        path: `/v1/media-items/${MEDIA_ID}`,
+        path: `/v1/media-items/${MEDIA_ID}?owner_type=mcp&owner_id=assistant`,
       });
       return {
         status: 200,
@@ -94,6 +101,7 @@ test("bootstrapMcpServerRuntime exposes domain tool entrypoints and mapping mark
   const result = await callMcpTool(runtime, {
     name: "get_media",
     arguments: {
+      owner: OWNER,
       media_item_id: MEDIA_ID,
     },
   });
