@@ -21,6 +21,8 @@ STALE_PUBLIC_TOKENS = (
     _hyphen("batch", "drafts"),
     _hyphen("create", "transcription"),
     _hyphen("batch", "draft"),
+    _hyphen("execution", "request"),
+    _hyphen("grouped", "submission"),
     "Job" + "Snapshot",
     _snake("source", "set"),
     _hyphen("job", "create"),
