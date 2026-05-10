@@ -602,24 +602,38 @@ def runAgentHarness(
             artifact_store,
             workspace_dir=workspace_dir,
         )
+        non_fatal_diagnostics = _normalize_non_fatal_diagnostics(execution, harness_result)
         policy_artifacts = _persist_run_policy_artifacts(
             execution,
             artifact_store,
             artifact_kinds=tuple(artifact.artifact_kind for artifact in artifact_descriptors),
+            diagnostics=non_fatal_diagnostics,
         )
         api_client.register_artifacts(
             execution.analysis_run_id,
             execution_id=execution.execution_id,
             artifacts=(*artifact_descriptors, *policy_artifacts),
         )
+        if non_fatal_diagnostics:
+            api_client.register_diagnostics(
+                execution.analysis_run_id,
+                execution_id=execution.execution_id,
+                diagnostics=non_fatal_diagnostics,
+            )
 
         _check_cancellation(api_client, execution)
+        final_outcome = _non_fatal_outcome(execution, non_fatal_diagnostics)
+        progress_message = (
+            "Agent harness completed with diagnostics"
+            if final_outcome == "partially_succeeded"
+            else "Agent harness completed"
+        )
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
             execution_id=execution.execution_id,
-            outcome="succeeded",
+            outcome=final_outcome,
             progress_stage="completed",
-            progress_message="Agent harness completed",
+            progress_message=progress_message,
             error_code=None,
             error_message=None,
         )
@@ -1138,8 +1152,10 @@ def _persist_run_policy_artifacts(
     artifact_store: ArtifactObjectStore,
     *,
     artifact_kinds: tuple[str, ...],
+    diagnostics: tuple[Mapping[str, object], ...] = (),
 ) -> tuple[ArtifactDescriptor, ...]:
     writer = ArtifactWriter(analysis_run_id=execution.analysis_run_id, object_store=artifact_store)
+    item_entries, summary = _manifest_items_with_diagnostics(execution, artifact_kinds=artifact_kinds, diagnostics=diagnostics)
     manifest = {
         "schema_version": "analysis_run_manifest/v2",
         "analysis_run_id": execution.analysis_run_id,
@@ -1150,31 +1166,15 @@ def _persist_run_policy_artifacts(
         "artifact_policy": {
             "canonical": ["run_manifest", "run_diagnostics"],
         },
-        "summary": {
-            "included_count": len(execution.selection.items),
-            "skipped_count": 0,
-            "failed_count": 0,
-        },
-        "items": [
-            {
-                "selection_item_id": str(item.selection_item_id),
-                "media_item_id": item.media_item_id,
-                "position": item.position,
-                "outcome": "succeeded",
-                "included": True,
-                "lineage": _selection_item_lineage(item),
-                "artifact_kinds": list(artifact_kinds),
-                "diagnostic_ids": [],
-            }
-            for item in sorted(execution.selection.items, key=lambda selection_item: selection_item.position)
-        ],
+        "summary": summary,
+        "items": item_entries,
     }
     diagnostics = {
         "schema_version": "analysis_run_diagnostics/v2",
         "analysis_run_id": execution.analysis_run_id,
         "execution_id": execution.execution_id,
         "selection_id": execution.selection.selection_id,
-        "diagnostics": [],
+        "diagnostics": list(diagnostics),
     }
     return (
         writer.write_text_artifact(
@@ -1206,6 +1206,103 @@ def _selection_item_lineage(item) -> Mapping[str, object]:
             "source_label": labels.source_label if labels else None,
             "original_filename": labels.original_filename if labels else None,
         },
+    }
+
+
+def _normalize_non_fatal_diagnostics(
+    execution: ClaimedAnalysisRunExecution,
+    harness_result: AgentHarnessResult,
+) -> tuple[Mapping[str, object], ...]:
+    raw = harness_result.result_payload.get("diagnostics")
+    if not isinstance(raw, list):
+        return ()
+    diagnostics: list[Mapping[str, object]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            continue
+        diagnostic_id = item.get("diagnostic_id")
+        code = item.get("code")
+        message = item.get("message")
+        if not isinstance(diagnostic_id, str) or not diagnostic_id.strip():
+            continue
+        if not isinstance(code, str) or not code.strip():
+            continue
+        if not isinstance(message, str) or not message.strip():
+            continue
+        context = dict(item.get("context")) if isinstance(item.get("context"), Mapping) else {}
+        context.setdefault("analysis_run_id", execution.analysis_run_id)
+        context.setdefault("selection_id", execution.selection.selection_id)
+        context.setdefault("execution_id", execution.execution_id)
+        context.setdefault("harness_name", harness_result.harness_name)
+        diagnostics.append(
+            {
+                "diagnostic_id": diagnostic_id.strip(),
+                "subject_type": str(item.get("subject_type") or "analysis_run"),
+                "subject_id": str(item.get("subject_id") or execution.analysis_run_id),
+                "severity": str(item.get("severity") or "warning"),
+                "code": code.strip(),
+                "message": message.strip(),
+                "context": context,
+            }
+        )
+    return tuple(diagnostics)
+
+
+def _non_fatal_outcome(
+    execution: ClaimedAnalysisRunExecution,
+    diagnostics: tuple[Mapping[str, object], ...],
+) -> str:
+    if not diagnostics:
+        return "succeeded"
+    policy = execution.params.get("diagnostics_policy")
+    if isinstance(policy, Mapping) and policy.get("non_fatal_outcome") == "partially_succeeded":
+        return "partially_succeeded"
+    return "succeeded"
+
+
+def _manifest_items_with_diagnostics(
+    execution: ClaimedAnalysisRunExecution,
+    *,
+    artifact_kinds: tuple[str, ...],
+    diagnostics: tuple[Mapping[str, object], ...],
+) -> tuple[list[Mapping[str, object]], Mapping[str, int]]:
+    items = sorted(execution.selection.items, key=lambda selection_item: selection_item.position)
+    diagnostics_by_selection_item_id: dict[str, list[str]] = {}
+    for diagnostic in diagnostics:
+        context = diagnostic.get("context")
+        if not isinstance(context, Mapping):
+            continue
+        selection_item_id = context.get("selection_item_id")
+        if isinstance(selection_item_id, str) and selection_item_id.strip():
+            diagnostics_by_selection_item_id.setdefault(selection_item_id.strip(), []).append(str(diagnostic["diagnostic_id"]))
+
+    manifest_items: list[Mapping[str, object]] = []
+    included_count = 0
+    skipped_count = 0
+    for item in items:
+        diagnostic_ids = diagnostics_by_selection_item_id.get(str(item.selection_item_id), [])
+        included = len(diagnostic_ids) == 0
+        outcome = "succeeded" if included else "skipped"
+        if included:
+            included_count += 1
+        else:
+            skipped_count += 1
+        manifest_items.append(
+            {
+                "selection_item_id": str(item.selection_item_id),
+                "media_item_id": item.media_item_id,
+                "position": item.position,
+                "outcome": outcome,
+                "included": included,
+                "lineage": _selection_item_lineage(item),
+                "artifact_kinds": list(artifact_kinds) if included else [],
+                "diagnostic_ids": diagnostic_ids,
+            }
+        )
+    return manifest_items, {
+        "included_count": included_count,
+        "skipped_count": skipped_count,
+        "failed_count": 0,
     }
 
 

@@ -108,6 +108,18 @@ class RecordingApiClient:
             )
         )
 
+    def register_diagnostics(self, analysis_run_id: str, *, execution_id: str, diagnostics) -> None:
+        self.calls.append(
+            (
+                "register_diagnostics",
+                {
+                    "analysis_run_id": analysis_run_id,
+                    "execution_id": execution_id,
+                    "diagnostics": tuple(diagnostics),
+                },
+            )
+        )
+
     def finalize_analysis_run(
         self,
         analysis_run_id: str,
@@ -311,6 +323,141 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
     assert api_client.calls[-1][0] == "finalize_analysis_run"
     assert api_client.calls[-1][1]["outcome"] == "succeeded"
     assert result.artifact_descriptors == register_call[1]["artifacts"]
+
+
+def test_run_agent_harness_registers_non_fatal_diagnostics_without_partial_policy(tmp_path: Path) -> None:
+    execution = _execution(
+        {
+            "harness_name": "fixture",
+            "request": {"operation": "summary", "expected_output_artifacts": ["summary_markdown"]},
+        }
+    )
+    api_client = RecordingApiClient(execution)
+    artifact_store = InMemoryArtifactStore()
+
+    class WarningHarnessRegistry:
+        def run(
+            self,
+            harness_name: str,
+            request: AgentHarnessRequest,
+            *,
+            lease: AgentHarnessLease | None = None,
+            cancellation_hook=None,
+        ) -> AgentHarnessResult:
+            return AgentHarnessResult(
+                harness_name=harness_name,
+                result_payload={
+                    "operation": "summary",
+                    "expected_output_artifacts": ["summary_markdown"],
+                    "output_text": "# Summary\n\nResult\n",
+                    "diagnostics": [
+                        {
+                            "diagnostic_id": "exec-agent:0:source-skipped",
+                            "subject_type": "media_item",
+                            "subject_id": "media-agent",
+                            "severity": "warning",
+                            "code": "source_unavailable",
+                            "message": "Reference URL was skipped",
+                            "context": {
+                                "selection_item_id": "selection-item-agent",
+                                "media_item_id": "media-agent",
+                                "position": 0,
+                                "role": "reference",
+                            },
+                        }
+                    ],
+                },
+                execution_log="completed with warnings\n",
+            )
+
+    runAgentHarness(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+        harness_registry=WarningHarnessRegistry(),
+    )
+
+    diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
+    diagnostics = diagnostics_call[1]["diagnostics"]
+    assert diagnostics[0]["severity"] == "warning"
+    assert diagnostics[0]["subject_id"] == "media-agent"
+    assert diagnostics[0]["context"]["analysis_run_id"] == execution.analysis_run_id
+    assert diagnostics[0]["context"]["selection_id"] == execution.selection.selection_id
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == list(diagnostics)
+    assert api_client.calls[-1][1]["outcome"] == "succeeded"
+
+
+def test_run_agent_harness_partial_success_policy_retains_artifacts_for_successful_items(tmp_path: Path) -> None:
+    execution = _execution(
+        {
+            "harness_name": "fixture",
+            "request": {"operation": "report", "expected_output_artifacts": ["report_markdown"]},
+            "diagnostics_policy": {"non_fatal_outcome": "partially_succeeded"},
+        },
+        item_count=2,
+    )
+    api_client = RecordingApiClient(execution)
+    artifact_store = InMemoryArtifactStore()
+
+    class PartialSuccessHarnessRegistry:
+        def run(
+            self,
+            harness_name: str,
+            request: AgentHarnessRequest,
+            *,
+            lease: AgentHarnessLease | None = None,
+            cancellation_hook=None,
+        ) -> AgentHarnessResult:
+            return AgentHarnessResult(
+                harness_name=harness_name,
+                result_payload={
+                    "operation": "report",
+                    "expected_output_artifacts": ["report_markdown"],
+                    "output_text": "# Report\n\nResult\n",
+                    "diagnostics": [
+                        {
+                            "diagnostic_id": "exec-agent:1:reference-skipped",
+                            "subject_type": "media_item",
+                            "subject_id": "media-agent-1",
+                            "severity": "warning",
+                            "code": "source_unavailable",
+                            "message": "One reference item was skipped",
+                            "context": {
+                                "selection_item_id": "selection-item-agent-1",
+                                "media_item_id": "media-agent-1",
+                                "position": 1,
+                                "role": "reference",
+                            },
+                        }
+                    ],
+                },
+                execution_log="completed with retained artifacts\n",
+            )
+
+    runAgentHarness(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+        harness_registry=PartialSuccessHarnessRegistry(),
+    )
+
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["summary"] == {"included_count": 1, "skipped_count": 1, "failed_count": 0}
+    assert manifest["items"][0]["selection_item_id"] == "selection-item-agent"
+    assert manifest["items"][0]["artifact_kinds"] == [
+        "agent_result_json",
+        "execution_log",
+        "report_markdown",
+    ]
+    assert manifest["items"][0]["diagnostic_ids"] == []
+    assert manifest["items"][1]["selection_item_id"] == "selection-item-agent-1"
+    assert manifest["items"][1]["artifact_kinds"] == []
+    assert manifest["items"][1]["diagnostic_ids"] == ["exec-agent:1:reference-skipped"]
+    assert manifest["items"][1]["outcome"] == "skipped"
+    assert api_client.calls[-1][1]["outcome"] == "partially_succeeded"
 
 
 def test_local_fixture_registry_supports_test_fixture_and_redacts_prompt_metadata(tmp_path: Path) -> None:
@@ -1140,31 +1287,38 @@ def test_run_agent_harness_cancels_before_artifact_upload(tmp_path: Path) -> Non
     assert api_client.calls[-1][1]["outcome"] == "canceled"
 
 
-def _execution(params: dict[str, object]) -> ClaimedAnalysisRunExecution:
+def _execution(params: dict[str, object], *, item_count: int = 1) -> ClaimedAnalysisRunExecution:
+    items = []
+    for position in range(item_count):
+        suffix = "" if position == 0 else f"-{position}"
+        role = "primary" if position == 0 else "reference"
+        items.append(
+            SelectionItemSnapshot(
+                selection_item_id=f"selection-item-agent{suffix}",
+                position=position,
+                media_item_id=f"media-agent{suffix}",
+                kind="text",
+                media_kind="text",
+                role=role,
+                source_snapshot=MediaSourceSnapshot(
+                    source_id=f"source-agent{suffix}",
+                    origin_type="text",
+                    text_ref=f"selection-agent/source-agent{suffix}",
+                ),
+                display_name=f"Agent context{suffix}",
+                status_at_selection="ready",
+                metadata_snapshot={},
+                retention_snapshot={"state": "active"},
+            )
+        )
+
     return ClaimedAnalysisRunExecution(
         execution_id="exec-agent",
         analysis_run_id="job-agent",
         run_type="custom",
         selection=SealedSelectionInput(
             selection_id="selection-agent",
-            items=(
-                SelectionItemSnapshot(
-                    selection_item_id="selection-item-agent",
-                    position=0,
-                    media_item_id="media-agent",
-                    kind="text",
-                    media_kind="text",
-                    source_snapshot=MediaSourceSnapshot(
-                        source_id="source-agent",
-                        origin_type="text",
-                        text_ref="selection-agent/source-agent",
-                    ),
-                    display_name="Agent context",
-                    status_at_selection="ready",
-                    metadata_snapshot={},
-                    retention_snapshot={"state": "active"},
-                ),
-            ),
+            items=tuple(items),
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
         ),
