@@ -125,7 +125,7 @@
       <rule>Web is the full management surface for browsing inbox, creating collections, curating selections, launching analysis_run records, and reviewing artifacts and diagnostics.</rule>
     </Web>
     <MCP>
-      <rule>MCP exposes tool calls for add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, and get_diagnostics.</rule>
+      <rule>MCP exposes tool calls for add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</rule>
     </MCP>
   </AdapterBoundaries>
 

@@ -91,8 +91,13 @@
     <endpoint method="POST" path="/v1/analysis-runs/{analysis_run_id}/cancel">Request cooperative cancellation.</endpoint>
     <endpoint method="POST" path="/v1/analysis-runs/{analysis_run_id}/retry">Create a new analysis_run attempt from the same sealed selection as a previous run.</endpoint>
     <endpoint method="GET" path="/v1/analysis-runs/{analysis_run_id}/events">Poll events and diagnostics.</endpoint>
+    <endpoint method="GET" path="/v1/analysis-runs/{analysis_run_id}/artifacts">List artifact summaries for one analysis_run.</endpoint>
     <endpoint method="GET" path="/v1/artifacts/{artifact_id}">Resolve owner-scoped artifact preview or download access.</endpoint>
-    <endpoint method="GET" path="/v1/diagnostics">Query owner-scoped diagnostics by subject and severity.</endpoint>
+    <endpoint method="POST" path="/v1/artifacts/{artifact_id}/refresh">Refresh artifact preview and download handles for the same owner.</endpoint>
+    <endpoint method="GET" path="/v1/diagnostics">Query owner-scoped diagnostics by subject, severity, code, and correlation id.</endpoint>
+    <endpoint method="POST" path="/v1/admin/reconcile-queue">Promote pending analysis_run tasks into queued worker delivery.</endpoint>
+    <endpoint method="GET" path="/v1/admin/observability">Read queue and artifact-resolution observability counters.</endpoint>
+    <endpoint method="GET" path="/v1/ws">Subscribe to owner-visible analysis_run events over WebSocket.</endpoint>
   </PublicApiSurface>
 
   <LifecycleAndRetention>
@@ -105,7 +110,7 @@
 
   <AdapterContracts>
     <telegram>Telegram captures input, shows inbox or collection state, lets the user manage items, creates selections, starts analysis_run records, and sends artifact previews or downloads returned by the API.</telegram>
-    <web>Web provides the richest management UI for inbox, collections, selections, runs, artifacts, diagnostics, retention actions, and owner-scoped search.</web>
+    <web>Web provides the richest management UI for inbox, collections, selections, runs, artifacts, diagnostics, owner-scoped search, and the surviving retention-touching actions: media soft delete plus artifact access refresh.</web>
     <mcp>MCP exposes stable tools over the same API and never maintains its own durable media store.</mcp>
   </AdapterContracts>
 
