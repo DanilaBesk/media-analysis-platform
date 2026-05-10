@@ -1,7 +1,7 @@
 # FILE: workers/agent-runner/src/transcriber_worker_agent_runner.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Execute generic agent_run jobs through a provider-neutral deterministic harness registry.
+# PURPOSE: Execute generic analysis runs through a provider-neutral deterministic harness registry.
 # SCOPE: Worker claim/run orchestration, harness_name dispatch, cancellation checkpoints, artifact writes, and finalize calls.
 # DEPENDS: M-WORKER-AGENT-RUNNER, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-AGENT-RUNNER, V-M-WORKER-AGENT-RUNNER
@@ -27,7 +27,7 @@
 #   AgentHarnessNotSupported - Signals stable unsupported harness failures.
 #   AgentHarnessConcurrencyUnavailable - Signals per-harness lease saturation.
 #   AgentHarnessExecutionFailed - Signals provider-reported harness execution failure.
-#   runAgentHarness - Claims an agent_run job, dispatches harness_name, persists artifacts, and finalizes.
+#   runAgentHarness - Claims an analysis run, dispatches harness_name, persists artifacts, and finalizes.
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -39,11 +39,12 @@ import os
 import subprocess
 import threading
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Mapping, Protocol
 from urllib import error, request as urlrequest
 
-from transcriber_workers_common.api import AgentRunRequestAccessResult, ClaimedJobExecution, JobApiClient
+from transcriber_workers_common.api import AgentRunRequestAccessResult, ClaimedAnalysisRunExecution, AnalysisRunControlClient
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
 from transcriber_workers_common.documents import normalize_report_markdown, write_report_docx
 
@@ -64,7 +65,16 @@ _DEFAULT_CLAUDE_CODE_MODEL = "glm-5"
 _DEFAULT_CLAUDE_CODE_CONFIG_DIR = "/tmp/runtime/agent-runner/claude-code"
 _ARTIFACT_RESOLVE_TIMEOUT_SECONDS = 30.0
 _ARTIFACT_DOWNLOAD_TIMEOUT_SECONDS = 60.0
-_EXPECTED_OPERATION_ARTIFACTS = frozenset({"report_markdown", "report_docx", "deep_research_markdown"})
+_EXPECTED_OPERATION_ARTIFACTS = frozenset(
+    {
+        "summary_markdown",
+        "report_markdown",
+        "report_docx",
+        "deep_research_markdown",
+        "agent_result_json",
+        "execution_log",
+    }
+)
 
 __all__ = [
     "AgentHarnessNotSupported",
@@ -103,21 +113,21 @@ class AgentHarnessLeaseClient(Protocol):
 
 # START_CONTRACT: AgentHarnessRequest
 # PURPOSE: Carry one provider-neutral agent-runner invocation.
-# INPUTS: { job_id: str, workspace_dir: Path, params: Mapping[str, object] }
+# INPUTS: { analysis_run_id: str, workspace_dir: Path, params: Mapping[str, object] }
 # OUTPUTS: { AgentHarnessRequest - Immutable request consumed by the harness registry }
 # SIDE_EFFECTS: none
 # LINKS: M-WORKER-AGENT-RUNNER, M-CONTRACTS
 # END_CONTRACT: AgentHarnessRequest
 @dataclass(frozen=True, slots=True)
 class AgentHarnessRequest:
-    job_id: str
+    analysis_run_id: str
     workspace_dir: Path
     params: Mapping[str, object]
     request_access: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
-        if not self.job_id.strip():
-            raise ValueError("job_id must not be empty")
+        if not self.analysis_run_id.strip():
+            raise ValueError("analysis_run_id must not be empty")
 
 
 # START_CONTRACT: AgentHarnessResult
@@ -153,7 +163,7 @@ class AgentHarnessLease:
 
 @dataclass(frozen=True, slots=True)
 class AgentRunnerWorkerResult:
-    execution: ClaimedJobExecution
+    execution: ClaimedAnalysisRunExecution
     harness_result: AgentHarnessResult
     artifact_descriptors: tuple[ArtifactDescriptor, ...]
 
@@ -180,6 +190,41 @@ class _AgentRunPromptContext:
     operation: str | None
     expected_output_artifacts: tuple[str, ...]
     materialized_input_artifacts: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _RequestAccessPolicy:
+    required_for_harnesses: frozenset[str]
+    required_for_operations: frozenset[str]
+    allow_inline_request: bool = True
+
+    @classmethod
+    def from_params(cls, params: Mapping[str, object]) -> "_RequestAccessPolicy":
+        raw_policy = params.get("request_access_policy")
+        if not isinstance(raw_policy, Mapping):
+            return cls(required_for_harnesses=_REQUEST_ACCESS_HARNESSES, required_for_operations=frozenset())
+        required_harnesses = _normalize_policy_names(
+            raw_policy.get("required_for_harnesses"),
+            canonicalizer=_canonical_harness_name,
+        )
+        required_operations = _normalize_policy_names(
+            raw_policy.get("required_for_operations"),
+            canonicalizer=_canonical_operation_name,
+        )
+        mode = raw_policy.get("mode")
+        if isinstance(mode, str) and mode.strip() == "required":
+            required_harnesses = frozenset({*required_harnesses, *_REQUEST_ACCESS_HARNESSES})
+        allow_inline = raw_policy.get("allow_inline_request")
+        return cls(
+            required_for_harnesses=frozenset({*_REQUEST_ACCESS_HARNESSES, *required_harnesses}),
+            required_for_operations=required_operations,
+            allow_inline_request=allow_inline is not False,
+        )
+
+    def requires_access(self, *, harness_name: str, operation: str | None) -> bool:
+        if _canonical_harness_name(harness_name) in self.required_for_harnesses:
+            return True
+        return bool(operation and _canonical_operation_name(operation) in self.required_for_operations)
 
 
 class LocalAgentHarnessLeaseClient:
@@ -216,7 +261,7 @@ class LocalAgentHarnessLeaseClient:
             return AgentHarnessLease(
                 harness_name=canonical,
                 lease_id=f"local-{canonical}-{self._sequence}",
-                metadata={"policy_limit": limit, "job_id": request.job_id},
+                metadata={"policy_limit": limit, "analysis_run_id": request.analysis_run_id},
             )
 
     def release(self, lease: AgentHarnessLease) -> None:
@@ -317,7 +362,7 @@ class AgentClaudeCodeHarness:
     # END_CONTRACT: runClaudeCodeHarness
     def run(self, request: AgentHarnessRequest, *, cancellation_hook=None) -> AgentHarnessResult:
         if cancellation_hook is not None and cancellation_hook():
-            raise WorkerCancellationRequested(f"job {request.job_id} was canceled")
+            raise WorkerCancellationRequested(f"analysis run {request.analysis_run_id} was canceled")
         if not request.request_access:
             raise AgentHarnessExecutionFailed("claude-code request access is missing")
 
@@ -453,7 +498,7 @@ class LocalAgentHarnessRegistry:
         if normalized not in self._SUPPORTED:
             raise AgentHarnessNotSupported(f"agent harness is not supported: {harness_name}")
         if cancellation_hook is not None and cancellation_hook():
-            raise WorkerCancellationRequested(f"job {request.job_id} was canceled")
+            raise WorkerCancellationRequested(f"analysis run {request.analysis_run_id} was canceled")
 
         request.workspace_dir.mkdir(parents=True, exist_ok=True)
         params_metadata = _build_redacted_params_metadata(request.params)
@@ -464,14 +509,14 @@ class LocalAgentHarnessRegistry:
             result_payload={
                 "status": "ok",
                 "harness_name": normalized,
-                "job_id": request.job_id,
+                "analysis_run_id": request.analysis_run_id,
                 "params_metadata": params_metadata,
                 "params_metadata_digest": metadata_digest,
             },
             execution_log="\n".join(
                 [
                     "agent-runner fixture execution",
-                    f"job_id={request.job_id}",
+                    f"analysis_run_id={request.analysis_run_id}",
                     f"harness_name={normalized}",
                     f"params_metadata_digest={metadata_digest}",
                     "",
@@ -482,23 +527,23 @@ class LocalAgentHarnessRegistry:
 
 
 # START_CONTRACT: runAgentHarness
-# PURPOSE: Claim and execute one generic agent_run job through the shared control plane.
-# INPUTS: { job_id: str, workspace_root: Path, api_client: JobApiClient, artifact_store: ArtifactObjectStore, harness_registry: AgentHarnessRegistry | None }
+# PURPOSE: Claim and execute one generic analysis run through the shared control plane.
+# INPUTS: { analysis_run_id: str, workspace_root: Path, api_client: AnalysisRunControlClient, artifact_store: ArtifactObjectStore, harness_registry: AgentHarnessRegistry | None }
 # OUTPUTS: { AgentRunnerWorkerResult - Successful execution evidence }
 # SIDE_EFFECTS: API claim/progress/artifact/finalize calls and object-store writes
 # LINKS: M-WORKER-AGENT-RUNNER, M-WORKER-COMMON, M-CONTRACTS, DF-001, DF-007
 # END_CONTRACT: runAgentHarness
 def runAgentHarness(
-    job_id: str,
+    analysis_run_id: str,
     *,
     workspace_root: Path,
-    api_client: JobApiClient,
+    api_client: AnalysisRunControlClient,
     artifact_store: ArtifactObjectStore,
     harness_registry: AgentHarnessRegistry | None = None,
     lease_client: AgentHarnessLeaseClient | None = None,
 ) -> AgentRunnerWorkerResult:
-    execution = api_client.claim_job(job_id, worker_kind="agent_runner", task_type="agent_run.run")
-    workspace_dir = Path(workspace_root) / execution.job_id
+    execution = api_client.claim_analysis_run(analysis_run_id, worker_kind="agent_runner", task_type="selection.analysis")
+    workspace_dir = Path(workspace_root) / execution.analysis_run_id
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -507,26 +552,27 @@ def runAgentHarness(
         registry = harness_registry or DefaultAgentHarnessRegistry.from_env()
         leases = lease_client or LocalAgentHarnessLeaseClient.from_env()
         request_access = _resolve_request_access(api_client, execution, harness_name)
+        request_access_payload = request_access.to_payload() if request_access is not None else _inline_request_access_payload(execution)
         request = AgentHarnessRequest(
-            job_id=execution.job_id,
+            analysis_run_id=execution.analysis_run_id,
             workspace_dir=workspace_dir,
             params=execution.params,
-            request_access=request_access.to_payload() if request_access is not None else None,
+            request_access=request_access_payload,
         )
         lease: AgentHarnessLease | None = None
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             progress_stage="running_agent_harness",
             progress_message="Running agent harness",
         )
         _LOGGER.info(
-            "%s %s job_id=%s execution_id=%s harness_name=%s workspace_dir=%s",
+            "%s %s analysis_run_id=%s execution_id=%s harness_name=%s workspace_dir=%s",
             _LOG_MARKER_RUN_AGENT_HARNESS,
             _LOG_MARKER_DISPATCH_AGENT_HARNESS,
-            execution.job_id,
+            execution.analysis_run_id,
             execution.execution_id,
             harness_name,
             workspace_dir,
@@ -545,26 +591,31 @@ def runAgentHarness(
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             progress_stage="persisting_artifacts",
             progress_message="Uploading agent-runner artifacts",
         )
         artifact_descriptors = _persist_agent_artifacts(
-            execution.job_id,
+            execution.analysis_run_id,
             harness_result,
             artifact_store,
             workspace_dir=workspace_dir,
         )
+        policy_artifacts = _persist_run_policy_artifacts(
+            execution,
+            artifact_store,
+            artifact_kinds=tuple(artifact.artifact_kind for artifact in artifact_descriptors),
+        )
         api_client.register_artifacts(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
-            artifacts=artifact_descriptors,
+            artifacts=(*artifact_descriptors, *policy_artifacts),
         )
 
         _check_cancellation(api_client, execution)
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="succeeded",
             progress_stage="completed",
@@ -575,12 +626,12 @@ def runAgentHarness(
         return AgentRunnerWorkerResult(
             execution=execution,
             harness_result=harness_result,
-            artifact_descriptors=artifact_descriptors,
+            artifact_descriptors=(*artifact_descriptors, *policy_artifacts),
         )
         # END_BLOCK_BLOCK_EXECUTE_AGENT_HARNESS
     except WorkerCancellationRequested:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="canceled",
             progress_stage="canceled",
@@ -590,8 +641,8 @@ def runAgentHarness(
         )
         raise
     except AgentHarnessNotSupported as exc:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="failed",
             progress_stage="failed",
@@ -601,8 +652,8 @@ def runAgentHarness(
         )
         raise
     except AgentHarnessConcurrencyUnavailable as exc:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="failed",
             progress_stage="failed",
@@ -612,8 +663,8 @@ def runAgentHarness(
         )
         raise
     except AgentHarnessExecutionFailed as exc:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="failed",
             progress_stage="failed",
@@ -623,8 +674,8 @@ def runAgentHarness(
         )
         raise
     except Exception as exc:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="failed",
             progress_stage="failed",
@@ -643,13 +694,36 @@ def _resolve_harness_name(params: Mapping[str, object]) -> str:
 
 
 def _resolve_request_access(
-    api_client: JobApiClient,
-    execution: ClaimedJobExecution,
+    api_client: AnalysisRunControlClient,
+    execution: ClaimedAnalysisRunExecution,
     harness_name: str,
 ) -> AgentRunRequestAccessResult | None:
-    if _canonical_harness_name(harness_name) not in _REQUEST_ACCESS_HARNESSES:
+    policy = _RequestAccessPolicy.from_params(execution.params)
+    operation = _operation_from_params(execution.params)
+    request_access = execution.params.get("request_access")
+    if isinstance(request_access, Mapping):
+        access = AgentRunRequestAccessResult.from_payload(request_access)
+        _ensure_request_access_not_expired(access)
+        return access
+    if not policy.requires_access(harness_name=harness_name, operation=operation):
         return None
-    return api_client.resolve_agent_run_request_access(execution.job_id, execution_id=execution.execution_id)
+    access = api_client.resolve_agent_run_request_access(execution.analysis_run_id, execution_id=execution.execution_id)
+    _ensure_request_access_not_expired(access)
+    return access
+
+
+def _inline_request_access_payload(execution: ClaimedAnalysisRunExecution) -> Mapping[str, object] | None:
+    policy = _RequestAccessPolicy.from_params(execution.params)
+    if not policy.allow_inline_request:
+        return None
+    inline_request = execution.params.get("request")
+    if not isinstance(inline_request, Mapping):
+        return None
+    return {
+        "provider": "inline_analysis_run_params",
+        "request": dict(inline_request),
+        "request_ref": f"{execution.analysis_run_id}:params.request",
+    }
 
 
 def _canonical_harness_name(harness_name: str) -> str:
@@ -657,6 +731,51 @@ def _canonical_harness_name(harness_name: str) -> str:
     if normalized in {"claude", "claude_code"}:
         return "claude-code"
     return normalized
+
+
+def _canonical_operation_name(operation: str) -> str:
+    return operation.strip().lower().replace("-", "_")
+
+
+def _operation_from_params(params: Mapping[str, object]) -> str | None:
+    request = params.get("request")
+    request_mapping = request if isinstance(request, Mapping) else None
+    payload = request_mapping.get("payload") if request_mapping is not None else None
+    payload_mapping = payload if isinstance(payload, Mapping) else None
+    for candidate in (
+        request_mapping.get("operation") if request_mapping is not None else None,
+        payload_mapping.get("operation") if payload_mapping is not None else None,
+        params.get("operation"),
+    ):
+        if isinstance(candidate, str) and _is_safe_operation_name(candidate):
+            return _canonical_operation_name(candidate)
+    return None
+
+
+def _normalize_policy_names(value: object, *, canonicalizer) -> frozenset[str]:
+    if not isinstance(value, list | tuple | set | frozenset):
+        return frozenset()
+    normalized: set[str] = set()
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            normalized.add(canonicalizer(item))
+    return frozenset(normalized)
+
+
+def _ensure_request_access_not_expired(access: AgentRunRequestAccessResult) -> None:
+    try:
+        expires_at = _parse_rfc3339_utc(access.expires_at)
+    except ValueError as exc:
+        raise AgentHarnessExecutionFailed("agent-run request access expires_at is invalid") from exc
+    if expires_at <= datetime.now(UTC):
+        raise AgentHarnessExecutionFailed("agent-run request access is expired")
+
+
+def _parse_rfc3339_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _build_redacted_params_metadata(params: Mapping[str, object]) -> dict[str, object]:
@@ -759,27 +878,31 @@ def _load_agent_run_prompt_context(
     request_params: Mapping[str, object],
     redaction_values: tuple[str, ...],
 ) -> _AgentRunPromptContext:
-    url = request_access.get("url")
-    if not isinstance(url, str) or not url.strip():
-        raise AgentHarnessExecutionFailed("claude-code request access url is missing")
-    expected_digest = request_access.get("request_digest_sha256")
-    if not isinstance(expected_digest, str) or not expected_digest.strip():
-        raise AgentHarnessExecutionFailed("claude-code request access digest is missing")
-    try:
-        with urlrequest.urlopen(url, timeout=30.0) as response:
-            body = response.read()
-    except error.URLError as exc:
-        raise AgentHarnessExecutionFailed(f"claude-code request envelope download failed: {exc.reason}") from exc
-    except TimeoutError as exc:
-        raise AgentHarnessExecutionFailed("claude-code request envelope download timed out") from exc
-    digest = hashlib.sha256(body).hexdigest()
-    if digest != expected_digest:
-        raise AgentHarnessExecutionFailed("claude-code request envelope digest mismatch")
-    try:
-        envelope = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise AgentHarnessExecutionFailed("claude-code request envelope is malformed JSON") from exc
-    mapping = _expect_mapping(envelope, context="agent request envelope")
+    inline_request = request_access.get("request")
+    if isinstance(inline_request, Mapping):
+        mapping: Mapping[str, object] = {"request": inline_request}
+    else:
+        url = request_access.get("url")
+        if not isinstance(url, str) or not url.strip():
+            raise AgentHarnessExecutionFailed("claude-code request access url is missing")
+        expected_digest = request_access.get("request_digest_sha256")
+        if not isinstance(expected_digest, str) or not expected_digest.strip():
+            raise AgentHarnessExecutionFailed("claude-code request access digest is missing")
+        try:
+            with urlrequest.urlopen(url, timeout=30.0) as response:
+                body = response.read()
+        except error.URLError as exc:
+            raise AgentHarnessExecutionFailed(f"claude-code request envelope download failed: {exc.reason}") from exc
+        except TimeoutError as exc:
+            raise AgentHarnessExecutionFailed("claude-code request envelope download timed out") from exc
+        digest = hashlib.sha256(body).hexdigest()
+        if digest != expected_digest:
+            raise AgentHarnessExecutionFailed("claude-code request envelope digest mismatch")
+        try:
+            envelope = json.loads(body)
+        except json.JSONDecodeError as exc:
+            raise AgentHarnessExecutionFailed("claude-code request envelope is malformed JSON") from exc
+        mapping = _expect_mapping(envelope, context="agent request envelope")
     request = _expect_mapping(mapping.get("request"), context="agent request envelope request")
     payload = request.get("payload")
     payload_mapping = payload if isinstance(payload, Mapping) else None
@@ -836,8 +959,8 @@ def _resolve_agent_operation(
         params_request.get("operation") if params_request is not None else None,
         params_payload.get("operation") if params_payload is not None else None,
     ):
-        if isinstance(candidate, str) and candidate.strip() in {"report", "deep_research"}:
-            return candidate.strip()
+        if isinstance(candidate, str) and _is_safe_operation_name(candidate):
+            return _canonical_operation_name(candidate)
     return None
 
 
@@ -873,6 +996,13 @@ def _normalize_expected_output_artifacts(value: object) -> tuple[str, ...]:
         if artifact_kind in _EXPECTED_OPERATION_ARTIFACTS and artifact_kind not in normalized:
             normalized.append(artifact_kind)
     return tuple(normalized)
+
+
+def _is_safe_operation_name(value: str) -> bool:
+    normalized = _canonical_operation_name(value)
+    if not normalized:
+        return False
+    return all(char.isalnum() or char == "_" for char in normalized)
 
 
 def _materialize_input_artifacts(input_artifacts: object, *, workspace_dir: Path) -> list[Mapping[str, object]]:
@@ -973,13 +1103,13 @@ def _redact_text(value: str, redaction_values: tuple[str, ...]) -> str:
 
 
 def _persist_agent_artifacts(
-    job_id: str,
+    analysis_run_id: str,
     harness_result: AgentHarnessResult,
     artifact_store: ArtifactObjectStore,
     *,
     workspace_dir: Path,
 ) -> tuple[ArtifactDescriptor, ...]:
-    writer = ArtifactWriter(job_id=job_id, object_store=artifact_store)
+    writer = ArtifactWriter(analysis_run_id=analysis_run_id, object_store=artifact_store)
     result_payload = dict(harness_result.result_payload)
     result_payload.setdefault("harness_name", harness_result.harness_name)
     result_json = json.dumps(result_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1003,6 +1133,86 @@ def _persist_agent_artifacts(
     return tuple(descriptors)
 
 
+def _persist_run_policy_artifacts(
+    execution: ClaimedAnalysisRunExecution,
+    artifact_store: ArtifactObjectStore,
+    *,
+    artifact_kinds: tuple[str, ...],
+) -> tuple[ArtifactDescriptor, ...]:
+    writer = ArtifactWriter(analysis_run_id=execution.analysis_run_id, object_store=artifact_store)
+    manifest = {
+        "schema_version": "analysis_run_manifest/v2",
+        "analysis_run_id": execution.analysis_run_id,
+        "execution_id": execution.execution_id,
+        "selection_id": execution.selection.selection_id,
+        "run_type": execution.run_type,
+        "created_at": execution.claimed_at,
+        "artifact_policy": {
+            "canonical": ["run_manifest", "run_diagnostics"],
+        },
+        "summary": {
+            "included_count": len(execution.selection.items),
+            "skipped_count": 0,
+            "failed_count": 0,
+        },
+        "items": [
+            {
+                "selection_item_id": str(item.selection_item_id),
+                "media_item_id": item.media_item_id,
+                "position": item.position,
+                "outcome": "succeeded",
+                "included": True,
+                "lineage": _selection_item_lineage(item),
+                "artifact_kinds": list(artifact_kinds),
+                "diagnostic_ids": [],
+            }
+            for item in sorted(execution.selection.items, key=lambda selection_item: selection_item.position)
+        ],
+    }
+    diagnostics = {
+        "schema_version": "analysis_run_diagnostics/v2",
+        "analysis_run_id": execution.analysis_run_id,
+        "execution_id": execution.execution_id,
+        "selection_id": execution.selection.selection_id,
+        "diagnostics": [],
+    }
+    return (
+        writer.write_text_artifact(
+            "run_manifest",
+            "run-manifest.json",
+            _canonical_json(manifest),
+            mime_type="application/json; charset=utf-8",
+            format="json",
+        ),
+        writer.write_text_artifact(
+            "run_diagnostics",
+            "run-diagnostics.json",
+            _canonical_json(diagnostics),
+            mime_type="application/json; charset=utf-8",
+            format="json",
+        ),
+    )
+
+
+def _selection_item_lineage(item) -> Mapping[str, object]:
+    labels = item.labels
+    return {
+        "selection_item_id": str(item.selection_item_id),
+        "media_item_id": item.media_item_id,
+        "media_kind": item.media_kind,
+        "role": item.role,
+        "labels": {
+            "display_label": labels.display_label if labels else item.display_name,
+            "source_label": labels.source_label if labels else None,
+            "original_filename": labels.original_filename if labels else None,
+        },
+    }
+
+
+def _canonical_json(payload: Mapping[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
 def _persist_requested_operation_artifacts(
     writer: ArtifactWriter,
     result_payload: Mapping[str, object],
@@ -1011,11 +1221,24 @@ def _persist_requested_operation_artifacts(
 ) -> tuple[ArtifactDescriptor, ...]:
     operation = result_payload.get("operation")
     expected = _normalize_expected_output_artifacts(result_payload.get("expected_output_artifacts"))
-    if operation == "report":
-        return _persist_report_operation_artifacts(writer, result_payload, expected, workspace_dir=workspace_dir)
-    if operation == "deep_research":
-        return _persist_deep_research_operation_artifacts(writer, result_payload, expected)
-    return ()
+    if not expected:
+        return ()
+    operation_name = operation if isinstance(operation, str) and operation.strip() else "custom"
+    descriptors: list[ArtifactDescriptor] = []
+    if "summary_markdown" in expected:
+        descriptors.extend(_persist_markdown_output_artifacts(writer, result_payload, ("summary_markdown",), operation=operation_name))
+    if "report_markdown" in expected or "report_docx" in expected:
+        descriptors.extend(_persist_report_operation_artifacts(writer, result_payload, expected, workspace_dir=workspace_dir))
+    if "deep_research_markdown" in expected:
+        descriptors.extend(
+            _persist_markdown_output_artifacts(
+                writer,
+                result_payload,
+                ("deep_research_markdown",),
+                operation=operation_name,
+            )
+        )
+    return tuple(descriptors)
 
 
 def _persist_report_operation_artifacts(
@@ -1074,6 +1297,38 @@ def _persist_deep_research_operation_artifacts(
     )
 
 
+def _persist_markdown_output_artifacts(
+    writer: ArtifactWriter,
+    result_payload: Mapping[str, object],
+    expected: tuple[str, ...],
+    *,
+    operation: str,
+) -> tuple[ArtifactDescriptor, ...]:
+    output_text = _operation_output_text(result_payload, operation=operation)
+    descriptors: list[ArtifactDescriptor] = []
+    if "summary_markdown" in expected:
+        descriptors.append(
+            writer.write_text_artifact(
+                "summary_markdown",
+                "summary.md",
+                _ensure_trailing_newline(output_text.strip()),
+                mime_type="text/markdown; charset=utf-8",
+                format="markdown",
+            )
+        )
+    if "deep_research_markdown" in expected:
+        descriptors.append(
+            writer.write_text_artifact(
+                "deep_research_markdown",
+                "deep-research.md",
+                _ensure_trailing_newline(output_text.strip()),
+                mime_type="text/markdown; charset=utf-8",
+                format="markdown",
+            )
+        )
+    return tuple(descriptors)
+
+
 def _operation_output_text(result_payload: Mapping[str, object], *, operation: str) -> str:
     output_text = result_payload.get("output_text")
     if not isinstance(output_text, str) or not output_text.strip():
@@ -1085,13 +1340,13 @@ def _ensure_trailing_newline(value: str) -> str:
     return value if value.endswith("\n") else value + "\n"
 
 
-def _check_cancellation(api_client: JobApiClient, execution: ClaimedJobExecution) -> None:
-    cancel_state = api_client.check_cancel(execution.job_id, execution_id=execution.execution_id)
+def _check_cancellation(api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunExecution) -> None:
+    cancel_state = api_client.check_cancel(execution.analysis_run_id, execution_id=execution.execution_id)
     if cancel_state.cancel_requested:
-        raise WorkerCancellationRequested(f"job {execution.job_id} was canceled")
+        raise WorkerCancellationRequested(f"analysis run {execution.analysis_run_id} was canceled")
 
 
-def _build_harness_cancellation_hook(*, api_client: JobApiClient, execution: ClaimedJobExecution):
+def _build_harness_cancellation_hook(*, api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunExecution):
     def cancellation_hook() -> bool:
         try:
             _check_cancellation(api_client, execution)

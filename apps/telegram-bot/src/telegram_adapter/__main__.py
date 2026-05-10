@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Start the real aiogram polling adapter over the API gateway.
+#   LAST_CHANGE: v2.0.0 - Start the always-on inbox adapter over final API state.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
@@ -26,9 +26,9 @@ from pathlib import Path
 from collections.abc import Mapping
 
 from telegram_adapter.api_client import TelegramApiClient
-from telegram_adapter.gateway import TelegramApiProcessingGateway
-from media_analysis_platform.bot import TelegramTranscriberApp
-from media_analysis_platform.config import load_settings
+from telegram_adapter.bot import TelegramInboxApp
+from telegram_adapter.config import load_settings
+from telegram_adapter.gateway import TelegramInboxGateway
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -37,11 +37,12 @@ _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER = "[TelegramAdapter][main][BLOCK_LAUNCH_TELE
 
 async def _run(env: Mapping[str, str] | None = None) -> None:
     values = os.environ if env is None else env
-    settings = load_settings(Path(values.get("SETTINGS_BASE_DIR", "/workspace")))
+    settings_base_dir = Path(values.get("SETTINGS_BASE_DIR", "/workspace"))
+    settings = load_settings(settings_base_dir, env=None if env is None else values)
     api_base_url = values.get("API_BASE_URL", "").strip() or "http://api:8080"
     api_client = TelegramApiClient(api_base_url)
-    gateway = TelegramApiProcessingGateway(api_client, settings.data_dir)
-    app = TelegramTranscriberApp(settings, gateway)
+    gateway = TelegramInboxGateway(api_client)
+    app = TelegramInboxApp(settings, gateway)
     _LOGGER.info("%s api_base_url=%s mode=token_configured", _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER, api_base_url)
     await app.run()
 

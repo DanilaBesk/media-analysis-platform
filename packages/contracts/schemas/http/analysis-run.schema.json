@@ -1,0 +1,291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/analysis-run.schema.json",
+  "title": "AnalysisRunContracts",
+  "$defs": {
+    "deliveryPreference": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "$ref": "../common/enums.schema.json#/$defs/deliveryStrategy",
+          "default": "polling"
+        },
+        "webhook": {
+          "type": "object",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "strategy": {
+                "const": "webhook"
+              }
+            },
+            "required": [
+              "strategy"
+            ]
+          },
+          "then": {
+            "required": [
+              "webhook"
+            ]
+          }
+        }
+      ]
+    },
+    "createAnalysisRunRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "selection_id",
+        "run_type"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "selection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "run_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runType"
+        },
+        "params": {
+          "type": "object"
+        },
+        "delivery": {
+          "$ref": "#/$defs/deliveryPreference"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cancelAnalysisRunRequest": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "retryAnalysisRunRequest": {
+      "type": "object",
+      "required": [
+        "owner"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRun": {
+      "type": "object",
+      "required": [
+        "analysis_run_id",
+        "owner",
+        "selection_id",
+        "selection",
+        "run_type",
+        "status",
+        "version",
+        "delivery",
+        "artifacts",
+        "diagnostics",
+        "created_at"
+      ],
+      "properties": {
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "selection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "selection": {
+          "$ref": "./selection.schema.json#/$defs/selection"
+        },
+        "run_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runType"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/analysisRunStatus"
+        },
+        "version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "idempotency": {
+          "$ref": "../common/pagination.schema.json#/$defs/idempotencyRecord"
+        },
+        "delivery": {
+          "$ref": "#/$defs/deliveryPreference"
+        },
+        "evidence_gate_state": {
+          "type": "string",
+          "enum": [
+            "not_required",
+            "waiting",
+            "passed",
+            "failed"
+          ],
+          "default": "not_required"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "./artifact.schema.json#/$defs/artifactSummary"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "canceled_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runEvent": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "analysis_run_id",
+        "event_type",
+        "version",
+        "emitted_at",
+        "payload"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "event_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runEventType"
+        },
+        "version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "emitted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/analysisRunStatus"
+        },
+        "artifact": {
+          "$ref": "./artifact.schema.json#/$defs/artifactSummary"
+        },
+        "diagnostic": {
+          "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunResponse": {
+      "type": "object",
+      "required": [
+        "analysis_run"
+      ],
+      "properties": {
+        "analysis_run": {
+          "$ref": "#/$defs/analysisRun"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunListResponse": {
+      "allOf": [
+        {
+          "$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/analysisRun"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "runEventListResponse": {
+      "allOf": [
+        {
+          "$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/runEvent"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -58,11 +58,23 @@ def test_build_artifact_object_key_uses_canonical_layout() -> None:
         build_artifact_object_key("job-1", "agent_result_json", "result.json")
         == "artifacts/job-1/agent/result/result.json"
     )
+    assert (
+        build_artifact_object_key("job-1", "summary_markdown", "summary.md")
+        == "artifacts/job-1/summary/markdown/summary.md"
+    )
+    assert (
+        build_artifact_object_key("run-1", "run_manifest", "run-manifest.json")
+        == "artifacts/run-1/run/manifest/run-manifest.json"
+    )
+    assert (
+        build_artifact_object_key("run-1", "run_diagnostics", "run-diagnostics.json")
+        == "artifacts/run-1/run/diagnostics/run-diagnostics.json"
+    )
 
 
 def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
     object_store = InMemoryObjectStore()
-    writer = ArtifactWriter(job_id="job-2", object_store=object_store)
+    writer = ArtifactWriter(analysis_run_id="job-2", object_store=object_store)
 
     descriptor = writer.write_text_artifact(
         "report_markdown",
@@ -91,7 +103,7 @@ def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
 
 def test_write_agent_result_json_uses_agent_result_path() -> None:
     object_store = InMemoryObjectStore()
-    writer = ArtifactWriter(job_id="job-agent", object_store=object_store)
+    writer = ArtifactWriter(analysis_run_id="job-agent", object_store=object_store)
 
     descriptor = writer.write_text_artifact(
         "agent_result_json",
@@ -120,7 +132,7 @@ def test_write_agent_result_json_uses_agent_result_path() -> None:
 
 def test_write_file_artifact_uses_existing_file_bytes(tmp_path: Path) -> None:
     object_store = InMemoryObjectStore()
-    writer = ArtifactWriter(job_id="job-3", object_store=object_store)
+    writer = ArtifactWriter(analysis_run_id="job-3", object_store=object_store)
     docx_path = tmp_path / "transcript.docx"
     docx_path.write_bytes(b"docx-bytes")
 

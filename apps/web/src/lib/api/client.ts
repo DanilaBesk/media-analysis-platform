@@ -1,47 +1,37 @@
-// FILE: apps/web/src/lib/api/client.ts
-// VERSION: 1.0.0
-// START_MODULE_CONTRACT
-// PURPOSE: Provide a thin, mockable HTTP and WebSocket boundary for the Web UI while preserving API-owned business logic and polling truth.
-// SCOPE: Normalize request URLs, send job or artifact actions to the API, subscribe to event updates, and reconcile transport state only at the boundary.
-// DEPENDS: M-WEB-UI, M-API-HTTP, M-API-EVENTS, M-CONTRACTS
-// LINKS: M-WEB-UI, V-M-WEB-UI
-// ROLE: RUNTIME
-// MAP_MODE: SUMMARY
-// END_MODULE_CONTRACT
-//
-// START_CHANGE_SUMMARY
-//   LAST_CHANGE: v1.0.0 - Expanded the packet-local boundary to cover job actions, artifact resolve, and websocket event reconciliation helpers.
-// END_CHANGE_SUMMARY
-//
-// START_MODULE_MAP
-//   normalize-transport-targets - Resolve REST request targets and preserve the declared WebSocket event endpoint inside the client boundary.
-//   send-api-requests - Execute submission, read, action, and artifact requests while preserving API error envelopes.
-//   subscribe-to-events - Parse websocket event messages into packet-local DTOs for polling-truth reconciliation.
-// END_MODULE_MAP
-
 import type {
-  ArtifactResolution,
-  ChildActionDraft,
-  DeliveryDraft,
-  JobAcceptedEnvelope,
-  JobEventListResponse,
-  JobEventStreamEnvelope,
-  JobListResponse,
-  JobSnapshot,
-  JobsAcceptedEnvelope,
-  ListJobsFilter,
-  UploadDraft,
-  UrlDraft,
+  AddMediaItemDraft,
+  AnalysisRun,
+  AnalysisRunSummary,
+  Artifact,
+  ArtifactSummary,
+  Collection,
+  CollectionDraft,
+  Diagnostic,
+  DiagnosticSeverity,
+  DiagnosticSubjectType,
+  MediaItem,
+  MediaItemSummary,
+  ObservabilitySnapshot,
+  OwnerScope,
+  PaginatedResponse,
+  ReconcileQueueResponse,
+  ReplaceCollectionItemsDraft,
+  RunDraft,
+  RunEvent,
+  RunType,
+  Selection,
+  SelectionDraft,
+  UpdateCollectionDraft,
 } from "./types";
 
-export const RECONCILE_STATE_MARKER = "[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE]";
+export const RECONCILE_STATE_MARKER = "[WebUi][reconcileRunState]";
 
-export interface JobEventSubscription {
+export interface RunEventSubscription {
   close(): void;
 }
 
-export interface SubscribeToJobEventsOptions {
-  onMessage: (event: JobEventStreamEnvelope) => void;
+export interface SubscribeToRunEventsOptions {
+  onMessage: (event: RunEvent) => void;
   onOpen?: () => void;
   onClose?: () => void;
   onError?: (error: Event | Error) => void;
@@ -56,18 +46,63 @@ export interface WebSocketLike {
 }
 
 export interface WebUiApiClient {
-  listJobs(filter: ListJobsFilter): Promise<JobListResponse>;
-  getJob(jobId: string): Promise<JobSnapshot>;
-  createUpload(draft: UploadDraft): Promise<JobSnapshot[]>;
-  createCombinedUpload(draft: UploadDraft): Promise<JobSnapshot>;
-  createFromUrl(draft: UrlDraft): Promise<JobSnapshot>;
-  createReport(jobId: string, draft: ChildActionDraft): Promise<JobSnapshot>;
-  createDeepResearch(jobId: string, draft: ChildActionDraft): Promise<JobSnapshot>;
-  cancelJob(jobId: string): Promise<JobSnapshot>;
-  retryJob(jobId: string): Promise<JobSnapshot>;
-  resolveArtifact(artifactId: string): Promise<ArtifactResolution>;
-  listJobEvents(jobId: string): Promise<JobEventListResponse["items"]>;
-  subscribeToJobEvents(options: SubscribeToJobEventsOptions): JobEventSubscription;
+  listMediaItems(owner: OwnerScope, filter?: ListMediaItemsFilter): Promise<PaginatedResponse<MediaItemSummary>>;
+  getMediaItem(owner: OwnerScope, mediaItemId: string): Promise<MediaItem>;
+  addMediaItem(owner: OwnerScope, draft: AddMediaItemDraft, collectionId?: string): Promise<MediaItem>;
+  removeMediaItem(owner: OwnerScope, mediaItemId: string): Promise<MediaItem>;
+  getInboxCollection(owner: OwnerScope): Promise<Collection>;
+  listCollections(owner: OwnerScope, page?: PageRequest): Promise<PaginatedResponse<Collection>>;
+  getCollection(owner: OwnerScope, collectionId: string, page?: PageRequest): Promise<Collection>;
+  createCollection(owner: OwnerScope, draft: CollectionDraft): Promise<Collection>;
+  updateCollection(owner: OwnerScope, collectionId: string, draft: UpdateCollectionDraft): Promise<Collection>;
+  replaceCollectionItems(owner: OwnerScope, collectionId: string, draft: ReplaceCollectionItemsDraft): Promise<Collection>;
+  removeCollectionItem(
+    owner: OwnerScope,
+    collectionId: string,
+    mediaItemId: string,
+    expectedVersion: number,
+  ): Promise<Collection>;
+  createSelection(owner: OwnerScope, draft: SelectionDraft): Promise<Selection>;
+  getSelection(owner: OwnerScope, selectionId: string): Promise<Selection>;
+  createAnalysisRun(owner: OwnerScope, draft: RunDraft): Promise<AnalysisRun>;
+  listAnalysisRuns(owner: OwnerScope, filter?: ListAnalysisRunsFilter): Promise<PaginatedResponse<AnalysisRunSummary>>;
+  getAnalysisRun(owner: OwnerScope, analysisRunId: string): Promise<AnalysisRun>;
+  cancelAnalysisRun(owner: OwnerScope, analysisRunId: string): Promise<AnalysisRun>;
+  retryAnalysisRun(owner: OwnerScope, analysisRunId: string): Promise<AnalysisRun>;
+  listAnalysisRunEvents(owner: OwnerScope, analysisRunId: string, page?: PageRequest): Promise<PaginatedResponse<RunEvent>>;
+  listArtifacts(owner: OwnerScope, filter?: ListArtifactsFilter): Promise<PaginatedResponse<ArtifactSummary>>;
+  getArtifact(owner: OwnerScope, artifactId: string): Promise<Artifact>;
+  refreshArtifact(owner: OwnerScope, artifactId: string): Promise<Artifact>;
+  listDiagnostics(owner: OwnerScope, filter?: ListDiagnosticsFilter): Promise<PaginatedResponse<Diagnostic>>;
+  reconcileAnalysisRunQueue(limit?: number): Promise<ReconcileQueueResponse>;
+  getObservabilitySnapshot(): Promise<ObservabilitySnapshot>;
+  subscribeToRunEvents(options: SubscribeToRunEventsOptions): RunEventSubscription;
+}
+
+export interface PageRequest {
+  cursor?: string;
+  pageSize?: number;
+}
+
+export interface ListMediaItemsFilter extends PageRequest {
+  query?: string;
+  kind?: string;
+  status?: string;
+}
+
+export interface ListAnalysisRunsFilter extends PageRequest {
+  status?: string;
+  runType?: RunType | "";
+}
+
+export interface ListArtifactsFilter extends PageRequest {
+  analysisRunId?: string;
+}
+
+export interface ListDiagnosticsFilter extends PageRequest {
+  subjectType?: DiagnosticSubjectType | "";
+  subjectId?: string;
+  severity?: DiagnosticSeverity | "";
 }
 
 export interface CreateWebUiApiClientOptions {
@@ -97,68 +132,15 @@ function toRequestUrl(baseUrl: string, path: string): URL {
   return new URL(normalizedPath, normalizedBaseUrl);
 }
 
-function buildDeliveryFields(delivery: DeliveryDraft): Record<string, string> {
-  const fields: Record<string, string> = {
-    delivery_strategy: delivery.strategy,
-  };
-  if (delivery.strategy === "webhook" && delivery.webhookUrl.trim() !== "") {
-    fields.delivery_webhook_url = delivery.webhookUrl.trim();
-  }
-  return fields;
-}
-
-function toChildPayload(draft: ChildActionDraft): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-  if (draft.clientRef.trim() !== "") {
-    payload.client_ref = draft.clientRef.trim();
-  }
-  if (draft.delivery.strategy === "webhook" || draft.delivery.webhookUrl.trim() !== "") {
-    payload.delivery = {
-      strategy: draft.delivery.strategy,
-      webhook:
-        draft.delivery.strategy === "webhook" && draft.delivery.webhookUrl.trim() !== ""
-          ? { url: draft.delivery.webhookUrl.trim() }
-          : undefined,
-    };
-  }
-  return payload;
-}
-
-function appendUploadDraft(formData: FormData, draft: UploadDraft): void {
-  draft.files.forEach((file) => {
-    formData.append("files", file, file.name);
-  });
-  if (draft.displayName.trim() !== "") {
-    formData.append("display_name", draft.displayName.trim());
-  }
-  if (draft.clientRef.trim() !== "") {
-    formData.append("client_ref", draft.clientRef.trim());
-  }
-  const deliveryFields = buildDeliveryFields(draft.delivery);
-  Object.entries(deliveryFields).forEach(([key, value]) => {
-    formData.append(key, value);
-  });
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function extractJobSnapshot(payload: unknown): JobSnapshot {
-  if (!isRecord(payload)) {
-    throw new Error("Job response is not an object");
+function extractEnvelope<TValue>(payload: unknown, key: string): TValue {
+  if (!isRecord(payload) || !isRecord(payload[key])) {
+    throw new Error(`API response does not include ${key}`);
   }
-  if (isRecord(payload.job)) {
-    return payload.job as JobSnapshot;
-  }
-  return payload as JobSnapshot;
-}
-
-function extractJobs(payload: unknown): JobSnapshot[] {
-  if (!isRecord(payload) || !Array.isArray(payload.jobs)) {
-    throw new Error("Jobs response does not include jobs[]");
-  }
-  return payload.jobs as JobSnapshot[];
+  return payload[key] as TValue;
 }
 
 function extractError(payload: unknown): { code?: string; message?: string } {
@@ -171,15 +153,41 @@ function extractError(payload: unknown): { code?: string; message?: string } {
   };
 }
 
-function isJobEventStreamEnvelope(payload: unknown): payload is JobEventStreamEnvelope {
+function appendOwner(search: URLSearchParams, owner: OwnerScope): void {
+  search.set("owner_type", owner.owner_type);
+  search.set("owner_id", owner.owner_id);
+  if (owner.tenant_id?.trim()) {
+    search.set("tenant_id", owner.tenant_id.trim());
+  }
+}
+
+function pageSearch(owner: OwnerScope, page?: PageRequest): URLSearchParams {
+  const search = new URLSearchParams();
+  appendOwner(search, owner);
+  if (page?.cursor?.trim()) {
+    search.set("cursor", page.cursor.trim());
+  }
+  if (page?.pageSize) {
+    search.set("page_size", String(page.pageSize));
+  }
+  return search;
+}
+
+function ownerBody(owner: OwnerScope): OwnerScope {
+  return {
+    owner_type: owner.owner_type,
+    owner_id: owner.owner_id,
+    ...(owner.tenant_id?.trim() ? { tenant_id: owner.tenant_id.trim() } : {}),
+    ...(owner.adapter_identity ? { adapter_identity: owner.adapter_identity } : {}),
+  };
+}
+
+function isRunEvent(payload: unknown): payload is RunEvent {
   return (
     isRecord(payload) &&
     typeof payload.event_id === "string" &&
+    typeof payload.analysis_run_id === "string" &&
     typeof payload.event_type === "string" &&
-    typeof payload.job_id === "string" &&
-    typeof payload.root_job_id === "string" &&
-    typeof payload.job_type === "string" &&
-    typeof payload.job_url === "string" &&
     typeof payload.version === "number" &&
     typeof payload.emitted_at === "string" &&
     isRecord(payload.payload)
@@ -197,7 +205,6 @@ function defaultWebSocketFactory(url: string): WebSocketLike {
   return new WebSocket(url);
 }
 
-// START_BLOCK_BLOCK_CREATE_WEB_UI_API_CLIENT
 export function createWebUiApiClient({
   baseUrl,
   wsUrl,
@@ -234,108 +241,230 @@ export function createWebUiApiClient({
     return payload as TResponse;
   };
 
-  const postJson = <TResponse>(path: string, payload?: unknown): Promise<TResponse> =>
+  const sendJson = <TResponse>(
+    method: "POST" | "PATCH",
+    path: string,
+    payload?: unknown,
+  ): Promise<TResponse> =>
     requestJson<TResponse>(path, {
-      method: "POST",
+      method,
       headers: payload ? { "Content-Type": "application/json" } : undefined,
       body: payload ? JSON.stringify(payload) : undefined,
     });
 
+  const postJson = <TResponse>(path: string, payload?: unknown): Promise<TResponse> =>
+    sendJson<TResponse>("POST", path, payload);
+
+  const patchJson = <TResponse>(path: string, payload: unknown): Promise<TResponse> =>
+    sendJson<TResponse>("PATCH", path, payload);
+
   return {
-    async listJobs(filter) {
-      const search = new URLSearchParams();
+    listMediaItems(owner, filter = {}) {
+      const search = pageSearch(owner, filter);
+      if (filter.query?.trim()) {
+        search.set("query", filter.query.trim());
+      }
+      if (filter.kind) {
+        search.set("kind", filter.kind);
+      }
       if (filter.status) {
         search.set("status", filter.status);
       }
-      if (filter.job_type) {
-        search.set("job_type", filter.job_type);
-      }
-      if (filter.root_job_id?.trim()) {
-        search.set("root_job_id", filter.root_job_id.trim());
-      }
-      search.set("page", String(filter.page ?? 1));
-      search.set("page_size", String(filter.page_size ?? 20));
-      return requestJson<JobListResponse>(`/v1/jobs?${search.toString()}`);
+      return requestJson<PaginatedResponse<MediaItemSummary>>(`/v1/media-items?${search.toString()}`);
     },
 
-    async getJob(jobId) {
-      const payload = await requestJson<JobAcceptedEnvelope | JobSnapshot>(`/v1/jobs/${jobId}`);
-      return extractJobSnapshot(payload);
+    async getMediaItem(owner, mediaItemId) {
+      const search = pageSearch(owner);
+      const payload = await requestJson<unknown>(`/v1/media-items/${mediaItemId}?${search.toString()}`);
+      return extractEnvelope<MediaItem>(payload, "media_item");
     },
 
-    async createUpload(draft) {
-      const formData = new FormData();
-      appendUploadDraft(formData, draft);
-      const payload = await requestJson<JobsAcceptedEnvelope>("/v1/transcription-jobs", {
-        method: "POST",
-        body: formData,
-      });
-      return extractJobs(payload);
-    },
-
-    async createCombinedUpload(draft) {
-      const formData = new FormData();
-      appendUploadDraft(formData, draft);
-      const payload = await requestJson<JobAcceptedEnvelope>("/v1/transcription-jobs/combined", {
-        method: "POST",
-        body: formData,
-      });
-      return extractJobSnapshot(payload);
-    },
-
-    async createFromUrl(draft) {
-      const payload = await postJson<JobAcceptedEnvelope>("/v1/transcription-jobs/from-url", {
-        source_kind: "youtube_url",
-        url: draft.url.trim(),
+    async addMediaItem(owner, draft, collectionId) {
+      const payload = await postJson<unknown>("/v1/media-items", {
+        owner: ownerBody(owner),
+        kind: draft.kind,
+        source: draft.source,
+        collection_id: collectionId || undefined,
         display_name: draft.displayName.trim() || undefined,
-        client_ref: draft.clientRef.trim() || undefined,
-        delivery: {
-          strategy: draft.delivery.strategy,
-          webhook:
-            draft.delivery.strategy === "webhook" && draft.delivery.webhookUrl.trim() !== ""
-              ? { url: draft.delivery.webhookUrl.trim() }
-              : undefined,
-        },
+        adapter_origin: draft.adapterOrigin.trim() || "web",
       });
-      return extractJobSnapshot(payload);
+      return extractEnvelope<MediaItem>(payload, "media_item");
     },
 
-    async createReport(jobId, draft) {
-      const payload = await postJson<JobAcceptedEnvelope>(
-        `/v1/transcription-jobs/${jobId}/report-jobs`,
-        toChildPayload(draft),
+    async removeMediaItem(owner, mediaItemId) {
+      const search = pageSearch(owner);
+      const payload = await requestJson<unknown>(`/v1/media-items/${mediaItemId}?${search.toString()}`, {
+        method: "DELETE",
+      });
+      return extractEnvelope<MediaItem>(payload, "media_item");
+    },
+
+    async getInboxCollection(owner) {
+      const search = pageSearch(owner);
+      const payload = await requestJson<unknown>(`/v1/collections/inbox?${search.toString()}`);
+      return extractEnvelope<Collection>(payload, "collection");
+    },
+
+    listCollections(owner, page) {
+      const search = pageSearch(owner, page);
+      return requestJson<PaginatedResponse<Collection>>(`/v1/collections?${search.toString()}`);
+    },
+
+    async getCollection(owner, collectionId, page) {
+      const search = pageSearch(owner, page);
+      const payload = await requestJson<unknown>(`/v1/collections/${collectionId}?${search.toString()}`);
+      return extractEnvelope<Collection>(payload, "collection");
+    },
+
+    async createCollection(owner, draft) {
+      const payload = await postJson<unknown>("/v1/collections", {
+        owner: ownerBody(owner),
+        name: draft.name.trim(),
+        items: draft.items,
+      });
+      return extractEnvelope<Collection>(payload, "collection");
+    },
+
+    async updateCollection(owner, collectionId, draft) {
+      const payload = await patchJson<unknown>(`/v1/collections/${collectionId}`, {
+        owner: ownerBody(owner),
+        expected_version: draft.expectedVersion,
+        name: draft.name?.trim() || undefined,
+        status: draft.status || undefined,
+      });
+      return extractEnvelope<Collection>(payload, "collection");
+    },
+
+    async replaceCollectionItems(owner, collectionId, draft) {
+      const payload = await postJson<unknown>(`/v1/collections/${collectionId}/items`, {
+        owner: ownerBody(owner),
+        expected_version: draft.expectedVersion,
+        items: draft.items,
+      });
+      return extractEnvelope<Collection>(payload, "collection");
+    },
+
+    async removeCollectionItem(owner, collectionId, mediaItemId, expectedVersion) {
+      const search = pageSearch(owner);
+      search.set("expected_version", String(expectedVersion));
+      const payload = await requestJson<unknown>(
+        `/v1/collections/${collectionId}/items/${mediaItemId}?${search.toString()}`,
+        { method: "DELETE" },
       );
-      return extractJobSnapshot(payload);
+      return extractEnvelope<Collection>(payload, "collection");
     },
 
-    async createDeepResearch(jobId, draft) {
-      const payload = await postJson<JobAcceptedEnvelope>(
-        `/v1/report-jobs/${jobId}/deep-research-jobs`,
-        toChildPayload(draft),
+    async createSelection(owner, draft) {
+      const payload = await postJson<unknown>("/v1/selections", {
+        owner: ownerBody(owner),
+        source_collection_id: draft.sourceCollectionId || undefined,
+        items: draft.items,
+        option_snapshot: draft.optionSnapshot,
+        duplicate_policy: draft.duplicatePolicy,
+        created_by: draft.createdBy?.trim() || "web",
+      });
+      return extractEnvelope<Selection>(payload, "selection");
+    },
+
+    async getSelection(owner, selectionId) {
+      const search = pageSearch(owner);
+      const payload = await requestJson<unknown>(`/v1/selections/${selectionId}?${search.toString()}`);
+      return extractEnvelope<Selection>(payload, "selection");
+    },
+
+    async createAnalysisRun(owner, draft) {
+      const payload = await postJson<unknown>("/v1/analysis-runs", {
+        owner: ownerBody(owner),
+        selection_id: draft.selectionId,
+        run_type: draft.runType,
+        params: draft.params,
+        delivery: draft.delivery,
+      });
+      return extractEnvelope<AnalysisRun>(payload, "analysis_run");
+    },
+
+    listAnalysisRuns(owner, filter = {}) {
+      const search = pageSearch(owner, filter);
+      if (filter.status) {
+        search.set("status", filter.status);
+      }
+      if (filter.runType) {
+        search.set("run_type", filter.runType);
+      }
+      return requestJson<PaginatedResponse<AnalysisRunSummary>>(`/v1/analysis-runs?${search.toString()}`);
+    },
+
+    async getAnalysisRun(owner, analysisRunId) {
+      const search = pageSearch(owner);
+      const payload = await requestJson<unknown>(`/v1/analysis-runs/${analysisRunId}?${search.toString()}`);
+      return extractEnvelope<AnalysisRun>(payload, "analysis_run");
+    },
+
+    async cancelAnalysisRun(owner, analysisRunId) {
+      const search = pageSearch(owner);
+      const payload = await postJson<unknown>(`/v1/analysis-runs/${analysisRunId}/cancel?${search.toString()}`, {});
+      return extractEnvelope<AnalysisRun>(payload, "analysis_run");
+    },
+
+    async retryAnalysisRun(owner, analysisRunId) {
+      const search = pageSearch(owner);
+      const payload = await postJson<unknown>(`/v1/analysis-runs/${analysisRunId}/retry?${search.toString()}`, {
+        owner: ownerBody(owner),
+      });
+      return extractEnvelope<AnalysisRun>(payload, "analysis_run");
+    },
+
+    listAnalysisRunEvents(owner, analysisRunId, page) {
+      const search = pageSearch(owner, page);
+      return requestJson<PaginatedResponse<RunEvent>>(
+        `/v1/analysis-runs/${analysisRunId}/events?${search.toString()}`,
       );
-      return extractJobSnapshot(payload);
     },
 
-    async cancelJob(jobId) {
-      const payload = await postJson<JobAcceptedEnvelope>(`/v1/jobs/${jobId}/cancel`);
-      return extractJobSnapshot(payload);
+    listArtifacts(owner, filter = {}) {
+      const search = pageSearch(owner, filter);
+      if (filter.analysisRunId?.trim()) {
+        search.set("analysis_run_id", filter.analysisRunId.trim());
+      }
+      return requestJson<PaginatedResponse<ArtifactSummary>>(`/v1/artifacts?${search.toString()}`);
     },
 
-    async retryJob(jobId) {
-      const payload = await postJson<JobAcceptedEnvelope>(`/v1/jobs/${jobId}/retry`);
-      return extractJobSnapshot(payload);
+    async getArtifact(owner, artifactId) {
+      const search = pageSearch(owner);
+      const payload = await requestJson<unknown>(`/v1/artifacts/${artifactId}?${search.toString()}`);
+      return extractEnvelope<Artifact>(payload, "artifact");
     },
 
-    resolveArtifact(artifactId) {
-      return requestJson<ArtifactResolution>(`/v1/artifacts/${artifactId}`);
+    async refreshArtifact(owner, artifactId) {
+      const search = pageSearch(owner);
+      const payload = await postJson<unknown>(`/v1/artifacts/${artifactId}/refresh?${search.toString()}`, {});
+      return extractEnvelope<Artifact>(payload, "artifact");
     },
 
-    async listJobEvents(jobId) {
-      const payload = await requestJson<JobEventListResponse>(`/v1/jobs/${jobId}/events`);
-      return payload.items;
+    listDiagnostics(owner, filter = {}) {
+      const search = pageSearch(owner, filter);
+      if (filter.subjectType) {
+        search.set("subject_type", filter.subjectType);
+      }
+      if (filter.subjectId?.trim()) {
+        search.set("subject_id", filter.subjectId.trim());
+      }
+      if (filter.severity) {
+        search.set("severity", filter.severity);
+      }
+      return requestJson<PaginatedResponse<Diagnostic>>(`/v1/diagnostics?${search.toString()}`);
     },
 
-    subscribeToJobEvents(options) {
+    reconcileAnalysisRunQueue(limit = 100) {
+      return postJson<ReconcileQueueResponse>("/v1/admin/reconcile-queue", { limit });
+    },
+
+    async getObservabilitySnapshot() {
+      const payload = await requestJson<unknown>("/v1/admin/observability");
+      return extractEnvelope<ObservabilitySnapshot>(payload, "observability");
+    },
+
+    subscribeToRunEvents(options) {
       const socket = webSocketFactory(wsUrl);
 
       socket.onopen = (event) => {
@@ -344,7 +473,7 @@ export function createWebUiApiClient({
       socket.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data) as unknown;
-          if (isJobEventStreamEnvelope(payload)) {
+          if (isRunEvent(payload)) {
             options.onMessage(payload);
           }
         } catch (error) {
@@ -366,4 +495,3 @@ export function createWebUiApiClient({
     },
   };
 }
-// END_BLOCK_BLOCK_CREATE_WEB_UI_API_CLIENT

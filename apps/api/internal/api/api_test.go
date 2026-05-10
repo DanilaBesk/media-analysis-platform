@@ -5,1210 +5,1133 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/danila/media-analysis-platform/apps/api/internal/jobs"
 	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
-	"github.com/danila/media-analysis-platform/apps/api/internal/ws"
 )
 
-func TestApiHttpUploadReturnsJobsArrayAndPreservesIdempotencyKey(t *testing.T) {
+func TestApiHttpFinalRoutesAddMediaWithoutStartingAnalysis(t *testing.T) {
 	t.Parallel()
 
+	createdAt := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
 	public := &fakePublicService{
-		uploadJobs: []JobSnapshot{snapshot("11111111-1111-1111-1111-111111111111", "transcription", "queued")},
+		mediaItem: storage.MediaItemRecord{
+			ID:          "11111111-1111-1111-1111-111111111111",
+			Owner:       storage.OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"},
+			Kind:        "text",
+			Status:      storage.MediaStatusReady,
+			DisplayName: "note",
+			Source: storage.MediaSourceMetadata{
+				SourceID:   "22222222-2222-2222-2222-222222222222",
+				OriginType: "text",
+				TextRef:    "inline:22222222-2222-2222-2222-222222222222",
+			},
+			Retention: storage.RetentionMetadata{State: storage.RetentionStateActive},
+			CreatedAt: createdAt,
+			UpdatedAt: createdAt,
+		},
 	}
-	logger := &bufferLogger{}
-	mux := newMux(t, Dependencies{Public: public}, WithLogger(logger))
+	mux := newFinalMux(Dependencies{Public: public})
 
-	body, contentType := buildMultipart(t, multipartInput{
-		Fields: map[string]string{
-			"client_ref": "cli-1",
-		},
-		Files: []multipartFile{
-			{Name: "files", Filename: "clip.mp3", ContentType: "audio/mpeg", Body: []byte("audio-data")},
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs", body)
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Idempotency-Key", "idem-1")
 	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/media-items", map[string]any{
+		"owner": map[string]any{"owner_type": "telegram", "owner_id": "chat-1"},
+		"kind":  "text",
+		"source": map[string]any{
+			"origin_type": "text",
+			"text":        "hello",
+		},
+		"display_name": "note",
+	}))
 
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
-	var envelope JobsAcceptedEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+	if public.lastAddMedia.Source.OriginType != "text" || public.createAnalysisRunCalls != 0 {
+		t.Fatalf("add media should persist only, got source=%#v run_calls=%d", public.lastAddMedia.Source, public.createAnalysisRunCalls)
+	}
+	var body map[string]storage.MediaItemRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("Unmarshal(response) error = %v", err)
 	}
-	if got, want := len(envelope.Jobs), 1; got != want {
-		t.Fatalf("jobs len = %d, want %d", got, want)
-	}
-	if public.lastUpload.IdempotencyKey != "idem-1" {
-		t.Fatalf("IdempotencyKey = %q, want idem-1", public.lastUpload.IdempotencyKey)
-	}
-	if got := public.lastUpload.Files[0].SHA256; got == "" {
-		t.Fatal("expected route layer to normalize multipart manifest with sha256")
-	}
-	if !strings.Contains(logger.String(), ValidateRequestMarker) {
-		t.Fatalf("logger output missing marker %q", ValidateRequestMarker)
+	if body["media_item"].ID != public.mediaItem.ID {
+		t.Fatalf("media_item_id = %q, want %q", body["media_item"].ID, public.mediaItem.ID)
 	}
 }
 
-func TestApiHttpCombinedUploadReturnsSingleJobEnvelope(t *testing.T) {
+func TestApiHttpFinalRoutesPropagateCollectionVersionConflict(t *testing.T) {
 	t.Parallel()
 
-	public := &fakePublicService{
-		combinedJob: snapshot("22222222-2222-2222-2222-222222222222", "transcription", "queued"),
-	}
-	mux := newMux(t, Dependencies{Public: public})
+	public := &fakePublicService{err: storage.ErrCollectionVersionConflict}
+	mux := newFinalMux(Dependencies{Public: public})
 
-	body, contentType := buildMultipart(t, multipartInput{
-		Fields: map[string]string{
-			"display_name":         "combined-batch",
-			"delivery_strategy":    "webhook",
-			"delivery_webhook_url": "https://example.com/hook",
-		},
-		Files: []multipartFile{
-			{Name: "files", Filename: "clip-a.mp3", ContentType: "audio/mpeg", Body: []byte("a")},
-			{Name: "files", Filename: "clip-b.mp3", ContentType: "audio/mpeg", Body: []byte("b")},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs/combined", body)
-	req.Header.Set("Content-Type", contentType)
 	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
-	}
-	var envelope JobAcceptedEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("Unmarshal(response) error = %v", err)
-	}
-	if envelope.Job.JobID != public.combinedJob.JobID {
-		t.Fatalf("job_id = %q, want %q", envelope.Job.JobID, public.combinedJob.JobID)
-	}
-	if public.lastCombined.Delivery.Strategy != storage.DeliveryStrategyWebhook {
-		t.Fatalf("delivery strategy = %q, want webhook", public.lastCombined.Delivery.Strategy)
-	}
-}
-
-func TestApiHttpBatchTranscriptionParsesManifestFilesURLsAndIdempotency(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{
-		batchJob: snapshot("77777777-7777-7777-7777-777777777777", queue.JobTypeTranscription, "queued"),
-	}
-	mux := newMux(t, Dependencies{Public: public})
-
-	manifest := `{
-		"manifest_version":"batch-transcription.v1",
-		"ordered_source_labels":["voice_a","video_b"],
-		"sources":{
-			"voice_a":{"source_kind":"uploaded_file","file_part":"voice_a","display_name":"Voice A"},
-			"video_b":{"source_kind":"youtube_url","url":"https://youtu.be/example","display_name":"Video B"}
-		},
-		"completion_policy":"succeed_when_all_sources_succeed"
-	}`
-	body, contentType := buildMultipart(t, multipartInput{
-		Fields: map[string]string{
-			"source_manifest": manifest,
-			"display_name":    "Mixed batch",
-			"client_ref":      "client-1",
-		},
-		Files: []multipartFile{
-			{Name: "voice_a", Filename: "voice.ogg", ContentType: "audio/ogg", Body: []byte("voice")},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs/batch", body)
-	req.Header.Set("Content-Type", contentType)
-	req.Header.Set("Idempotency-Key", "batch-idem")
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
-	}
-	var envelope JobAcceptedEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("Unmarshal(response) error = %v", err)
-	}
-	if envelope.Job.JobID != public.batchJob.JobID {
-		t.Fatalf("job_id = %q, want %q", envelope.Job.JobID, public.batchJob.JobID)
-	}
-	if public.lastBatch.IdempotencyKey != "batch-idem" || public.lastBatch.DisplayName != "Mixed batch" {
-		t.Fatalf("batch command metadata = %#v", public.lastBatch)
-	}
-	if got, want := len(public.lastBatch.Manifest.OrderedSourceLabels), 2; got != want {
-		t.Fatalf("manifest labels = %d, want %d", got, want)
-	}
-	if got, want := len(public.lastBatch.Files), 1; got != want {
-		t.Fatalf("batch files = %d, want %d", got, want)
-	}
-	if public.lastBatch.Files[0].PartName != "voice_a" || public.lastBatch.Files[0].SHA256 == "" {
-		t.Fatalf("batch file normalization = %#v", public.lastBatch.Files[0])
-	}
-}
-
-func TestApiHttpBatchTranscriptionRejectsInvalidManifest(t *testing.T) {
-	t.Parallel()
-
-	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
-	body, contentType := buildMultipart(t, multipartInput{
-		Fields: map[string]string{
-			"source_manifest": `{"manifest_version":"batch-transcription.v1","ordered_source_labels":["missing"],"sources":{},"completion_policy":"succeed_when_all_sources_succeed"}`,
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs/batch", body)
-	req.Header.Set("Content-Type", contentType)
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_source_manifest")
-}
-
-func TestApiHttpBatchDraftRoutesParseOwnerVersionAndReturnStaleErrors(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{
-		batchDraft: BatchDraft{
-			DraftID: "11111111-1111-1111-1111-111111111111",
-			Version: 1,
-			Status:  BatchDraftStatusOpen,
-			Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
-			Items:   []BatchDraftItem{},
-		},
-		batchDraftErr: apiError{status: http.StatusConflict, code: "version_conflict", message: "batch draft version conflict"},
-	}
-	mux := newMux(t, Dependencies{Public: public})
-
-	createReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"display_name": "Telegram batch",
-		"client_ref":   "client-1",
-	})
-	createRec := httptest.NewRecorder()
-	mux.ServeHTTP(createRec, createReq)
-	if createRec.Code != http.StatusCreated {
-		t.Fatalf("create status = %d, want %d body=%s", createRec.Code, http.StatusCreated, createRec.Body.String())
-	}
-	if public.lastCreateBatchDraft.Owner.TelegramChatID != "chat-1" || public.lastCreateBatchDraft.DisplayName != "Telegram batch" {
-		t.Fatalf("create draft request = %#v", public.lastCreateBatchDraft)
-	}
-
-	getReq := httptest.NewRequest(http.MethodGet, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111?owner_type=telegram&telegram_chat_id=chat-1&telegram_user_id=user-1", nil)
-	getRec := httptest.NewRecorder()
-	mux.ServeHTTP(getRec, getReq)
-	if getRec.Code != http.StatusOK {
-		t.Fatalf("get status = %d, want %d body=%s", getRec.Code, http.StatusOK, getRec.Body.String())
-	}
-	if public.lastGetBatchDraft.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastGetBatchDraft.Owner.TelegramUserID != "user-1" {
-		t.Fatalf("get draft request = %#v", public.lastGetBatchDraft)
-	}
-
-	addReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"expected_version": 1,
-		"item": map[string]any{
-			"source_kind":  "youtube_url",
-			"url":          "https://youtu.be/video",
-			"display_name": "Video",
-		},
-	})
-	addRec := httptest.NewRecorder()
-	mux.ServeHTTP(addRec, addReq)
-	assertErrorEnvelope(t, addRec, http.StatusConflict, "version_conflict")
-	if public.lastAddBatchDraftItem.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastAddBatchDraftItem.ExpectedVersion != 1 {
-		t.Fatalf("add draft item request = %#v", public.lastAddBatchDraftItem)
-	}
-
-	public.batchDraftErr = nil
-	removeReq := jsonRequest(t, http.MethodDelete, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items/22222222-2222-2222-2222-222222222222", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"expected_version": 2,
-	})
-	removeRec := httptest.NewRecorder()
-	mux.ServeHTTP(removeRec, removeReq)
-	if removeRec.Code != http.StatusOK {
-		t.Fatalf("remove status = %d, want %d body=%s", removeRec.Code, http.StatusOK, removeRec.Body.String())
-	}
-	if public.lastRemoveBatchDraft.ItemID != "22222222-2222-2222-2222-222222222222" || public.lastRemoveBatchDraft.ExpectedVersion != 2 {
-		t.Fatalf("remove draft request = %#v", public.lastRemoveBatchDraft)
-	}
-
-	clearReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/clear", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"expected_version": 3,
-	})
-	clearRec := httptest.NewRecorder()
-	mux.ServeHTTP(clearRec, clearReq)
-	if clearRec.Code != http.StatusOK {
-		t.Fatalf("clear status = %d, want %d body=%s", clearRec.Code, http.StatusOK, clearRec.Body.String())
-	}
-	if public.lastClearBatchDraft.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastClearBatchDraft.ExpectedVersion != 3 {
-		t.Fatalf("clear draft request = %#v", public.lastClearBatchDraft)
-	}
-
-	submitReq := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/submit", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"expected_version": 4,
-	})
-	submitRec := httptest.NewRecorder()
-	mux.ServeHTTP(submitRec, submitReq)
-	if submitRec.Code != http.StatusAccepted {
-		t.Fatalf("submit status = %d, want %d body=%s", submitRec.Code, http.StatusAccepted, submitRec.Body.String())
-	}
-	if public.lastSubmitBatchDraft.DraftID != "11111111-1111-1111-1111-111111111111" || public.lastSubmitBatchDraft.ExpectedVersion != 4 {
-		t.Fatalf("submit draft request = %#v", public.lastSubmitBatchDraft)
-	}
-}
-
-func TestApiHttpBatchDraftMultipartAddParsesOwnerVersionMetadataAndFile(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{
-		batchDraft: BatchDraft{
-			DraftID: "11111111-1111-1111-1111-111111111111",
-			Version: 2,
-			Status:  BatchDraftStatusOpen,
-			Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
-			Items:   []BatchDraftItem{},
-		},
-	}
-	mux := newMux(t, Dependencies{Public: public})
-
-	body, contentType := buildMultipart(t, multipartInput{
-		Fields: map[string]string{
-			"owner":            `{"owner_type":"telegram","telegram_chat_id":"chat-1","telegram_user_id":"user-1"}`,
-			"expected_version": "1",
-			"item":             `{"source_kind":"telegram_upload","display_name":"Voice note"}`,
-		},
-		Files: []multipartFile{{
-			Name:     "file",
-			Filename: "Voice Note.ogg",
-			Body:     []byte("voice-bytes"),
+	mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/collections/11111111-1111-1111-1111-111111111111/items", map[string]any{
+		"owner":            map[string]any{"owner_type": "web", "owner_id": "u-1"},
+		"expected_version": float64(1),
+		"items": []map[string]any{{
+			"media_item_id": "22222222-2222-2222-2222-222222222222",
+			"position":      float64(0),
 		}},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", body)
-	req.Header.Set("Content-Type", contentType)
-	rec := httptest.NewRecorder()
+	}))
 
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	got := public.lastAddBatchDraftItem
-	if got.DraftID != "11111111-1111-1111-1111-111111111111" || got.ExpectedVersion != 1 {
-		t.Fatalf("draft mutation = %#v, want draft/version parsed", got)
-	}
-	if got.Owner.TelegramChatID != "chat-1" || got.Owner.TelegramUserID != "user-1" {
-		t.Fatalf("owner = %#v, want telegram scope", got.Owner)
-	}
-	if got.Item.SourceKind != storage.SourceKindTelegramUpload || got.Item.UploadedSourceRef == "" {
-		t.Fatalf("item source = %#v, want generated uploaded source ref", got.Item)
-	}
-	if !strings.Contains(got.Item.UploadedSourceRef, "11111111-1111-1111-1111-111111111111") || !strings.Contains(got.Item.UploadedSourceRef, "Voice_Note.ogg") {
-		t.Fatalf("uploaded_source_ref = %q, want draft-scoped sanitized object key", got.Item.UploadedSourceRef)
-	}
-	if got.Item.DisplayName != "Voice note" || got.Item.OriginalFilename != "Voice Note.ogg" {
-		t.Fatalf("metadata = %#v, want display/original filename propagated", got.Item)
-	}
-	if got.Item.SizeBytes != int64(len("voice-bytes")) || string(got.Item.ObjectBody) != "voice-bytes" {
-		t.Fatalf("file metadata/body = size %d body %q", got.Item.SizeBytes, string(got.Item.ObjectBody))
-	}
+	assertErrorCode(t, rec, http.StatusConflict, "collection_version_conflict")
 }
 
-func TestApiHttpBatchDraftJSONURLAddStillWorks(t *testing.T) {
+func TestApiHttpFinalRoutesCreateSelectionAndRun(t *testing.T) {
 	t.Parallel()
 
-	public := &fakePublicService{
-		batchDraft: BatchDraft{
-			DraftID: "11111111-1111-1111-1111-111111111111",
-			Version: 2,
-			Status:  BatchDraftStatusOpen,
-			Owner:   BatchDraftOwner{OwnerType: "telegram", TelegramChatID: "chat-1", TelegramUserID: "user-1"},
-			Items:   []BatchDraftItem{},
-		},
-	}
-	mux := newMux(t, Dependencies{Public: public})
-	req := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"expected_version": 1,
-		"item": map[string]any{
-			"source_kind":  "youtube_url",
-			"url":          "https://youtu.be/video",
-			"display_name": "Video",
-		},
-	})
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	if public.lastAddBatchDraftItem.Item.SourceKind != storage.SourceKindYouTubeURL || public.lastAddBatchDraftItem.Item.URL != "https://youtu.be/video" {
-		t.Fatalf("json url item = %#v, want URL item preserved", public.lastAddBatchDraftItem.Item)
-	}
-}
-
-func TestApiHttpBatchDraftJSONUploadedAddRequiresMultipart(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{}
-	mux := newMux(t, Dependencies{Public: public})
-	req := jsonRequest(t, http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", map[string]any{
-		"owner": map[string]any{
-			"owner_type":       "telegram",
-			"telegram_chat_id": "chat-1",
-			"telegram_user_id": "user-1",
-		},
-		"expected_version": 1,
-		"item": map[string]any{
-			"source_kind":         "telegram_upload",
-			"uploaded_source_ref": "attacker-controlled-ref",
-			"display_name":        "Voice",
-		},
-	})
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_batch_draft_item")
-	if !strings.Contains(rec.Body.String(), "uploaded draft items require multipart upload") {
-		t.Fatalf("error body = %s, want multipart upload guidance", rec.Body.String())
-	}
-	if public.lastAddBatchDraftItem.DraftID != "" {
-		t.Fatalf("JSON uploaded draft item reached service: %#v", public.lastAddBatchDraftItem)
-	}
-}
-
-func TestApiHttpBatchDraftMultipartAddRequiresUploadedSourceKind(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{}
-	mux := newMux(t, Dependencies{Public: public})
-	body, contentType := buildMultipart(t, multipartInput{
-		Fields: map[string]string{
-			"owner":            `{"owner_type":"telegram","telegram_chat_id":"chat-1","telegram_user_id":"user-1"}`,
-			"expected_version": "1",
-			"item":             `{"source_kind":"youtube_url","url":"https://youtu.be/video","display_name":"Video"}`,
-		},
-		Files: []multipartFile{{
-			Name:     "file",
-			Filename: "voice.ogg",
-			Body:     []byte("voice-bytes"),
+	selection := storage.SelectionRecord{
+		ID:        "33333333-3333-3333-3333-333333333333",
+		Owner:     storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"},
+		Status:    storage.SelectionStatusSealed,
+		CreatedBy: "u-1",
+		Items: []storage.SelectionItemSnapshot{{
+			Position:          0,
+			MediaItemID:       "22222222-2222-2222-2222-222222222222",
+			Kind:              "file",
+			DisplayName:       "clip.mp3",
+			StatusAtSelection: storage.MediaStatusReady,
+			RetentionSnapshot: storage.RetentionMetadata{State: storage.RetentionStateActive},
 		}},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items", body)
-	req.Header.Set("Content-Type", contentType)
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_batch_draft_item")
-	if !strings.Contains(rec.Body.String(), "multipart draft uploads require uploaded_file or telegram_upload source_kind") {
-		t.Fatalf("error body = %s, want uploaded source kind guidance", rec.Body.String())
+		CreatedAt: time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+		SealedAt:  time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
 	}
-	if public.lastAddBatchDraftItem.DraftID != "" {
-		t.Fatalf("multipart URL draft item reached service: %#v", public.lastAddBatchDraftItem)
+	public := &fakePublicService{
+		selection: selection,
+		run: storage.AnalysisRunRecord{
+			ID:                "44444444-4444-4444-4444-444444444444",
+			Owner:             selection.Owner,
+			SelectionID:       selection.ID,
+			Selection:         selection,
+			RunType:           "transcription",
+			Status:            storage.AnalysisRunStatusQueued,
+			Version:           1,
+			DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+			EvidenceGateState: "not_required",
+			CreatedAt:         selection.CreatedAt,
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	selectionRec := httptest.NewRecorder()
+	mux.ServeHTTP(selectionRec, jsonRequest(http.MethodPost, "/v1/selections", map[string]any{
+		"owner": map[string]any{"owner_type": "web", "owner_id": "u-1"},
+		"items": []map[string]any{{
+			"media_item_id": "22222222-2222-2222-2222-222222222222",
+			"position":      float64(0),
+		}},
+	}))
+	if selectionRec.Code != http.StatusCreated {
+		t.Fatalf("selection status = %d want 201 body=%s", selectionRec.Code, selectionRec.Body.String())
+	}
+
+	runRec := httptest.NewRecorder()
+	mux.ServeHTTP(runRec, jsonRequest(http.MethodPost, "/v1/analysis-runs", map[string]any{
+		"owner":        map[string]any{"owner_type": "web", "owner_id": "u-1"},
+		"selection_id": selection.ID,
+		"run_type":     "transcription",
+	}))
+	if runRec.Code != http.StatusAccepted {
+		t.Fatalf("run status = %d want 202 body=%s", runRec.Code, runRec.Body.String())
+	}
+	if public.lastRun.SelectionID != selection.ID || public.lastRun.RunType != "transcription" {
+		t.Fatalf("run request = %#v", public.lastRun)
 	}
 }
 
-func TestApiHttpCreateAgentRunParsesIdempotencyHarnessAndRequest(t *testing.T) {
+func TestApiHttpListEndpointsUseCursorPagedSummaries(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	public := &fakePublicService{
+		mediaItems: []storage.MediaItemRecord{
+			{ID: "media-1", Owner: owner, Kind: "text", Status: storage.MediaStatusReady, DisplayName: "first", Source: storage.MediaSourceMetadata{SourceID: "source-1", OriginType: "text"}, Retention: storage.RetentionMetadata{State: storage.RetentionStateActive}, CreatedAt: time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)},
+			{ID: "media-2", Owner: owner, Kind: "url", Status: storage.MediaStatusReady, DisplayName: "second", Source: storage.MediaSourceMetadata{SourceID: "source-2", OriginType: "url"}, Retention: storage.RetentionMetadata{State: storage.RetentionStateActive}, CreatedAt: time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC), UpdatedAt: time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC)},
+		},
+		runs: []storage.AnalysisRunRecord{
+			{ID: "run-1", Owner: owner, SelectionID: "selection-1", RunType: "transcription", Status: storage.AnalysisRunStatusQueued, Version: 1, EvidenceGateState: "not_required", CreatedAt: time.Date(2026, 5, 10, 12, 2, 0, 0, time.UTC)},
+			{ID: "run-2", Owner: owner, SelectionID: "selection-2", RunType: "report", Status: storage.AnalysisRunStatusQueued, Version: 1, EvidenceGateState: "not_required", CreatedAt: time.Date(2026, 5, 10, 12, 3, 0, 0, time.UTC)},
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	mediaRec := httptest.NewRecorder()
+	mux.ServeHTTP(mediaRec, httptest.NewRequest(http.MethodGet, "/v1/media-items?owner_type=web&owner_id=u-1&page_size=1", nil))
+	if mediaRec.Code != http.StatusOK {
+		t.Fatalf("media list status = %d want 200 body=%s", mediaRec.Code, mediaRec.Body.String())
+	}
+	var mediaBody struct {
+		Items []struct {
+			ID               string `json:"media_item_id"`
+			DisplayName      string `json:"display_name"`
+			DiagnosticsCount int    `json:"diagnostics_count"`
+		} `json:"items"`
+		Page struct {
+			PageSize   int    `json:"page_size"`
+			HasMore    bool   `json:"has_more"`
+			NextCursor string `json:"next_cursor"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(mediaRec.Body.Bytes(), &mediaBody); err != nil {
+		t.Fatalf("Unmarshal(media list) error = %v", err)
+	}
+	if len(mediaBody.Items) != 1 || mediaBody.Items[0].ID != "media-1" || !mediaBody.Page.HasMore || mediaBody.Page.NextCursor != "media-1" {
+		t.Fatalf("media page = %#v", mediaBody)
+	}
+
+	runRec := httptest.NewRecorder()
+	mux.ServeHTTP(runRec, httptest.NewRequest(http.MethodGet, "/v1/analysis-runs?owner_type=web&owner_id=u-1&page_size=1&cursor=run-1", nil))
+	if runRec.Code != http.StatusOK {
+		t.Fatalf("run list status = %d want 200 body=%s", runRec.Code, runRec.Body.String())
+	}
+	var runBody struct {
+		Items []struct {
+			ID               string `json:"analysis_run_id"`
+			SelectionID      string `json:"selection_id"`
+			ArtifactCount    int    `json:"artifact_count"`
+			DiagnosticsCount int    `json:"diagnostics_count"`
+		} `json:"items"`
+		Page struct {
+			HasMore bool `json:"has_more"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(runRec.Body.Bytes(), &runBody); err != nil {
+		t.Fatalf("Unmarshal(run list) error = %v", err)
+	}
+	if len(runBody.Items) != 1 || runBody.Items[0].ID != "run-2" || runBody.Page.HasMore {
+		t.Fatalf("run page = %#v", runBody)
+	}
+}
+
+func TestApiHttpArtifactAccessIsOwnerScoped(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	public := &fakePublicService{
+		artifact: storage.ArtifactRecord{
+			ID:            "artifact-1",
+			Owner:         owner,
+			AnalysisRunID: "run-1",
+			Kind:          "transcript",
+			Status:        "available",
+			ContentType:   "text/plain",
+			SizeBytes:     10,
+			Visibility:    "owner",
+			Download:      &storage.DownloadDescriptor{Provider: "object_store", URL: "https://minio.local/presigned", ExpiresAt: time.Date(2026, 5, 10, 13, 0, 0, 0, time.UTC)},
+			Retention:     storage.RetentionMetadata{State: storage.RetentionStateActive},
+			CreatedAt:     time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/artifacts/artifact-1?owner_type=web&owner_id=u-1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("artifact status = %d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Artifact storage.ArtifactRecord `json:"artifact"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(artifact) error = %v", err)
+	}
+	if body.Artifact.Download == nil || body.Artifact.Download.URL == "" {
+		t.Fatalf("artifact download = %#v", body.Artifact.Download)
+	}
+
+	public.err = storage.ErrOwnerMismatch
+	denied := httptest.NewRecorder()
+	mux.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/v1/artifacts/artifact-1?owner_type=web&owner_id=other", nil))
+	assertErrorCode(t, denied, http.StatusNotFound, "not_found")
+}
+
+func TestApiHttpAdminLifecycleRoutesCancelRetryRefreshAndReconcile(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	public := &fakePublicService{
+		run: storage.AnalysisRunRecord{
+			ID:          "run-1",
+			Owner:       owner,
+			SelectionID: "selection-1",
+			RunType:     "transcription",
+			Status:      storage.AnalysisRunStatusRunning,
+			CreatedAt:   time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+		},
+		artifact: storage.ArtifactRecord{
+			ID:            "artifact-1",
+			Owner:         owner,
+			AnalysisRunID: "run-1",
+			Kind:          "transcript",
+			Status:        storage.ArtifactStatusAvailable,
+			ContentType:   "text/plain",
+			SizeBytes:     42,
+			Visibility:    "owner",
+			Download:      &storage.DownloadDescriptor{Provider: "object_store", URL: "https://minio.local/refreshed", ExpiresAt: time.Date(2026, 5, 10, 13, 0, 0, 0, time.UTC)},
+			CreatedAt:     time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC),
+		},
+		reconciled: 2,
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	cancel := httptest.NewRecorder()
+	mux.ServeHTTP(cancel, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/cancel?owner_type=web&owner_id=u-1", map[string]any{
+		"message": "operator cancel",
+	}))
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d want 200 body=%s", cancel.Code, cancel.Body.String())
+	}
+	if public.canceledRunID != "run-1" || public.canceledMessage != "operator cancel" {
+		t.Fatalf("cancel call = id:%q message:%q", public.canceledRunID, public.canceledMessage)
+	}
+
+	retry := httptest.NewRecorder()
+	mux.ServeHTTP(retry, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/retry?owner_type=web&owner_id=u-1", map[string]any{
+		"owner": map[string]any{"owner_type": "web", "owner_id": "u-1"},
+	}))
+	if retry.Code != http.StatusAccepted {
+		t.Fatalf("retry status = %d want 202 body=%s", retry.Code, retry.Body.String())
+	}
+	if public.retriedRunID != "run-1" {
+		t.Fatalf("retried run id = %q", public.retriedRunID)
+	}
+
+	refresh := httptest.NewRecorder()
+	mux.ServeHTTP(refresh, jsonRequest(http.MethodPost, "/v1/artifacts/artifact-1/refresh?owner_type=web&owner_id=u-1", nil))
+	if refresh.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d want 200 body=%s", refresh.Code, refresh.Body.String())
+	}
+	if public.refreshedArtifactID != "artifact-1" {
+		t.Fatalf("refreshed artifact id = %q", public.refreshedArtifactID)
+	}
+
+	reconcile := httptest.NewRecorder()
+	mux.ServeHTTP(reconcile, jsonRequest(http.MethodPost, "/v1/admin/reconcile-queue", map[string]any{"limit": float64(10)}))
+	if reconcile.Code != http.StatusAccepted {
+		t.Fatalf("reconcile status = %d want 202 body=%s", reconcile.Code, reconcile.Body.String())
+	}
+	var reconcileBody struct {
+		Reconciled int `json:"reconciled"`
+	}
+	if err := json.Unmarshal(reconcile.Body.Bytes(), &reconcileBody); err != nil {
+		t.Fatalf("Unmarshal(reconcile) error = %v", err)
+	}
+	if reconcileBody.Reconciled != 2 {
+		t.Fatalf("reconcile body = %#v, want 2", reconcileBody)
+	}
+}
+
+func TestApiHttpObservabilitySurfacesOperationalFailuresAndQueueLag(t *testing.T) {
 	t.Parallel()
 
 	public := &fakePublicService{
-		agentRunJob: snapshot("33333333-3333-3333-3333-333333333333", queue.JobTypeAgentRun, "queued"),
-	}
-	mux := newMux(t, Dependencies{Public: public})
-
-	req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
-		"harness_name": "generic",
-		"client_ref":   "client-1",
-		"request": map[string]any{
-			"prompt": "summarize",
-			"payload": map[string]any{
-				"topic": "calls",
-			},
-			"input_artifacts": []map[string]any{
-				{"artifact_id": "44444444-4444-4444-4444-444444444444", "artifact_kind": "transcript_plain"},
-			},
+		observability: storage.ObservabilitySnapshot{
+			QueueTasks:                 3,
+			QueueLagSeconds:            42,
+			CleanupFailures:            1,
+			ArtifactResolutionFailures: 2,
+			GeneratedAt:                time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
 		},
-	})
-	req.Header.Set("Idempotency-Key", "agent-idem")
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
 	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/admin/observability", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("observability status = %d want 200 body=%s", rec.Code, rec.Body.String())
 	}
-	var envelope JobAcceptedEnvelope
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("Unmarshal(response) error = %v", err)
+	var body struct {
+		Observability storage.ObservabilitySnapshot `json:"observability"`
 	}
-	if envelope.Job.JobID != public.agentRunJob.JobID {
-		t.Fatalf("job_id = %q, want %q", envelope.Job.JobID, public.agentRunJob.JobID)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(observability) error = %v", err)
 	}
-	if public.lastAgentRun.IdempotencyKey != "agent-idem" || public.lastAgentRun.HarnessName != "generic" {
-		t.Fatalf("agent run request = %#v, want idempotency+harness", public.lastAgentRun)
-	}
-	if string(public.lastAgentRun.Request.Payload) == "" {
-		t.Fatalf("agent run payload was not parsed: %#v", public.lastAgentRun.Request)
+	if body.Observability.QueueLagSeconds != 42 || body.Observability.CleanupFailures != 1 || body.Observability.ArtifactResolutionFailures != 2 {
+		t.Fatalf("observability = %#v", body.Observability)
 	}
 }
 
-func TestApiHttpCreateReportAndDeepResearchRoutesReturnAgentRunJobs(t *testing.T) {
+func TestApiHttpRegistersFinalInternalExecutionRoutes(t *testing.T) {
 	t.Parallel()
 
-	public := &fakePublicService{
-		reportJob:       snapshot("55555555-5555-5555-5555-555555555555", queue.JobTypeAgentRun, "queued"),
-		deepResearchJob: snapshot("66666666-6666-6666-6666-666666666666", queue.JobTypeAgentRun, "queued"),
+	mux := newFinalMux(Dependencies{Public: &fakePublicService{}, Worker: &fakeWorkerService{}})
+	queueRec := httptest.NewRecorder()
+	mux.ServeHTTP(queueRec, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/queue?status=queued&run_type=transcription&task_type=selection.transcription&page_size=1", nil))
+	if queueRec.Code != http.StatusOK {
+		t.Fatalf("queue status = %d, want 200 body=%s", queueRec.Code, queueRec.Body.String())
 	}
-	mux := newMux(t, Dependencies{Public: public})
-
-	reportReq := jsonRequest(t, http.MethodPost, "/v1/transcription-jobs/11111111-1111-1111-1111-111111111111/report-jobs", map[string]any{
-		"client_ref": "report-client",
-	})
-	reportReq.Header.Set("Idempotency-Key", "report-idem")
-	reportRec := httptest.NewRecorder()
-	mux.ServeHTTP(reportRec, reportReq)
-	if reportRec.Code != http.StatusAccepted {
-		t.Fatalf("report status = %d, want %d body=%s", reportRec.Code, http.StatusAccepted, reportRec.Body.String())
+	var queueBody AnalysisRunQueueResponse
+	if err := json.Unmarshal(queueRec.Body.Bytes(), &queueBody); err != nil {
+		t.Fatalf("Unmarshal(queue response) error = %v", err)
 	}
-	var reportEnvelope JobAcceptedEnvelope
-	if err := json.Unmarshal(reportRec.Body.Bytes(), &reportEnvelope); err != nil {
-		t.Fatalf("Unmarshal(report response) error = %v", err)
-	}
-	if reportEnvelope.Job.JobType != queue.JobTypeAgentRun {
-		t.Fatalf("report route job_type = %q, want agent_run", reportEnvelope.Job.JobType)
-	}
-	if public.lastReportJobID != "11111111-1111-1111-1111-111111111111" || public.lastReportReq.IdempotencyKey != "report-idem" {
-		t.Fatalf("report request = job_id %q req %#v", public.lastReportJobID, public.lastReportReq)
+	if len(queueBody.Items) != 1 || queueBody.Items[0].AnalysisRunID == "" || queueBody.Items[0].TaskType != "selection.transcription" {
+		t.Fatalf("queue response = %#v", queueBody)
 	}
 
-	deepReq := jsonRequest(t, http.MethodPost, "/v1/report-jobs/22222222-2222-2222-2222-222222222222/deep-research-jobs", map[string]any{
-		"client_ref": "deep-client",
-	})
-	deepReq.Header.Set("Idempotency-Key", "deep-idem")
-	deepRec := httptest.NewRecorder()
-	mux.ServeHTTP(deepRec, deepReq)
-	if deepRec.Code != http.StatusAccepted {
-		t.Fatalf("deep status = %d, want %d body=%s", deepRec.Code, http.StatusAccepted, deepRec.Body.String())
-	}
-	var deepEnvelope JobAcceptedEnvelope
-	if err := json.Unmarshal(deepRec.Body.Bytes(), &deepEnvelope); err != nil {
-		t.Fatalf("Unmarshal(deep response) error = %v", err)
-	}
-	if deepEnvelope.Job.JobType != queue.JobTypeAgentRun {
-		t.Fatalf("deep route job_type = %q, want agent_run", deepEnvelope.Job.JobType)
-	}
-	if public.lastDeepResearchJobID != "22222222-2222-2222-2222-222222222222" || public.lastDeepResearchReq.IdempotencyKey != "deep-idem" {
-		t.Fatalf("deep request = job_id %q req %#v", public.lastDeepResearchJobID, public.lastDeepResearchReq)
-	}
-}
-
-func TestApiHttpRejectsInvalidInputsWithStableErrorEnvelopes(t *testing.T) {
-	t.Parallel()
-
-	fixture := loadHTTPFixture(t)
-	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
-
-	t.Run("invalid uuid", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/v1/jobs/not-a-uuid", nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusBadRequest, "invalid_uuid")
-	})
-
-	t.Run("missing webhook url", func(t *testing.T) {
-		body, contentType := buildMultipart(t, multipartInput{
-			Fields: map[string]string{"delivery_strategy": "webhook"},
-			Files: []multipartFile{
-				{Name: "files", Filename: "clip.mp3", ContentType: "audio/mpeg", Body: []byte("audio")},
-			},
-		})
-		req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs", body)
-		req.Header.Set("Content-Type", contentType)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusBadRequest, "webhook_url_required")
-	})
-
-	t.Run("oversized upload", func(t *testing.T) {
-		smallMux := newMux(t, Dependencies{Public: &fakePublicService{}}, WithMaxRequestBytes(8))
-		body, contentType := buildMultipart(t, multipartInput{
-			Files: []multipartFile{
-				{Name: "files", Filename: "clip.mp3", ContentType: "audio/mpeg", Body: []byte("0123456789")},
-			},
-		})
-		req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs", body)
-		req.Header.Set("Content-Type", contentType)
-		rec := httptest.NewRecorder()
-		smallMux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusRequestEntityTooLarge, "request_too_large")
-	})
-
-	t.Run("unsupported source url", func(t *testing.T) {
-		payload := map[string]any{
-			"source_kind": "youtube_url",
-			"url":         fixture.UnsupportedURLs[0],
-		}
-		req := jsonRequest(t, http.MethodPost, "/v1/transcription-jobs/from-url", payload)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusBadRequest, "unsupported_source_url")
-	})
-
-	t.Run("missing agent harness", func(t *testing.T) {
-		req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
-			"request": map[string]any{"prompt": "hello"},
-		})
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusBadRequest, "validation_failed")
-	})
-
-	t.Run("missing agent request content", func(t *testing.T) {
-		req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
-			"harness_name": "generic",
-			"request":      map[string]any{},
-		})
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusBadRequest, "validation_failed")
-	})
-
-	t.Run("unsupported agent artifact kind", func(t *testing.T) {
-		req := jsonRequest(t, http.MethodPost, "/v1/agent-runs", map[string]any{
-			"harness_name": "generic",
-			"request": map[string]any{
-				"input_artifacts": []map[string]any{
-					{"artifact_id": "44444444-4444-4444-4444-444444444444", "artifact_kind": "not_a_kind"},
-				},
-			},
-		})
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		assertErrorEnvelope(t, rec, http.StatusBadRequest, "validation_failed")
-	})
-}
-
-func TestApiHttpMapsQueueUnavailableToStableErrorEnvelope(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{uploadErr: queue.ErrQueueUnavailable}
-	mux := newMux(t, Dependencies{Public: public})
-
-	body, contentType := buildMultipart(t, multipartInput{
-		Files: []multipartFile{
-			{Name: "files", Filename: "clip.mp3", ContentType: "audio/mpeg", Body: []byte("audio")},
-		},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/transcription-jobs", body)
-	req.Header.Set("Content-Type", contentType)
 	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-
-	assertErrorEnvelope(t, rec, http.StatusServiceUnavailable, "queue_unavailable")
-}
-
-func TestApiHttpRoutesEventsArtifactAndWebsocketShapes(t *testing.T) {
-	t.Parallel()
-
-	public := &fakePublicService{
-		artifactResolution: storage.ArtifactResolution{
-			ArtifactID:   "33333333-3333-3333-3333-333333333333",
-			JobID:        "11111111-1111-1111-1111-111111111111",
-			ArtifactKind: "report_markdown",
-			Filename:     "report.md",
-			MIMEType:     "text/markdown",
-			SizeBytes:    64,
-			CreatedAt:    time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
-			Download: storage.DownloadDescriptor{
-				Provider:  storage.DownloadProviderMinIO,
-				URL:       "https://minio.local/report.md",
-				ExpiresAt: time.Date(2026, 4, 22, 12, 15, 0, 0, time.UTC),
-			},
-		},
-		internalArtifactAccess: storage.ArtifactResolution{
-			ArtifactID:   "33333333-3333-3333-3333-333333333333",
-			JobID:        "11111111-1111-1111-1111-111111111111",
-			ArtifactKind: "report_markdown",
-			Filename:     "report.md",
-			MIMEType:     "text/markdown",
-			SizeBytes:    64,
-			CreatedAt:    time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
-			Download: storage.DownloadDescriptor{
-				Provider:  storage.DownloadProviderMinIO,
-				URL:       "http://minio:9000/report.md",
-				ExpiresAt: time.Date(2026, 4, 22, 12, 15, 0, 0, time.UTC),
-			},
-		},
-		events: []ws.JobEventEnvelope{
-			{
-				EventID:   "44444444-4444-4444-4444-444444444444",
-				EventType: "job.updated",
-				JobID:     "11111111-1111-1111-1111-111111111111",
-				RootJobID: "11111111-1111-1111-1111-111111111111",
-				Version:   3,
-				EmittedAt: time.Date(2026, 4, 22, 12, 5, 0, 0, time.UTC),
-				JobType:   "transcription",
-				JobURL:    "/v1/jobs/11111111-1111-1111-1111-111111111111",
-				Payload: ws.EventPayload{
-					Status:          "running",
-					ProgressStage:   "transcribing",
-					ProgressMessage: "50%",
-				},
-			},
-		},
+	mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/44444444-4444-4444-4444-444444444444/executions/claim", map[string]any{
+		"worker_kind": "transcription",
+		"task_type":   "selection.transcription",
+		"lease_owner": "worker-1",
+	}))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rec.Code, rec.Body.String())
 	}
-	websocket := &fakeWebsocket{}
-	mux := newMux(t, Dependencies{Public: public, Websocket: websocket})
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(claim response) error = %v", err)
+	}
+	for _, key := range []string{"execution_id", "analysis_run_id", "run_type", "selection", "params", "claimed_at"} {
+		if _, ok := body[key]; !ok {
+			t.Fatalf("claim response missing %q: %#v", key, body)
+		}
+	}
+	for _, stale := range []string{"analysis_run", "items", "claimed"} {
+		if _, ok := body[stale]; ok {
+			t.Fatalf("claim response leaked stale wrapper field %q: %#v", stale, body)
+		}
+	}
+	selection, ok := body["selection"].(map[string]any)
+	if !ok {
+		t.Fatalf("selection missing or invalid: %#v", body["selection"])
+	}
+	items, ok := selection["items"].([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("selection.items missing or invalid: %#v", selection["items"])
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("selection item missing or invalid: %#v", items[0])
+	}
+	for _, key := range []string{"selection_item_id", "media_kind", "mime_type", "role", "labels"} {
+		if _, ok := item[key]; !ok {
+			t.Fatalf("claim selection item missing %q: %#v", key, item)
+		}
+	}
+	if item["selection_item_id"] != "66666666-6666-6666-6666-666666666666" {
+		t.Fatalf("selection_item_id = %#v, want persisted selection item id", item["selection_item_id"])
+	}
+	if item["media_kind"] != "audio" || item["mime_type"] != "audio/wav" || item["role"] != "primary" {
+		t.Fatalf("claim selection item v2 fields mismatch: %#v", item)
+	}
+	labels, ok := item["labels"].(map[string]any)
+	if !ok {
+		t.Fatalf("labels missing or invalid: %#v", item["labels"])
+	}
+	if labels["display_label"] != "source.wav" || labels["source_label"] != "voice_a" || labels["original_filename"] != "source.wav" {
+		t.Fatalf("labels mismatch: %#v", labels)
+	}
+	for _, stale := range []string{"selection_item_snapshot", "selection_item"} {
+		if _, ok := item[stale]; ok {
+			t.Fatalf("claim selection item leaked stale wrapper field %q: %#v", stale, item)
+		}
+	}
 
-	t.Run("artifact resolve", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/v1/artifacts/33333333-3333-3333-3333-333333333333", nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-		}
-		var response ArtifactResolutionView
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatalf("Unmarshal(response) error = %v", err)
-		}
-		if response.Download.Provider != storage.DownloadProviderMinIO {
-			t.Fatalf("download provider = %q, want %q", response.Download.Provider, storage.DownloadProviderMinIO)
-		}
-		if response.Download.URL != "https://minio.local/report.md" {
-			t.Fatalf("download url = %q, want public URL", response.Download.URL)
-		}
-	})
+	accessRec := httptest.NewRecorder()
+	mux.ServeHTTP(accessRec, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/44444444-4444-4444-4444-444444444444/request-access?execution_id=55555555-5555-5555-5555-555555555555", nil))
+	if accessRec.Code != http.StatusOK {
+		t.Fatalf("request-access status = %d, want 200 body=%s", accessRec.Code, accessRec.Body.String())
+	}
+	var accessBody RequestAccessResponse
+	if err := json.Unmarshal(accessRec.Body.Bytes(), &accessBody); err != nil {
+		t.Fatalf("Unmarshal(request-access response) error = %v", err)
+	}
+	if accessBody.RequestRef != "agentreq_digest" || accessBody.RequestDigestSHA256 == "" || accessBody.RequestBytes != 123 {
+		t.Fatalf("request-access response = %#v", accessBody)
+	}
 
-	t.Run("internal artifact download access", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/internal/v1/artifacts/33333333-3333-3333-3333-333333333333/download-access", nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-		}
-		var response ArtifactResolutionView
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatalf("Unmarshal(response) error = %v", err)
-		}
-		if response.Download.URL != "http://minio:9000/report.md" {
-			t.Fatalf("download url = %q, want internal URL", response.Download.URL)
-		}
-	})
+	cancelRec := httptest.NewRecorder()
+	mux.ServeHTTP(cancelRec, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/44444444-4444-4444-4444-444444444444/executions/cancel-check?execution_id=55555555-5555-5555-5555-555555555555", nil))
+	if cancelRec.Code != http.StatusOK {
+		t.Fatalf("cancel-check status = %d, want 200 body=%s", cancelRec.Code, cancelRec.Body.String())
+	}
+	var cancelBody CancelCheckResponse
+	if err := json.Unmarshal(cancelRec.Body.Bytes(), &cancelBody); err != nil {
+		t.Fatalf("Unmarshal(cancel-check response) error = %v", err)
+	}
+	if cancelBody.CancelRequested || cancelBody.Status != storage.AnalysisRunStatusRunning {
+		t.Fatalf("cancel-check response = %#v", cancelBody)
+	}
 
-	t.Run("events list", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/v1/jobs/11111111-1111-1111-1111-111111111111/events", nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-		}
-		var response JobEventListResponse
-		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-			t.Fatalf("Unmarshal(response) error = %v", err)
-		}
-		if got := len(response.Items); got != 1 {
-			t.Fatalf("events len = %d, want 1", got)
-		}
-		if response.Items[0].Payload.ProgressStage == nil || *response.Items[0].Payload.ProgressStage != "transcribing" {
-			t.Fatalf("progress stage = %#v", response.Items[0].Payload.ProgressStage)
-		}
-	})
-
-	t.Run("websocket entry", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/v1/ws", nil)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusSwitchingProtocols {
-			t.Fatalf("status = %d, want %d", rec.Code, http.StatusSwitchingProtocols)
-		}
-		if websocket.calls != 1 {
-			t.Fatalf("websocket calls = %d, want 1", websocket.calls)
-		}
-	})
+	downloadRec := httptest.NewRecorder()
+	mux.ServeHTTP(downloadRec, httptest.NewRequest(http.MethodGet, "/internal/v1/artifacts/77777777-7777-7777-7777-777777777777/download-access", nil))
+	if downloadRec.Code != http.StatusOK {
+		t.Fatalf("download-access status = %d, want 200 body=%s", downloadRec.Code, downloadRec.Body.String())
+	}
+	var downloadBody ArtifactDownloadAccessResponse
+	if err := json.Unmarshal(downloadRec.Body.Bytes(), &downloadBody); err != nil {
+		t.Fatalf("Unmarshal(download-access response) error = %v", err)
+	}
+	if downloadBody.AnalysisRunID == "" || downloadBody.Download.URL == "" {
+		t.Fatalf("download-access response = %#v", downloadBody)
+	}
 }
 
-func TestApiHttpInternalWorkerRoutesRemainExplicit(t *testing.T) {
+func TestWorkerRuntimeRoutesPersistWorkerArtifactDiagnosticAndFinalizePayloads(t *testing.T) {
 	t.Parallel()
 
-	worker := &fakeWorkerService{
-		claimResponse: ClaimResponse{
-			ExecutionID: "55555555-5555-5555-5555-555555555555",
-			JobID:       "11111111-1111-1111-1111-111111111111",
-			RootJobID:   "11111111-1111-1111-1111-111111111111",
-			JobType:     "transcription",
+	runID := "44444444-4444-4444-4444-444444444444"
+	mediaID := "22222222-2222-2222-2222-222222222222"
+	store := &fakePublicService{
+		run: storage.AnalysisRunRecord{
+			ID:          runID,
+			Owner:       storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"},
+			SelectionID: "33333333-3333-3333-3333-333333333333",
+			RunType:     "transcription",
+			Status:      storage.AnalysisRunStatusRunning,
 			Version:     2,
-			OrderedInputs: []OrderedInput{
-				{Position: 0, SourceID: "66666666-6666-6666-6666-666666666666", SourceKind: "uploaded_file"},
+		},
+		artifact: storage.ArtifactRecord{
+			ID:            "77777777-7777-7777-7777-777777777777",
+			Owner:         storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"},
+			AnalysisRunID: runID,
+			Kind:          "transcript",
+			Status:        storage.ArtifactStatusAvailable,
+			ObjectKey:     "artifacts/" + runID + "/transcript/segmented/transcript.md",
+			ContentType:   "text/markdown; charset=utf-8",
+			SizeBytes:     55,
+			Visibility:    "owner",
+			PreviewJSON:   []byte(`{"filename":"transcript.md","worker_artifact_kind":"transcript_segmented_markdown"}`),
+			CreatedAt:     time.Date(2026, 5, 10, 12, 2, 0, 0, time.UTC),
+			Download:      &storage.DownloadDescriptor{Provider: "object_store", URL: "https://minio.local/artifacts/transcript.md", ExpiresAt: time.Date(2099, 4, 25, 12, 0, 0, 0, time.UTC)},
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: store, Worker: &workerRuntimeService{store: store}})
+
+	cancel := httptest.NewRecorder()
+	mux.ServeHTTP(cancel, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/"+runID+"/executions/cancel-check?execution_id="+runID, nil))
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel-check status = %d, want 200 body=%s", cancel.Code, cancel.Body.String())
+	}
+	var cancelBody CancelCheckResponse
+	if err := json.Unmarshal(cancel.Body.Bytes(), &cancelBody); err != nil {
+		t.Fatalf("Unmarshal(cancel-check) error = %v", err)
+	}
+	if cancelBody.CancelRequested || cancelBody.Status != storage.AnalysisRunStatusRunning {
+		t.Fatalf("cancel-check = %#v", cancelBody)
+	}
+
+	download := httptest.NewRecorder()
+	mux.ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/internal/v1/artifacts/77777777-7777-7777-7777-777777777777/download-access", nil))
+	if download.Code != http.StatusOK {
+		t.Fatalf("download-access status = %d, want 200 body=%s", download.Code, download.Body.String())
+	}
+	var downloadBody ArtifactDownloadAccessResponse
+	if err := json.Unmarshal(download.Body.Bytes(), &downloadBody); err != nil {
+		t.Fatalf("Unmarshal(download-access) error = %v", err)
+	}
+	if downloadBody.AnalysisRunID != runID || downloadBody.ArtifactKind != "transcript_segmented_markdown" || downloadBody.Filename != "transcript.md" || downloadBody.Download.URL == "" {
+		t.Fatalf("download-access = %#v", downloadBody)
+	}
+
+	progress := httptest.NewRecorder()
+	mux.ServeHTTP(progress, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/"+runID+"/executions/progress", map[string]any{
+		"execution_id":     runID,
+		"progress_stage":   "persisting_artifacts",
+		"progress_message": "Uploading artifacts",
+	}))
+	if progress.Code != http.StatusAccepted {
+		t.Fatalf("progress status = %d, want 202 body=%s", progress.Code, progress.Body.String())
+	}
+	if store.recordedProgressStage != "persisting_artifacts" || store.recordedProgressMsg != "Uploading artifacts" {
+		t.Fatalf("progress = stage:%q message:%q", store.recordedProgressStage, store.recordedProgressMsg)
+	}
+
+	artifacts := httptest.NewRecorder()
+	mux.ServeHTTP(artifacts, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/"+runID+"/artifacts", map[string]any{
+		"execution_id": runID,
+		"artifacts": []map[string]any{
+			{"artifact_kind": "transcript_plain", "mime_type": "text/plain; charset=utf-8", "object_key": "artifacts/" + runID + "/transcript/plain/transcript.txt", "size_bytes": 42, "filename": "transcript.txt", "format": "plain_text"},
+			{"artifact_kind": "transcript_segmented_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/transcript/segmented/transcript.md", "size_bytes": 55, "filename": "transcript.md", "format": "markdown"},
+			{"artifact_kind": "transcript_docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "object_key": "artifacts/" + runID + "/transcript/docx/transcript.docx", "size_bytes": 66, "filename": "transcript.docx", "format": "docx"},
+			{"artifact_kind": "summary_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/summary/markdown/summary.md", "size_bytes": 77, "filename": "summary.md", "format": "markdown"},
+			{"artifact_kind": "report_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/report/markdown/report.md", "size_bytes": 88, "filename": "report.md", "format": "markdown"},
+			{"artifact_kind": "report_docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "object_key": "artifacts/" + runID + "/report/docx/report.docx", "size_bytes": 99, "filename": "report.docx", "format": "docx"},
+			{"artifact_kind": "deep_research_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/deep-research/markdown/deep-research.md", "size_bytes": 111, "filename": "deep-research.md", "format": "markdown"},
+			{"artifact_kind": "agent_result_json", "mime_type": "application/json; charset=utf-8", "object_key": "artifacts/" + runID + "/agent/result/result.json", "size_bytes": 122, "filename": "result.json", "format": "json"},
+			{"artifact_kind": "execution_log", "mime_type": "text/plain; charset=utf-8", "object_key": "artifacts/" + runID + "/logs/execution.log", "size_bytes": 12, "filename": "execution.log", "format": "plain_text"},
+			{"artifact_kind": "run_manifest", "mime_type": "application/json; charset=utf-8", "object_key": "artifacts/" + runID + "/run/manifest/run-manifest.json", "size_bytes": 101, "filename": "run-manifest.json", "format": "json"},
+			{"artifact_kind": "run_diagnostics", "mime_type": "application/json; charset=utf-8", "object_key": "artifacts/" + runID + "/run/diagnostics/run-diagnostics.json", "size_bytes": 77, "filename": "run-diagnostics.json", "format": "json"},
+		},
+	}))
+	if artifacts.Code != http.StatusAccepted {
+		t.Fatalf("artifacts status = %d, want 202 body=%s", artifacts.Code, artifacts.Body.String())
+	}
+	if got := len(store.recordedArtifacts); got != 11 {
+		t.Fatalf("recorded artifacts = %d, want 11: %#v", got, store.recordedArtifacts)
+	}
+	wantKinds := []string{
+		"transcript",
+		"transcript",
+		"transcript",
+		"summary",
+		"report",
+		"report",
+		"deep_research",
+		"structured_data",
+		"execution_log",
+		"run_manifest",
+		"run_diagnostics",
+	}
+	for idx, wantKind := range wantKinds {
+		if store.recordedArtifacts[idx].Kind != wantKind {
+			t.Fatalf("artifact %d kind = %q, want %q: %#v", idx, store.recordedArtifacts[idx].Kind, wantKind, store.recordedArtifacts[idx])
+		}
+	}
+	if store.recordedArtifacts[0].ContentType != "text/plain; charset=utf-8" || store.recordedArtifacts[0].ObjectKey == "" {
+		t.Fatalf("transcript mapping = %#v", store.recordedArtifacts[0])
+	}
+	if store.recordedArtifacts[10].SizeBytes != 77 {
+		t.Fatalf("run_diagnostics mapping = %#v", store.recordedArtifacts[10])
+	}
+	var artifactPreview map[string]any
+	if err := json.Unmarshal(store.recordedArtifacts[0].PreviewJSON, &artifactPreview); err != nil {
+		t.Fatalf("artifact preview JSON error = %v", err)
+	}
+	if artifactPreview["worker_artifact_kind"] != "transcript_plain" || artifactPreview["artifact_kind"] != "transcript" {
+		t.Fatalf("artifact preview = %#v, want public and worker artifact kinds", artifactPreview)
+	}
+
+	diagnostics := httptest.NewRecorder()
+	mux.ServeHTTP(diagnostics, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/"+runID+"/diagnostics", map[string]any{
+		"execution_id": runID,
+		"diagnostics": []map[string]any{{
+			"diagnostic_id": "55555555-5555-5555-5555-555555555555",
+			"subject_type":  "media_item",
+			"subject_id":    mediaID,
+			"severity":      "warning",
+			"code":          "source_unavailable",
+			"message":       "URL source skipped",
+			"context": map[string]any{
+				"analysis_run_id":   runID,
+				"selection_item_id": "66666666-6666-6666-6666-666666666666",
+				"media_item_id":     mediaID,
+				"media_kind":        "url",
+				"role":              "primary",
+				"labels":            map[string]any{"display_label": "source"},
 			},
-			Params: map[string]any{"lang": "ru"},
-		},
+		}},
+	}))
+	if diagnostics.Code != http.StatusAccepted {
+		t.Fatalf("diagnostics status = %d, want 202 body=%s", diagnostics.Code, diagnostics.Body.String())
 	}
-	mux := newMux(t, Dependencies{Public: &fakePublicService{}, Worker: worker})
+	if got := len(store.recordedDiagnostics); got != 1 {
+		t.Fatalf("recorded diagnostics = %d, want 1: %#v", got, store.recordedDiagnostics)
+	}
+	diagnostic := store.recordedDiagnostics[0]
+	if diagnostic.SubjectType != "media_item" || diagnostic.SubjectID != mediaID || diagnostic.Code != "source_unavailable" {
+		t.Fatalf("diagnostic mapping = %#v", diagnostic)
+	}
+	var contextPayload map[string]any
+	if err := json.Unmarshal(diagnostic.ContextJSON, &contextPayload); err != nil {
+		t.Fatalf("diagnostic context JSON error = %v", err)
+	}
+	if contextPayload["execution_id"] != runID || contextPayload["selection_item_id"] != "66666666-6666-6666-6666-666666666666" {
+		t.Fatalf("diagnostic context = %#v", contextPayload)
+	}
 
-	req := jsonRequest(t, http.MethodPost, "/internal/v1/jobs/11111111-1111-1111-1111-111111111111/claim", map[string]any{
-		"worker_kind": "transcription",
-		"task_type":   "job:transcription.run",
+	finalize := httptest.NewRecorder()
+	mux.ServeHTTP(finalize, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/"+runID+"/executions/finalize", map[string]any{
+		"execution_id": runID,
+		"outcome":      "partially_succeeded",
+		"message":      "Completed with skipped items",
+	}))
+	if finalize.Code != http.StatusOK {
+		t.Fatalf("finalize status = %d, want 200 body=%s", finalize.Code, finalize.Body.String())
+	}
+	if store.finalizedStatus != storage.AnalysisRunStatusPartiallySucceeded {
+		t.Fatalf("finalized status = %q, want partially_succeeded", store.finalizedStatus)
+	}
+}
+
+func TestToSealedSelectionInputEmitsV2SelectionItemClaimFields(t *testing.T) {
+	t.Parallel()
+
+	sealed := toSealedSelectionInput(storage.SelectionRecord{
+		ID: "33333333-3333-3333-3333-333333333333",
+		Items: []storage.SelectionItemSnapshot{{
+			ID:                "66666666-6666-6666-6666-666666666666",
+			Position:          2,
+			MediaItemID:       "22222222-2222-2222-2222-222222222222",
+			Kind:              "audio",
+			SourceSnapshot:    storage.MediaSourceMetadata{SourceID: "11111111-1111-1111-1111-111111111111", OriginType: "object", ObjectKey: "media/source.wav", MIMEType: "audio/wav"},
+			DisplayName:       "source.wav",
+			StatusAtSelection: storage.MediaStatusReady,
+			MetadataJSON:      []byte(`{"source_label":"voice_a","original_filename":"source.wav"}`),
+			RetentionSnapshot: storage.RetentionMetadata{State: storage.RetentionStateActive},
+		}},
+		OptionSnapshotJSON: []byte(`{"item_roles":{"22222222-2222-2222-2222-222222222222":"reference"}}`),
+		SealedAt:           time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
 	})
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	if len(sealed.Items) != 1 {
+		t.Fatalf("sealed items len = %d, want 1", len(sealed.Items))
 	}
-	if worker.claimCalls != 1 {
-		t.Fatalf("claim calls = %d, want 1", worker.claimCalls)
+	item := sealed.Items[0]
+	if item.SelectionItemID != "66666666-6666-6666-6666-666666666666" {
+		t.Fatalf("selection_item_id = %q, want persisted selection item id", item.SelectionItemID)
 	}
-
-	publicReq := jsonRequest(t, http.MethodPost, "/v1/jobs/11111111-1111-1111-1111-111111111111/claim", map[string]any{
-		"worker_kind": "transcription",
-		"task_type":   "job:transcription.run",
-	})
-	publicRec := httptest.NewRecorder()
-	mux.ServeHTTP(publicRec, publicReq)
-	if publicRec.Code != http.StatusNotFound {
-		t.Fatalf("public claim route should be absent, status=%d", publicRec.Code)
+	if item.MediaKind != "audio" || item.MIMEType == nil || *item.MIMEType != "audio/wav" {
+		t.Fatalf("media fields mismatch: %#v", item)
 	}
-}
-
-func TestApiHttpInternalAgentRunRequestAccessRouteReturnsOpaqueAccess(t *testing.T) {
-	t.Parallel()
-
-	worker := &fakeWorkerService{
-		requestAccess: storage.AgentRunRequestAccess{
-			Provider:            storage.AgentRunRequestProviderMinIO,
-			URL:                 "https://minio.local/private/request.json",
-			ExpiresAt:           time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC),
-			RequestRef:          "agentreq_digest",
-			RequestDigestSHA256: "digest",
-			RequestBytes:        123,
-		},
+	if item.Role != "reference" {
+		t.Fatalf("role = %q, want role from option_snapshot item_roles", item.Role)
 	}
-	mux := newMux(t, Dependencies{Public: &fakePublicService{}, Worker: worker})
-
-	req := httptest.NewRequest(
-		http.MethodGet,
-		"/internal/v1/jobs/11111111-1111-1111-1111-111111111111/request-access?execution_id=55555555-5555-5555-5555-555555555555",
-		nil,
-	)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	var response AgentRunRequestAccessResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
-		t.Fatalf("Unmarshal(response) error = %v", err)
-	}
-	if response.RequestRef != "agentreq_digest" || response.RequestBytes != 123 {
-		t.Fatalf("response = %#v, want request-access payload", response)
-	}
-}
-
-func TestApiHttpAllowsLocalWebUiCors(t *testing.T) {
-	t.Parallel()
-
-	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
-
-	req := httptest.NewRequest(http.MethodGet, "/v1/jobs?page=1&page_size=20", nil)
-	req.Header.Set("Origin", "http://localhost:3300")
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3300" {
-		t.Fatalf("Access-Control-Allow-Origin = %q, want local origin", got)
+	if item.Labels.DisplayLabel != "source.wav" || item.Labels.SourceLabel == nil || *item.Labels.SourceLabel != "voice_a" || item.Labels.OriginalFilename == nil || *item.Labels.OriginalFilename != "source.wav" {
+		t.Fatalf("labels mismatch: %#v", item.Labels)
 	}
 
-	preflight := httptest.NewRequest(http.MethodOptions, "/v1/jobs?page=1&page_size=20", nil)
-	preflight.Header.Set("Origin", "http://localhost:3300")
-	preflight.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	preflight.Header.Set("Access-Control-Request-Headers", "Content-Type")
-	preflightRec := httptest.NewRecorder()
-	mux.ServeHTTP(preflightRec, preflight)
-
-	if preflightRec.Code != http.StatusNoContent {
-		t.Fatalf("preflight status = %d, want %d body=%s", preflightRec.Code, http.StatusNoContent, preflightRec.Body.String())
-	}
-	if got := preflightRec.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(got, "Idempotency-Key") {
-		t.Fatalf("Access-Control-Allow-Headers = %q, want Idempotency-Key", got)
-	}
-}
-
-func TestApiHttpRejectsNonLocalCorsPreflight(t *testing.T) {
-	t.Parallel()
-
-	mux := newMux(t, Dependencies{Public: &fakePublicService{}})
-
-	req := httptest.NewRequest(http.MethodOptions, "/v1/jobs", nil)
-	req.Header.Set("Origin", "https://example.com")
-	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
-	}
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
-		t.Fatalf("Access-Control-Allow-Origin = %q, want empty", got)
-	}
-}
-
-func loadHTTPFixture(t *testing.T) httpFixture {
-	t.Helper()
-
-	data, err := os.ReadFile(filepath.Join("testdata", "validation_cases.json"))
+	payload, err := json.Marshal(item)
 	if err != nil {
-		t.Fatalf("ReadFile(validation_cases.json) error = %v", err)
+		t.Fatalf("Marshal(selection item) error = %v", err)
 	}
-	var fixture httpFixture
-	if err := json.Unmarshal(data, &fixture); err != nil {
-		t.Fatalf("Unmarshal(validation_cases.json) error = %v", err)
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("Unmarshal(selection item) error = %v", err)
 	}
-	return fixture
-}
-
-type httpFixture struct {
-	UnsupportedURLs []string `json:"unsupported_urls"`
-}
-
-type fakePublicService struct {
-	uploadJobs             []JobSnapshot
-	uploadErr              error
-	combinedJob            JobSnapshot
-	batchJob               JobSnapshot
-	batchDraft             BatchDraft
-	batchDraftErr          error
-	agentRunJob            JobSnapshot
-	reportJob              JobSnapshot
-	deepResearchJob        JobSnapshot
-	lastUpload             UploadCommand
-	lastCombined           UploadCommand
-	lastBatch              BatchCommand
-	lastCreateBatchDraft   BatchDraftCreateCommand
-	lastGetBatchDraft      BatchDraftGetCommand
-	lastAddBatchDraftItem  BatchDraftItemCommand
-	lastRemoveBatchDraft   BatchDraftRemoveItemCommand
-	lastClearBatchDraft    BatchDraftMutateCommand
-	lastSubmitBatchDraft   BatchDraftSubmitCommand
-	lastAgentRun           AgentRunCommand
-	lastReportJobID        string
-	lastReportReq          ChildCreateRequest
-	lastDeepResearchJobID  string
-	lastDeepResearchReq    ChildCreateRequest
-	artifactResolution     storage.ArtifactResolution
-	internalArtifactAccess storage.ArtifactResolution
-	events                 []ws.JobEventEnvelope
-}
-
-func (f *fakePublicService) CreateUpload(_ context.Context, req UploadCommand) ([]JobSnapshot, error) {
-	f.lastUpload = req
-	if f.uploadErr != nil {
-		return nil, f.uploadErr
+	if _, ok := raw["mime_type"]; !ok {
+		t.Fatalf("mime_type must be emitted even when nullable: %#v", raw)
 	}
-	if f.uploadJobs == nil {
-		return nil, errors.New("missing upload result")
+	for _, stale := range []string{"selection_item_snapshot", "selection_item"} {
+		if _, ok := raw[stale]; ok {
+			t.Fatalf("selection item leaked stale wrapper field %q: %#v", stale, raw)
+		}
 	}
-	return f.uploadJobs, nil
-}
 
-func (f *fakePublicService) CreateCombined(_ context.Context, req UploadCommand) (JobSnapshot, error) {
-	f.lastCombined = req
-	return f.combinedJob, nil
-}
-
-func (f *fakePublicService) CreateBatch(_ context.Context, req BatchCommand) (JobSnapshot, error) {
-	f.lastBatch = req
-	return f.batchJob, nil
-}
-
-func (f *fakePublicService) CreateBatchDraft(_ context.Context, req BatchDraftCreateCommand) (BatchDraftResponse, error) {
-	f.lastCreateBatchDraft = req
-	return BatchDraftResponse{Draft: f.batchDraft}, nil
-}
-
-func (f *fakePublicService) GetBatchDraft(_ context.Context, req BatchDraftGetCommand) (BatchDraftResponse, error) {
-	f.lastGetBatchDraft = req
-	return BatchDraftResponse{Draft: f.batchDraft}, nil
-}
-
-func (f *fakePublicService) AddBatchDraftItem(_ context.Context, req BatchDraftItemCommand) (BatchDraftResponse, error) {
-	f.lastAddBatchDraftItem = req
-	if f.batchDraftErr != nil {
-		return BatchDraftResponse{}, f.batchDraftErr
+	noMime := toSealedSelectionInput(storage.SelectionRecord{
+		Items: []storage.SelectionItemSnapshot{{
+			ID:                "77777777-7777-7777-7777-777777777777",
+			Position:          0,
+			MediaItemID:       "88888888-8888-8888-8888-888888888888",
+			Kind:              "text",
+			SourceSnapshot:    storage.MediaSourceMetadata{SourceID: "99999999-9999-9999-9999-999999999999", OriginType: "text", TextRef: "inline:99999999-9999-9999-9999-999999999999"},
+			DisplayName:       "note",
+			StatusAtSelection: storage.MediaStatusReady,
+			RetentionSnapshot: storage.RetentionMetadata{State: storage.RetentionStateActive},
+		}},
+	})
+	payload, err = json.Marshal(noMime.Items[0])
+	if err != nil {
+		t.Fatalf("Marshal(no mime selection item) error = %v", err)
 	}
-	return BatchDraftResponse{Draft: f.batchDraft}, nil
+	raw = map[string]any{}
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("Unmarshal(no mime selection item) error = %v", err)
+	}
+	if value, ok := raw["mime_type"]; !ok || value != nil {
+		t.Fatalf("absent source MIME type must be emitted as null, got %#v in %#v", value, raw)
+	}
 }
 
-func (f *fakePublicService) RemoveBatchDraftItem(_ context.Context, req BatchDraftRemoveItemCommand) (BatchDraftResponse, error) {
-	f.lastRemoveBatchDraft = req
-	return BatchDraftResponse{Draft: f.batchDraft}, nil
+func TestApiRuntimeReconcilesPersistedRunAfterEnqueueFailure(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	public := &fakePublicService{
+		run: storage.AnalysisRunRecord{
+			ID:          "run-1",
+			Owner:       owner,
+			SelectionID: "selection-1",
+			RunType:     "transcription",
+			Status:      storage.AnalysisRunStatusQueued,
+			CreatedAt:   now,
+		},
+	}
+	client := &flakyQueueClient{err: errors.New("redis unavailable")}
+	publisher, err := queue.NewPublisher(client)
+	if err != nil {
+		t.Fatalf("NewPublisher() error = %v", err)
+	}
+	service := &publicRuntimeService{store: public, queue: publisher}
+
+	_, err = service.CreateAnalysisRun(context.Background(), storage.CreateAnalysisRunRequest{Owner: owner, SelectionID: "selection-1", RunType: "transcription"})
+	if !errors.Is(err, queue.ErrQueueUnavailable) {
+		t.Fatalf("CreateAnalysisRun() error = %v, want queue unavailable", err)
+	}
+	pending, err := public.ListPendingEnqueueTasks(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListPendingEnqueueTasks() error = %v", err)
+	}
+	if len(pending) != 1 || pending[0].AnalysisRunID != "run-1" {
+		t.Fatalf("pending tasks = %#v, want persisted run task", pending)
+	}
+
+	client.err = nil
+	recovered, err := service.ReconcileAnalysisRunQueue(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ReconcileAnalysisRunQueue() error = %v", err)
+	}
+	if recovered != 1 || client.calls != 2 {
+		t.Fatalf("recovered=%d calls=%d, want one recovery enqueue after one failed enqueue", recovered, client.calls)
+	}
+	pending, err = public.ListPendingEnqueueTasks(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListPendingEnqueueTasks(after) error = %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending tasks after reconcile = %#v, want none", pending)
+	}
+	_, claimed, err := public.ClaimAnalysisRunTask(context.Background(), "run-1", "transcription", "selection.transcription", "worker-1")
+	if err != nil {
+		t.Fatalf("ClaimAnalysisRunTask() error = %v", err)
+	}
+	if !claimed {
+		t.Fatalf("reconciled task was not claimable")
+	}
 }
 
-func (f *fakePublicService) ClearBatchDraft(_ context.Context, req BatchDraftMutateCommand) (BatchDraftResponse, error) {
-	f.lastClearBatchDraft = req
-	return BatchDraftResponse{Draft: f.batchDraft}, nil
-}
-
-func (f *fakePublicService) SubmitBatchDraft(_ context.Context, req BatchDraftSubmitCommand) (BatchDraftSubmitResponse, error) {
-	f.lastSubmitBatchDraft = req
-	return BatchDraftSubmitResponse{Draft: f.batchDraft, Job: &f.batchJob}, nil
-}
-
-func (f *fakePublicService) CreateFromURL(_ context.Context, _ URLCommand) (JobSnapshot, error) {
-	return JobSnapshot{}, nil
-}
-
-func (f *fakePublicService) CreateAgentRun(_ context.Context, req AgentRunCommand) (JobSnapshot, error) {
-	f.lastAgentRun = req
-	return f.agentRunJob, nil
-}
-
-func (f *fakePublicService) GetJob(_ context.Context, _ string) (JobSnapshot, error) {
-	return JobSnapshot{}, jobs.ErrJobNotFound
-}
-
-func (f *fakePublicService) ListJobs(_ context.Context, filter ListJobsFilter) (JobListResponse, error) {
-	return JobListResponse{Items: nil, Page: filter.Page, PageSize: filter.PageSize}, nil
-}
-
-func (f *fakePublicService) CreateReport(_ context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
-	f.lastReportJobID = jobID
-	f.lastReportReq = req
-	return f.reportJob, nil
-}
-
-func (f *fakePublicService) CreateDeepResearch(_ context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
-	f.lastDeepResearchJobID = jobID
-	f.lastDeepResearchReq = req
-	return f.deepResearchJob, nil
-}
-
-func (f *fakePublicService) CancelJob(_ context.Context, _ string) (JobSnapshot, error) {
-	return JobSnapshot{}, nil
-}
-
-func (f *fakePublicService) RetryJob(_ context.Context, _ string) (JobSnapshot, error) {
-	return JobSnapshot{}, nil
-}
-
-func (f *fakePublicService) ResolveArtifact(_ context.Context, _ string) (storage.ArtifactResolution, error) {
-	return f.artifactResolution, nil
-}
-
-func (f *fakePublicService) ResolveInternalArtifactDownloadAccess(_ context.Context, _ string) (storage.ArtifactResolution, error) {
-	return f.internalArtifactAccess, nil
-}
-
-func (f *fakePublicService) ListJobEvents(_ context.Context, _ string) ([]ws.JobEventEnvelope, error) {
-	return f.events, nil
-}
-
-type fakeWorkerService struct {
-	claimResponse ClaimResponse
-	claimCalls    int
-	requestAccess storage.AgentRunRequestAccess
-}
-
-func (f *fakeWorkerService) Claim(_ context.Context, _ string, _ ClaimRequest) (ClaimResponse, error) {
-	f.claimCalls++
-	return f.claimResponse, nil
-}
-
-func (f *fakeWorkerService) RecordProgress(_ context.Context, _ string, _ ProgressRequest) error {
-	return nil
-}
-
-func (f *fakeWorkerService) RecordArtifacts(_ context.Context, _ string, _ ArtifactUpsertRequest) error {
-	return nil
-}
-
-func (f *fakeWorkerService) Finalize(_ context.Context, _ string, _ FinalizeRequest) (JobSnapshot, error) {
-	return snapshot("11111111-1111-1111-1111-111111111111", "transcription", "succeeded"), nil
-}
-
-func (f *fakeWorkerService) CancelCheck(_ context.Context, _ string, _ string) (CancelCheckResponse, error) {
-	return CancelCheckResponse{CancelRequested: false, Status: "running"}, nil
-}
-
-func (f *fakeWorkerService) ResolveAgentRunRequestAccess(_ context.Context, _ string, _ string) (storage.AgentRunRequestAccess, error) {
-	return f.requestAccess, nil
-}
-
-type fakeWebsocket struct {
-	calls int
-}
-
-func (f *fakeWebsocket) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
-	f.calls++
-	w.WriteHeader(http.StatusSwitchingProtocols)
-}
-
-type bufferLogger struct {
-	lines []string
-}
-
-func (l *bufferLogger) Printf(format string, args ...any) {
-	l.lines = append(l.lines, strings.TrimSpace(fmt.Sprintf(format, args...)))
-}
-
-func (l *bufferLogger) String() string {
-	return strings.Join(l.lines, "\n")
-}
-
-func newMux(t *testing.T, deps Dependencies, opts ...Option) *http.ServeMux {
-	t.Helper()
-	server := NewServer(deps, opts...)
+func newFinalMux(deps Dependencies) *http.ServeMux {
 	mux := http.NewServeMux()
-	server.RegisterRoutes(mux)
+	NewServer(deps).RegisterRoutes(mux)
 	return mux
 }
 
-type multipartInput struct {
-	Fields map[string]string
-	Files  []multipartFile
-}
-
-type multipartFile struct {
-	Name        string
-	Filename    string
-	ContentType string
-	Body        []byte
-}
-
-func buildMultipart(t *testing.T, input multipartInput) (io.Reader, string) {
-	t.Helper()
-
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	for key, value := range input.Fields {
-		if err := writer.WriteField(key, value); err != nil {
-			t.Fatalf("WriteField(%s) error = %v", key, err)
-		}
-	}
-	for _, file := range input.Files {
-		part, err := writer.CreateFormFile(file.Name, file.Filename)
-		if err != nil {
-			t.Fatalf("CreateFormFile(%s) error = %v", file.Filename, err)
-		}
-		if _, err := part.Write(file.Body); err != nil {
-			t.Fatalf("part.Write(%s) error = %v", file.Filename, err)
-		}
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatalf("writer.Close() error = %v", err)
-	}
-	return bytes.NewReader(buf.Bytes()), writer.FormDataContentType()
-}
-
-func jsonRequest(t *testing.T, method, path string, payload any) *http.Request {
-	t.Helper()
-
-	body, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("Marshal(payload) error = %v", err)
-	}
-	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+func jsonRequest(method, path string, body any) *http.Request {
+	data, _ := json.Marshal(body)
+	req := httptest.NewRequest(method, path, bytes.NewReader(data))
 	req.Header.Set("Content-Type", "application/json")
 	return req
 }
 
-func assertErrorEnvelope(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) {
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
-
-	if rec.Code != wantStatus {
-		t.Fatalf("status = %d, want %d body=%s", rec.Code, wantStatus, rec.Body.String())
+	if rec.Code != status {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, status, rec.Body.String())
 	}
-	var envelope struct {
+	var body struct {
 		Error struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("Unmarshal(error envelope) error = %v", err)
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(error) error = %v", err)
 	}
-	if envelope.Error.Code != wantCode {
-		t.Fatalf("error.code = %q, want %q body=%s", envelope.Error.Code, wantCode, rec.Body.String())
+	if body.Error.Code != code {
+		t.Fatalf("error code = %q, want %q", body.Error.Code, code)
 	}
 }
 
-func snapshot(jobID, jobType, status string) JobSnapshot {
-	displayName := "job"
-	return JobSnapshot{
-		JobID:     jobID,
-		RootJobID: jobID,
-		JobType:   jobType,
-		Status:    status,
-		Version:   1,
-		Delivery:  DeliveryConfig{Strategy: storage.DeliveryStrategyPolling},
-		SourceSet: SourceSetView{
-			SourceSetID: "77777777-7777-7777-7777-777777777777",
-			InputKind:   storage.SourceSetInputSingleSource,
-			Items: []SourceSetItem{
+type fakePublicService struct {
+	mediaItem              storage.MediaItemRecord
+	mediaItems             []storage.MediaItemRecord
+	collection             storage.CollectionRecord
+	selection              storage.SelectionRecord
+	run                    storage.AnalysisRunRecord
+	runs                   []storage.AnalysisRunRecord
+	artifact               storage.ArtifactRecord
+	artifacts              []storage.ArtifactRecord
+	err                    error
+	lastAddMedia           storage.AddMediaItemRequest
+	lastRun                storage.CreateAnalysisRunRequest
+	createAnalysisRunCalls int
+	pendingTasks           []storage.AnalysisRunTaskRecord
+	recordedArtifacts      []storage.ArtifactRecord
+	recordedDiagnostics    []storage.DiagnosticRecord
+	recordedProgressStage  string
+	recordedProgressMsg    string
+	finalizedStatus        string
+	canceledRunID          string
+	canceledMessage        string
+	retriedRunID           string
+	refreshedArtifactID    string
+	reconciled             int
+	observability          storage.ObservabilitySnapshot
+}
+
+func (f *fakePublicService) AddMediaItem(_ context.Context, req storage.AddMediaItemRequest) (storage.MediaItemRecord, error) {
+	f.lastAddMedia = req
+	return f.mediaItem, f.err
+}
+func (f *fakePublicService) ListMediaItems(context.Context, storage.OwnerScope) ([]storage.MediaItemRecord, error) {
+	if f.mediaItems != nil {
+		return f.mediaItems, f.err
+	}
+	return []storage.MediaItemRecord{f.mediaItem}, f.err
+}
+func (f *fakePublicService) GetMediaItem(context.Context, storage.OwnerScope, string) (storage.MediaItemRecord, error) {
+	return f.mediaItem, f.err
+}
+func (f *fakePublicService) RemoveMediaItem(context.Context, storage.OwnerScope, string) (storage.MediaItemRecord, error) {
+	return f.mediaItem, f.err
+}
+func (f *fakePublicService) GetInboxCollection(context.Context, storage.OwnerScope) (storage.CollectionRecord, error) {
+	return f.collection, f.err
+}
+func (f *fakePublicService) CreateCollection(context.Context, storage.CreateCollectionRequest) (storage.CollectionRecord, error) {
+	return f.collection, f.err
+}
+func (f *fakePublicService) ListCollections(context.Context, storage.OwnerScope) ([]storage.CollectionRecord, error) {
+	return []storage.CollectionRecord{f.collection}, f.err
+}
+func (f *fakePublicService) GetCollection(context.Context, storage.OwnerScope, string) (storage.CollectionRecord, error) {
+	return f.collection, f.err
+}
+func (f *fakePublicService) UpdateCollection(context.Context, storage.UpdateCollectionRequest) (storage.CollectionRecord, error) {
+	return f.collection, f.err
+}
+func (f *fakePublicService) UpdateCollectionItems(context.Context, storage.UpdateCollectionItemsRequest) (storage.CollectionRecord, error) {
+	return f.collection, f.err
+}
+func (f *fakePublicService) CreateSelection(context.Context, storage.CreateSelectionRequest) (storage.SelectionRecord, error) {
+	return f.selection, f.err
+}
+func (f *fakePublicService) GetSelection(context.Context, storage.OwnerScope, string) (storage.SelectionRecord, error) {
+	return f.selection, f.err
+}
+func (f *fakePublicService) CreateAnalysisRun(_ context.Context, req storage.CreateAnalysisRunRequest) (storage.AnalysisRunRecord, error) {
+	f.createAnalysisRunCalls++
+	f.lastRun = req
+	if f.err == nil && f.run.ID != "" {
+		taskType := queue.TaskTypeSelectionAnalysis
+		workerKind := "analysis_runner"
+		if f.run.RunType == "transcription" {
+			taskType = queue.TaskTypeSelectionTranscription
+			workerKind = "transcription"
+		}
+		f.pendingTasks = append(f.pendingTasks, storage.AnalysisRunTaskRecord{
+			ID:            "task-" + f.run.ID,
+			AnalysisRunID: f.run.ID,
+			WorkerKind:    workerKind,
+			TaskType:      taskType,
+			Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
+			AttemptNo:     1,
+			CreatedAt:     f.run.CreatedAt,
+		})
+	}
+	return f.run, f.err
+}
+func (f *fakePublicService) CancelAnalysisRun(_ context.Context, _ storage.OwnerScope, analysisRunID, message string) (storage.AnalysisRunRecord, error) {
+	f.canceledRunID = analysisRunID
+	f.canceledMessage = message
+	f.run.Status = storage.AnalysisRunStatusCanceled
+	return f.run, f.err
+}
+func (f *fakePublicService) RetryAnalysisRun(_ context.Context, _ storage.OwnerScope, analysisRunID, _ string) (storage.AnalysisRunRecord, error) {
+	f.retriedRunID = analysisRunID
+	return f.run, f.err
+}
+func (f *fakePublicService) GetAnalysisRunByID(context.Context, string) (storage.AnalysisRunRecord, error) {
+	return f.run, f.err
+}
+func (f *fakePublicService) ListAnalysisRuns(context.Context, storage.OwnerScope) ([]storage.AnalysisRunRecord, error) {
+	if f.runs != nil {
+		return f.runs, f.err
+	}
+	return []storage.AnalysisRunRecord{f.run}, f.err
+}
+func (f *fakePublicService) GetAnalysisRun(context.Context, storage.OwnerScope, string) (storage.AnalysisRunRecord, error) {
+	return f.run, f.err
+}
+func (f *fakePublicService) ListAnalysisRunEvents(context.Context, storage.OwnerScope, string) ([]storage.RunEventRecord, error) {
+	return nil, f.err
+}
+func (f *fakePublicService) ListArtifacts(context.Context, storage.OwnerScope, string) ([]storage.ArtifactRecord, error) {
+	if f.artifacts != nil {
+		return f.artifacts, f.err
+	}
+	return nil, f.err
+}
+func (f *fakePublicService) GetArtifact(context.Context, storage.OwnerScope, string) (storage.ArtifactRecord, error) {
+	return f.artifact, f.err
+}
+func (f *fakePublicService) GetInternalArtifactDownloadAccess(context.Context, string) (storage.ArtifactRecord, error) {
+	return f.artifact, f.err
+}
+func (f *fakePublicService) RefreshArtifactLink(_ context.Context, _ storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error) {
+	f.refreshedArtifactID = artifactID
+	return f.artifact, f.err
+}
+func (f *fakePublicService) ListDiagnostics(context.Context, storage.OwnerScope, string, string) ([]storage.DiagnosticRecord, error) {
+	return nil, f.err
+}
+func (f *fakePublicService) RecordArtifacts(_ context.Context, _ storage.OwnerScope, _ string, artifacts []storage.ArtifactRecord) ([]storage.ArtifactRecord, error) {
+	f.recordedArtifacts = append([]storage.ArtifactRecord(nil), artifacts...)
+	return artifacts, f.err
+}
+func (f *fakePublicService) RecordDiagnostics(_ context.Context, _ storage.OwnerScope, _ string, diagnostics []storage.DiagnosticRecord) ([]storage.DiagnosticRecord, error) {
+	f.recordedDiagnostics = append([]storage.DiagnosticRecord(nil), diagnostics...)
+	return diagnostics, f.err
+}
+func (f *fakePublicService) RecordAnalysisRunProgress(_ context.Context, _ storage.OwnerScope, _ string, stage, message string, _ json.RawMessage) (storage.AnalysisRunRecord, error) {
+	f.recordedProgressStage = stage
+	f.recordedProgressMsg = message
+	return f.run, f.err
+}
+func (f *fakePublicService) FinalizeAnalysisRunTask(_ context.Context, _ storage.OwnerScope, _ string, status, _ string) (storage.AnalysisRunRecord, error) {
+	f.finalizedStatus = status
+	f.run.Status = status
+	return f.run, f.err
+}
+func (f *fakePublicService) ListPendingEnqueueTasks(context.Context, int) ([]storage.AnalysisRunTaskRecord, error) {
+	return append([]storage.AnalysisRunTaskRecord(nil), f.pendingTasks...), f.err
+}
+func (f *fakePublicService) ListAnalysisRunQueue(_ context.Context, status, runType, taskType string, limit int) ([]storage.AnalysisRunQueueRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	records := make([]storage.AnalysisRunQueueRecord, 0, limit)
+	for _, task := range f.pendingTasks {
+		if status != "" && task.Status != status {
+			continue
+		}
+		if taskType != "" && task.TaskType != taskType {
+			continue
+		}
+		runTypeForTask := f.run.RunType
+		if runType != "" && runTypeForTask != runType {
+			continue
+		}
+		records = append(records, storage.AnalysisRunQueueRecord{
+			AnalysisRunID: task.AnalysisRunID,
+			RunType:       runTypeForTask,
+			WorkerKind:    task.WorkerKind,
+			TaskType:      task.TaskType,
+			Status:        task.Status,
+			Version:       f.run.Version,
+			AttemptNo:     task.AttemptNo,
+			CreatedAt:     task.CreatedAt,
+		})
+		if len(records) == limit {
+			break
+		}
+	}
+	return records, f.err
+}
+func (f *fakePublicService) MarkAnalysisRunTaskQueued(_ context.Context, analysisRunID, taskType string) error {
+	for i, task := range f.pendingTasks {
+		if task.AnalysisRunID == analysisRunID && task.TaskType == taskType {
+			f.pendingTasks = append(f.pendingTasks[:i], f.pendingTasks[i+1:]...)
+			return f.err
+		}
+	}
+	return storage.ErrExecutionNotFound
+}
+func (f *fakePublicService) ClaimAnalysisRunTask(context.Context, string, string, string, string) (storage.AnalysisRunRecord, bool, error) {
+	f.run.Status = storage.AnalysisRunStatusRunning
+	return f.run, true, f.err
+}
+func (f *fakePublicService) ReconcileAnalysisRunQueue(context.Context, int) (int, error) {
+	return f.reconciled, f.err
+}
+func (f *fakePublicService) GetObservabilitySnapshot(context.Context) (storage.ObservabilitySnapshot, error) {
+	return f.observability, f.err
+}
+
+type fakeWorkerService struct{}
+
+func (f *fakeWorkerService) ListAnalysisRunQueue(context.Context, AnalysisRunQueueRequest) (AnalysisRunQueueResponse, error) {
+	return AnalysisRunQueueResponse{
+		Items: []storage.AnalysisRunQueueRecord{{
+			AnalysisRunID: "44444444-4444-4444-4444-444444444444",
+			RunType:       "transcription",
+			WorkerKind:    "transcription",
+			TaskType:      "selection.transcription",
+			Status:        storage.AnalysisRunTaskStatusQueued,
+			Version:       1,
+			AttemptNo:     1,
+			CreatedAt:     time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+		}},
+		Page:     1,
+		PageSize: 1,
+	}, nil
+}
+
+func (f *fakeWorkerService) ClaimExecution(context.Context, string, ExecutionClaimRequest) (ExecutionClaimResponse, error) {
+	return ExecutionClaimResponse{
+		ExecutionID:   "55555555-5555-5555-5555-555555555555",
+		AnalysisRunID: "44444444-4444-4444-4444-444444444444",
+		RunType:       "transcription",
+		Selection: sealedSelectionInput{
+			SelectionID: "33333333-3333-3333-3333-333333333333",
+			Items: []selectionItemSnapshot{
 				{
-					Position: 0,
-					Source: SourceReference{
-						SourceID:    "66666666-6666-6666-6666-666666666666",
-						SourceKind:  storage.SourceKindUploadedFile,
-						DisplayName: &displayName,
-					},
+					SelectionItemID:   "66666666-6666-6666-6666-666666666666",
+					Position:          0,
+					MediaItemID:       "22222222-2222-2222-2222-222222222222",
+					Kind:              "audio",
+					MediaKind:         "audio",
+					MIMEType:          stringPtr("audio/wav"),
+					Role:              "primary",
+					Labels:            selectionItemLabels{DisplayLabel: "source.wav", SourceLabel: stringPtr("voice_a"), OriginalFilename: stringPtr("source.wav")},
+					SourceSnapshot:    storage.MediaSourceMetadata{SourceID: "11111111-1111-1111-1111-111111111111", OriginType: "object", ObjectKey: "media/source.wav", MIMEType: "audio/wav"},
+					DisplayName:       "source.wav",
+					StatusAtSelection: "ready",
+					MetadataSnapshot:  map[string]any{"source_label": "voice_a", "original_filename": "source.wav"},
+					RetentionSnapshot: storage.RetentionMetadata{State: "active"},
 				},
 			},
+			OptionSnapshot: map[string]any{},
+			SealedAt:       time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
 		},
-		Artifacts: []ArtifactSummary{},
-		Children:  []ChildJobReference{},
-		CreatedAt: time.Date(2026, 4, 22, 12, 0, 0, 0, time.UTC),
+		Params:    map[string]any{},
+		ClaimedAt: time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC),
+	}, nil
+}
+
+func (f *fakeWorkerService) ResolveRequestAccess(context.Context, string, string) (RequestAccessResponse, error) {
+	return RequestAccessResponse{
+		Provider:            "minio_presigned_url",
+		URL:                 "https://minio.local/private/request.json",
+		ExpiresAt:           "2099-04-25T12:00:00Z",
+		RequestRef:          "agentreq_digest",
+		RequestDigestSHA256: "abc123",
+		RequestBytes:        123,
+	}, nil
+}
+
+func (f *fakeWorkerService) CheckCancel(context.Context, string, string) (CancelCheckResponse, error) {
+	return CancelCheckResponse{CancelRequested: false, Status: storage.AnalysisRunStatusRunning}, nil
+}
+
+func (f *fakeWorkerService) ResolveArtifactDownloadAccess(context.Context, string) (ArtifactDownloadAccessResponse, error) {
+	return ArtifactDownloadAccessResponse{
+		ArtifactID:    "77777777-7777-7777-7777-777777777777",
+		AnalysisRunID: "44444444-4444-4444-4444-444444444444",
+		ArtifactKind:  "transcript_segmented_markdown",
+		Filename:      "transcript.md",
+		MIMEType:      "text/markdown; charset=utf-8",
+		SizeBytes:     55,
+		CreatedAt:     time.Date(2026, 5, 10, 12, 2, 0, 0, time.UTC),
+		Download: storage.DownloadDescriptor{
+			Provider:  "object_store",
+			URL:       "https://minio.local/artifacts/transcript.md",
+			ExpiresAt: time.Date(2099, 4, 25, 12, 0, 0, 0, time.UTC),
+		},
+	}, nil
+}
+
+func stringPtr(value string) *string {
+	return &value
+}
+
+func (f *fakeWorkerService) RecordExecutionProgress(context.Context, string, ExecutionProgressRequest) error {
+	return nil
+}
+func (f *fakeWorkerService) RecordExecutionArtifacts(context.Context, string, ExecutionArtifactsRequest) error {
+	return nil
+}
+func (f *fakeWorkerService) RecordExecutionDiagnostics(context.Context, string, ExecutionDiagnosticsRequest) error {
+	return nil
+}
+func (f *fakeWorkerService) FinalizeExecution(context.Context, string, ExecutionFinalizeRequest) (storage.AnalysisRunRecord, error) {
+	return storage.AnalysisRunRecord{}, nil
+}
+
+type flakyQueueClient struct {
+	err   error
+	calls int
+}
+
+func (f *flakyQueueClient) Enqueue(_ context.Context, spec queue.EnqueueSpec) (queue.EnqueueReceipt, error) {
+	f.calls++
+	if f.err != nil {
+		return queue.EnqueueReceipt{}, f.err
 	}
+	return queue.EnqueueReceipt{ID: "task-id", QueueName: spec.QueueName, TaskType: spec.TaskType}, nil
 }

@@ -12,25 +12,18 @@ import (
 )
 
 const (
-	EnqueueMarker                  = "[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]"
-	JobTypeTranscription           = "transcription"
-	JobTypeReport                  = "report"
-	JobTypeDeepResearch            = "deep_research"
-	JobTypeAgentRun                = "agent_run"
+	EnqueueMarker                  = "[ApiQueue][enqueue][BLOCK_ENQUEUE_ANALYSIS_RUN]"
+	RunTypeAnalysis                = "analysis_run"
 	QueueNameTranscription         = "transcription"
-	QueueNameAgentRun              = "agent_run"
-	TaskTypeTranscription          = "job:transcription.run"
-	TaskTypeTranscriptionAggregate = "job:transcription.aggregate"
-	TaskTypeAgentRun               = "job:agent_run.run"
+	QueueNameAnalysis              = "analysis"
+	TaskTypeSelectionTranscription = "selection.transcription"
+	TaskTypeSelectionAnalysis      = "selection.analysis"
 )
 
 const (
-	FailureCodeJobTerminal           = "job_terminal"
-	FailureCodeJobAlreadyOwned       = "job_already_owned"
-	FailureCodeCancelAuthoritative   = "cancel_authoritative"
-	FailureCodeMissingParentArtifact = "missing_parent_artifact"
-	FailureCodeInvalidRequestData    = "invalid_request_data"
-	FailureCodePipelineTerminal      = "pipeline_terminal_failure"
+	FailureCodeExecutionTerminal = "execution_terminal"
+	FailureCodeAlreadyOwned      = "execution_already_owned"
+	FailureCodeInvalidInput      = "invalid_execution_input"
 )
 
 var (
@@ -39,12 +32,9 @@ var (
 )
 
 var deterministicFailureCodes = map[string]struct{}{
-	FailureCodeJobTerminal:           {},
-	FailureCodeJobAlreadyOwned:       {},
-	FailureCodeCancelAuthoritative:   {},
-	FailureCodeMissingParentArtifact: {},
-	FailureCodeInvalidRequestData:    {},
-	FailureCodePipelineTerminal:      {},
+	FailureCodeExecutionTerminal: {},
+	FailureCodeAlreadyOwned:      {},
+	FailureCodeInvalidInput:      {},
 }
 
 type Logger interface {
@@ -52,7 +42,7 @@ type Logger interface {
 }
 
 type Policy struct {
-	JobType   string
+	RunType   string
 	QueueName string
 	TaskType  string
 	MaxRetry  int
@@ -60,8 +50,8 @@ type Policy struct {
 }
 
 type Payload struct {
-	JobID   string `json:"job_id"`
-	Attempt int    `json:"attempt"`
+	AnalysisRunID string `json:"analysis_run_id"`
+	Attempt       int    `json:"attempt"`
 }
 
 type EnqueueSpec struct {
@@ -130,20 +120,18 @@ func NewPublisher(client Client, opts ...Option) (*Publisher, error) {
 	if client == nil {
 		return nil, fmt.Errorf("%w: queue client is required", ErrContractViolation)
 	}
-
 	publisher := &Publisher{client: client}
 	for _, opt := range opts {
 		opt(publisher)
 	}
-
 	return publisher, nil
 }
 
 type EnqueueRequest struct {
-	JobID    string
-	JobType  string
-	TaskType string
-	Attempt  int
+	AnalysisRunID string
+	RunType       string
+	TaskType      string
+	Attempt       int
 }
 
 type EnqueueResult struct {
@@ -154,41 +142,29 @@ type EnqueueResult struct {
 
 func KnownPolicies() []Policy {
 	return []Policy{
-		policyByJobType[JobTypeTranscription],
-		policyByTaskType[TaskTypeTranscriptionAggregate],
-		policyByJobType[JobTypeAgentRun],
+		policyByTaskType[TaskTypeSelectionTranscription],
+		policyByTaskType[TaskTypeSelectionAnalysis],
 	}
-}
-
-func PolicyForJobType(jobType string) (Policy, error) {
-	policy, ok := policyByJobType[jobType]
-	if !ok {
-		return Policy{}, fmt.Errorf("%w: unsupported job type %q", ErrContractViolation, jobType)
-	}
-	return policy, nil
 }
 
 func (p *Publisher) Enqueue(ctx context.Context, req EnqueueRequest) (EnqueueResult, error) {
-	if strings.TrimSpace(req.JobID) == "" {
-		return EnqueueResult{}, fmt.Errorf("%w: job_id is required", ErrContractViolation)
+	if strings.TrimSpace(req.AnalysisRunID) == "" {
+		return EnqueueResult{}, fmt.Errorf("%w: analysis_run_id is required", ErrContractViolation)
 	}
 	if req.Attempt < 1 {
 		return EnqueueResult{}, fmt.Errorf("%w: attempt must be >= 1", ErrContractViolation)
 	}
-
 	policy, err := policyForRequest(req)
 	if err != nil {
 		return EnqueueResult{}, err
 	}
-
 	payload, err := json.Marshal(Payload{
-		JobID:   req.JobID,
-		Attempt: req.Attempt,
+		AnalysisRunID: strings.TrimSpace(req.AnalysisRunID),
+		Attempt:       req.Attempt,
 	})
 	if err != nil {
 		return EnqueueResult{}, fmt.Errorf("%w: encode payload: %v", ErrQueueUnavailable, err)
 	}
-
 	spec := EnqueueSpec{
 		QueueName: policy.QueueName,
 		TaskType:  policy.TaskType,
@@ -196,27 +172,49 @@ func (p *Publisher) Enqueue(ctx context.Context, req EnqueueRequest) (EnqueueRes
 		MaxRetry:  policy.MaxRetry,
 		Timeout:   policy.Timeout,
 	}
-
-	p.logf("%s job_id=%s queue=%s task_type=%s", EnqueueMarker, req.JobID, policy.QueueName, policy.TaskType)
-
+	p.logf("%s analysis_run_id=%s queue=%s task_type=%s", EnqueueMarker, req.AnalysisRunID, policy.QueueName, policy.TaskType)
 	receipt, err := p.client.Enqueue(ctx, spec)
 	if err != nil {
 		return EnqueueResult{}, fmt.Errorf("%w: enqueue task: %v", ErrQueueUnavailable, err)
 	}
+	return EnqueueResult{Receipt: receipt, Policy: policy, Payload: payload}, nil
+}
 
-	return EnqueueResult{
-		Receipt: receipt,
-		Policy:  policy,
-		Payload: payload,
-	}, nil
+func policyForRequest(req EnqueueRequest) (Policy, error) {
+	taskType := strings.TrimSpace(req.TaskType)
+	if taskType == "" && strings.TrimSpace(req.RunType) == RunTypeAnalysis {
+		taskType = TaskTypeSelectionAnalysis
+	}
+	if taskType == "" {
+		return Policy{}, fmt.Errorf("%w: task_type is required", ErrContractViolation)
+	}
+	policy, ok := policyByTaskType[taskType]
+	if !ok {
+		return Policy{}, fmt.Errorf("%w: unsupported task type %q", ErrContractViolation, taskType)
+	}
+	return policy, nil
+}
+
+var policyByTaskType = map[string]Policy{
+	TaskTypeSelectionTranscription: {
+		RunType:   RunTypeAnalysis,
+		QueueName: QueueNameTranscription,
+		TaskType:  TaskTypeSelectionTranscription,
+		MaxRetry:  3,
+		Timeout:   2 * time.Hour,
+	},
+	TaskTypeSelectionAnalysis: {
+		RunType:   RunTypeAnalysis,
+		QueueName: QueueNameAnalysis,
+		TaskType:  TaskTypeSelectionAnalysis,
+		MaxRetry:  2,
+		Timeout:   4 * time.Hour,
+	},
 }
 
 func classifyFailure(code string, err error) error {
-	if err == nil {
-		return nil
-	}
-	if _, ok := deterministicFailureCodes[code]; ok {
-		return fmt.Errorf("%w: %s: %v", asynq.SkipRetry, code, err)
+	if _, ok := deterministicFailureCodes[strings.TrimSpace(code)]; ok {
+		return fmt.Errorf("%w: %v", asynq.SkipRetry, err)
 	}
 	return err
 }
@@ -225,45 +223,4 @@ func (p *Publisher) logf(format string, args ...any) {
 	if p.logger != nil {
 		p.logger.Printf(format, args...)
 	}
-}
-
-var policyByJobType = map[string]Policy{
-	JobTypeTranscription: {
-		JobType:   JobTypeTranscription,
-		QueueName: QueueNameTranscription,
-		TaskType:  TaskTypeTranscription,
-		MaxRetry:  3,
-		Timeout:   2 * time.Hour,
-	},
-	JobTypeAgentRun: {
-		JobType:   JobTypeAgentRun,
-		QueueName: QueueNameAgentRun,
-		TaskType:  TaskTypeAgentRun,
-		MaxRetry:  1,
-		Timeout:   2 * time.Hour,
-	},
-}
-
-var policyByTaskType = map[string]Policy{
-	TaskTypeTranscription: policyByJobType[JobTypeTranscription],
-	TaskTypeTranscriptionAggregate: {
-		JobType:   JobTypeTranscription,
-		QueueName: QueueNameTranscription,
-		TaskType:  TaskTypeTranscriptionAggregate,
-		MaxRetry:  3,
-		Timeout:   2 * time.Hour,
-	},
-	TaskTypeAgentRun: policyByJobType[JobTypeAgentRun],
-}
-
-func policyForRequest(req EnqueueRequest) (Policy, error) {
-	taskType := strings.TrimSpace(req.TaskType)
-	if taskType == "" {
-		return PolicyForJobType(req.JobType)
-	}
-	policy, ok := policyByTaskType[taskType]
-	if !ok || policy.JobType != req.JobType {
-		return Policy{}, fmt.Errorf("%w: unsupported task type %q for job type %q", ErrContractViolation, taskType, req.JobType)
-	}
-	return policy, nil
 }

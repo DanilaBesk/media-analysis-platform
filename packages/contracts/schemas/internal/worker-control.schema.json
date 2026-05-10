@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://media-analysis.local/contracts/schemas/internal/worker-control.schema.json",
-  "title": "WorkerControl",
+  "title": "InternalAnalysisWorkerControl",
   "$defs": {
     "claimRequest": {
       "type": "object",
@@ -15,6 +15,115 @@
         },
         "task_type": {
           "$ref": "../common/enums.schema.json#/$defs/taskType"
+        },
+        "lease_owner": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunQueueItem": {
+      "type": "object",
+      "required": [
+        "analysis_run_id",
+        "run_type",
+        "worker_kind",
+        "task_type",
+        "status",
+        "version",
+        "attempt_no",
+        "created_at"
+      ],
+      "properties": {
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "run_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runType"
+        },
+        "worker_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/workerKind"
+        },
+        "task_type": {
+          "$ref": "../common/enums.schema.json#/$defs/taskType"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending_enqueue",
+            "queued",
+            "claimed",
+            "succeeded",
+            "partially_succeeded",
+            "failed",
+            "canceled"
+          ]
+        },
+        "version": {
+          "$ref": "../common/enums.schema.json#/$defs/optimisticVersion"
+        },
+        "attempt_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunQueueResponse": {
+      "type": "object",
+      "required": [
+        "items",
+        "page",
+        "page_size"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/analysisRunQueueItem"
+          }
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "sealedSelectionInput": {
+      "type": "object",
+      "required": [
+        "selection_id",
+        "items",
+        "option_snapshot",
+        "sealed_at"
+      ],
+      "properties": {
+        "selection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "../http/selection.schema.json#/$defs/selectionItemSnapshot"
+          }
+        },
+        "option_snapshot": {
+          "type": "object"
+        },
+        "sealed_at": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "additionalProperties": false
@@ -23,148 +132,158 @@
       "type": "object",
       "required": [
         "execution_id",
-        "job_id",
-        "root_job_id",
-        "job_type",
-        "version",
-        "ordered_inputs",
-        "params"
+        "analysis_run_id",
+        "run_type",
+        "selection",
+        "params",
+        "claimed_at"
       ],
       "properties": {
         "execution_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "job_id": {
+        "analysis_run_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "root_job_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        "run_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runType"
         },
-        "parent_job_id": {
-          "oneOf": [
-            {
-              "$ref": "../common/enums.schema.json#/$defs/uuid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "retry_of_job_id": {
-          "oneOf": [
-            {
-              "$ref": "../common/enums.schema.json#/$defs/uuid"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "job_type": {
-          "$ref": "../common/enums.schema.json#/$defs/jobType"
-        },
-        "version": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "ordered_inputs": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/orderedWorkerInput"
-          }
+        "selection": {
+          "$ref": "#/$defs/sealedSelectionInput"
         },
         "params": {
           "type": "object"
+        },
+        "claimed_at": {
+          "type": "string",
+          "format": "date-time"
         }
       },
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "job_type": {
-                "const": "agent_run"
-              }
-            },
-            "required": [
-              "job_type"
-            ]
-          },
-          "then": {
-            "properties": {
-              "ordered_inputs": {
-                "maxItems": 0
-              }
-            }
-          },
-          "else": {
-            "properties": {
-              "ordered_inputs": {
-                "minItems": 1
-              }
-            }
-          }
-        }
-      ]
+      "additionalProperties": false
     },
-    "orderedWorkerInput": {
+    "requestAccessResponse": {
       "type": "object",
       "required": [
-        "position",
-        "source_id",
-        "source_kind"
+        "provider",
+        "url",
+        "expires_at",
+        "request_ref",
+        "request_digest_sha256",
+        "request_bytes"
       ],
       "properties": {
-        "position": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "minio_presigned_url"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "request_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_digest_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "request_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "cancelCheckResponse": {
+      "type": "object",
+      "required": [
+        "cancel_requested",
+        "status"
+      ],
+      "properties": {
+        "cancel_requested": {
+          "type": "boolean"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/analysisRunStatus"
+        },
+        "cancel_requested_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactDownloadAccessResponse": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "analysis_run_id",
+        "artifact_kind",
+        "filename",
+        "mime_type",
+        "size_bytes",
+        "created_at",
+        "download"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "artifact_kind": {
+          "$ref": "#/$defs/workerArtifactDescriptorKind"
+        },
+        "filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mime_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
           "type": "integer",
           "minimum": 0
         },
-        "source_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
         },
-        "source_label": {
-          "$ref": "../common/job-snapshot.schema.json#/$defs/sourceLabel"
-        },
-        "source_kind": {
-          "$ref": "../common/enums.schema.json#/$defs/sourceKind"
-        },
-        "display_name": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "original_filename": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "object_key": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "source_url": {
-          "type": [
-            "string",
-            "null"
+        "download": {
+          "type": "object",
+          "required": [
+            "provider",
+            "url",
+            "expires_at"
           ],
-          "format": "uri"
-        },
-        "sha256": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "size_bytes": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
+          "properties": {
+            "provider": {
+              "type": "string",
+              "minLength": 1
+            },
+            "url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "expires_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -188,9 +307,32 @@
             "string",
             "null"
           ]
+        },
+        "item_position": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
         }
       },
       "additionalProperties": false
+    },
+    "workerArtifactDescriptorKind": {
+      "type": "string",
+      "enum": [
+        "transcript_plain",
+        "transcript_segmented_markdown",
+        "transcript_docx",
+        "summary_markdown",
+        "report_markdown",
+        "report_docx",
+        "deep_research_markdown",
+        "agent_result_json",
+        "execution_log",
+        "run_manifest",
+        "run_diagnostics"
+      ]
     },
     "artifactDescriptor": {
       "type": "object",
@@ -203,13 +345,7 @@
       ],
       "properties": {
         "artifact_kind": {
-          "$ref": "../common/enums.schema.json#/$defs/artifactKind"
-        },
-        "format": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "$ref": "#/$defs/workerArtifactDescriptorKind"
         },
         "filename": {
           "type": "string",
@@ -226,6 +362,12 @@
         "size_bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -250,6 +392,86 @@
       },
       "additionalProperties": false
     },
+    "diagnosticDescriptor": {
+      "type": "object",
+      "required": [
+        "diagnostic_id",
+        "subject_type",
+        "subject_id",
+        "severity",
+        "code",
+        "message",
+        "created_at"
+      ],
+      "properties": {
+        "diagnostic_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject_type": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticSubjectType"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticSeverity"
+        },
+        "code": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "object"
+        },
+        "safe_adapter_context": {
+          "type": "object"
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "remediation_hint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "diagnosticUpsertRequest": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "diagnostics"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "diagnostics": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/diagnosticDescriptor"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "finalizeRequest": {
       "type": "object",
       "required": [
@@ -263,91 +485,11 @@
         "outcome": {
           "$ref": "../common/enums.schema.json#/$defs/workerOutcome"
         },
-        "progress_stage": {
+        "message": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "progress_message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "error_code": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "error_message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "cancelCheckResponse": {
-      "type": "object",
-      "required": [
-        "cancel_requested",
-        "status"
-      ],
-      "properties": {
-        "cancel_requested": {
-          "type": "boolean"
-        },
-        "status": {
-          "$ref": "../common/enums.schema.json#/$defs/jobStatus"
-        },
-        "cancel_requested_at": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "format": "date-time"
-        }
-      },
-      "additionalProperties": false
-    },
-    "agentRunRequestAccessResponse": {
-      "type": "object",
-      "required": [
-        "provider",
-        "url",
-        "expires_at",
-        "request_ref",
-        "request_digest_sha256",
-        "request_bytes"
-      ],
-      "properties": {
-        "provider": {
-          "type": "string",
-          "minLength": 1
-        },
-        "url": {
-          "type": "string",
-          "format": "uri",
-          "minLength": 1
-        },
-        "expires_at": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "request_ref": {
-          "type": "string",
-          "minLength": 1
-        },
-        "request_digest_sha256": {
-          "type": "string",
-          "minLength": 1
-        },
-        "request_bytes": {
-          "type": "integer",
-          "minimum": 1
         }
       },
       "additionalProperties": false

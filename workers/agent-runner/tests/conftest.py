@@ -15,7 +15,7 @@
 #
 # START_MODULE_MAP
 #   _ensure_path - Insert a repository-local Python source root when it exists.
-#   bootstrap-pythonpath - Add agent-runner worker, worker-common, and legacy src roots for tests.
+#   bootstrap-pythonpath - Add agent-runner worker, worker-common, and repository src roots for tests.
 # END_MODULE_MAP
 
 from __future__ import annotations

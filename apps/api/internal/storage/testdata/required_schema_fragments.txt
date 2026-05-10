@@ -1,37 +1,31 @@
-# required phase-2 storage schema fragments
-CREATE TABLE job_submissions
+# required final inbox-first storage schema fragments
 CREATE TABLE sources
-CREATE TABLE source_sets
-CREATE TABLE source_set_items
-CREATE TABLE jobs
-CREATE TABLE job_executions
-CREATE TABLE job_artifacts
-CREATE TABLE job_events
-CREATE TABLE webhook_deliveries
-CREATE TABLE batch_drafts
-CREATE TABLE batch_draft_items
-owner_type = 'telegram'
-status IN ('open', 'submitted', 'expired', 'canceled')
-submitted_root_job_id uuid NULL REFERENCES jobs(id)
-CREATE INDEX batch_drafts_owner_status_updated_at_idx
-CREATE INDEX batch_draft_items_draft_position_idx
-source_kind = 'youtube_url'
-source_kind IN ('uploaded_file', 'telegram_upload')
-content_type text NULL
-size_bytes bigint NULL
-input_kind IN ('single_source', 'combined_upload', 'combined_telegram', 'batch_transcription', 'agent_run')
-source_label text NULL
-source_label_version text NULL
-metadata jsonb NOT NULL DEFAULT '{}'::jsonb
-lineage jsonb NOT NULL DEFAULT '{}'::jsonb
-CREATE UNIQUE INDEX source_set_items_source_set_source_label_unique_idx
-delivery_strategy = 'webhook'
-delivery_strategy = 'polling'
-status <> 'cancel_requested'
-status IN ('queued', 'running', 'cancel_requested', 'succeeded')
-job_type IN ('agent_run', 'report', 'deep_research')
-finished_at IS NULL AND outcome IS NULL
-finished_at IS NOT NULL AND outcome IN ('succeeded', 'failed', 'canceled')
-job_event_id uuid NOT NULL UNIQUE REFERENCES job_events(id) ON DELETE CASCADE
-CREATE UNIQUE INDEX jobs_canonical_child_unique_idx
-CREATE UNIQUE INDEX job_executions_active_job_unique_idx
+CREATE TABLE media_items
+CREATE TABLE collections
+CREATE TABLE collection_items
+CREATE TABLE selections
+CREATE TABLE selection_items
+CREATE TABLE analysis_runs
+CREATE TABLE analysis_run_tasks
+CREATE TABLE artifacts
+CREATE TABLE diagnostics
+CREATE TABLE analysis_run_events
+owner_type text NOT NULL
+owner_id text NOT NULL
+tenant_id text NULL
+origin_type text NOT NULL
+status IN ('validating', 'ready', 'quarantined', 'deleted')
+retention_state text NOT NULL DEFAULT 'active'
+CREATE UNIQUE INDEX collections_active_inbox_owner_unique_idx
+version bigint NOT NULL DEFAULT 1
+source_snapshot jsonb NOT NULL
+retention_snapshot jsonb NOT NULL
+status IN ('queued', 'running', 'cancel_requested', 'partially_succeeded', 'succeeded', 'failed', 'canceled', 'expired')
+idempotency_key text NULL
+evidence_gate_state text NOT NULL DEFAULT 'not_required'
+analysis_run_id uuid NOT NULL REFERENCES analysis_runs(id)
+status text NOT NULL DEFAULT 'pending_enqueue'
+preview jsonb NOT NULL DEFAULT '{"available":false}'::jsonb
+safe_adapter_context jsonb NOT NULL DEFAULT '{}'::jsonb
+CREATE INDEX diagnostics_owner_subject_created_at_desc_idx
+CREATE INDEX analysis_run_events_run_created_at_idx

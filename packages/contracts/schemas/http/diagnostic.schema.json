@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/diagnostic.schema.json",
+  "title": "DiagnosticContracts",
+  "$defs": {
+    "diagnosticSubject": {
+      "type": "object",
+      "required": [
+        "subject_type",
+        "subject_id"
+      ],
+      "properties": {
+        "subject_type": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticSubjectType"
+        },
+        "subject_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "diagnosticSummary": {
+      "type": "object",
+      "required": [
+        "diagnostic_id",
+        "severity",
+        "code",
+        "message",
+        "created_at"
+      ],
+      "properties": {
+        "diagnostic_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "severity": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticSeverity"
+        },
+        "code": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": [
+        "diagnostic_id",
+        "owner",
+        "subject",
+        "severity",
+        "code",
+        "message",
+        "created_at"
+      ],
+      "properties": {
+        "diagnostic_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "subject": {
+          "$ref": "#/$defs/diagnosticSubject"
+        },
+        "severity": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticSeverity"
+        },
+        "code": {
+          "$ref": "../common/enums.schema.json#/$defs/diagnosticCode"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "type": "object"
+        },
+        "safe_adapter_context": {
+          "type": "object"
+        },
+        "correlation_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "remediation_hint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "diagnosticListResponse": {
+      "allOf": [
+        {
+          "$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/diagnostic"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reconcileQueueRequest": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 100
+        }
+      },
+      "additionalProperties": false
+    },
+    "reconcileQueueResponse": {
+      "type": "object",
+      "required": [
+        "reconciled"
+      ],
+      "properties": {
+        "reconciled": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "observabilitySnapshot": {
+      "type": "object",
+      "required": [
+        "queue_tasks",
+        "queue_lag_seconds",
+        "cleanup_failures",
+        "artifact_resolution_failures",
+        "generated_at"
+      ],
+      "properties": {
+        "queue_tasks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "queue_lag_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cleanup_failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "artifact_resolution_failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "observabilityResponse": {
+      "type": "object",
+      "required": [
+        "observability"
+      ],
+      "properties": {
+        "observability": {
+          "$ref": "#/$defs/observabilitySnapshot"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

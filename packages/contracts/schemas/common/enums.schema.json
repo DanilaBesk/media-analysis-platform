@@ -1,54 +1,101 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://media-analysis.local/contracts/schemas/common/enums.schema.json",
-  "title": "Shared enum surface",
+  "title": "Shared inbox-first enum surface",
   "$defs": {
     "uuid": {
       "type": "string",
       "format": "uuid"
     },
-    "jobStatus": {
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "ownerType": {
+      "type": "string",
+      "enum": [
+        "user",
+        "telegram",
+        "web",
+        "mcp",
+        "service"
+      ]
+    },
+    "mediaKind": {
+      "type": "string",
+      "enum": [
+        "text",
+        "url",
+        "file",
+        "photo",
+        "image",
+        "audio",
+        "voice",
+        "video",
+        "document"
+      ]
+    },
+    "sourceOriginType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "url",
+        "object"
+      ]
+    },
+    "mediaItemStatus": {
+      "type": "string",
+      "enum": [
+        "validating",
+        "ready",
+        "quarantined",
+        "deleted"
+      ]
+    },
+    "collectionKind": {
+      "type": "string",
+      "enum": [
+        "inbox",
+        "user"
+      ]
+    },
+    "collectionStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "archived",
+        "deleted"
+      ]
+    },
+    "selectionStatus": {
+      "type": "string",
+      "enum": [
+        "sealed",
+        "invalidated"
+      ]
+    },
+    "analysisRunStatus": {
       "type": "string",
       "enum": [
         "queued",
         "running",
         "cancel_requested",
+        "partially_succeeded",
         "succeeded",
         "failed",
-        "canceled"
+        "canceled",
+        "expired"
       ]
     },
-    "jobType": {
+    "runType": {
       "type": "string",
       "enum": [
         "transcription",
+        "summary",
         "report",
         "deep_research",
-        "agent_run"
-      ]
-    },
-    "sourceKind": {
-      "type": "string",
-      "enum": [
-        "uploaded_file",
-        "telegram_upload",
-        "youtube_url",
-        "external_url"
-      ]
-    },
-    "artifactKind": {
-      "type": "string",
-      "enum": [
-        "transcript_plain",
-        "transcript_segmented_markdown",
-        "transcript_docx",
-        "report_markdown",
-        "report_docx",
-        "deep_research_markdown",
-        "execution_log",
-        "agent_result_json",
-        "source_manifest_json",
-        "batch_diagnostics_json"
+        "custom"
       ]
     },
     "deliveryStrategy": {
@@ -58,26 +105,101 @@
         "webhook"
       ]
     },
-    "submissionKind": {
+    "runEventType": {
       "type": "string",
       "enum": [
-        "transcription_upload",
-        "transcription_url",
-        "report_create",
-        "deep_research_create",
-        "agent_run_create",
-        "job_retry"
+        "analysis_run.created",
+        "analysis_run.started",
+        "analysis_run.progress",
+        "analysis_run.cancel_requested",
+        "analysis_run.completed",
+        "analysis_run.failed",
+        "analysis_run.canceled",
+        "artifact.created",
+        "diagnostic.recorded"
       ]
     },
-    "jobEventType": {
+    "artifactKind": {
       "type": "string",
       "enum": [
-        "job.created",
-        "job.updated",
-        "job.artifact_created",
-        "job.completed",
-        "job.failed",
-        "job.canceled"
+        "transcript",
+        "summary",
+        "report",
+        "deep_research",
+        "structured_data",
+        "source_manifest",
+        "run_manifest",
+        "execution_log",
+        "diagnostic_bundle",
+        "run_diagnostics",
+        "preview"
+      ]
+    },
+    "artifactStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "available",
+        "failed",
+        "expired",
+        "deleted"
+      ]
+    },
+    "artifactVisibility": {
+      "type": "string",
+      "enum": [
+        "owner",
+        "private_execution"
+      ]
+    },
+    "diagnosticSeverity": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warning",
+        "error"
+      ]
+    },
+    "diagnosticSubjectType": {
+      "type": "string",
+      "enum": [
+        "media_item",
+        "source",
+        "collection",
+        "selection",
+        "analysis_run",
+        "artifact",
+        "adapter",
+        "retention"
+      ]
+    },
+    "diagnosticCode": {
+      "type": "string",
+      "enum": [
+        "media_item_invalid",
+        "owner_mismatch",
+        "collection_version_conflict",
+        "selection_invalid",
+        "selection_not_sealed",
+        "source_unavailable",
+        "worker_failed",
+        "artifact_unavailable",
+        "artifact_resolution_failed",
+        "orphan_object_cleanup",
+        "orphan_object_cleanup_failed",
+        "retention_denied",
+        "adapter_conflict"
+      ]
+    },
+    "retentionState": {
+      "type": "string",
+      "enum": [
+        "active",
+        "soft_deleted",
+        "expires_scheduled",
+        "expired",
+        "hard_delete_eligible",
+        "held"
       ]
     },
     "workerKind": {
@@ -90,27 +212,17 @@
     "taskType": {
       "type": "string",
       "enum": [
-        "transcription.run",
-        "transcription.aggregate",
-        "agent_run.run"
+        "selection.transcription",
+        "selection.analysis"
       ]
     },
     "workerOutcome": {
       "type": "string",
       "enum": [
         "succeeded",
+        "partially_succeeded",
         "failed",
         "canceled"
-      ]
-    },
-    "sourceSetInputKind": {
-      "type": "string",
-      "enum": [
-        "single_source",
-        "combined_upload",
-        "combined_telegram",
-        "batch_transcription",
-        "agent_run"
       ]
     }
   }

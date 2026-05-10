@@ -1,8 +1,8 @@
 # FILE: workers/common/src/transcriber_workers_common/domain.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Own shared Python domain contracts used by workers, the Telegram adapter, and the legacy compose cutover shell.
-# SCOPE: Source, media, transcript, report, and processed-job dataclasses with no runtime side effects.
+# PURPOSE: Own shared Python domain contracts used by workers, adapters, and execution-plane services.
+# SCOPE: Source, media, transcript, report, and analysis-run dataclasses with no runtime side effects.
 # DEPENDS: M-WORKER-COMMON
 # LINKS: M-WORKER-COMMON, V-M-WORKER-COMMON
 # ROLE: TYPES
@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Moved the legacy bot domain dataclasses into the worker-common shared boundary.
+#   LAST_CHANGE: v1.0.0 - Moved shared worker domain dataclasses into the worker-common boundary.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
@@ -23,7 +23,7 @@
 #   TranscriptResult - Transcript result contract.
 #   TranscriptArtifacts - Transcript artifact path contract.
 #   ReportArtifacts - Report artifact path contract.
-#   ProcessedJob - Processed job contract used by bot-facing gateways.
+#   ProcessedJob - Analysis-run result contract kept for worker compatibility.
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -92,12 +92,12 @@ class TranscriptArtifacts:
 class ReportArtifacts:
     markdown_path: Path
     docx_path: Path
-    job_id: str | None = None
+    analysis_run_id: str | None = None
 
 
 @dataclass(slots=True)
 class ProcessedJob:
-    job_id: str
+    analysis_run_id: str
     source: SourceCandidate
     workspace_dir: Path
     transcript: TranscriptArtifacts

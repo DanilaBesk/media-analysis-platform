@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/webhook/run-lifecycle.schema.json",
+  "title": "RunLifecycleWebhookEvent",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "analysis_run_id",
+    "version",
+    "emitted_at",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "event_type": {
+      "$ref": "../common/enums.schema.json#/$defs/runEventType"
+    },
+    "analysis_run_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "version": {
+      "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+    },
+    "emitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "$ref": "../http/analysis-run.schema.json#/$defs/runEvent"
+    }
+  },
+  "additionalProperties": false
+}

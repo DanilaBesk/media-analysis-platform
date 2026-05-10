@@ -22,7 +22,22 @@
           "type": "string",
           "minLength": 1
         },
-        "details": {}
+        "correlation_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "details": {
+          "type": "object"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "../http/diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        },
+        "conflict": {
+          "$ref": "./pagination.schema.json#/$defs/conflictEnvelope"
+        }
       },
       "additionalProperties": false
     }

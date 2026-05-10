@@ -32,16 +32,16 @@ def test_build_runner_delegates_to_run_agent_harness(monkeypatch, tmp_path: Path
     config = WorkerRuntimeConfig(
         api_config=InternalApiConfig(base_url="http://api"),
         worker_kind="agent_runner",
-        task_type="agent_run.run",
-        job_type="agent_run",
+        task_type="selection.analysis",
+        run_type="custom",
         workspace_root=tmp_path / "runtime",
     )
     api_client = object()
     object_store = object()
     calls: list[dict[str, object]] = []
 
-    def fake_run_agent_harness(job_id: str, **kwargs):
-        calls.append({"job_id": job_id, **kwargs})
+    def fake_run_agent_harness(analysis_run_id: str, **kwargs):
+        calls.append({"analysis_run_id": analysis_run_id, **kwargs})
         return "ok"
 
     monkeypatch.setattr(launcher, "runAgentHarness", fake_run_agent_harness)
@@ -49,7 +49,7 @@ def test_build_runner_delegates_to_run_agent_harness(monkeypatch, tmp_path: Path
     result = launcher.build_runner(config, api_client=api_client, object_store=object_store)("job-1")
 
     assert result == "ok"
-    assert calls[0]["job_id"] == "job-1"
+    assert calls[0]["analysis_run_id"] == "job-1"
     assert calls[0]["workspace_root"] == tmp_path / "runtime"
     assert calls[0]["api_client"] is api_client
     assert calls[0]["artifact_store"] is object_store
@@ -73,14 +73,14 @@ def test_main_wires_agent_runner_runtime_identity(monkeypatch, tmp_path: Path) -
         captured["runner_result"] = run_job("job-main")
 
     monkeypatch.setattr(launcher, "run_worker_loop", fake_loop)
-    monkeypatch.setattr(launcher, "JobApiClient", lambda api_config: {"api_config": api_config})
-    monkeypatch.setattr(launcher, "runAgentHarness", lambda job_id, **kwargs: {"job_id": job_id, **kwargs})
+    monkeypatch.setattr(launcher, "AnalysisRunControlClient", lambda api_config: {"api_config": api_config})
+    monkeypatch.setattr(launcher, "runAgentHarness", lambda analysis_run_id, **kwargs: {"analysis_run_id": analysis_run_id, **kwargs})
 
     exit_code = launcher.main(
         {
             "API_BASE_URL": "http://api",
             "WORKER_WORKSPACE_ROOT": str(tmp_path / "workspace"),
-            "WORKER_MAX_PROCESSED_JOBS": "1",
+            "WORKER_MAX_PROCESSED_RUNS": "1",
         }
     )
 
@@ -88,9 +88,9 @@ def test_main_wires_agent_runner_runtime_identity(monkeypatch, tmp_path: Path) -
     config = captured["config"]
     assert isinstance(config, WorkerRuntimeConfig)
     assert config.worker_kind == "agent_runner"
-    assert config.task_type == "agent_run.run"
-    assert config.job_type == "agent_run"
-    assert captured["runner_result"]["job_id"] == "job-main"
+    assert config.task_type == "selection.analysis"
+    assert config.run_type == "custom"
+    assert captured["runner_result"]["analysis_run_id"] == "job-main"
     assert captured["runner_result"]["harness_registry"].__class__.__name__ == "DefaultAgentHarnessRegistry"
     assert captured["runner_result"]["lease_client"].__class__.__name__ == "LocalAgentHarnessLeaseClient"
 

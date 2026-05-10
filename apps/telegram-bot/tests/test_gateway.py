@@ -1,460 +1,433 @@
 # FILE: apps/telegram-bot/tests/test_gateway.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Prove the Telegram adapter gateway import surface works only through the explicit worker-common path contract, without hidden runtime path mutation.
-# SCOPE: Verify direct module import and package re-export resolve the same gateway class in the supported explicit PYTHONPATH mode.
+# PURPOSE: Prove Telegram input and controls use inbox, selection, and analysis_run semantics only.
+# SCOPE: Text, photo, video, document, link, media group, removal, run start, rejected records, and restore behavior.
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: TEST
 # MAP_MODE: SUMMARY
 # END_MODULE_CONTRACT
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added adapter-level import-contract coverage for the gateway package and module surfaces after removing hidden path bootstrap logic.
-# END_CHANGE_SUMMARY
-#
-# START_MODULE_MAP
-#   verify-explicit-import-contract - Confirm explicit worker-common import mode resolves both telegram_adapter.gateway and the package re-export without hidden shims.
-# END_MODULE_MAP
 
 from __future__ import annotations
 
-import importlib
-from pathlib import Path
+import asyncio
+from types import SimpleNamespace
 from typing import Any
 
-from telegram_adapter.gateway import TelegramApiProcessingGateway
-from transcriber_workers_common.domain import SourceCandidate
+import pytest
+
+from telegram_adapter.bot import TelegramInboxApp, build_status_keyboard, render_status_text
+from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode, safe_callback_answer, user_error_text
+from telegram_adapter.gateway import TelegramFileInput, TelegramInboxGateway
 
 
-class FakeGatewayApiClient:
+class FakeFinalApiClient:
     def __init__(self) -> None:
-        self.batch_requests: list[dict[str, Any]] = []
-        self.report_requests: list[str] = []
-        self.deep_research_requests: list[str] = []
-        self.download_requests: list[str] = []
-        self.downloads = {
-            "memory://transcript.md": b"# Transcript\n",
-            "memory://transcript.docx": b"transcript-docx",
-            "memory://transcript.txt": b"Transcript text\n",
-            "memory://report.md": b"# Report\n",
-            "memory://report.docx": b"report-docx",
-            "memory://deep-research.md": b"# Deep Research\n",
+        self.items: list[dict[str, Any]] = []
+        self.collection = {
+            "collection_id": "inbox-1",
+            "version": 1,
+            "items": [],
         }
-        self.resolutions = {
-            "transcript-md": self._resolution("transcript.md", "memory://transcript.md"),
-            "transcript-docx": self._resolution("transcript.docx", "memory://transcript.docx"),
-            "transcript-txt": self._resolution("transcript.txt", "memory://transcript.txt"),
-            "report-md": self._resolution("report.md", "memory://report.md"),
-            "report-docx": self._resolution("report.docx", "memory://report.docx"),
-            "deep-research-md": self._resolution(
-                "evidence-research-final-report.md",
-                "memory://deep-research.md",
-            ),
-        }
+        self.runs: list[dict[str, Any]] = []
+        self.selections: list[dict[str, Any]] = []
+        self.artifacts: list[dict[str, Any]] = []
+        self.diagnostics: list[dict[str, Any]] = []
+        self.add_requests: list[dict[str, Any]] = []
+        self.remove_requests: list[dict[str, Any]] = []
 
-    def create_batch(
-        self,
-        *,
-        files,
-        source_manifest: dict[str, Any],
-        display_name: str | None = None,
-        delivery_strategy: str,
-    ) -> dict[str, Any]:
-        self.batch_requests.append(
-            {
-                "files": files,
-                "source_manifest": source_manifest,
-                "display_name": display_name,
-                "delivery_strategy": delivery_strategy,
-            }
-        )
-        assert delivery_strategy == "polling"
+    def add_media_item(self, **kwargs) -> dict[str, Any]:
+        media_item = {
+            "media_item_id": f"media-{len(self.items) + 1}",
+            "kind": kwargs["kind"],
+            "status": "ready",
+            "display_name": kwargs.get("display_name") or kwargs["kind"],
+            "source": kwargs["source"],
+            "metadata": kwargs.get("metadata") or {},
+        }
+        self.add_requests.append(kwargs)
+        self.items.append(media_item)
+        self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
+        return media_item
+
+    def list_media_items(self, **kwargs) -> dict[str, Any]:
+        page_size = kwargs.get("page_size") or 5
+        start = int(kwargs.get("cursor") or 0)
+        next_start = start + page_size
         return {
-            "job": {
-                "job_id": "batch-root-1",
-                "job_type": "transcription",
-                "status": "queued",
-            }
-        }
-
-    def create_report(self, job_id: str, *, delivery_strategy: str) -> dict[str, Any]:
-        self.report_requests.append(job_id)
-        assert delivery_strategy == "polling"
-        return {
-            "job": {
-                "job_id": "agent-report-1",
-                "job_type": "agent_run",
-                "status": "queued",
-            }
-        }
-
-    def create_deep_research(self, job_id: str, *, delivery_strategy: str) -> dict[str, Any]:
-        self.deep_research_requests.append(job_id)
-        assert delivery_strategy == "polling"
-        return {
-            "job": {
-                "job_id": "agent-deep-research-1",
-                "job_type": "agent_run",
-                "status": "queued",
-            }
-        }
-
-    def get_job(self, job_id: str) -> dict[str, Any]:
-        return {"job": self._jobs()[job_id]}
-
-    def resolve_internal_artifact_download_access(self, artifact_id: str) -> dict[str, Any]:
-        return self.resolutions[artifact_id]
-
-    def download_bytes(self, url: str) -> bytes:
-        self.download_requests.append(url)
-        return self.downloads[url]
-
-    def _jobs(self) -> dict[str, dict[str, Any]]:
-        return {
-            "transcription-1": {
-                "job_id": "transcription-1",
-                "job_type": "transcription",
-                "status": "succeeded",
-                "display_name": "Telegram audio",
-                "source_set": {
-                    "items": [
-                        {
-                            "source": {
-                                "source_id": "source-1",
-                                "source_kind": "telegram_audio",
-                                "display_name": "Telegram audio",
-                                "original_filename": "clip.ogg",
-                            }
-                        }
-                    ]
-                },
-                "artifacts": [
-                    {"artifact_id": "transcript-md", "artifact_kind": "transcript_segmented_markdown"},
-                    {"artifact_id": "transcript-docx", "artifact_kind": "transcript_docx"},
-                    {"artifact_id": "transcript-txt", "artifact_kind": "transcript_plain"},
-                ],
-            },
-            "batch-root-1": {
-                "job_id": "batch-root-1",
-                "root_job_id": "batch-root-1",
-                "job_type": "transcription",
-                "status": "succeeded",
-                "display_name": "Telegram basket (2 sources)",
-                "source_set": {
-                    "items": [
-                        {
-                            "source": {
-                                "source_id": "source-file",
-                                "source_kind": "telegram_upload",
-                                "display_name": "Audio: call.ogg",
-                                "original_filename": "call.ogg",
-                            },
-                        },
-                        {
-                            "source": {
-                                "source_id": "source-url",
-                                "source_kind": "youtube_url",
-                                "display_name": "YouTube: demo",
-                            },
-                        },
-                    ]
-                },
-                "artifacts": [
-                    {"artifact_id": "transcript-md", "artifact_kind": "transcript_segmented_markdown"},
-                    {"artifact_id": "transcript-docx", "artifact_kind": "transcript_docx"},
-                    {"artifact_id": "transcript-txt", "artifact_kind": "transcript_plain"},
-                ],
-            },
-            "agent-report-1": {
-                "job_id": "agent-report-1",
-                "job_type": "agent_run",
-                "status": "succeeded",
-                "parent_job_id": "transcription-1",
-                "artifacts": [
-                    {"artifact_id": "report-md", "artifact_kind": "report_markdown"},
-                    {"artifact_id": "report-docx", "artifact_kind": "report_docx"},
-                ],
-            },
-            "agent-deep-research-1": {
-                "job_id": "agent-deep-research-1",
-                "job_type": "agent_run",
-                "status": "succeeded",
-                "parent_job_id": "agent-report-1",
-                "artifacts": [
-                    {"artifact_id": "deep-research-md", "artifact_kind": "deep_research_markdown"},
-                ],
+            "items": self.items[start:next_start],
+            "page": {
+                "page_size": page_size,
+                "has_more": len(self.items) > next_start,
+                "next_cursor": str(next_start) if len(self.items) > next_start else "",
             },
         }
 
-    def _resolution(self, filename: str, url: str) -> dict[str, Any]:
+    def get_inbox_collection(self, **kwargs) -> dict[str, Any]:
+        return self.collection
+
+    def remove_collection_item(self, **kwargs) -> dict[str, Any]:
+        media_item_id = kwargs["media_item_id"]
+        self.remove_requests.append(kwargs)
+        self.collection["items"] = [item for item in self.collection["items"] if item["media_item_id"] != media_item_id]
+        self.items = [item for item in self.items if item["media_item_id"] != media_item_id]
+        self.collection["version"] += 1
+        return self.collection
+
+    def create_selection(self, **kwargs) -> dict[str, Any]:
+        selection = {
+            "selection_id": f"selection-{len(self.selections) + 1}",
+            "items": kwargs["items"],
+            "source_collection_id": kwargs.get("source_collection_id"),
+        }
+        self.selections.append(selection)
+        return selection
+
+    def create_analysis_run(self, **kwargs) -> dict[str, Any]:
+        run = {
+            "analysis_run_id": f"run-{len(self.runs) + 1}",
+            "selection_id": kwargs["selection_id"],
+            "run_type": kwargs["run_type"],
+            "status": "queued",
+            "version": 1,
+        }
+        self.runs.append(run)
+        return run
+
+    def list_analysis_runs(self, **kwargs) -> dict[str, Any]:
+        return {"items": list(self.runs), "page": {"page_size": 10, "has_more": False}}
+
+    def get_analysis_run(self, **kwargs) -> dict[str, Any]:
+        analysis_run_id = kwargs["analysis_run_id"]
+        return next(run for run in self.runs if run["analysis_run_id"] == analysis_run_id)
+
+    def list_artifacts(self, **kwargs) -> dict[str, Any]:
+        analysis_run_id = kwargs.get("analysis_run_id")
         return {
-            "filename": filename,
-            "download": {
-                "url": url,
-            },
+            "items": [
+                artifact
+                for artifact in self.artifacts
+                if not analysis_run_id or artifact["analysis_run_id"] == analysis_run_id
+            ],
+            "page": {"page_size": 10, "has_more": False},
+        }
+
+    def list_diagnostics(self, **kwargs) -> dict[str, Any]:
+        subject_type = kwargs.get("subject_type")
+        subject_id = kwargs.get("subject_id")
+        return {
+            "items": [
+                diagnostic
+                for diagnostic in self.diagnostics
+                if (not subject_type or diagnostic.get("subject_type") == subject_type)
+                and (not subject_id or diagnostic.get("subject_id") == subject_id)
+            ],
+            "page": {"page_size": 10, "has_more": False},
         }
 
 
-class FakeDraftGatewayApiClient(FakeGatewayApiClient):
-    def __init__(self) -> None:
-        super().__init__()
-        self.add_url_requests: list[dict[str, Any]] = []
-        self.add_upload_requests: list[dict[str, Any]] = []
-        self.submit_requests: list[dict[str, Any]] = []
-
-    def add_batch_draft_url_item(
-        self,
-        *,
-        draft_id: str,
-        owner: dict[str, str],
-        expected_version: int,
-        item: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.add_url_requests.append(
-            {
-                "draft_id": draft_id,
-                "owner": owner,
-                "expected_version": expected_version,
-                "item": item,
-            }
-        )
-        return {"draft": _draft_snapshot(draft_id=draft_id, version=expected_version + 1)}
-
-    def add_batch_draft_upload_item(
-        self,
-        *,
-        draft_id: str,
-        owner: dict[str, str],
-        expected_version: int,
-        item: dict[str, Any],
-        file,
-    ) -> dict[str, Any]:
-        self.add_upload_requests.append(
-            {
-                "draft_id": draft_id,
-                "owner": owner,
-                "expected_version": expected_version,
-                "item": item,
-                "file": file,
-            }
-        )
-        return {"draft": _draft_snapshot(draft_id=draft_id, version=expected_version + 1)}
-
-    def submit_batch_draft(
-        self,
-        *,
-        draft_id: str,
-        owner: dict[str, str],
-        expected_version: int,
-        delivery_strategy: str,
-    ) -> dict[str, Any]:
-        self.submit_requests.append(
-            {
-                "draft_id": draft_id,
-                "owner": owner,
-                "expected_version": expected_version,
-                "delivery_strategy": delivery_strategy,
-            }
-        )
-        return {
-            "draft": _draft_snapshot(draft_id=draft_id, version=expected_version + 1, status="submitted"),
-            "job": {
-                "job_id": "batch-root-1",
-                "job_type": "transcription",
-                "status": "queued",
-            },
-        }
-
-
-def _draft_snapshot(
-    *,
-    draft_id: str = "11111111-1111-1111-1111-111111111111",
-    version: int = 1,
-    status: str = "open",
-) -> dict[str, Any]:
+def owner() -> dict[str, Any]:
     return {
-        "draft_id": draft_id,
-        "version": version,
-        "owner": {
-            "owner_type": "telegram",
+        "owner_type": "telegram",
+        "owner_id": "chat:10:user:7",
+        "adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"},
+    }
+
+
+def test_text_and_link_messages_become_inbox_media_items() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+
+    records = gateway.add_message_inputs(owner=owner(), text="Meeting notes https://example.com/a", message_id=42)
+
+    assert [record.status for record in records] == ["accepted", "accepted"]
+    assert [request["kind"] for request in api.add_requests] == ["url", "text"]
+    assert api.add_requests[0]["source"] == {"origin_type": "url", "url": "https://example.com/a"}
+    assert api.add_requests[1]["source"] == {"origin_type": "text", "text": "Meeting notes"}
+    assert api.add_requests[0]["metadata"]["message_id"] == 42
+
+
+def test_private_chat_scope_is_deterministic_and_groups_are_not_supported() -> None:
+    gateway = TelegramInboxGateway(FakeFinalApiClient())
+
+    private_scope = gateway.scope_for(chat_id=10, user_id=7, chat_type="private")
+
+    assert private_scope.visibility == "private"
+    assert private_scope.state_key == (10, 7)
+    assert private_scope.owner == {
+        "owner_type": "telegram",
+        "owner_id": "chat:10:user:7",
+        "adapter_identity": {
             "telegram_chat_id": "10",
             "telegram_user_id": "7",
+            "telegram_chat_type": "private",
         },
-        "status": status,
-        "items": [],
     }
 
+    with pytest.raises(TelegramUserError) as group_error:
+        gateway.scope_for(chat_id=-100, user_id=7, chat_type="supergroup")
+    with pytest.raises(TelegramUserError) as topic_error:
+        gateway.scope_for(chat_id=-100, user_id=7, chat_type="supergroup", message_thread_id=42)
 
-def test_gateway_package_reexport_matches_module_class() -> None:
-    gateway_module = importlib.import_module("telegram_adapter.gateway")
-    package_module = importlib.import_module("telegram_adapter")
+    assert group_error.value.code == TelegramUserErrorCode.GROUP_NOT_SUPPORTED
+    assert topic_error.value.code == TelegramUserErrorCode.GROUP_NOT_SUPPORTED
+    assert "private-chat only" in user_error_text(group_error.value)
 
-    assert not hasattr(gateway_module, "_ensure_worker_common_path")
-    assert (
-        package_module.TelegramApiProcessingGateway
-        is gateway_module.TelegramApiProcessingGateway
+
+def test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    files = [
+        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", size_bytes=10, message_id=43),
+        TelegramFileInput(
+            kind="document",
+            file_id="doc-file",
+            file_name="generic.bin",
+            content_type="application/octet-stream",
+            size_bytes=20,
+            message_id=43,
+        ),
+    ]
+
+    records = gateway.add_message_inputs(
+        owner=owner(),
+        text="Keep this https://ok.example/a ftp://bad.example/file",
+        files=files,
+        message_id=43,
     )
 
-
-def test_gateway_materializes_agent_run_report_and_preserves_returned_job_id(tmp_path) -> None:
-    api_client = FakeGatewayApiClient()
-    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
-
-    processed = gateway.ensure_report("transcription-1")
-
-    assert api_client.report_requests == ["transcription-1"]
-    assert processed.report is not None
-    assert processed.report.job_id == "agent-report-1"
-    assert processed.report.markdown_path.read_text(encoding="utf-8") == "# Report\n"
-    assert processed.report.docx_path.read_bytes() == b"report-docx"
+    assert [record.status for record in records] == ["accepted", "rejected", "accepted", "accepted", "accepted"]
+    assert records[1].label == "ftp://bad.example/file"
+    assert records[1].reason == "unsupported_url_scheme"
+    assert [request["kind"] for request in api.add_requests] == ["url", "text", "photo", "document"]
+    assert api.add_requests[1]["source"] == {"origin_type": "text", "text": "Keep this"}
+    assert api.add_requests[3]["source"]["content_type"] == "application/octet-stream"
 
 
-def test_gateway_materializes_transcript_plain_from_api_artifacts(tmp_path) -> None:
-    api_client = FakeGatewayApiClient()
-    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
+def test_photo_video_document_and_media_group_inputs_keep_telegram_metadata() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    files = [
+        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", size_bytes=10, media_group_id="grp", message_id=1),
+        TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", size_bytes=20, media_group_id="grp", message_id=2),
+        TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", size_bytes=30, media_group_id="grp", message_id=3),
+    ]
 
-    processed = gateway.load_job("transcription-1")
+    records = gateway.add_message_inputs(owner=owner(), files=files)
 
-    assert processed.transcript.text_path == (
-        tmp_path / "api-jobs" / "transcription-1" / "transcript" / "transcript.txt"
-    )
-    assert processed.transcript.text_path.read_text(encoding="utf-8") == "Transcript text\n"
-    assert processed.transcript.markdown_path.read_text(encoding="utf-8") == "# Transcript\n"
-    assert processed.transcript.docx_path.read_bytes() == b"transcript-docx"
-    assert api_client.download_requests == [
-        "memory://transcript.md",
-        "memory://transcript.docx",
-        "memory://transcript.txt",
+    assert [record.status for record in records] == ["accepted", "accepted", "accepted"]
+    assert [request["kind"] for request in api.add_requests] == ["photo", "video", "document"]
+    assert api.add_requests[0]["source"]["object_ref"] == "telegram://file/photo-file"
+    assert api.add_requests[1]["source"]["original_filename"] == "clip.mp4"
+    assert api.add_requests[2]["source"]["content_type"] == "application/pdf"
+    assert all(request["metadata"]["media_group_id"] == "grp" for request in api.add_requests)
+
+
+def test_album_status_preview_groups_visible_media_together() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    files = [
+        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", size_bytes=10, media_group_id="grp", message_id=1),
+        TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", size_bytes=20, media_group_id="grp", message_id=2),
+        TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", size_bytes=30, media_group_id="grp", message_id=3),
+    ]
+    gateway.add_message_inputs(owner=owner(), files=files)
+
+    text = render_status_text(gateway.restore_status(owner=owner()))
+
+    assert "Album grp (3 items)" in text
+    assert "1. Telegram photo [photo, ready, message 1]" in text
+    assert "2. clip.mp4 [video, ready, message 2]" in text
+    assert "3. brief.pdf [document, ready, message 3]" in text
+
+
+def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+
+    records = gateway.add_message_inputs(owner=owner())
+    missing_file = gateway.add_message_inputs(owner=owner(), files=[TelegramFileInput(kind="photo", file_id="")])
+
+    assert records[0].status == "rejected"
+    assert records[0].reason == "unsupported_message"
+    assert missing_file[0].status == "rejected"
+    assert missing_file[0].reason == "missing_file_id"
+    assert api.add_requests == []
+
+    text = render_status_text(gateway.restore_status(owner=owner(), rejected=[records[0], missing_file[0]]))
+    assert "Rejected: Telegram message (unsupported input:" in text
+    assert "Rejected: photo (unsupported input:" in text
+
+
+def test_status_surface_supports_refresh_paging_slot_removal_clear_and_start_analysis() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api, page_size=1)
+    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(owner=owner(), text="two")
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status, can_go_back=True)
+    text = render_status_text(status)
+    updated = gateway.remove_visible_slot(owner=owner(), slot=1)
+    result = gateway.start_analysis(owner=owner())
+
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    assert "Inbox" in text
+    assert "inbox:refresh" in callbacks
+    assert "inbox:page:prev" in callbacks
+    assert "inbox:page:next" in callbacks
+    assert "inbox:remove:1" in callbacks
+    assert "inbox:clear" in callbacks
+    assert updated.collection is not None
+    assert updated.collection["version"] == 2
+    assert result.selection["items"] == [{"media_item_id": "media-2", "position": 0}]
+    assert result.analysis_run["status"] == "queued"
+
+
+def test_large_inbox_uses_compact_callbacks_and_clears_only_visible_page() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api, page_size=5)
+    for index in range(12):
+        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status)
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    after_slot_remove = gateway.remove_visible_slot(owner=owner(), slot=2)
+    after_clear = gateway.clear_visible_items(owner=owner(), cursor="5")
+
+    assert callbacks[:6] == ["inbox:refresh", "inbox:remove:1", "inbox:remove:2", "inbox:remove:3", "inbox:remove:4", "inbox:remove:5"]
+    assert "inbox:page:next" in callbacks
+    assert "inbox:clear" in callbacks
+    assert max(len(callback) for callback in callbacks) <= 64
+    assert all(not callback.startswith("inbox:remove:media-") for callback in callbacks)
+    assert [item["media_item_id"] for item in after_slot_remove.collection["items"][:5]] == [
+        "media-1",
+        "media-3",
+        "media-4",
+        "media-5",
+        "media-6",
+    ]
+    assert [request["media_item_id"] for request in api.remove_requests[-5:]] == [
+        "media-7",
+        "media-8",
+        "media-9",
+        "media-10",
+        "media-11",
+    ]
+    assert [item["media_item_id"] for item in after_clear.collection["items"]] == [
+        "media-1",
+        "media-3",
+        "media-4",
+        "media-5",
+        "media-6",
+        "media-12",
     ]
 
 
-def test_gateway_submits_mixed_sources_to_batch_endpoint_and_polls_root(tmp_path: Path) -> None:
-    media_path = tmp_path / "call.ogg"
-    media_path.write_bytes(b"voice")
-    api_client = FakeGatewayApiClient()
-    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
+def test_stale_callback_copy_is_safe_and_actionable() -> None:
+    answer = safe_callback_answer(RuntimeError("slot_not_visible"))
 
-    processed = gateway.process_source_group(
-        [
-            SourceCandidate(
-                source_id="telegram-message:42:call.ogg",
-                kind="telegram_audio",
-                display_name="Audio: call.ogg",
-                url=None,
-                telegram_file_id="file-1",
-                mime_type="audio/ogg",
-                file_name="call.ogg",
-                local_path=media_path,
-            ),
-            SourceCandidate(
-                source_id="url:https://youtu.be/demo",
-                kind="youtube_url",
-                display_name="YouTube: demo",
-                url="https://youtu.be/demo",
-                telegram_file_id=None,
-                mime_type=None,
-                file_name=None,
-            ),
-        ]
-    )
-
-    assert processed.job_id == "batch-root-1"
-    assert len(api_client.batch_requests) == 1
-    request = api_client.batch_requests[0]
-    assert request["display_name"] == "Telegram basket (2 sources)"
-    manifest = request["source_manifest"]
-    assert manifest["manifest_version"] == "batch-transcription.v1"
-    assert manifest["completion_policy"] == "succeed_when_all_sources_succeed"
-    labels = manifest["ordered_source_labels"]
-    assert labels[0].startswith("telegram-message_42_call_ogg_")
-    assert labels[1].startswith("https_youtu_be_demo_")
-    assert manifest["sources"][labels[0]]["source_kind"] == "telegram_upload"
-    assert manifest["sources"][labels[0]]["file_part"] == labels[0]
-    assert manifest["sources"][labels[1]]["url"] == "https://youtu.be/demo"
-    assert request["files"][0].field_name == labels[0]
-    assert request["files"][0].content_bytes == b"voice"
-
-
-def test_gateway_adds_mixed_sources_to_api_draft_and_materializes_submit_root(tmp_path: Path) -> None:
-    media_path = tmp_path / "call.ogg"
-    media_path.write_bytes(b"voice")
-    api_client = FakeDraftGatewayApiClient()
-    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
-    owner = {
-        "owner_type": "telegram",
-        "telegram_chat_id": "10",
-        "telegram_user_id": "7",
+    assert answer == {
+        "text": "This button is stale. Open /inbox and try again.",
+        "show_alert": True,
     }
-    draft = _draft_snapshot(version=1)
+    assert "slot_not_visible" not in answer["text"]
 
-    draft = gateway.add_source_to_draft(
-        draft,
-        owner=owner,
-        source=SourceCandidate(
-            source_id="telegram-message:42:call.ogg",
-            kind="telegram_audio",
-            display_name="Audio: call.ogg",
-            url=None,
-            telegram_file_id="file-1",
-            mime_type="audio/ogg",
-            file_name="call.ogg",
-            local_path=media_path,
-        ),
-    )
-    draft = gateway.add_source_to_draft(
-        draft,
-        owner=owner,
-        source=SourceCandidate(
-            source_id="url:https://youtu.be/demo",
-            kind="youtube_url",
-            display_name="YouTube: demo",
-            url="https://youtu.be/demo",
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=None,
-        ),
-    )
-    processed = gateway.submit_batch_draft(
-        draft_id=draft["draft_id"],
-        owner=owner,
-        expected_version=draft["version"],
-    )
 
-    assert api_client.add_upload_requests[0]["expected_version"] == 1
-    assert api_client.add_upload_requests[0]["item"] == {
-        "source_kind": "telegram_upload",
-        "display_name": "Audio: call.ogg",
-        "original_filename": "call.ogg",
-        "content_type": "audio/ogg",
-        "size_bytes": 5,
-    }
-    assert api_client.add_upload_requests[0]["file"].field_name == "file"
-    assert api_client.add_upload_requests[0]["file"].content_bytes == b"voice"
-    assert api_client.add_url_requests[0]["expected_version"] == 2
-    assert api_client.add_url_requests[0]["item"] == {
-        "source_kind": "youtube_url",
-        "url": "https://youtu.be/demo",
-        "display_name": "YouTube: demo",
-    }
-    assert api_client.submit_requests == [
+def test_long_running_run_is_restored_and_later_completion_is_visible_after_restart() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="long transcript")
+    result = gateway.start_analysis(owner=owner())
+
+    restarted_gateway = TelegramInboxGateway(api)
+    restored = restarted_gateway.restore_status(owner=owner())
+    assert restored.active_runs == [result.analysis_run]
+
+    api.runs[0]["status"] = "succeeded"
+    completed = restarted_gateway.restore_status(owner=owner())
+    run = restarted_gateway.get_run_status(owner=owner(), analysis_run_id=result.analysis_run["analysis_run_id"])
+
+    assert completed.active_runs == []
+    assert run["status"] == "succeeded"
+
+
+def test_long_running_run_does_not_false_fail_and_terminal_result_is_rendered_later() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="long transcript")
+    result = gateway.start_analysis(owner=owner())
+
+    queued_text = render_status_text(gateway.restore_status(owner=owner()))
+
+    assert "run-1: queued" in queued_text
+    assert "failed" not in queued_text
+    assert "available later" in queued_text
+
+    api.runs[0]["status"] = "succeeded"
+    api.artifacts.append(
         {
-            "draft_id": "11111111-1111-1111-1111-111111111111",
-            "owner": owner,
-            "expected_version": 3,
-            "delivery_strategy": "polling",
+            "artifact_id": "artifact-1",
+            "analysis_run_id": result.analysis_run["analysis_run_id"],
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
         }
-    ]
-    assert processed.job_id == "batch-root-1"
-    assert processed.transcript.text_path.read_text(encoding="utf-8") == "Transcript text\n"
+    )
+    api.diagnostics.append(
+        {
+            "diagnostic_id": "diagnostic-1",
+            "subject_type": "analysis_run",
+            "subject_id": result.analysis_run["analysis_run_id"],
+            "severity": "info",
+            "code": "worker_note",
+            "message": "Result stored for later delivery.",
+        }
+    )
+
+    restarted_gateway = TelegramInboxGateway(api)
+    completed = restarted_gateway.restore_status(owner=owner())
+    completed_text = render_status_text(completed)
+
+    assert completed.active_runs == []
+    assert "Completed runs:" in completed_text
+    assert "run-1: succeeded" in completed_text
+    assert "artifact-1: transcript [available, text/plain]" in completed_text
+    assert "worker_note: Result stored for later delivery." in completed_text
 
 
-def test_gateway_creates_deep_research_from_agent_run_report_job(tmp_path) -> None:
-    api_client = FakeGatewayApiClient()
-    gateway = TelegramApiProcessingGateway(api_client, tmp_path, poll_interval_seconds=0)
+def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="restore after reconnect")
+    gateway.start_analysis(owner=owner())
 
-    deep_research_path = gateway.ensure_deep_research("agent-report-1")
+    app = TelegramInboxApp(
+        SimpleNamespace(allowed_user_ids=set()),
+        TelegramInboxGateway(api),
+        bot=SimpleNamespace(edit_message_text=None),
+    )
+    message = _FakeMessage()
 
-    assert api_client.deep_research_requests == ["agent-report-1"]
-    assert deep_research_path.name == "evidence-research-final-report.md"
-    assert deep_research_path.read_text(encoding="utf-8") == "# Deep Research\n"
+    sent = asyncio.run(app._send_or_edit_status(message))
+
+    assert sent is True
+    assert app.status_message_ids == {(10, 7): 9001}
+    assert app.page_states[(10, 7)].current_cursor is None
+    assert "restore after reconnect" in message.answers[0]["text"]
+    assert "run-1: queued" in message.answers[0]["text"]
+    assert "available later" in message.answers[0]["text"]
+
+
+class _FakeMessage:
+    def __init__(self) -> None:
+        self.chat = SimpleNamespace(id=10, type="private")
+        self.from_user = SimpleNamespace(id=7)
+        self.message_thread_id = None
+        self.answers: list[dict[str, Any]] = []
+
+    async def answer(self, text: str, **kwargs) -> SimpleNamespace:
+        self.answers.append({"text": text, **kwargs})
+        return SimpleNamespace(message_id=9001)

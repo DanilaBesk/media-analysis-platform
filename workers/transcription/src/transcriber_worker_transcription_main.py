@@ -15,7 +15,7 @@
 #
 # START_MODULE_MAP
 #   launch-transcription-worker - Build the API client, object-store adapter, default transcriber, and shared worker loop.
-#   build-transcription-runner - Adapt claimed job IDs into runTranscription calls without duplicating queue logic.
+#   build-transcription-runner - Adapt claimed analysis run IDs into runTranscription calls without duplicating queue logic.
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ import logging
 import os
 from typing import Mapping
 
-from transcriber_worker_transcription import runTranscription, runTranscriptionAggregate
-from transcriber_workers_common.api import JobApiClient
+from transcriber_worker_transcription import runTranscription
+from transcriber_workers_common.api import AnalysisRunControlClient
 from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
 from transcriber_workers_common.runtime import WorkerRuntimeConfig, run_worker_loop
 from transcriber_workers_common.transcribers import DefaultTranscriber, PODLODKA_WHISPER_MODEL
@@ -40,25 +40,13 @@ __all__ = ["build_runner", "main"]
 def build_runner(
     config: WorkerRuntimeConfig,
     *,
-    api_client: JobApiClient,
+    api_client: AnalysisRunControlClient,
     object_store: WorkerObjectStore,
     transcriber: object,
 ):
-    def _runner(job_id: str) -> object:
-        snapshot = api_client.get_job_snapshot(job_id)
-        if (
-            snapshot.job_type == "transcription"
-            and snapshot.parent_job_id is None
-            and any(child.job_type == "transcription" for child in snapshot.children)
-        ):
-            return runTranscriptionAggregate(
-                job_id,
-                workspace_root=config.workspace_root,
-                api_client=api_client,
-                artifact_store=object_store,
-            )
+    def _runner(analysis_run_id: str) -> object:
         return runTranscription(
-            job_id,
+            analysis_run_id,
             workspace_root=config.workspace_root,
             api_client=api_client,
             source_store=object_store,
@@ -74,11 +62,11 @@ def main(env: Mapping[str, str] | None = None) -> int:
     values = os.environ if env is None else env
     config = WorkerRuntimeConfig.from_env(
         worker_kind="transcription",
-        task_type="transcription.run",
-        job_type="transcription",
+        task_type="selection.transcription",
+        run_type="transcription",
         env=values,
     )
-    api_client = JobApiClient(config.api_config)
+    api_client = AnalysisRunControlClient(config.api_config)
     object_store = WorkerObjectStore(WorkerObjectStoreConfig.from_env(values))
     runner = build_runner(
         config,

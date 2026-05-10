@@ -2,1664 +2,176 @@ package api
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
-	neturl "net/url"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
-	"unicode"
 
-	"github.com/google/uuid"
-
-	"github.com/danila/media-analysis-platform/apps/api/internal/jobs"
 	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 	"github.com/danila/media-analysis-platform/apps/api/internal/ws"
 )
 
-const (
-	submissionKindTranscriptionUpload = "transcription_upload"
-	submissionKindTranscriptionURL    = "transcription_url"
-	submissionKindTranscriptionBatch  = "transcription_batch"
-	submissionKindAgentRunCreate      = "agent_run_create"
-	agentRunHarnessClaudeCode         = "claude-code"
-	agentRunOperationReport           = "report"
-	agentRunOperationDeepResearch     = "deep_research"
-)
-
-type runtimeJobsService interface {
-	CreateTranscriptionJobs(ctx context.Context, req jobs.CreateTranscriptionRequest) (jobs.CreateJobsResult, error)
-	CreateCombinedTranscriptionJob(ctx context.Context, req jobs.CreateCombinedTranscriptionRequest) (jobs.ChildResult, error)
-	CreateBatchTranscriptionJob(ctx context.Context, req jobs.CreateBatchTranscriptionRequest) (jobs.ChildResult, error)
-	SubmitBatchDraft(ctx context.Context, req jobs.SubmitBatchDraftRequest) (jobs.SubmitBatchDraftResult, error)
-	CreateAgentRun(ctx context.Context, req jobs.CreateAgentRunRequest) (jobs.ChildResult, error)
-	CreateChildJob(ctx context.Context, req jobs.CreateChildRequest) (jobs.ChildResult, error)
-	CancelJob(ctx context.Context, jobID string) (storage.JobRecord, error)
-	RetryJob(ctx context.Context, jobID string) (jobs.RetryResult, error)
-	TransitionJob(ctx context.Context, req jobs.TransitionRequest) (storage.JobRecord, error)
-	ScheduleBatchAggregateIfReady(ctx context.Context, rootJobID string) (bool, error)
-}
-
-type runtimeStorageService interface {
-	GetJob(ctx context.Context, jobID string) (storage.JobRecord, error)
-	ListJobs(ctx context.Context, filter storage.JobListFilter) (storage.JobListPage, error)
-	GetSourceSet(ctx context.Context, sourceSetID string) (storage.SourceSetRecord, error)
-	ListOrderedSources(ctx context.Context, sourceSetID string) ([]storage.OrderedSource, error)
-	ListArtifactsByJob(ctx context.Context, jobID string) ([]storage.ArtifactRecord, error)
-	ListChildJobs(ctx context.Context, parentJobID string) ([]storage.JobRecord, error)
-	ListJobEvents(ctx context.Context, jobID string) ([]storage.JobEvent, error)
-	ResolveArtifact(ctx context.Context, artifactID string) (storage.ArtifactResolution, error)
-	ResolveArtifactForAudience(ctx context.Context, artifactID string, audience storage.ArtifactDownloadAudience) (storage.ArtifactResolution, error)
-	ClaimJobExecution(ctx context.Context, req storage.ClaimJobExecutionRequest) (storage.ClaimJobExecutionResult, error)
-	GetActiveJobExecution(ctx context.Context, jobID, executionID string) (storage.JobExecutionRecord, error)
-	FinishJobExecution(ctx context.Context, req storage.FinishJobExecutionRequest) (storage.JobExecutionRecord, error)
-	UpsertArtifacts(ctx context.Context, artifacts []storage.ArtifactRecord) error
-	UpdateJob(ctx context.Context, job storage.JobRecord) error
-	FindArtifactByKind(ctx context.Context, jobID, artifactKind string) (*storage.ArtifactRecord, error)
-	CreateBatchDraft(ctx context.Context, req storage.BatchDraftCreate) (storage.BatchDraftRecord, error)
-	GetBatchDraft(ctx context.Context, draftID string, owner storage.BatchDraftOwner) (storage.BatchDraftRecord, error)
-	AddBatchDraftItem(ctx context.Context, req storage.BatchDraftItemMutation) (storage.BatchDraftRecord, error)
-	RemoveBatchDraftItem(ctx context.Context, req storage.BatchDraftItemRemove) (storage.BatchDraftRecord, error)
-	ClearBatchDraft(ctx context.Context, req storage.BatchDraftMutation) (storage.BatchDraftRecord, error)
-	PersistAgentRunRequest(ctx context.Context, requestRef string, body []byte) error
-	ResolveAgentRunRequestAccess(ctx context.Context, job storage.JobRecord) (storage.AgentRunRequestAccess, error)
-}
-
-type runtimeEventsService interface {
-	EmitJobEvent(ctx context.Context, req ws.EmitRequest) (ws.EmitResult, error)
-}
-
 type publicRuntimeService struct {
-	jobs   runtimeJobsService
-	store  runtimeStorageService
-	events runtimeEventsService
+	store finalRuntimeStorageService
+	queue *queue.Publisher
 }
 
 type workerRuntimeService struct {
-	jobs   runtimeJobsService
-	store  runtimeStorageService
-	events runtimeEventsService
-	now    func() time.Time
-	nextID func() string
+	store finalRuntimeStorageService
 }
 
-type jobsEventBridge struct {
-	store  runtimeStorageService
-	events runtimeEventsService
-}
-
-func newPublicRuntimeService(jobsService runtimeJobsService, storageService runtimeStorageService, eventsService runtimeEventsService) *publicRuntimeService {
-	return &publicRuntimeService{
-		jobs:   jobsService,
-		store:  storageService,
-		events: eventsService,
-	}
-}
-
-func newWorkerRuntimeService(jobsService runtimeJobsService, storageService runtimeStorageService, eventsService runtimeEventsService) *workerRuntimeService {
-	return &workerRuntimeService{
-		jobs:   jobsService,
-		store:  storageService,
-		events: eventsService,
-		now:    func() time.Time { return time.Now().UTC() },
-		nextID: uuid.NewString,
-	}
-}
-
-func newJobsEventBridge(storageService runtimeStorageService, eventsService runtimeEventsService) *jobsEventBridge {
-	if eventsService == nil {
-		return nil
-	}
-	return &jobsEventBridge{
-		store:  storageService,
-		events: eventsService,
-	}
-}
-
-func NewRuntimeDependencies(storageService *storage.Repository, publisher *queue.Publisher, eventsService *ws.Service, websocket WebsocketAcceptor) (Dependencies, error) {
-	jobsService, err := jobs.NewService(
-		storageService,
-		publisher,
-		jobs.WithEventEmitter(newJobsEventBridge(storageService, eventsService)),
-	)
-	if err != nil {
-		return Dependencies{}, err
+func NewRuntimeDependencies(storageService *storage.Repository, publisher *queue.Publisher, _ *ws.Service, websocket WebsocketAcceptor) (Dependencies, error) {
+	if storageService == nil {
+		return Dependencies{}, fmt.Errorf("%w: storage repository is required", storage.ErrContractViolation)
 	}
 	return Dependencies{
-		Public:    newPublicRuntimeService(jobsService, storageService, eventsService),
-		Worker:    newWorkerRuntimeService(jobsService, storageService, eventsService),
+		Public:    &publicRuntimeService{store: storageService, queue: publisher},
+		Worker:    &workerRuntimeService{store: storageService},
 		Websocket: websocket,
 	}, nil
 }
 
-func (s *publicRuntimeService) CreateUpload(ctx context.Context, req UploadCommand) ([]JobSnapshot, error) {
-	sources := buildUploadedSources(req)
-	result, err := s.jobs.CreateTranscriptionJobs(ctx, jobs.CreateTranscriptionRequest{
-		SubmissionKind:     submissionKindTranscriptionUpload,
-		IdempotencyKey:     req.IdempotencyKey,
-		RequestFingerprint: fingerprintUploadCommand("upload", req),
-		Sources:            sources,
-		Delivery:           deliveryConfigToStorage(req.Delivery),
-		ClientRef:          strings.TrimSpace(req.ClientRef),
-	})
+func (s *workerRuntimeService) ListAnalysisRunQueue(ctx context.Context, req AnalysisRunQueueRequest) (AnalysisRunQueueResponse, error) {
+	records, err := s.store.ListAnalysisRunQueue(ctx, req.Status, req.RunType, req.TaskType, req.PageSize)
 	if err != nil {
-		return nil, err
+		return AnalysisRunQueueResponse{}, err
 	}
-
-	snapshots := make([]JobSnapshot, 0, len(result.Jobs))
-	for _, job := range result.Jobs {
-		if !result.Reused {
-			if err := s.emitJobEvent(ctx, job, "job.created"); err != nil {
-				return nil, err
-			}
-		}
-		snapshot, err := s.snapshotByID(ctx, job.ID)
-		if err != nil {
-			return nil, err
-		}
-		snapshots = append(snapshots, snapshot)
-	}
-	return snapshots, nil
-}
-
-func (s *publicRuntimeService) CreateCombined(ctx context.Context, req UploadCommand) (JobSnapshot, error) {
-	sources := buildUploadedSources(req)
-	result, err := s.jobs.CreateCombinedTranscriptionJob(ctx, jobs.CreateCombinedTranscriptionRequest{
-		SubmissionKind:     submissionKindTranscriptionUpload,
-		IdempotencyKey:     req.IdempotencyKey,
-		RequestFingerprint: fingerprintUploadCommand("combined_upload", req),
-		Sources:            sources,
-		Delivery:           deliveryConfigToStorage(req.Delivery),
-		ClientRef:          strings.TrimSpace(req.ClientRef),
-		DisplayName:        strings.TrimSpace(req.DisplayName),
-	})
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return s.snapshotByID(ctx, result.Job.ID)
-}
-
-func (s *publicRuntimeService) CreateBatch(ctx context.Context, req BatchCommand) (JobSnapshot, error) {
-	sources, labels, err := buildBatchSources(req)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	result, err := s.jobs.CreateBatchTranscriptionJob(ctx, jobs.CreateBatchTranscriptionRequest{
-		SubmissionKind:     submissionKindTranscriptionBatch,
-		IdempotencyKey:     req.IdempotencyKey,
-		RequestFingerprint: fingerprintBatchCommand(req),
-		Sources:            sources,
-		SourceLabels:       labels,
-		CompletionPolicy:   req.Manifest.CompletionPolicy,
-		ManifestJSON:       req.ManifestJSON,
-		Delivery:           deliveryConfigToStorage(req.Delivery),
-		ClientRef:          strings.TrimSpace(req.ClientRef),
-		DisplayName:        strings.TrimSpace(req.DisplayName),
-	})
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return s.snapshotByID(ctx, result.Job.ID)
-}
-
-func (s *publicRuntimeService) CreateBatchDraft(ctx context.Context, req BatchDraftCreateCommand) (BatchDraftResponse, error) {
-	draft, err := s.store.CreateBatchDraft(ctx, storage.BatchDraftCreate{
-		Owner:       batchDraftOwnerToStorage(req.Owner),
-		DisplayName: strings.TrimSpace(req.DisplayName),
-		ClientRef:   strings.TrimSpace(req.ClientRef),
-		ExpiresAt:   req.ExpiresAt,
-	})
-	if err != nil {
-		return BatchDraftResponse{}, err
-	}
-	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
-}
-
-func (s *publicRuntimeService) GetBatchDraft(ctx context.Context, req BatchDraftGetCommand) (BatchDraftResponse, error) {
-	draft, err := s.store.GetBatchDraft(ctx, req.DraftID, batchDraftOwnerToStorage(req.Owner))
-	if err != nil {
-		return BatchDraftResponse{}, err
-	}
-	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
-}
-
-func (s *publicRuntimeService) AddBatchDraftItem(ctx context.Context, req BatchDraftItemCommand) (BatchDraftResponse, error) {
-	draft, err := s.store.AddBatchDraftItem(ctx, storage.BatchDraftItemMutation{
-		DraftID:         strings.TrimSpace(req.DraftID),
-		Owner:           batchDraftOwnerToStorage(req.Owner),
-		ExpectedVersion: req.ExpectedVersion,
-		Source:          batchDraftItemSourceToStorage(req.Item),
-	})
-	if err != nil {
-		return BatchDraftResponse{}, err
-	}
-	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
-}
-
-func (s *publicRuntimeService) RemoveBatchDraftItem(ctx context.Context, req BatchDraftRemoveItemCommand) (BatchDraftResponse, error) {
-	draft, err := s.store.RemoveBatchDraftItem(ctx, storage.BatchDraftItemRemove{
-		DraftID:         strings.TrimSpace(req.DraftID),
-		ItemID:          strings.TrimSpace(req.ItemID),
-		Owner:           batchDraftOwnerToStorage(req.Owner),
-		ExpectedVersion: req.ExpectedVersion,
-	})
-	if err != nil {
-		return BatchDraftResponse{}, err
-	}
-	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
-}
-
-func (s *publicRuntimeService) ClearBatchDraft(ctx context.Context, req BatchDraftMutateCommand) (BatchDraftResponse, error) {
-	draft, err := s.store.ClearBatchDraft(ctx, storage.BatchDraftMutation{
-		DraftID:         strings.TrimSpace(req.DraftID),
-		Owner:           batchDraftOwnerToStorage(req.Owner),
-		ExpectedVersion: req.ExpectedVersion,
-	})
-	if err != nil {
-		return BatchDraftResponse{}, err
-	}
-	return BatchDraftResponse{Draft: batchDraftFromStorage(draft)}, nil
-}
-
-func (s *publicRuntimeService) SubmitBatchDraft(ctx context.Context, req BatchDraftSubmitCommand) (BatchDraftSubmitResponse, error) {
-	result, err := s.jobs.SubmitBatchDraft(ctx, jobs.SubmitBatchDraftRequest{
-		DraftID:          strings.TrimSpace(req.DraftID),
-		Owner:            batchDraftOwnerToStorage(req.Owner),
-		ExpectedVersion:  req.ExpectedVersion,
-		SubmissionKind:   submissionKindTranscriptionBatch,
-		Delivery:         deliveryConfigToStorage(req.Delivery),
-		CompletionPolicy: BatchCompletionPolicyAllSources,
-	})
-	if err != nil {
-		return BatchDraftSubmitResponse{}, err
-	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-			return BatchDraftSubmitResponse{}, err
-		}
-	}
-	snapshot, err := s.snapshotByID(ctx, result.Job.ID)
-	if err != nil {
-		return BatchDraftSubmitResponse{}, err
-	}
-	staleOutcome := ""
-	if result.Reused {
-		staleOutcome = "draft_submitted"
-	}
-	return BatchDraftSubmitResponse{
-		Draft:        batchDraftFromStorage(result.Draft),
-		Job:          &snapshot,
-		StaleOutcome: staleOutcome,
+	return AnalysisRunQueueResponse{
+		Items:    records,
+		Page:     1,
+		PageSize: req.PageSize,
 	}, nil
 }
 
-func (s *publicRuntimeService) CreateFromURL(ctx context.Context, req URLCommand) (JobSnapshot, error) {
-	displayName := strings.TrimSpace(req.DisplayName)
-	if displayName == "" {
-		displayName = strings.TrimSpace(req.URL)
-	}
-	sourceID := uuid.NewString()
-	result, err := s.jobs.CreateTranscriptionJobs(ctx, jobs.CreateTranscriptionRequest{
-		SubmissionKind:     submissionKindTranscriptionURL,
-		IdempotencyKey:     req.IdempotencyKey,
-		RequestFingerprint: fingerprintURLCommand(req),
-		Sources: []storage.SourceRecord{
-			{
-				ID:          sourceID,
-				SourceKind:  storage.SourceKindYouTubeURL,
-				DisplayName: displayName,
-				SourceURL:   strings.TrimSpace(req.URL),
-			},
-		},
-		Delivery:  deliveryConfigToStorage(req.Delivery),
-		ClientRef: strings.TrimSpace(req.ClientRef),
-	})
+func (s *workerRuntimeService) ClaimExecution(ctx context.Context, analysisRunID string, req ExecutionClaimRequest) (ExecutionClaimResponse, error) {
+	run, claimed, err := s.store.ClaimAnalysisRunTask(ctx, analysisRunID, req.WorkerKind, req.TaskType, req.LeaseOwner)
 	if err != nil {
-		return JobSnapshot{}, err
+		return ExecutionClaimResponse{}, err
 	}
-	if len(result.Jobs) != 1 {
-		return JobSnapshot{}, fmt.Errorf("expected one job for URL submission, got %d", len(result.Jobs))
+	claimedAt := time.Now().UTC()
+	if run.StartedAt != nil {
+		claimedAt = run.StartedAt.UTC()
+	} else if !run.CreatedAt.IsZero() {
+		claimedAt = run.CreatedAt.UTC()
 	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Jobs[0], "job.created"); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return s.snapshotByID(ctx, result.Jobs[0].ID)
+	_ = claimed
+	return ExecutionClaimResponse{
+		ExecutionID:   run.ID,
+		AnalysisRunID: run.ID,
+		RunType:       run.RunType,
+		Selection:     toSealedSelectionInput(run.Selection),
+		Params:        jsonObject(run.ParamsJSON),
+		ClaimedAt:     claimedAt,
+	}, nil
 }
 
-func (s *publicRuntimeService) CreateAgentRun(ctx context.Context, req AgentRunCommand) (JobSnapshot, error) {
-	envelopeJSON, requestRef, requestDigestSHA256, requestBytes, err := agentRunEnvelopeJSON(req)
+func (s *workerRuntimeService) ResolveRequestAccess(ctx context.Context, analysisRunID string, executionID string) (RequestAccessResponse, error) {
+	if strings.TrimSpace(executionID) == "" {
+		return RequestAccessResponse{}, fmt.Errorf("%w: execution_id is required", storage.ErrContractViolation)
+	}
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
 	if err != nil {
-		return JobSnapshot{}, err
+		return RequestAccessResponse{}, err
 	}
-	if err := s.store.PersistAgentRunRequest(ctx, requestRef, envelopeJSON); err != nil {
-		return JobSnapshot{}, err
+	params := jsonObject(run.ParamsJSON)
+	access, ok := params["request_access"].(map[string]any)
+	if !ok {
+		return RequestAccessResponse{}, fmt.Errorf("%w: request_access is not available for analysis_run", storage.ErrContractViolation)
 	}
-	paramsJSON, err := agentRunParamsJSON(req, requestRef, requestDigestSHA256, requestBytes)
-	if err != nil {
-		return JobSnapshot{}, err
+	response := RequestAccessResponse{
+		Provider:            accessString(access, "provider"),
+		URL:                 accessString(access, "url"),
+		ExpiresAt:           accessString(access, "expires_at"),
+		RequestRef:          accessString(access, "request_ref"),
+		RequestDigestSHA256: accessString(access, "request_digest_sha256"),
+		RequestBytes:        accessInt64(access, "request_bytes"),
 	}
-	result, err := s.jobs.CreateAgentRun(ctx, jobs.CreateAgentRunRequest{
-		SubmissionKind:     submissionKindAgentRunCreate,
-		IdempotencyKey:     req.IdempotencyKey,
-		RequestFingerprint: fingerprintAgentRunCommand(req),
-		HarnessName:        strings.TrimSpace(req.HarnessName),
-		ParamsJSON:         paramsJSON,
-		ParentJobID:        strings.TrimSpace(req.ParentJobID),
-		Delivery:           deliveryConfigToStorage(req.Delivery),
-		ClientRef:          strings.TrimSpace(req.ClientRef),
-	})
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	if !result.Reused {
-		if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return s.snapshotByID(ctx, result.Job.ID)
-}
-
-func (s *publicRuntimeService) GetJob(ctx context.Context, jobID string) (JobSnapshot, error) {
-	return s.snapshotByID(ctx, jobID)
-}
-
-func (s *publicRuntimeService) ListJobs(ctx context.Context, filter ListJobsFilter) (JobListResponse, error) {
-	page, err := s.store.ListJobs(ctx, storage.JobListFilter{
-		Status:    strings.TrimSpace(filter.Status),
-		JobType:   strings.TrimSpace(filter.JobType),
-		RootJobID: strings.TrimSpace(filter.RootJobID),
-		Limit:     filter.PageSize,
-		Offset:    (filter.Page - 1) * filter.PageSize,
-	})
-	if err != nil {
-		return JobListResponse{}, err
-	}
-
-	response := JobListResponse{
-		Items:    make([]JobSnapshot, 0, len(page.Jobs)),
-		Page:     filter.Page,
-		PageSize: filter.PageSize,
-	}
-	for _, job := range page.Jobs {
-		snapshot, err := s.snapshotFromJob(ctx, job)
-		if err != nil {
-			return JobListResponse{}, err
-		}
-		response.Items = append(response.Items, snapshot)
-	}
-	if page.HasMore {
-		nextPage := filter.Page + 1
-		response.NextPage = &nextPage
+	if response.Provider == "" || response.URL == "" || response.ExpiresAt == "" || response.RequestRef == "" || response.RequestDigestSHA256 == "" || response.RequestBytes < 1 {
+		return RequestAccessResponse{}, fmt.Errorf("%w: request_access is incomplete", storage.ErrContractViolation)
 	}
 	return response, nil
 }
 
-func (s *publicRuntimeService) CreateReport(ctx context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
-	parent, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		return JobSnapshot{}, err
+func (s *workerRuntimeService) CheckCancel(ctx context.Context, analysisRunID string, executionID string) (CancelCheckResponse, error) {
+	if strings.TrimSpace(executionID) == "" {
+		return CancelCheckResponse{}, fmt.Errorf("%w: execution_id is required", storage.ErrContractViolation)
 	}
-	if parent.JobType != queue.JobTypeTranscription || parent.Status != "succeeded" || strings.TrimSpace(parent.ParentJobID) != "" {
-		return JobSnapshot{}, fmt.Errorf("%w: report operation requires a succeeded transcription root parent", jobs.ErrInvalidJobState)
-	}
-	if snapshot, ok, err := s.canonicalAgentRunChildSnapshot(ctx, parent.ID); err != nil || ok {
-		return snapshot, err
-	}
-	transcript, err := s.findFirstArtifactByKind(ctx, parent.ID, "transcript_segmented_markdown", "transcript_plain")
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	command, err := agentRunOperationCommand(req, parent, agentRunOperationReport, []string{"report_markdown", "report_docx"}, []operationInputArtifact{
-		{Role: "transcript", Artifact: transcript},
-	})
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	return s.CreateAgentRun(ctx, command)
-}
-
-func (s *publicRuntimeService) CreateDeepResearch(ctx context.Context, jobID string, req ChildCreateRequest) (JobSnapshot, error) {
-	reportJob, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	if reportJob.JobType != queue.JobTypeAgentRun || reportJob.Status != "succeeded" || strings.TrimSpace(reportJob.ParentJobID) == "" {
-		return JobSnapshot{}, fmt.Errorf("%w: deep_research operation requires a succeeded report-backed agent_run parent", jobs.ErrInvalidJobState)
-	}
-	if snapshot, ok, err := s.canonicalAgentRunChildSnapshot(ctx, reportJob.ID); err != nil || ok {
-		return snapshot, err
-	}
-	transcript, err := s.findFirstArtifactByKind(ctx, reportJob.ParentJobID, "transcript_segmented_markdown", "transcript_plain")
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	report, err := s.findFirstArtifactByKind(ctx, reportJob.ID, "report_markdown")
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	command, err := agentRunOperationCommand(req, reportJob, agentRunOperationDeepResearch, []string{"deep_research_markdown"}, []operationInputArtifact{
-		{Role: "transcript", Artifact: transcript},
-		{Role: "report", Artifact: report},
-	})
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	return s.CreateAgentRun(ctx, command)
-}
-
-func (s *publicRuntimeService) CancelJob(ctx context.Context, jobID string) (JobSnapshot, error) {
-	job, err := s.jobs.CancelJob(ctx, jobID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	return s.snapshotFromJob(ctx, job)
-}
-
-func (s *publicRuntimeService) RetryJob(ctx context.Context, jobID string) (JobSnapshot, error) {
-	result, err := s.jobs.RetryJob(ctx, jobID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	if err := s.emitJobEvent(ctx, result.Job, "job.created"); err != nil {
-		return JobSnapshot{}, err
-	}
-	return s.snapshotByID(ctx, result.Job.ID)
-}
-
-func (s *publicRuntimeService) ResolveArtifact(ctx context.Context, artifactID string) (storage.ArtifactResolution, error) {
-	return s.store.ResolveArtifact(ctx, artifactID)
-}
-
-func (s *publicRuntimeService) ResolveInternalArtifactDownloadAccess(ctx context.Context, artifactID string) (storage.ArtifactResolution, error) {
-	return s.store.ResolveArtifactForAudience(ctx, artifactID, storage.ArtifactDownloadAudienceInternal)
-}
-
-func (s *publicRuntimeService) ListJobEvents(ctx context.Context, jobID string) ([]ws.JobEventEnvelope, error) {
-	events, err := s.store.ListJobEvents(ctx, jobID)
-	if err != nil {
-		return nil, err
-	}
-	envelopes := make([]ws.JobEventEnvelope, 0, len(events))
-	for _, event := range events {
-		envelope, err := decodeStoredEnvelope(event)
-		if err != nil {
-			return nil, err
-		}
-		envelopes = append(envelopes, envelope)
-	}
-	return envelopes, nil
-}
-
-func (s *publicRuntimeService) snapshotByID(ctx context.Context, jobID string) (JobSnapshot, error) {
-	job, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	return s.snapshotFromJob(ctx, job)
-}
-
-func (s *publicRuntimeService) snapshotFromJob(ctx context.Context, job storage.JobRecord) (JobSnapshot, error) {
-	sourceSet, err := s.store.GetSourceSet(ctx, job.SourceSetID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	orderedSources, err := s.store.ListOrderedSources(ctx, job.SourceSetID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	artifacts, err := s.store.ListArtifactsByJob(ctx, job.ID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	children, err := s.store.ListChildJobs(ctx, job.ID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-
-	return jobSnapshotFromRecords(job, sourceSet, orderedSources, artifacts, children), nil
-}
-
-func (s *publicRuntimeService) emitJobEvent(ctx context.Context, job storage.JobRecord, eventType string) error {
-	if s.events == nil {
-		return nil
-	}
-	_, err := s.events.EmitJobEvent(ctx, ws.EmitRequest{
-		Job:       job,
-		EventType: eventType,
-		JobURL:    jobURL(job.ID),
-		Payload: ws.EventPayload{
-			Status:          job.Status,
-			ProgressStage:   job.ProgressStage,
-			ProgressMessage: job.ProgressMessage,
-		},
-	})
-	return err
-}
-
-func (s *publicRuntimeService) canonicalAgentRunChildSnapshot(ctx context.Context, parentJobID string) (JobSnapshot, bool, error) {
-	children, err := s.store.ListChildJobs(ctx, parentJobID)
-	if err != nil {
-		return JobSnapshot{}, false, err
-	}
-	for _, child := range children {
-		if child.JobType == queue.JobTypeAgentRun && child.RetryOfJobID == "" && isCanonicalReusableStatus(child.Status) {
-			snapshot, err := s.snapshotByID(ctx, child.ID)
-			return snapshot, true, err
-		}
-	}
-	return JobSnapshot{}, false, nil
-}
-
-func (s *publicRuntimeService) findFirstArtifactByKind(ctx context.Context, jobID string, artifactKinds ...string) (storage.ArtifactRecord, error) {
-	for _, artifactKind := range artifactKinds {
-		artifact, err := s.store.FindArtifactByKind(ctx, jobID, artifactKind)
-		if err != nil {
-			return storage.ArtifactRecord{}, err
-		}
-		if artifact != nil {
-			return *artifact, nil
-		}
-	}
-	return storage.ArtifactRecord{}, fmt.Errorf("%w: required operation input artifact missing", jobs.ErrMissingArtifact)
-}
-
-func (s *workerRuntimeService) Claim(ctx context.Context, jobID string, req ClaimRequest) (ClaimResponse, error) {
-	result, err := s.store.ClaimJobExecution(ctx, storage.ClaimJobExecutionRequest{
-		JobID:      jobID,
-		WorkerKind: strings.TrimSpace(req.WorkerKind),
-		TaskType:   strings.TrimSpace(req.TaskType),
-	})
-	if err != nil {
-		return ClaimResponse{}, err
-	}
-	if !result.Claimed {
-		switch result.Job.Status {
-		case "succeeded", "failed", "canceled":
-			return ClaimResponse{}, apiError{status: 409, code: "job_terminal", message: "job is already terminal"}
-		default:
-			return ClaimResponse{}, apiError{status: 409, code: "job_already_owned", message: "job already has an active execution"}
-		}
-	}
-	if err := s.emitEvent(ctx, result.Job, "job.updated"); err != nil {
-		return ClaimResponse{}, err
-	}
-	return s.claimResponseFromJob(ctx, result.Job, *result.Execution)
-}
-
-func (s *workerRuntimeService) RecordProgress(ctx context.Context, jobID string, req ProgressRequest) error {
-	if _, err := s.store.GetActiveJobExecution(ctx, jobID, req.ExecutionID); err != nil {
-		return mapExecutionLookupError(err)
-	}
-	job, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if job.Status != "running" && job.Status != "cancel_requested" {
-		return jobs.ErrInvalidJobState
-	}
-
-	job.Version++
-	job.ProgressStage = strings.TrimSpace(req.ProgressStage)
-	job.ProgressMessage = optionalStringValue(req.ProgressMessage)
-	if err := s.store.UpdateJob(ctx, job); err != nil {
-		return err
-	}
-	return s.emitEvent(ctx, job, "job.updated")
-}
-
-func (s *workerRuntimeService) RecordArtifacts(ctx context.Context, jobID string, req ArtifactUpsertRequest) error {
-	if _, err := s.store.GetActiveJobExecution(ctx, jobID, req.ExecutionID); err != nil {
-		return mapExecutionLookupError(err)
-	}
-	job, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	if job.Status != "running" && job.Status != "cancel_requested" {
-		return jobs.ErrInvalidJobState
-	}
-
-	records := make([]storage.ArtifactRecord, 0, len(req.Artifacts))
-	for _, artifact := range req.Artifacts {
-		records = append(records, storage.ArtifactRecord{
-			ID:           s.nextID(),
-			JobID:        jobID,
-			ArtifactKind: strings.TrimSpace(artifact.ArtifactKind),
-			Filename:     filepath.Base(strings.TrimSpace(artifact.Filename)),
-			Format:       optionalStringValue(artifact.Format),
-			MIMEType:     strings.TrimSpace(artifact.MIMEType),
-			ObjectKey:    strings.TrimSpace(artifact.ObjectKey),
-			SizeBytes:    artifact.SizeBytes,
-			CreatedAt:    s.now(),
-		})
-	}
-	if err := s.store.UpsertArtifacts(ctx, records); err != nil {
-		return err
-	}
-
-	job.Version++
-	if err := s.store.UpdateJob(ctx, job); err != nil {
-		return err
-	}
-	return s.emitEvent(ctx, job, "job.artifact_created")
-}
-
-func (s *workerRuntimeService) Finalize(ctx context.Context, jobID string, req FinalizeRequest) (JobSnapshot, error) {
-	if _, err := s.store.GetActiveJobExecution(ctx, jobID, req.ExecutionID); err != nil {
-		return JobSnapshot{}, mapExecutionLookupError(err)
-	}
-	job, err := s.store.GetJob(ctx, jobID)
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-
-	if strings.TrimSpace(req.Outcome) == "succeeded" {
-		if err := s.ensureRequiredArtifacts(ctx, job); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-
-	transitionedJob, err := s.jobs.TransitionJob(ctx, jobs.TransitionRequest{
-		JobID:           jobID,
-		ToStatus:        statusFromOutcome(req.Outcome),
-		ProgressStage:   terminalProgressStage(req),
-		ProgressMessage: optionalStringValue(req.ProgressMessage),
-		ErrorCode:       optionalStringValue(req.ErrorCode),
-		ErrorMessage:    optionalStringValue(req.ErrorMessage),
-	})
-	if err != nil {
-		return JobSnapshot{}, err
-	}
-	if _, err := s.store.FinishJobExecution(ctx, storage.FinishJobExecutionRequest{
-		JobID:       jobID,
-		ExecutionID: req.ExecutionID,
-		Outcome:     strings.TrimSpace(req.Outcome),
-	}); err != nil {
-		return JobSnapshot{}, mapExecutionLookupError(err)
-	}
-	if transitionedJob.JobType == queue.JobTypeTranscription && strings.TrimSpace(transitionedJob.ParentJobID) != "" {
-		if _, err := s.jobs.ScheduleBatchAggregateIfReady(ctx, transitionedJob.ParentJobID); err != nil {
-			return JobSnapshot{}, err
-		}
-	}
-	return newPublicRuntimeService(s.jobs, s.store, s.events).snapshotFromJob(ctx, transitionedJob)
-}
-
-func (s *workerRuntimeService) CancelCheck(ctx context.Context, jobID, executionID string) (CancelCheckResponse, error) {
-	if _, err := s.store.GetActiveJobExecution(ctx, jobID, executionID); err != nil {
-		return CancelCheckResponse{}, mapExecutionLookupError(err)
-	}
-	job, err := s.store.GetJob(ctx, jobID)
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
 	if err != nil {
 		return CancelCheckResponse{}, err
 	}
+	cancelRequested := run.Status == storage.AnalysisRunStatusCancelRequested || run.Status == storage.AnalysisRunStatusCanceled
 	return CancelCheckResponse{
-		CancelRequested:   job.Status == "cancel_requested",
-		Status:            job.Status,
-		CancelRequestedAt: job.CancelRequestedAt,
+		CancelRequested:   cancelRequested,
+		Status:            run.Status,
+		CancelRequestedAt: run.CanceledAt,
 	}, nil
 }
 
-func (s *workerRuntimeService) ResolveAgentRunRequestAccess(ctx context.Context, jobID, executionID string) (storage.AgentRunRequestAccess, error) {
-	if _, err := s.store.GetActiveJobExecution(ctx, jobID, executionID); err != nil {
-		return storage.AgentRunRequestAccess{}, mapExecutionLookupError(err)
-	}
-	job, err := s.store.GetJob(ctx, jobID)
+func (s *workerRuntimeService) ResolveArtifactDownloadAccess(ctx context.Context, artifactID string) (ArtifactDownloadAccessResponse, error) {
+	artifact, err := s.store.GetInternalArtifactDownloadAccess(ctx, artifactID)
 	if err != nil {
-		return storage.AgentRunRequestAccess{}, err
+		return ArtifactDownloadAccessResponse{}, err
 	}
-	if strings.TrimSpace(job.JobType) != queue.JobTypeAgentRun {
-		return storage.AgentRunRequestAccess{}, apiError{status: 409, code: "agent_request_access_unavailable", message: "agent_run request access is only available for agent_run jobs"}
+	if artifact.Download == nil {
+		return ArtifactDownloadAccessResponse{}, fmt.Errorf("%w: artifact download is not available", storage.ErrArtifactResolutionFailed)
 	}
-	access, err := s.store.ResolveAgentRunRequestAccess(ctx, job)
-	if err != nil {
-		if errors.Is(err, storage.ErrAgentRunRequestRef) {
-			return storage.AgentRunRequestAccess{}, apiError{status: 409, code: "agent_request_access_unavailable", message: "agent_run request access is unavailable"}
-		}
-		return storage.AgentRunRequestAccess{}, err
-	}
-	return access, nil
-}
-
-func (s *workerRuntimeService) claimResponseFromJob(ctx context.Context, job storage.JobRecord, execution storage.JobExecutionRecord) (ClaimResponse, error) {
-	params := map[string]any{}
-	if len(job.ParamsJSON) > 0 {
-		if err := json.Unmarshal(job.ParamsJSON, &params); err != nil {
-			return ClaimResponse{}, fmt.Errorf("decode job params: %w", err)
-		}
-	}
-	inputs, err := s.claimInputsForJob(ctx, job)
-	if err != nil {
-		return ClaimResponse{}, err
-	}
-	return ClaimResponse{
-		ExecutionID:   execution.ExecutionID,
-		JobID:         job.ID,
-		RootJobID:     job.RootJobID,
-		ParentJobID:   stringPtr(job.ParentJobID),
-		RetryOfJobID:  stringPtr(job.RetryOfJobID),
-		JobType:       job.JobType,
-		Version:       job.Version,
-		OrderedInputs: inputs,
-		Params:        params,
+	return ArtifactDownloadAccessResponse{
+		ArtifactID:    artifact.ID,
+		AnalysisRunID: artifact.AnalysisRunID,
+		ArtifactKind:  internalWorkerArtifactKind(artifact),
+		Filename:      internalArtifactFilename(artifact),
+		MIMEType:      artifact.ContentType,
+		SizeBytes:     artifact.SizeBytes,
+		CreatedAt:     artifact.CreatedAt,
+		Download:      *artifact.Download,
 	}, nil
 }
 
-func (s *workerRuntimeService) claimInputsForJob(ctx context.Context, job storage.JobRecord) ([]OrderedInput, error) {
-	switch job.JobType {
-	case queue.JobTypeTranscription:
-		orderedSources, err := s.store.ListOrderedSources(ctx, job.SourceSetID)
-		if err != nil {
-			return nil, err
-		}
-		inputs := make([]OrderedInput, 0, len(orderedSources))
-		for _, ordered := range orderedSources {
-			inputs = append(inputs, orderedInputFromSource(ordered))
-		}
-		return inputs, nil
-	case queue.JobTypeReport:
-		if strings.TrimSpace(job.ParentJobID) == "" {
-			return nil, fmt.Errorf("report claim requires parent transcription job")
-		}
-		artifact, err := s.findFirstArtifactByKind(ctx, job.ParentJobID, "transcript_segmented_markdown", "transcript_plain")
-		if err != nil {
-			return nil, err
-		}
-		return []OrderedInput{orderedInputFromArtifact(0, "Transcript", artifact)}, nil
-	case queue.JobTypeDeepResearch:
-		if strings.TrimSpace(job.ParentJobID) == "" {
-			return nil, fmt.Errorf("deep research claim requires parent report job")
-		}
-		reportJob, err := s.store.GetJob(ctx, job.ParentJobID)
-		if err != nil {
-			return nil, err
-		}
-		if strings.TrimSpace(reportJob.ParentJobID) == "" {
-			return nil, fmt.Errorf("deep research claim requires report parent to reference transcription job")
-		}
-		transcriptArtifact, err := s.findFirstArtifactByKind(ctx, reportJob.ParentJobID, "transcript_segmented_markdown", "transcript_plain")
-		if err != nil {
-			return nil, err
-		}
-		reportArtifact, err := s.findFirstArtifactByKind(ctx, reportJob.ID, "report_markdown")
-		if err != nil {
-			return nil, err
-		}
-		return []OrderedInput{
-			orderedInputFromArtifact(0, "Transcript", transcriptArtifact),
-			orderedInputFromArtifact(1, "Report", reportArtifact),
-		}, nil
-	case queue.JobTypeAgentRun:
-		return []OrderedInput{}, nil
-	default:
-		return nil, fmt.Errorf("unsupported claim job type %q", job.JobType)
-	}
-}
-
-func (s *workerRuntimeService) findFirstArtifactByKind(ctx context.Context, jobID string, artifactKinds ...string) (storage.ArtifactRecord, error) {
-	for _, artifactKind := range artifactKinds {
-		artifact, err := s.store.FindArtifactByKind(ctx, jobID, artifactKind)
-		if err != nil {
-			return storage.ArtifactRecord{}, err
-		}
-		if artifact != nil {
-			return *artifact, nil
-		}
-	}
-	return storage.ArtifactRecord{}, fmt.Errorf("%w: required claim input artifact missing", jobs.ErrMissingArtifact)
-}
-
-func (s *workerRuntimeService) ensureRequiredArtifacts(ctx context.Context, job storage.JobRecord) error {
-	for _, artifactKind := range requiredArtifactKinds(job.JobType) {
-		artifact, err := s.store.FindArtifactByKind(ctx, job.ID, artifactKind)
-		if err != nil {
-			return err
-		}
-		if artifact == nil {
-			return fmt.Errorf("%w: missing %s for %s finalize", jobs.ErrMissingArtifact, artifactKind, job.JobType)
-		}
-	}
-	return nil
-}
-
-func (s *workerRuntimeService) emitEvent(ctx context.Context, job storage.JobRecord, eventType string) error {
-	if s.events == nil {
-		return nil
-	}
-	_, err := s.events.EmitJobEvent(ctx, ws.EmitRequest{
-		Job:       job,
-		EventType: eventType,
-		JobURL:    jobURL(job.ID),
-		Payload: ws.EventPayload{
-			Status:          job.Status,
-			ProgressStage:   job.ProgressStage,
-			ProgressMessage: job.ProgressMessage,
-		},
-	})
-	return err
-}
-
-func (b *jobsEventBridge) Emit(ctx context.Context, event jobs.Event) error {
-	if b == nil || b.events == nil {
-		return nil
-	}
-	job, err := b.store.GetJob(ctx, event.JobID)
-	if err != nil {
-		return err
-	}
-	status := strings.TrimSpace(event.ToStatus)
-	if status == "" {
-		status = job.Status
-	}
-	_, err = b.events.EmitJobEvent(ctx, ws.EmitRequest{
-		Job:       job,
-		EventType: event.EventType,
-		JobURL:    jobURL(job.ID),
-		Payload: ws.EventPayload{
-			Status:          status,
-			ProgressStage:   job.ProgressStage,
-			ProgressMessage: job.ProgressMessage,
-		},
-	})
-	return err
-}
-
-func buildUploadedSources(req UploadCommand) []storage.SourceRecord {
-	sources := make([]storage.SourceRecord, 0, len(req.Files))
-	singleDisplayName := strings.TrimSpace(req.DisplayName)
-	for idx, file := range req.Files {
-		sourceID := uuid.NewString()
-		displayName := strings.TrimSpace(file.Filename)
-		if len(req.Files) == 1 && singleDisplayName != "" {
-			displayName = singleDisplayName
-		}
-		if displayName == "" {
-			displayName = fmt.Sprintf("upload-%d", idx+1)
-		}
-		sources = append(sources, storage.SourceRecord{
-			ID:               sourceID,
-			SourceKind:       storage.SourceKindUploadedFile,
-			DisplayName:      displayName,
-			OriginalFilename: filepath.Base(strings.TrimSpace(file.Filename)),
-			MIMEType:         strings.TrimSpace(file.ContentType),
-			ObjectKey:        sourceObjectKey(sourceID, file.Filename),
-			SizeBytes:        file.SizeBytes,
-			ObjectBody:       file.Body,
+func toSealedSelectionInput(selection storage.SelectionRecord) sealedSelectionInput {
+	optionSnapshot := jsonObject(selection.OptionSnapshotJSON)
+	items := make([]selectionItemSnapshot, 0, len(selection.Items))
+	for _, item := range selection.Items {
+		metadata := jsonObject(item.MetadataJSON)
+		items = append(items, selectionItemSnapshot{
+			SelectionItemID:   item.ID,
+			Position:          item.Position,
+			MediaItemID:       item.MediaItemID,
+			Kind:              item.Kind,
+			MediaKind:         item.Kind,
+			MIMEType:          optionalString(item.SourceSnapshot.MIMEType),
+			Role:              selectionItemRole(item, metadata, optionSnapshot),
+			Labels:            selectionLabels(item, metadata),
+			SourceSnapshot:    item.SourceSnapshot,
+			DisplayName:       item.DisplayName,
+			StatusAtSelection: item.StatusAtSelection,
+			MetadataSnapshot:  metadata,
+			RetentionSnapshot: item.RetentionSnapshot,
+			Diagnostics:       item.Diagnostics,
 		})
 	}
-	return sources
-}
-
-func buildBatchSources(req BatchCommand) ([]storage.SourceRecord, []string, error) {
-	filesByPart := map[string]BatchUploadFile{}
-	for _, file := range req.Files {
-		filesByPart[file.PartName] = file
-	}
-
-	sources := make([]storage.SourceRecord, 0, len(req.Manifest.OrderedSourceLabels))
-	labels := make([]string, 0, len(req.Manifest.OrderedSourceLabels))
-	for idx, label := range req.Manifest.OrderedSourceLabels {
-		sourceSpec := req.Manifest.Sources[label]
-		sourceID := uuid.NewString()
-		displayName := strings.TrimSpace(sourceSpec.DisplayName)
-		if displayName == "" {
-			displayName = label
-		}
-		record := storage.SourceRecord{
-			ID:          sourceID,
-			SourceKind:  sourceSpec.SourceKind,
-			DisplayName: displayName,
-		}
-		switch sourceSpec.SourceKind {
-		case storage.SourceKindUploadedFile, storage.SourceKindTelegramUpload:
-			file, ok := filesByPart[sourceSpec.FilePart]
-			if !ok {
-				return nil, nil, apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: "uploaded batch source references missing multipart file_part"}
-			}
-			originalFilename := strings.TrimSpace(sourceSpec.OriginalFilename)
-			if originalFilename == "" {
-				originalFilename = file.Filename
-			}
-			record.OriginalFilename = filepath.Base(originalFilename)
-			record.MIMEType = strings.TrimSpace(file.ContentType)
-			record.ObjectKey = sourceObjectKey(sourceID, file.Filename)
-			record.SizeBytes = file.SizeBytes
-			record.ObjectBody = file.Body
-		case storage.SourceKindYouTubeURL:
-			record.SourceURL = strings.TrimSpace(sourceSpec.URL)
-		default:
-			return nil, nil, apiError{status: http.StatusBadRequest, code: "invalid_source_manifest", message: fmt.Sprintf("unsupported batch source_kind at position %d", idx)}
-		}
-		sources = append(sources, record)
-		labels = append(labels, label)
-	}
-	return sources, labels, nil
-}
-
-func deliveryConfigToStorage(cfg DeliveryConfig) storage.Delivery {
-	strategy := strings.TrimSpace(cfg.Strategy)
-	if strategy == "" {
-		strategy = storage.DeliveryStrategyPolling
-	}
-	return storage.Delivery{
-		Strategy:   strategy,
-		WebhookURL: strings.TrimSpace(cfg.WebhookURL),
+	return sealedSelectionInput{
+		SelectionID:    selection.ID,
+		Items:          items,
+		OptionSnapshot: optionSnapshot,
+		SealedAt:       selection.SealedAt,
 	}
 }
 
-func batchDraftOwnerToStorage(owner BatchDraftOwner) storage.BatchDraftOwner {
-	return storage.BatchDraftOwner{
-		OwnerType:      strings.TrimSpace(owner.OwnerType),
-		TelegramChatID: strings.TrimSpace(owner.TelegramChatID),
-		TelegramUserID: strings.TrimSpace(owner.TelegramUserID),
+func jsonObject(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
 	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded == nil {
+		return map[string]any{}
+	}
+	return decoded
 }
 
-func batchDraftOwnerFromStorage(owner storage.BatchDraftOwner) BatchDraftOwner {
-	return BatchDraftOwner{
-		OwnerType:      owner.OwnerType,
-		TelegramChatID: owner.TelegramChatID,
-		TelegramUserID: owner.TelegramUserID,
-	}
-}
-
-func batchDraftItemSourceToStorage(source BatchDraftItemSource) storage.BatchDraftItemSource {
-	return storage.BatchDraftItemSource{
-		SourceKind:        strings.TrimSpace(source.SourceKind),
-		UploadedSourceRef: strings.TrimSpace(source.UploadedSourceRef),
-		URL:               strings.TrimSpace(source.URL),
-		DisplayName:       strings.TrimSpace(source.DisplayName),
-		OriginalFilename:  strings.TrimSpace(source.OriginalFilename),
-		MIMEType:          strings.TrimSpace(source.ContentType),
-		SizeBytes:         source.SizeBytes,
-		ObjectBody:        source.ObjectBody,
-	}
-}
-
-func batchDraftItemSourceFromStorage(source storage.BatchDraftItemSource) BatchDraftItemSource {
-	return BatchDraftItemSource{
-		SourceKind:        source.SourceKind,
-		UploadedSourceRef: source.UploadedSourceRef,
-		URL:               source.URL,
-		DisplayName:       source.DisplayName,
-		OriginalFilename:  source.OriginalFilename,
-		ContentType:       source.MIMEType,
-		SizeBytes:         source.SizeBytes,
-	}
-}
-
-func batchDraftFromStorage(draft storage.BatchDraftRecord) BatchDraft {
-	items := make([]BatchDraftItem, 0, len(draft.Items))
-	for _, item := range draft.Items {
-		items = append(items, BatchDraftItem{
-			ItemID:      item.ItemID,
-			Position:    item.Position,
-			SourceLabel: item.SourceLabel,
-			Source:      batchDraftItemSourceFromStorage(item.Source),
-		})
-	}
-	return BatchDraft{
-		DraftID:            draft.DraftID,
-		Version:            draft.Version,
-		Owner:              batchDraftOwnerFromStorage(draft.Owner),
-		Status:             draft.Status,
-		Items:              items,
-		DisplayName:        draft.DisplayName,
-		ClientRef:          draft.ClientRef,
-		ExpiresAt:          draft.ExpiresAt,
-		SubmittedRootJobID: draft.SubmittedRootJobID,
-	}
-}
-
-func fingerprintUploadCommand(kind string, req UploadCommand) string {
-	type fileFingerprint struct {
-		Filename    string `json:"filename"`
-		ContentType string `json:"content_type"`
-		SizeBytes   int64  `json:"size_bytes"`
-		SHA256      string `json:"sha256"`
-	}
-	payload := struct {
-		Kind        string            `json:"kind"`
-		DisplayName string            `json:"display_name,omitempty"`
-		ClientRef   string            `json:"client_ref,omitempty"`
-		Delivery    DeliveryConfig    `json:"delivery"`
-		Files       []fileFingerprint `json:"files"`
-	}{
-		Kind:        kind,
-		DisplayName: strings.TrimSpace(req.DisplayName),
-		ClientRef:   strings.TrimSpace(req.ClientRef),
-		Delivery:    req.Delivery,
-		Files:       make([]fileFingerprint, 0, len(req.Files)),
-	}
-	for _, file := range req.Files {
-		payload.Files = append(payload.Files, fileFingerprint{
-			Filename:    filepath.Base(strings.TrimSpace(file.Filename)),
-			ContentType: strings.TrimSpace(file.ContentType),
-			SizeBytes:   file.SizeBytes,
-			SHA256:      strings.TrimSpace(file.SHA256),
-		})
-	}
-	encoded, _ := json.Marshal(payload)
-	return checksum(encoded)
-}
-
-func fingerprintURLCommand(req URLCommand) string {
-	payload := struct {
-		Kind        string         `json:"kind"`
-		SourceKind  string         `json:"source_kind"`
-		URL         string         `json:"url"`
-		DisplayName string         `json:"display_name,omitempty"`
-		ClientRef   string         `json:"client_ref,omitempty"`
-		Delivery    DeliveryConfig `json:"delivery"`
-	}{
-		Kind:        submissionKindTranscriptionURL,
-		SourceKind:  strings.TrimSpace(req.SourceKind),
-		URL:         strings.TrimSpace(req.URL),
-		DisplayName: strings.TrimSpace(req.DisplayName),
-		ClientRef:   strings.TrimSpace(req.ClientRef),
-		Delivery:    req.Delivery,
-	}
-	encoded, _ := json.Marshal(payload)
-	return checksum(encoded)
-}
-
-func fingerprintBatchCommand(req BatchCommand) string {
-	type fileFingerprint struct {
-		PartName    string `json:"part_name"`
-		Filename    string `json:"filename"`
-		ContentType string `json:"content_type"`
-		SizeBytes   int64  `json:"size_bytes"`
-		SHA256      string `json:"sha256"`
-	}
-	payload := struct {
-		Kind        string              `json:"kind"`
-		DisplayName string              `json:"display_name,omitempty"`
-		ClientRef   string              `json:"client_ref,omitempty"`
-		Delivery    DeliveryConfig      `json:"delivery"`
-		Manifest    BatchSourceManifest `json:"source_manifest"`
-		Files       []fileFingerprint   `json:"files"`
-	}{
-		Kind:        submissionKindTranscriptionBatch,
-		DisplayName: strings.TrimSpace(req.DisplayName),
-		ClientRef:   strings.TrimSpace(req.ClientRef),
-		Delivery:    req.Delivery,
-		Manifest:    req.Manifest,
-		Files:       make([]fileFingerprint, 0, len(req.Files)),
-	}
-	for _, file := range req.Files {
-		payload.Files = append(payload.Files, fileFingerprint{
-			PartName:    strings.TrimSpace(file.PartName),
-			Filename:    filepath.Base(strings.TrimSpace(file.Filename)),
-			ContentType: strings.TrimSpace(file.ContentType),
-			SizeBytes:   file.SizeBytes,
-			SHA256:      strings.TrimSpace(file.SHA256),
-		})
-	}
-	encoded, _ := json.Marshal(payload)
-	return checksum(encoded)
-}
-
-func fingerprintAgentRunCommand(req AgentRunCommand) string {
-	payload := struct {
-		Kind        string          `json:"kind"`
-		HarnessName string          `json:"harness_name"`
-		ParentJobID string          `json:"parent_job_id,omitempty"`
-		ClientRef   string          `json:"client_ref,omitempty"`
-		Delivery    DeliveryConfig  `json:"delivery"`
-		Request     AgentRunRequest `json:"request"`
-	}{
-		Kind:        submissionKindAgentRunCreate,
-		HarnessName: strings.TrimSpace(req.HarnessName),
-		ParentJobID: strings.TrimSpace(req.ParentJobID),
-		ClientRef:   strings.TrimSpace(req.ClientRef),
-		Delivery:    req.Delivery,
-		Request:     normalizeAgentRunRequest(req.Request),
-	}
-	encoded, _ := json.Marshal(payload)
-	return checksum(encoded)
-}
-
-type operationInputArtifact struct {
-	Role     string
-	Artifact storage.ArtifactRecord
-}
-
-func agentRunOperationCommand(req ChildCreateRequest, parent storage.JobRecord, operation string, expectedOutputArtifacts []string, inputs []operationInputArtifact) (AgentRunCommand, error) {
-	inputRefs := make([]AgentRunInputArtifact, 0, len(inputs))
-	payloadInputs := make([]map[string]any, 0, len(inputs))
-	for _, input := range inputs {
-		inputRefs = append(inputRefs, agentRunInputArtifactFromRecord(input.Artifact))
-		payloadInputs = append(payloadInputs, map[string]any{
-			"role":          strings.TrimSpace(input.Role),
-			"artifact_id":   input.Artifact.ID,
-			"artifact_kind": input.Artifact.ArtifactKind,
-		})
-	}
-	rootJobID := parent.RootJobID
-	if strings.TrimSpace(rootJobID) == "" {
-		rootJobID = parent.ID
-	}
-	payload := map[string]any{
-		"operation":                 strings.TrimSpace(operation),
-		"parent_job_id":             parent.ID,
-		"root_job_id":               rootJobID,
-		"expected_output_artifacts": expectedOutputArtifacts,
-		"input_artifact_refs":       payloadInputs,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return AgentRunCommand{}, fmt.Errorf("encode %s agent_run payload: %w", operation, err)
-	}
-	return AgentRunCommand{
-		IdempotencyKey: strings.TrimSpace(req.IdempotencyKey),
-		ParentJobID:    parent.ID,
-		HarnessName:    agentRunHarnessClaudeCode,
-		ClientRef:      childClientRef(req, parent),
-		Delivery:       childDelivery(req, parent),
-		Request: AgentRunRequest{
-			Prompt:         operationPrompt(operation),
-			Payload:        payloadJSON,
-			InputArtifacts: inputRefs,
-		},
-	}, nil
-}
-
-func agentRunInputArtifactFromRecord(artifact storage.ArtifactRecord) AgentRunInputArtifact {
-	return AgentRunInputArtifact{
-		ArtifactID:   artifact.ID,
-		ArtifactKind: artifact.ArtifactKind,
-		ObjectKey:    artifact.ObjectKey,
-		Filename:     artifact.Filename,
-	}
-}
-
-func operationPrompt(operation string) string {
-	switch operation {
-	case agentRunOperationReport:
-		return "Create report_markdown and report_docx artifacts from the transcript input."
-	case agentRunOperationDeepResearch:
-		return "Create deep_research_markdown from the transcript and report inputs."
-	default:
-		return "Run the requested transcript operation and persist the expected artifacts."
-	}
-}
-
-func childClientRef(req ChildCreateRequest, parent storage.JobRecord) string {
-	if value := strings.TrimSpace(req.ClientRef); value != "" {
-		return value
-	}
-	return strings.TrimSpace(parent.ClientRef)
-}
-
-func childDelivery(req ChildCreateRequest, parent storage.JobRecord) DeliveryConfig {
-	if strings.TrimSpace(req.Delivery.Strategy) == storage.DeliveryStrategyWebhook || strings.TrimSpace(req.Delivery.WebhookURL) != "" {
-		return req.Delivery
-	}
-	return deliveryConfigFromStorage(parent.Delivery)
-}
-
-func isCanonicalReusableStatus(status string) bool {
-	switch strings.TrimSpace(status) {
-	case "queued", "running", "cancel_requested", "succeeded":
-		return true
-	default:
-		return false
-	}
-}
-
-func agentRunParamsJSON(req AgentRunCommand, requestRef, requestDigestSHA256 string, requestBytes int64) ([]byte, error) {
-	params := map[string]any{
-		"harness_name":          strings.TrimSpace(req.HarnessName),
-		"request_ref":           strings.TrimSpace(requestRef),
-		"request_digest_sha256": strings.TrimSpace(requestDigestSHA256),
-		"request_bytes":         requestBytes,
-		"request":               normalizedAgentRunRequestMetadata(req.Request),
-	}
-	encoded, err := json.Marshal(params)
-	if err != nil {
-		return nil, fmt.Errorf("encode agent_run params: %w", err)
-	}
-	return encoded, nil
-}
-
-func agentRunEnvelopeJSON(req AgentRunCommand) ([]byte, string, string, int64, error) {
-	envelope := map[string]any{
-		"schema_version": "agent_run_request_envelope/v1",
-		"harness_name":   strings.TrimSpace(req.HarnessName),
-		"request":        normalizedAgentRunEnvelopeRequest(req.Request),
-	}
-	encoded, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, "", "", 0, fmt.Errorf("encode agent_run envelope: %w", err)
-	}
-	digest := sha256.Sum256(encoded)
-	requestDigestSHA256 := hex.EncodeToString(digest[:])
-	return encoded, "agentreq_" + requestDigestSHA256, requestDigestSHA256, int64(len(encoded)), nil
-}
-
-func normalizedAgentRunEnvelopeRequest(req AgentRunRequest) map[string]any {
-	normalized := normalizeAgentRunRequest(req)
-	request := map[string]any{}
-	if normalized.Prompt != "" {
-		request["prompt"] = normalized.Prompt
-	}
-	if len(normalized.Payload) > 0 {
-		var payload any
-		if err := json.Unmarshal(normalized.Payload, &payload); err == nil {
-			request["payload"] = payload
-		} else {
-			request["payload"] = json.RawMessage(normalized.Payload)
-		}
-	}
-	if len(normalized.InputArtifacts) > 0 {
-		artifacts := make([]map[string]any, 0, len(normalized.InputArtifacts))
-		for _, artifact := range normalized.InputArtifacts {
-			item := map[string]any{}
-			if artifact.ArtifactID != "" {
-				item["artifact_id"] = artifact.ArtifactID
-			}
-			if artifact.ArtifactKind != "" {
-				item["artifact_kind"] = artifact.ArtifactKind
-			}
-			if artifact.ObjectKey != "" {
-				item["object_key"] = artifact.ObjectKey
-			}
-			if artifact.URI != "" {
-				item["uri"] = artifact.URI
-			}
-			if artifact.Filename != "" {
-				item["filename"] = artifact.Filename
-			}
-			artifacts = append(artifacts, item)
-		}
-		request["input_artifacts"] = artifacts
-	}
-	return request
-}
-
-func normalizedAgentRunRequestMetadata(req AgentRunRequest) map[string]any {
-	metadata := map[string]any{}
-	if prompt := strings.TrimSpace(req.Prompt); prompt != "" {
-		metadata["prompt_sha256"] = checksum([]byte(prompt))
-		metadata["prompt_bytes"] = len([]byte(prompt))
-		metadata["prompt_runes"] = len([]rune(prompt))
-	}
-	if len(req.Payload) > 0 {
-		metadata["payload"] = agentRunPayloadMetadata(req.Payload)
-	}
-	if len(req.InputArtifacts) > 0 {
-		artifacts := make([]map[string]any, 0, len(req.InputArtifacts))
-		for _, artifact := range req.InputArtifacts {
-			item := map[string]any{}
-			if value := strings.TrimSpace(artifact.ArtifactID); value != "" {
-				item["artifact_id"] = value
-			}
-			if value := strings.TrimSpace(artifact.ArtifactKind); value != "" {
-				item["artifact_kind"] = value
-			}
-			if value := strings.TrimSpace(artifact.ObjectKey); value != "" {
-				item["object_key_sha256"] = checksum([]byte(value))
-			}
-			if value := strings.TrimSpace(artifact.URI); value != "" {
-				item["uri"] = agentRunURIMetadata(value)
-			}
-			if value := strings.TrimSpace(artifact.Filename); value != "" {
-				base := filepath.Base(value)
-				item["filename_sha256"] = checksum([]byte(base))
-				if ext := filepath.Ext(base); ext != "" {
-					item["filename_extension"] = ext
-				}
-			}
-			artifacts = append(artifacts, item)
-		}
-		metadata["input_artifacts"] = artifacts
-	}
-	return metadata
-}
-
-func normalizeAgentRunRequest(req AgentRunRequest) AgentRunRequest {
-	req.Prompt = strings.TrimSpace(req.Prompt)
-	if len(req.Payload) == 0 {
-		req.Payload = nil
-	}
-	for idx := range req.InputArtifacts {
-		req.InputArtifacts[idx].ArtifactID = strings.TrimSpace(req.InputArtifacts[idx].ArtifactID)
-		req.InputArtifacts[idx].ArtifactKind = strings.TrimSpace(req.InputArtifacts[idx].ArtifactKind)
-		req.InputArtifacts[idx].ObjectKey = strings.TrimSpace(req.InputArtifacts[idx].ObjectKey)
-		req.InputArtifacts[idx].URI = strings.TrimSpace(req.InputArtifacts[idx].URI)
-		req.InputArtifacts[idx].Filename = filepath.Base(strings.TrimSpace(req.InputArtifacts[idx].Filename))
-	}
-	return req
-}
-
-func agentRunPayloadMetadata(raw json.RawMessage) map[string]any {
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return map[string]any{"invalid": true}
-	}
-	return map[string]any{
-		"json_type": jsonValueType(decoded),
-		"sha256":    checksum(raw),
-		"bytes":     len(raw),
-	}
-}
-
-func agentRunURIMetadata(value string) map[string]any {
-	metadata := map[string]any{
-		"sha256": checksum([]byte(value)),
-	}
-	if parsed, err := neturl.Parse(value); err == nil && parsed != nil {
-		if parsed.Scheme != "" {
-			metadata["scheme"] = parsed.Scheme
-		}
-		if parsed.Host != "" {
-			metadata["host"] = parsed.Host
-		}
-	}
-	return metadata
-}
-
-func jsonValueType(value any) string {
-	switch typed := value.(type) {
-	case map[string]any:
-		return "object"
-	case []any:
-		return "array"
-	case string:
-		return "string"
-	case float64:
-		return "number"
-	case bool:
-		return "boolean"
-	default:
-		if typed == nil {
-			return "null"
-		}
-		return "unknown"
-	}
-}
-
-func sourceObjectKey(sourceID, filename string) string {
-	name := sanitizeFilename(filename)
-	if name == "" {
-		name = "source.bin"
-	}
-	return fmt.Sprintf("sources/%s/original/%s", sourceID, name)
-}
-
-func sanitizeFilename(name string) string {
-	base := filepath.Base(strings.TrimSpace(name))
-	if base == "." || base == "/" || base == "" {
-		return ""
-	}
-	var builder strings.Builder
-	for _, r := range base {
-		switch {
-		case unicode.IsLetter(r), unicode.IsDigit(r), r == '.', r == '-', r == '_':
-			builder.WriteRune(r)
-		default:
-			builder.WriteByte('_')
-		}
-	}
-	return strings.Trim(builder.String(), "_")
-}
-
-func jobSnapshotFromRecords(job storage.JobRecord, sourceSet storage.SourceSetRecord, orderedSources []storage.OrderedSource, artifacts []storage.ArtifactRecord, children []storage.JobRecord) JobSnapshot {
-	snapshot := JobSnapshot{
-		JobID:             job.ID,
-		RootJobID:         job.RootJobID,
-		ParentJobID:       stringPtr(job.ParentJobID),
-		RetryOfJobID:      stringPtr(job.RetryOfJobID),
-		JobType:           job.JobType,
-		Status:            job.Status,
-		Version:           job.Version,
-		DisplayName:       inferredDisplayName(sourceSet, orderedSources),
-		ClientRef:         stringPtr(job.ClientRef),
-		Delivery:          deliveryConfigFromStorage(job.Delivery),
-		SourceSet:         sourceSetViewFromRecords(sourceSet, orderedSources),
-		Artifacts:         artifactSummariesFromRecords(artifacts),
-		Children:          childReferencesFromRecords(children),
-		Progress:          progressStateFromJob(job),
-		LatestError:       errorInfoFromJob(job),
-		CreatedAt:         job.CreatedAt,
-		StartedAt:         job.StartedAt,
-		FinishedAt:        job.FinishedAt,
-		CancelRequestedAt: job.CancelRequestedAt,
-	}
-	return snapshot
-}
-
-func sourceSetViewFromRecords(sourceSet storage.SourceSetRecord, orderedSources []storage.OrderedSource) SourceSetView {
-	view := SourceSetView{
-		SourceSetID: sourceSet.ID,
-		InputKind:   sourceSet.InputKind,
-		Items:       make([]SourceSetItem, 0, len(orderedSources)),
-	}
-	for _, ordered := range orderedSources {
-		view.Items = append(view.Items, SourceSetItem{
-			Position:    ordered.Position,
-			SourceLabel: stringPtr(ordered.SourceLabel),
-			Source: SourceReference{
-				SourceID:         ordered.Source.ID,
-				SourceKind:       ordered.Source.SourceKind,
-				DisplayName:      stringPtr(ordered.Source.DisplayName),
-				OriginalFilename: stringPtr(ordered.Source.OriginalFilename),
-				SourceURL:        stringPtr(ordered.Source.SourceURL),
-			},
-		})
-	}
-	return view
-}
-
-func orderedInputFromSource(source storage.OrderedSource) OrderedInput {
-	return OrderedInput{
-		Position:         source.Position,
-		SourceID:         source.Source.ID,
-		SourceKind:       source.Source.SourceKind,
-		DisplayName:      stringPtr(source.Source.DisplayName),
-		OriginalFilename: stringPtr(source.Source.OriginalFilename),
-		ObjectKey:        stringPtr(source.Source.ObjectKey),
-		SourceURL:        stringPtr(source.Source.SourceURL),
-		SizeBytes:        int64Ptr(source.Source.SizeBytes),
-	}
-}
-
-func orderedInputFromArtifact(position int, label string, artifact storage.ArtifactRecord) OrderedInput {
-	filename := filepath.Base(strings.TrimSpace(artifact.Filename))
-	displayName := strings.TrimSpace(label)
-	if filename != "" {
-		displayName = displayName + ": " + filename
-	}
-	return OrderedInput{
-		Position:         position,
-		SourceID:         artifact.ID,
-		SourceKind:       storage.SourceKindUploadedFile,
-		DisplayName:      stringPtr(displayName),
-		OriginalFilename: stringPtr(filename),
-		ObjectKey:        stringPtr(artifact.ObjectKey),
-		SizeBytes:        int64Ptr(artifact.SizeBytes),
-	}
-}
-
-func artifactSummariesFromRecords(records []storage.ArtifactRecord) []ArtifactSummary {
-	summaries := make([]ArtifactSummary, 0, len(records))
-	for _, artifact := range records {
-		summaries = append(summaries, ArtifactSummary{
-			ArtifactID:   artifact.ID,
-			ArtifactKind: artifact.ArtifactKind,
-			Filename:     artifact.Filename,
-			MIMEType:     artifact.MIMEType,
-			SizeBytes:    artifact.SizeBytes,
-			CreatedAt:    artifact.CreatedAt,
-		})
-	}
-	return summaries
-}
-
-func childReferencesFromRecords(children []storage.JobRecord) []ChildJobReference {
-	refs := make([]ChildJobReference, 0, len(children))
-	for _, child := range children {
-		refs = append(refs, ChildJobReference{
-			JobID:     child.ID,
-			JobType:   child.JobType,
-			Status:    child.Status,
-			Version:   child.Version,
-			JobURL:    jobURL(child.ID),
-			RootJobID: child.RootJobID,
-		})
-	}
-	return refs
-}
-
-func progressStateFromJob(job storage.JobRecord) *ProgressState {
-	if strings.TrimSpace(job.ProgressStage) == "" && strings.TrimSpace(job.ProgressMessage) == "" {
-		return nil
-	}
-	return &ProgressState{
-		Stage:   job.ProgressStage,
-		Message: stringPtr(job.ProgressMessage),
-	}
-}
-
-func errorInfoFromJob(job storage.JobRecord) *ErrorInfo {
-	if strings.TrimSpace(job.ErrorCode) == "" && strings.TrimSpace(job.ErrorMessage) == "" {
-		return nil
-	}
-	return &ErrorInfo{
-		Code:    job.ErrorCode,
-		Message: stringPtr(job.ErrorMessage),
-	}
-}
-
-func deliveryConfigFromStorage(delivery storage.Delivery) DeliveryConfig {
-	return DeliveryConfig{
-		Strategy:   delivery.Strategy,
-		WebhookURL: delivery.WebhookURL,
-	}
-}
-
-func inferredDisplayName(sourceSet storage.SourceSetRecord, orderedSources []storage.OrderedSource) *string {
-	if value := strings.TrimSpace(sourceSet.DisplayName); value != "" {
-		return &value
-	}
-	if len(orderedSources) == 1 {
-		if value := strings.TrimSpace(orderedSources[0].Source.DisplayName); value != "" {
-			return &value
-		}
-	}
-	return nil
-}
-
-func decodeStoredEnvelope(event storage.JobEvent) (ws.JobEventEnvelope, error) {
-	var envelope ws.JobEventEnvelope
-	if err := json.Unmarshal(event.Payload, &envelope); err == nil && strings.TrimSpace(envelope.EventID) != "" {
-		return envelope, nil
-	}
-
-	var payload struct {
-		Status          string `json:"status"`
-		ProgressStage   string `json:"progress_stage"`
-		ProgressMessage string `json:"progress_message"`
-	}
-	if len(event.Payload) != 0 {
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			return ws.JobEventEnvelope{}, fmt.Errorf("decode job event payload: %w", err)
-		}
-	}
-	return ws.JobEventEnvelope{
-		EventID:   event.ID,
-		EventType: event.EventType,
-		JobID:     event.JobID,
-		RootJobID: event.RootJobID,
-		Version:   event.Version,
-		EmittedAt: event.CreatedAt,
-		Payload: ws.EventPayload{
-			Status:          payload.Status,
-			ProgressStage:   payload.ProgressStage,
-			ProgressMessage: payload.ProgressMessage,
-		},
-	}, nil
-}
-
-func requiredArtifactKinds(jobType string) []string {
-	switch jobType {
-	case queue.JobTypeTranscription:
-		return []string{"transcript_plain", "transcript_segmented_markdown", "transcript_docx"}
-	case queue.JobTypeReport:
-		return []string{"report_markdown", "report_docx"}
-	case queue.JobTypeDeepResearch:
-		return []string{"deep_research_markdown"}
-	case queue.JobTypeAgentRun:
-		return []string{"execution_log", "agent_result_json"}
-	default:
-		return nil
-	}
-}
-
-func statusFromOutcome(outcome string) string {
-	switch strings.TrimSpace(outcome) {
-	case "succeeded":
-		return "succeeded"
-	case "failed":
-		return "failed"
-	case "canceled":
-		return "canceled"
-	default:
-		return strings.TrimSpace(outcome)
-	}
-}
-
-func terminalProgressStage(req FinalizeRequest) string {
-	if req.ProgressStage != nil && strings.TrimSpace(*req.ProgressStage) != "" {
-		return strings.TrimSpace(*req.ProgressStage)
-	}
-	switch strings.TrimSpace(req.Outcome) {
-	case "succeeded":
-		return "completed"
-	case "failed":
-		return "failed"
-	case "canceled":
-		return "canceled"
-	default:
-		return ""
-	}
-}
-
-func mapExecutionLookupError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if err == storage.ErrExecutionNotFound {
-		return apiError{status: 409, code: "execution_not_found", message: "execution_id is not active for this job"}
-	}
-	return err
-}
-
-func optionalStringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return strings.TrimSpace(*value)
-}
-
-func stringPtr(value string) *string {
+func optionalString(value string) *string {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return nil
@@ -1667,14 +179,264 @@ func stringPtr(value string) *string {
 	return &trimmed
 }
 
-func int64Ptr(value int64) *int64 {
-	if value == 0 {
-		return nil
+func accessString(access map[string]any, key string) string {
+	value, ok := access[key].(string)
+	if !ok {
+		return ""
 	}
-	copied := value
-	return &copied
+	return strings.TrimSpace(value)
 }
 
-func jobURL(jobID string) string {
-	return fmt.Sprintf("/v1/jobs/%s", jobID)
+func accessInt64(access map[string]any, key string) int64 {
+	switch value := access[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
+}
+
+func internalWorkerArtifactKind(artifact storage.ArtifactRecord) string {
+	preview := jsonObject(artifact.PreviewJSON)
+	if workerKind := accessString(preview, "worker_artifact_kind"); workerKind != "" {
+		return workerKind
+	}
+	return strings.TrimSpace(artifact.Kind)
+}
+
+func internalArtifactFilename(artifact storage.ArtifactRecord) string {
+	preview := jsonObject(artifact.PreviewJSON)
+	if filename := accessString(preview, "filename"); filename != "" {
+		return filename
+	}
+	if base := path.Base(strings.TrimSpace(artifact.ObjectKey)); base != "." && base != "/" && base != "" {
+		return base
+	}
+	return artifact.ID
+}
+
+func selectionLabels(item storage.SelectionItemSnapshot, metadata map[string]any) selectionItemLabels {
+	displayLabel := strings.TrimSpace(item.DisplayName)
+	if displayLabel == "" {
+		displayLabel = strings.TrimSpace(item.MediaItemID)
+	}
+	return selectionItemLabels{
+		DisplayLabel:     displayLabel,
+		SourceLabel:      firstString(metadataString(metadata, "source_label"), sourceLabelFromSnapshot(item.SourceSnapshot)),
+		OriginalFilename: firstMetadataString(metadata, "original_filename", "filename"),
+	}
+}
+
+func sourceLabelFromSnapshot(source storage.MediaSourceMetadata) *string {
+	for _, value := range []string{source.ExternalURI, source.ObjectKey, source.TextRef, source.SourceID} {
+		if label := optionalString(value); label != nil {
+			return label
+		}
+	}
+	return nil
+}
+
+func selectionItemRole(item storage.SelectionItemSnapshot, metadata map[string]any, optionSnapshot map[string]any) string {
+	if role := metadataString(metadata, "role"); role != nil {
+		return *role
+	}
+	if itemRoles, ok := optionSnapshot["item_roles"].(map[string]any); ok {
+		for _, key := range []string{item.ID, item.MediaItemID, fmt.Sprintf("%d", item.Position)} {
+			if role := metadataString(itemRoles, key); role != nil {
+				return *role
+			}
+		}
+	}
+	return "primary"
+}
+
+func firstMetadataString(metadata map[string]any, keys ...string) *string {
+	for _, key := range keys {
+		if value := metadataString(metadata, key); value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func firstString(values ...*string) *string {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+func metadataString(metadata map[string]any, key string) *string {
+	value, ok := metadata[key].(string)
+	if !ok {
+		return nil
+	}
+	return optionalString(value)
+}
+
+func (s *workerRuntimeService) RecordExecutionProgress(ctx context.Context, analysisRunID string, req ExecutionProgressRequest) error {
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
+	if err != nil {
+		return err
+	}
+	stage := firstNonEmpty(req.ProgressStage, req.Stage)
+	message := firstNonEmpty(req.ProgressMessage, req.Message)
+	_, err = s.store.RecordAnalysisRunProgress(ctx, run.Owner, run.ID, stage, message, req.Payload)
+	return err
+}
+
+func (s *workerRuntimeService) RecordExecutionArtifacts(ctx context.Context, analysisRunID string, req ExecutionArtifactsRequest) error {
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
+	if err != nil {
+		return err
+	}
+	artifacts := make([]storage.ArtifactRecord, 0, len(req.Artifacts))
+	for _, descriptor := range req.Artifacts {
+		workerKind := strings.TrimSpace(descriptor.ArtifactKind)
+		publicKind := workerDescriptorPublicArtifactKind(workerKind)
+		if publicKind == "" {
+			return fmt.Errorf("%w: unsupported worker artifact_kind %q", storage.ErrContractViolation, workerKind)
+		}
+		preview := map[string]any{
+			"available":            false,
+			"filename":             strings.TrimSpace(descriptor.Filename),
+			"format":               strings.TrimSpace(descriptor.Format),
+			"artifact_kind":        publicKind,
+			"worker_artifact_kind": workerKind,
+		}
+		previewJSON, _ := json.Marshal(preview)
+		artifacts = append(artifacts, storage.ArtifactRecord{
+			Kind:        publicKind,
+			Status:      storage.ArtifactStatusAvailable,
+			ObjectKey:   strings.TrimSpace(descriptor.ObjectKey),
+			ContentType: strings.TrimSpace(descriptor.MIMEType),
+			SizeBytes:   descriptor.SizeBytes,
+			Visibility:  "owner",
+			PreviewJSON: previewJSON,
+		})
+	}
+	_, err = s.store.RecordArtifacts(ctx, run.Owner, run.ID, artifacts)
+	return err
+}
+
+func workerDescriptorPublicArtifactKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "transcript_plain", "transcript_segmented_markdown", "transcript_docx":
+		return "transcript"
+	case "summary_markdown":
+		return "summary"
+	case "report_markdown", "report_docx":
+		return "report"
+	case "deep_research_markdown":
+		return "deep_research"
+	case "agent_result_json":
+		return "structured_data"
+	case "execution_log":
+		return "execution_log"
+	case "run_manifest":
+		return "run_manifest"
+	case "run_diagnostics":
+		return "run_diagnostics"
+	default:
+		return ""
+	}
+}
+
+func (s *workerRuntimeService) RecordExecutionDiagnostics(ctx context.Context, analysisRunID string, req ExecutionDiagnosticsRequest) error {
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
+	if err != nil {
+		return err
+	}
+	diagnostics := make([]storage.DiagnosticRecord, 0, len(req.Diagnostics))
+	for _, descriptor := range req.Diagnostics {
+		contextJSON := jsonObjectBytes(descriptor.Context)
+		if req.ExecutionID != "" {
+			contextJSON = mergeRuntimeContext(contextJSON, map[string]any{"execution_id": req.ExecutionID})
+		}
+		diagnostics = append(diagnostics, storage.DiagnosticRecord{
+			ID:              strings.TrimSpace(descriptor.DiagnosticID),
+			SubjectType:     strings.TrimSpace(descriptor.SubjectType),
+			SubjectID:       strings.TrimSpace(descriptor.SubjectID),
+			Severity:        strings.TrimSpace(descriptor.Severity),
+			Code:            strings.TrimSpace(descriptor.Code),
+			Message:         strings.TrimSpace(descriptor.Message),
+			ContextJSON:     contextJSON,
+			SafeAdapterJSON: jsonObjectBytes(descriptor.SafeAdapterContext),
+			CorrelationID:   strings.TrimSpace(descriptor.CorrelationID),
+			RemediationHint: strings.TrimSpace(descriptor.RemediationHint),
+			CreatedAt:       descriptor.CreatedAt,
+		})
+	}
+	_, err = s.store.RecordDiagnostics(ctx, run.Owner, run.ID, diagnostics)
+	return err
+}
+
+func (s *workerRuntimeService) FinalizeExecution(ctx context.Context, analysisRunID string, req ExecutionFinalizeRequest) (storage.AnalysisRunRecord, error) {
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
+	if err != nil {
+		return storage.AnalysisRunRecord{}, err
+	}
+	status := workerOutcomeStatus(firstNonEmpty(req.Outcome, req.Status))
+	if status == "" {
+		return storage.AnalysisRunRecord{}, fmt.Errorf("%w: invalid worker outcome", storage.ErrContractViolation)
+	}
+	return s.store.FinalizeAnalysisRunTask(ctx, run.Owner, run.ID, status, req.Message)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func workerOutcomeStatus(outcome string) string {
+	switch strings.TrimSpace(outcome) {
+	case "succeeded":
+		return storage.AnalysisRunStatusSucceeded
+	case "partially_succeeded":
+		return storage.AnalysisRunStatusPartiallySucceeded
+	case "failed":
+		return storage.AnalysisRunStatusFailed
+	case "canceled":
+		return storage.AnalysisRunStatusCanceled
+	default:
+		return ""
+	}
+}
+
+func jsonObjectBytes(value map[string]any) []byte {
+	if value == nil {
+		return []byte(`{}`)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return data
+}
+
+func mergeRuntimeContext(data []byte, fields map[string]any) []byte {
+	merged := map[string]any{}
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &merged)
+	}
+	for key, value := range fields {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return encoded
 }

@@ -1,25 +1,3 @@
-// FILE: apps/web/tests/api-client.test.ts
-// VERSION: 1.0.0
-// START_MODULE_CONTRACT
-// PURPOSE: Prove the Web UI API boundary preserves canonical job, action, and event transport semantics without leaking contract drift into UI layers.
-// SCOPE: Verify envelope normalization, multipart payload shaping, error handling, canonical websocket event transport, and reconciliation helpers.
-// DEPENDS: M-WEB-UI, M-API-HTTP
-// LINKS: V-M-WEB-UI
-// ROLE: TEST
-// MAP_MODE: SUMMARY
-// END_MODULE_CONTRACT
-//
-// START_CHANGE_SUMMARY
-//   LAST_CHANGE: v1.0.0 - Expanded the client tests to cover job envelopes, multipart create flows, canonical websocket transport, and reconciliation helpers.
-// END_CHANGE_SUMMARY
-//
-// START_MODULE_MAP
-//   verify-client-request-shape - Confirm the client resolves job reads and envelopes against the actual API surface.
-//   verify-multipart-shape - Confirm upload and combined create paths preserve multipart and delivery fields.
-//   verify-event-boundary - Confirm websocket subscription parses canonical messages and preserves the declared event stream endpoint.
-//   verify-client-error-surface - Confirm failed responses surface as transport errors instead of client-side guesses.
-// END_MODULE_MAP
-
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -27,43 +5,36 @@ import {
   createWebUiApiClient,
   requiresRestReconciliation,
 } from "../src/lib/api/client";
+import type { OwnerScope } from "../src/lib/api/types";
+
+const owner: OwnerScope = {
+  owner_type: "web",
+  owner_id: "web-console",
+};
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 describe("createWebUiApiClient", () => {
-  // START_BLOCK_BLOCK_VERIFY_CLIENT_REQUEST_SHAPE
-  it("unwraps job envelopes returned by the current server implementation", async () => {
+  it("adds text media through the final media item endpoint", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          job: {
-            job_id: "job-1",
-            root_job_id: "job-1",
-            job_type: "transcription",
-            status: "queued",
-            version: 1,
-            delivery: { strategy: "polling" },
-            source_set: {
-              source_set_id: "source-set-1",
-              input_kind: "single_source",
-              items: [
-                {
-                  position: 0,
-                  source: {
-                    source_id: "source-1",
-                    source_kind: "uploaded_file",
-                  },
-                },
-              ],
-            },
-            artifacts: [],
-            children: [],
-            created_at: "2026-04-23T00:00:00Z",
-          },
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
+      jsonResponse({
+        media_item: {
+          media_item_id: "media-1",
+          owner,
+          kind: "text",
+          status: "ready",
+          display_name: "Note",
+          source: { source_id: "source-1", origin_type: "text" },
+          retention: { state: "active" },
+          created_at: "2026-05-10T00:00:00Z",
+          updated_at: "2026-05-10T00:00:00Z",
         },
-      ),
+      }, 201),
     );
     const client = createWebUiApiClient({
       baseUrl: "http://localhost:8080/api",
@@ -71,131 +42,128 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.getJob("job-1")).resolves.toEqual(
-      expect.objectContaining({
-        job_id: "job-1",
-        status: "queued",
+    await expect(
+      client.addMediaItem(owner, {
+        kind: "text",
+        displayName: "Note",
+        adapterOrigin: "web",
+        source: { origin_type: "text", text: "Meeting note" },
       }),
-    );
+    ).resolves.toEqual(expect.objectContaining({ media_item_id: "media-1" }));
+
     expect(fetchImpl).toHaveBeenCalledWith(
-      new URL("v1/jobs/job-1", "http://localhost:8080/api/"),
+      new URL("v1/media-items", "http://localhost:8080/api/"),
       expect.objectContaining({
-        headers: expect.objectContaining({
-          Accept: "application/json",
+        method: "POST",
+        body: JSON.stringify({
+          owner,
+          kind: "text",
+          source: { origin_type: "text", text: "Meeting note" },
+          collection_id: undefined,
+          display_name: "Note",
+          adapter_origin: "web",
         }),
       }),
     );
   });
-  // END_BLOCK_BLOCK_VERIFY_CLIENT_REQUEST_SHAPE
 
-  it("tolerates agent_run snapshots from report and deep-research create endpoints", async () => {
+  it("creates a selection and queues an analysis run from that selection", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            job: {
-              job_id: "agent-report-1",
-              root_job_id: "transcription-1",
-              parent_job_id: "transcription-1",
-              job_type: "agent_run",
-              status: "queued",
-              version: 1,
-              delivery: { strategy: "polling" },
-              source_set: { source_set_id: "source-set-1", input_kind: "single_source", items: [] },
-              artifacts: [],
-              children: [],
-              created_at: "2026-04-23T00:00:00Z",
-            },
-          }),
-          {
-            status: 202,
-            headers: { "Content-Type": "application/json" },
+        jsonResponse({
+          selection: {
+            selection_id: "selection-1",
+            owner,
+            status: "sealed",
+            items: [],
+            option_snapshot: {},
+            created_by: "web",
+            created_at: "2026-05-10T00:00:00Z",
+            sealed_at: "2026-05-10T00:00:00Z",
           },
-        ),
+        }, 201),
       )
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            job: {
-              job_id: "agent-deep-1",
-              root_job_id: "transcription-1",
-              parent_job_id: "agent-report-1",
-              job_type: "agent_run",
-              status: "queued",
-              version: 1,
-              delivery: { strategy: "polling" },
-              source_set: { source_set_id: "source-set-1", input_kind: "single_source", items: [] },
-              artifacts: [],
-              children: [],
-              created_at: "2026-04-23T00:00:00Z",
-            },
-          }),
-          {
-            status: 202,
-            headers: { "Content-Type": "application/json" },
+        jsonResponse({
+          analysis_run: {
+            analysis_run_id: "run-1",
+            owner,
+            selection_id: "selection-1",
+            selection: { selection_id: "selection-1", owner, status: "sealed", items: [] },
+            run_type: "summary",
+            status: "queued",
+            version: 1,
+            delivery: { strategy: "polling" },
+            evidence_gate_state: "not_required",
+            artifacts: [],
+            diagnostics: [],
+            created_at: "2026-05-10T00:00:00Z",
           },
-        ),
+        }, 202),
       );
     const client = createWebUiApiClient({
-      baseUrl: "http://localhost:8080/api",
+      baseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
       fetchImpl,
     });
 
+    const selection = await client.createSelection(owner, {
+      items: [{ media_item_id: "media-1", position: 0 }],
+      sourceCollectionId: "collection-1",
+      createdBy: "web",
+    });
     await expect(
-      client.createReport("transcription-1", {
-        clientRef: "",
-        delivery: { strategy: "polling", webhookUrl: "" },
+      client.createAnalysisRun(owner, {
+        selectionId: selection.selection_id,
+        runType: "summary",
+        params: { tone: "brief" },
+        delivery: { strategy: "polling" },
       }),
-    ).resolves.toEqual(expect.objectContaining({ job_id: "agent-report-1", job_type: "agent_run" }));
-    await expect(
-      client.createDeepResearch("agent-report-1", {
-        clientRef: "",
-        delivery: { strategy: "polling", webhookUrl: "" },
-      }),
-    ).resolves.toEqual(expect.objectContaining({ job_id: "agent-deep-1", job_type: "agent_run" }));
+    ).resolves.toEqual(expect.objectContaining({ analysis_run_id: "run-1", run_type: "summary" }));
+
+    expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://localhost:8080/v1/selections",
+      "http://localhost:8080/v1/analysis-runs",
+    ]);
   });
 
-  // START_BLOCK_BLOCK_VERIFY_MULTIPART_SHAPE
-  it("shapes multipart upload requests through the packet-local boundary", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ jobs: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it("uses owner-scoped collection, artifact, and diagnostic reads", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ items: [], page: { page_size: 50, has_more: false } }))
+      .mockResolvedValueOnce(jsonResponse({ artifact: { artifact_id: "artifact-1" } }))
+      .mockResolvedValueOnce(jsonResponse({ items: [], page: { page_size: 50, has_more: false } }));
     const client = createWebUiApiClient({
-      baseUrl: "http://localhost:8080/api",
+      baseUrl: "http://localhost:8080/root",
       wsUrl: "ws://localhost:8080/v1/ws",
       fetchImpl,
     });
-    const file = new File(["audio-data"], "clip.mp3", { type: "audio/mpeg" });
 
-    await client.createUpload({
-      files: [file],
-      displayName: "Clip",
-      clientRef: "client-1",
-      delivery: {
-        strategy: "webhook",
-        webhookUrl: "https://example.com/hook",
-      },
+    await client.listCollections(owner, { pageSize: 50 });
+    await client.getArtifact(owner, "artifact-1");
+    await client.listDiagnostics(owner, {
+      subjectType: "analysis_run",
+      subjectId: "run-1",
+      severity: "warning",
+      pageSize: 50,
     });
 
-    const request = fetchImpl.mock.calls[0][1];
-    const formData = request.body as FormData;
-    expect(formData.get("display_name")).toBe("Clip");
-    expect(formData.get("client_ref")).toBe("client-1");
-    expect(formData.get("delivery_strategy")).toBe("webhook");
-    expect(formData.get("delivery_webhook_url")).toBe("https://example.com/hook");
-    expect(formData.getAll("files")).toHaveLength(1);
+    expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
+      "http://localhost:8080/root/v1/collections?owner_type=web&owner_id=web-console&page_size=50",
+      "http://localhost:8080/root/v1/artifacts/artifact-1?owner_type=web&owner_id=web-console",
+      "http://localhost:8080/root/v1/diagnostics?owner_type=web&owner_id=web-console&page_size=50&subject_type=analysis_run&subject_id=run-1&severity=warning",
+    ]);
   });
-  // END_BLOCK_BLOCK_VERIFY_MULTIPART_SHAPE
 
-  // START_BLOCK_BLOCK_VERIFY_EVENT_BOUNDARY
-  it("preserves websocket urls and forwards canonical event envelopes", () => {
-    const fetchImpl = vi.fn();
-    const socket = {
+  it("preserves run event stream transport and reconciliation checks", () => {
+    const socket: {
+      onopen: ((event: Event) => void) | null;
+      onmessage: ((event: MessageEvent<string>) => void) | null;
+      onerror: ((event: Event) => void) | null;
+      onclose: ((event: CloseEvent) => void) | null;
+      close: ReturnType<typeof vi.fn>;
+    } = {
       onopen: null,
       onmessage: null,
       onerror: null,
@@ -206,72 +174,138 @@ describe("createWebUiApiClient", () => {
     const client = createWebUiApiClient({
       baseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
-      fetchImpl,
+      fetchImpl: vi.fn(),
       webSocketFactory,
     });
     const onMessage = vi.fn();
 
-    client.subscribeToJobEvents({ onMessage });
-
-    expect(webSocketFactory).toHaveBeenCalledWith("ws://localhost:8080/v1/ws");
+    client.subscribeToRunEvents({ onMessage });
     socket.onmessage?.({
       data: JSON.stringify({
         event_id: "event-1",
-        event_type: "job.updated",
-        job_id: "job-1",
-        root_job_id: "job-1",
-        job_type: "transcription",
-        job_url: "/v1/jobs/job-1",
+        analysis_run_id: "run-1",
+        event_type: "analysis_run.progress",
         version: 2,
-        emitted_at: "2026-04-23T00:00:00Z",
+        emitted_at: "2026-05-10T00:00:00Z",
+        status: "running",
         payload: {
-          status: "running",
+          stage: "transcribing",
+          message: "Running transcription pipeline",
         },
       }),
     } as MessageEvent<string>);
 
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_id: "event-1",
-        job_id: "job-1",
-        version: 2,
-      }),
-    );
+    expect(webSocketFactory).toHaveBeenCalledWith("ws://localhost:8080/v1/ws");
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ analysis_run_id: "run-1" }));
     expect(requiresRestReconciliation(1, 3)).toBe(true);
     expect(requiresRestReconciliation(1, 2)).toBe(false);
   });
-  // END_BLOCK_BLOCK_VERIFY_EVENT_BOUNDARY
 
-  // START_BLOCK_BLOCK_VERIFY_CLIENT_ERROR_SURFACE
-  it("surfaces non-ok responses as transport errors", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          error: {
-            code: "dependency_unavailable",
-            message: "API dependency unavailable",
+  it("calls final admin lifecycle and artifact access endpoints", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          analysis_run: {
+            analysis_run_id: "run-1",
+            owner,
+            selection_id: "selection-1",
+            selection: { selection_id: "selection-1", owner, status: "sealed", items: [] },
+            run_type: "summary",
+            status: "cancel_requested",
+            version: 3,
+            delivery: { strategy: "polling" },
+            evidence_gate_state: "not_required",
+            artifacts: [],
+            diagnostics: [],
+            created_at: "2026-05-10T00:00:00Z",
           },
         }),
-        {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
-    );
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          artifact: {
+            artifact_id: "artifact-1",
+            owner,
+            analysis_run_id: "run-1",
+            kind: "summary",
+            status: "available",
+            content_type: "text/plain",
+            checksum: null,
+            size_bytes: 42,
+            visibility: "owner",
+            preview: { available: true, kind: "text", text_excerpt: "ready" },
+            download: {
+              available: true,
+              provider: "minio_presigned_url",
+              url: "https://minio.local/refreshed",
+            },
+            retention: { state: "active" },
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ reconciled: 2 }, 202))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          observability: {
+            queue_tasks: 3,
+            queue_lag_seconds: 42,
+            cleanup_failures: 1,
+            artifact_resolution_failures: 2,
+            generated_at: "2026-05-10T00:00:00Z",
+          },
+        }),
+      );
     const client = createWebUiApiClient({
-      baseUrl: "http://localhost:8080/api",
+      baseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
       fetchImpl,
     });
 
-    await expect(client.listJobs({})).rejects.toEqual(
-      expect.objectContaining<WebUiApiClientError>({
-        name: "WebUiApiClientError",
-        path: "/v1/jobs?page=1&page_size=20",
-        status: 503,
-        code: "dependency_unavailable",
-      }),
-    );
+    await client.cancelAnalysisRun(owner, "run-1");
+    await client.refreshArtifact(owner, "artifact-1");
+    await expect(client.reconcileAnalysisRunQueue(10)).resolves.toEqual({ reconciled: 2 });
+    await expect(client.getObservabilitySnapshot()).resolves.toMatchObject({ queue_lag_seconds: 42 });
+
+    expect(fetchImpl.mock.calls.map((call) => [String(call[0]), (call[1] as RequestInit | undefined)?.body])).toEqual([
+      [
+        "http://localhost:8080/v1/analysis-runs/run-1/cancel?owner_type=web&owner_id=web-console",
+        JSON.stringify({}),
+      ],
+      [
+        "http://localhost:8080/v1/artifacts/artifact-1/refresh?owner_type=web&owner_id=web-console",
+        JSON.stringify({}),
+      ],
+      ["http://localhost:8080/v1/admin/reconcile-queue", JSON.stringify({ limit: 10 })],
+      ["http://localhost:8080/v1/admin/observability", undefined],
+    ]);
   });
-  // END_BLOCK_BLOCK_VERIFY_CLIENT_ERROR_SURFACE
+
+  it("surfaces API error envelopes with status and code", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(
+        {
+          error: {
+            code: "invalid_request",
+            message: "invalid owner",
+          },
+        },
+        400,
+      ),
+    );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+
+    await expect(client.listMediaItems(owner)).rejects.toMatchObject({
+      name: "WebUiApiClientError",
+      path: "/v1/media-items?owner_type=web&owner_id=web-console",
+      status: 400,
+      code: "invalid_request",
+      message: "invalid owner",
+    });
+  });
 });

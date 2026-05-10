@@ -1,39 +1,52 @@
 # Cutover Checklist
 
+This checklist tracks acceptance for the final inbox-first architecture. The former public job control plane is retired as target guidance; acceptance is based on API-owned media accumulation, immutable selections, analysis runs, artifacts, diagnostics, and thin adapters.
+
 ## Preconditions
 
-- Use `bash infra/scripts/compose-smoke.sh --check-config` as the static topology preflight.
-- Keep report/deep-research AI execution routed through `worker-agent-runner` for deterministic compose smoke.
-- For real provider acceptance, use the agent-runner image/configuration that installs or exposes the provider launcher in the container and supplies credentials/config through explicit worker configuration.
+- `bash infra/scripts/compose-smoke.sh --check-config` passes as the static topology preflight.
+- PostgreSQL exposes the final media model: sources, media_items, collections, collection_items, selections, analysis_runs, artifacts, diagnostics, and internal execution rows.
+- Public contracts expose inbox-first routes only: media ingestion, collection management, selection creation/read, analysis_run lifecycle, artifact access, and diagnostics query.
+- Worker execution is internal to analysis_run and consumes sealed selection snapshots rather than mutable inbox or collection state.
 
 ## Final Acceptance Matrix
 
-Run these commands in order:
+Run focused checks in this order:
 
 ```bash
 bash infra/scripts/compose-smoke.sh --check-config
 docker compose -f infra/docker-compose.yml config --services
 docker compose -f infra/docker-compose.yml config
-docker compose -f infra/docker-compose.yml build worker-transcription worker-agent-runner
 
 cd apps/api
-go test ./internal/api -run 'TestApiHttpRuntimeCreateReportReusesCanonicalChildWithoutExtraCreatedEvent|TestApiHttpRuntimeClaimUsesTranscriptAndReportArtifactsForDeepResearchChild' -count=1
-go test ./internal/jobs -run 'TestApiJobsCreateChildJobReusesCanonicalChildAndValidatesArtifacts|TestApiJobsRetryCreatesNewLineageLinkedRow' -count=1
-go test ./internal/storage -run TestApiStorageRepositoryDelegatesSubmissionAndJobQueries -count=1
+go test ./internal/storage -run 'Media|Selection|AnalysisRun|Artifact|Diagnostic|Retention' -count=1
+go test ./internal/api -run 'Media|Collection|Selection|AnalysisRun|Artifact|Diagnostic|Retention' -count=1
+go test ./internal/queue ./internal/ws -run 'AnalysisRun|RunEvent|CollectionEvent' -count=1
 
 cd ../..
-uv run pytest --no-cov tests/test_bot.py -k 'handle_generate_report'
-uv run pytest --no-cov tests/test_main.py
+uv run pytest --no-cov apps/telegram-bot/tests -k 'media or collection or selection or analysis_run or diagnostic'
+pnpm --filter web test
+pnpm --filter mcp-server test
 ```
 
-Container-native live e2e is accepted only after report and deep-research child jobs succeed through API claim/finalize and MinIO artifact persistence using `worker-agent-runner` for AI execution. The earlier bridge-based replay remains historical evidence only; it is not sufficient for this gate.
+## Live Acceptance
+
+Container-native live smoke is accepted only after all of the following pass through the public API and shared adapter state:
+
+- media can be added from text, URL, file, image/photo, audio/voice, video, and document inputs;
+- accepted media appears in the owner inbox without requiring a user-facing execution mode;
+- collections can be created, version-checked, mutated, archived, and restored;
+- selections are immutable snapshots and do not change when the source inbox or collection changes later;
+- analysis_run creation requires a sealed selection and records lifecycle state, diagnostics, and artifact summaries;
+- cancellation is cooperative and visible through analysis_run state and diagnostics;
+- artifacts can be previewed or resolved through owner-scoped artifact routes;
+- Telegram, Web, and MCP operate as thin clients over the same API-owned state.
 
 ## Legacy Removal Gate
 
-The old single-process runtime is considered replaced only when all of the following are true:
+Legacy job-based product guidance is considered removed only when:
 
-- compose live smoke passes with fixture transcription plus agent-runner images
-- report child reuse is proven both by tests and by a repeated live create against the same transcription job
-- Telegram deep callback uses `ReportArtifacts.job_id` only
-- the legacy entrypoint prints the cutover message instead of starting local orchestration
-- no open GRACE cutover items remain except future conditional notes
+- GRACE XML docs and active architecture docs reference the inbox-first model as the target;
+- stale scans show no active public job-route, job identifier, or job module target references;
+- remaining historical notes, if any, are explicitly marked superseded and excluded from implementation guidance;
+- adapter tests prove the UX centers on accumulated media, explicit selections, and analysis runs.

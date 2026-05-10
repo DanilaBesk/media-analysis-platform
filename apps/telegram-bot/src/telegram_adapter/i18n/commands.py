@@ -1,8 +1,8 @@
 # FILE: apps/telegram-bot/src/telegram_adapter/i18n/commands.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Build localized aiogram command metadata from the packet-local Telegram i18n foundation.
-# SCOPE: Stable command registry and helper for per-locale BotCommand construction without full bot runtime integration.
+# PURPOSE: Build localized aiogram command metadata for the final Telegram inbox adapter.
+# SCOPE: Stable command registry for start, help, and inbox restore commands.
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
@@ -28,9 +28,7 @@ class LocalizedCommandSpec:
 COMMAND_SPECS: tuple[LocalizedCommandSpec, ...] = (
     LocalizedCommandSpec(TelegramCommandKey.START, TelegramTextKey.COMMAND_START_DESCRIPTION),
     LocalizedCommandSpec(TelegramCommandKey.HELP, TelegramTextKey.COMMAND_HELP_DESCRIPTION),
-    LocalizedCommandSpec(TelegramCommandKey.BATCH, TelegramTextKey.COMMAND_BATCH_DESCRIPTION),
-    LocalizedCommandSpec(TelegramCommandKey.BASKET, TelegramTextKey.COMMAND_BASKET_DESCRIPTION),
-    LocalizedCommandSpec(TelegramCommandKey.CLEAR, TelegramTextKey.COMMAND_CLEAR_DESCRIPTION),
+    LocalizedCommandSpec(TelegramCommandKey.INBOX, TelegramTextKey.COMMAND_INBOX_DESCRIPTION),
 )
 
 

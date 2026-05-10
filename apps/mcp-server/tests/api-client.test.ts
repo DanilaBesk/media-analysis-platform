@@ -1,5 +1,5 @@
 // FILE: apps/mcp-server/tests/api-client.test.ts
-// VERSION: 1.0.0
+// VERSION: 2.0.0
 // START_MODULE_CONTRACT
 // PURPOSE: Prove the MCP adapter boundary preserves JSON and multipart transport semantics without absorbing business logic.
 // SCOPE: Verify request URL normalization, JSON transport behavior, multipart passthrough, and upstream error-envelope preservation.
@@ -10,12 +10,12 @@
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
-//   LAST_CHANGE: v2.0.0 - Expanded the transport-boundary verification to cover multipart passthrough for MCP file-create mapping.
+//   LAST_CHANGE: v2.0.0 - Aligned transport-boundary tests with inbox-first media paths.
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
-//   verify-request-shape - Confirm the thin client normalizes packet-local paths and JSON payloads.
-//   verify-multipart-passthrough - Confirm multipart bodies stay multipart through the packet-local transport boundary.
+//   verify-request-shape - Confirm the thin client normalizes paths and JSON payloads.
+//   verify-multipart-passthrough - Confirm multipart bodies stay multipart through the transport boundary.
 //   verify-error-surface - Confirm upstream API error envelopes remain visible at the client boundary.
 // END_MODULE_MAP
 
@@ -50,20 +50,20 @@ test("createMcpAdapterApiClient normalizes request targets and JSON payloads", a
   });
 
   const response = await client.request<{ ok: boolean }>({
-    path: "/v1/jobs",
+    path: "/v1/media-items",
     method: "POST",
-    body: { kind: "scaffold-check" },
+    body: { kind: "text" },
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/jobs");
+  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-items");
   assert.equal(calls[0]?.init?.method, "POST");
   assert.equal(calls[0]?.init?.headers instanceof Object, true);
   assert.equal(
     (calls[0]?.init?.headers as Record<string, string>)["Content-Type"],
     "application/json",
   );
-  assert.equal(calls[0]?.init?.body, JSON.stringify({ kind: "scaffold-check" }));
+  assert.equal(calls[0]?.init?.body, JSON.stringify({ kind: "text" }));
   assert.deepEqual(response, {
     status: 200,
     data: { ok: true },
@@ -84,8 +84,8 @@ test("createMcpAdapterApiClient preserves multipart bodies without forcing JSON 
         url: input instanceof URL ? input.toString() : String(input),
         init,
       });
-      return new Response(JSON.stringify({ jobs: [] }), {
-        status: 202,
+      return new Response(JSON.stringify({ media_item: { media_item_id: "media-1" } }), {
+        status: 201,
         headers: {
           "content-type": "application/json",
         },
@@ -93,15 +93,15 @@ test("createMcpAdapterApiClient preserves multipart bodies without forcing JSON 
     },
   });
   const body = new FormData();
-  body.append("files", new Blob(["audio-data"], { type: "audio/mpeg" }), "clip.mp3");
+  body.append("file", new Blob(["audio-data"], { type: "audio/mpeg" }), "clip.mp3");
 
   await client.request({
-    path: "/v1/transcription-jobs",
+    path: "/v1/media-items",
     method: "POST",
     body,
   });
 
-  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/transcription-jobs");
+  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-items");
   assert.equal(calls[0]?.init?.body, body);
   assert.equal(
     Object.hasOwn((calls[0]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
@@ -120,6 +120,18 @@ test("createMcpAdapterApiClient preserves upstream error envelopes", async () =>
           error: {
             code: "upstream_failure",
             message: "upstream rejected request",
+            correlation_id: "corr-123",
+            details: {
+              field: "media_item_id",
+            },
+            diagnostics: [
+              {
+                diagnostic_id: "diagnostic-1",
+                severity: "error",
+                code: "artifact_resolution_failed",
+                message: "preview object missing",
+              },
+            ],
           },
         }),
         {
@@ -134,14 +146,27 @@ test("createMcpAdapterApiClient preserves upstream error envelopes", async () =>
   await assert.rejects(
     () =>
       client.request({
-        path: "/v1/jobs/job-123",
+        path: "/v1/media-items/00000000-0000-4000-8000-000000000001",
       }),
     (error: unknown) => {
       assert.ok(error instanceof McpAdapterApiClientError);
-      assert.equal(error.path, "/v1/jobs/job-123");
-      assert.equal(error.status, 409);
-      assert.equal(error.code, "upstream_failure");
-      assert.equal(error.message, "upstream rejected request");
+      const apiError = error as McpAdapterApiClientError;
+      assert.equal(apiError.path, "/v1/media-items/00000000-0000-4000-8000-000000000001");
+      assert.equal(apiError.status, 409);
+      assert.equal(apiError.code, "upstream_failure");
+      assert.equal(apiError.message, "upstream rejected request");
+      assert.equal((apiError as any).correlationId, "corr-123");
+      assert.deepEqual((apiError as any).details, {
+        field: "media_item_id",
+      });
+      assert.deepEqual((apiError as any).diagnostics, [
+        {
+          diagnostic_id: "diagnostic-1",
+          severity: "error",
+          code: "artifact_resolution_failed",
+          message: "preview object missing",
+        },
+      ]);
       return true;
     },
   );

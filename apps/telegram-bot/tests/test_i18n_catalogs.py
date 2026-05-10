@@ -32,7 +32,7 @@ def test_validate_translation_catalogs_rejects_placeholder_mismatch() -> None:
         "ru": dict(TRANSLATION_CATALOGS["ru"]),
         "en": dict(TRANSLATION_CATALOGS["en"]),
     }
-    broken_catalogs["en"][TelegramTextKey.BASKET_SUMMARY_ADDED] = "Added: {items}"
+    broken_catalogs["en"][TelegramTextKey.INBOX_SUMMARY_ADDED] = "Accepted: {items}"
 
-    with pytest.raises(CatalogValidationError, match="BASKET_SUMMARY_ADDED"):
+    with pytest.raises(CatalogValidationError, match="INBOX_SUMMARY_ADDED"):
         validate_translation_catalogs(broken_catalogs, default_locale=DEFAULT_LOCALE)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 
@@ -9,29 +8,49 @@ ROOT = Path(__file__).resolve().parents[1]
 OPENAPI_PATH = ROOT / "openapi" / "openapi.yaml"
 SCHEMA_ROOT = ROOT / "schemas"
 
+def _hyphen(*parts: str) -> str:
+    return "-".join(parts)
+
+
+def _snake(*parts: str) -> str:
+    return "_".join(parts)
+
+
+STALE_PUBLIC_TOKENS = (
+    _hyphen("transcription", "jobs"),
+    _hyphen("batch", "drafts"),
+    _hyphen("create", "transcription"),
+    _hyphen("batch", "draft"),
+    "Job" + "Snapshot",
+    _snake("source", "set"),
+    _hyphen("job", "create"),
+    "Compat" + "ibility",
+    "compat" + "ibility",
+    "leg" + "acy",
+)
+
 
 def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def validate_contract_surface() -> dict[str, dict]:
-    print("[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE] loading frozen contract surface")
+    print("[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE] loading inbox-first contract surface")
     return {
         "openapi": _load_json(OPENAPI_PATH),
         "enums": _load_json(SCHEMA_ROOT / "common" / "enums.schema.json"),
-        "job_snapshot": _load_json(SCHEMA_ROOT / "common" / "job-snapshot.schema.json"),
-        "upload": _load_json(SCHEMA_ROOT / "http" / "create-transcription-upload.schema.json"),
-        "from_url": _load_json(SCHEMA_ROOT / "http" / "create-transcription-from-url.schema.json"),
-        "batch": _load_json(SCHEMA_ROOT / "http" / "create-transcription-batch.schema.json"),
-        "batch_draft": _load_json(SCHEMA_ROOT / "http" / "batch-draft.schema.json"),
-        "agent_run": _load_json(SCHEMA_ROOT / "http" / "create-agent-run.schema.json"),
-        "report": _load_json(SCHEMA_ROOT / "http" / "create-report.schema.json"),
-        "deep_research": _load_json(SCHEMA_ROOT / "http" / "create-deep-research.schema.json"),
-        "job_control": _load_json(SCHEMA_ROOT / "http" / "job-control.schema.json"),
-        "artifact_resolution": _load_json(SCHEMA_ROOT / "http" / "artifact-resolution.schema.json"),
+        "error": _load_json(SCHEMA_ROOT / "common" / "error-envelope.schema.json"),
+        "pagination": _load_json(SCHEMA_ROOT / "common" / "pagination.schema.json"),
+        "owner": _load_json(SCHEMA_ROOT / "common" / "owner-scope.schema.json"),
+        "media": _load_json(SCHEMA_ROOT / "http" / "media-item.schema.json"),
+        "collection": _load_json(SCHEMA_ROOT / "http" / "collection.schema.json"),
+        "selection": _load_json(SCHEMA_ROOT / "http" / "selection.schema.json"),
+        "analysis_run": _load_json(SCHEMA_ROOT / "http" / "analysis-run.schema.json"),
+        "artifact": _load_json(SCHEMA_ROOT / "http" / "artifact.schema.json"),
+        "diagnostic": _load_json(SCHEMA_ROOT / "http" / "diagnostic.schema.json"),
         "worker_control": _load_json(SCHEMA_ROOT / "internal" / "worker-control.schema.json"),
-        "ws_event": _load_json(SCHEMA_ROOT / "ws" / "job-event.schema.json"),
-        "webhook_event": _load_json(SCHEMA_ROOT / "webhook" / "job-lifecycle.schema.json"),
+        "ws_event": _load_json(SCHEMA_ROOT / "ws" / "run-event.schema.json"),
+        "webhook_event": _load_json(SCHEMA_ROOT / "webhook" / "run-lifecycle.schema.json"),
     }
 
 
@@ -49,268 +68,301 @@ def _parameter_names(operation: dict) -> list[str]:
     return names
 
 
-def test_openapi_contains_frozen_phase_1_paths() -> None:
-    surface = validate_contract_surface()
-    spec = surface["openapi"]
+def test_openapi_contains_final_inbox_first_public_paths() -> None:
+    spec = validate_contract_surface()["openapi"]
 
     expected_paths = {
-        "/v1/transcription-jobs",
-        "/v1/transcription-jobs/combined",
-        "/v1/transcription-jobs/from-url",
-        "/v1/transcription-jobs/batch",
-        "/v1/agent-runs",
-        "/v1/jobs/{job_id}",
-        "/v1/jobs",
-        "/v1/transcription-jobs/{job_id}/report-jobs",
-        "/v1/report-jobs/{job_id}/deep-research-jobs",
-        "/v1/jobs/{job_id}/cancel",
-        "/v1/jobs/{job_id}/retry",
+        "/v1/media-items",
+        "/v1/media-items/{media_item_id}",
+        "/v1/collections/inbox",
+        "/v1/collections",
+        "/v1/collections/{collection_id}",
+        "/v1/collections/{collection_id}/items",
+        "/v1/collections/{collection_id}/items/{media_item_id}",
+        "/v1/selections",
+        "/v1/selections/{selection_id}",
+        "/v1/analysis-runs",
+        "/v1/analysis-runs/{analysis_run_id}",
+        "/v1/analysis-runs/{analysis_run_id}/cancel",
+        "/v1/analysis-runs/{analysis_run_id}/retry",
+        "/v1/analysis-runs/{analysis_run_id}/events",
+        "/v1/analysis-runs/{analysis_run_id}/artifacts",
         "/v1/artifacts/{artifact_id}",
-        "/v1/jobs/{job_id}/events",
+        "/v1/artifacts/{artifact_id}/refresh",
+        "/v1/diagnostics",
+        "/v1/admin/reconcile-queue",
+        "/v1/admin/observability",
         "/v1/ws",
-        "/internal/v1/jobs/{job_id}/claim",
-        "/internal/v1/jobs/{job_id}/progress",
-        "/internal/v1/jobs/{job_id}/artifacts",
-        "/internal/v1/jobs/{job_id}/finalize",
-        "/internal/v1/jobs/{job_id}/cancel-check",
-        "/internal/v1/jobs/{job_id}/request-access",
+        "/internal/v1/analysis-runs/{analysis_run_id}/request-access",
+        "/internal/v1/analysis-runs/{analysis_run_id}/executions/cancel-check",
         "/internal/v1/artifacts/{artifact_id}/download-access",
     }
 
     assert expected_paths.issubset(spec["paths"])
+    assert not {
+        f"/v1/{_hyphen('transcription', 'jobs')}",
+        f"/v1/{_hyphen('transcription', 'jobs')}/combined",
+        f"/v1/{_hyphen('transcription', 'jobs')}/from-url",
+        f"/v1/{_hyphen('transcription', 'jobs')}/batch",
+        f"/v1/{_hyphen('batch', 'drafts')}",
+        "/v1/agent-runs",
+        "/v1/jobs",
+        f"/v1/jobs/{{{'_'.join(('job', 'id'))}}}",
+    }.intersection(spec["paths"])
 
 
-def test_idempotency_boundary_and_combined_route_shape() -> None:
+def test_public_operations_use_inbox_first_vocabulary_and_idempotency_boundaries() -> None:
+    spec = validate_contract_surface()["openapi"]
+
+    assert _path_item(spec, "/v1/media-items", "post")["operationId"] == "addMediaItem"
+    assert _path_item(spec, "/v1/collections", "post")["operationId"] == "createCollection"
+    assert _path_item(spec, "/v1/selections", "post")["operationId"] == "createSelection"
+    assert _path_item(spec, "/v1/analysis-runs", "post")["operationId"] == "run_analysis"
+    assert _path_item(spec, "/v1/analysis-runs/{analysis_run_id}", "get")["operationId"] == "getAnalysisRun"
+    assert _path_item(spec, "/v1/analysis-runs/{analysis_run_id}/retry", "post")["operationId"] == "retryAnalysisRun"
+    assert _path_item(spec, "/v1/artifacts/{artifact_id}", "get")["operationId"] == "getArtifact"
+    assert _path_item(spec, "/v1/artifacts/{artifact_id}/refresh", "post")["operationId"] == "refreshArtifactLink"
+    assert _path_item(spec, "/v1/diagnostics", "get")["operationId"] == "getDiagnostics"
+    assert _path_item(spec, "/v1/admin/reconcile-queue", "post")["operationId"] == "reconcileAnalysisRunQueue"
+    assert _path_item(spec, "/v1/admin/observability", "get")["operationId"] == "getObservabilitySnapshot"
+
+    for path in ("/v1/media-items", "/v1/collections", "/v1/selections", "/v1/analysis-runs"):
+        assert "#/components/parameters/IdempotencyKey" in _parameter_names(_path_item(spec, path, "post"))
+    assert "#/components/parameters/IdempotencyKey" in _parameter_names(
+        _path_item(spec, "/v1/analysis-runs/{analysis_run_id}/retry", "post")
+    )
+    assert "query" in _parameter_names(_path_item(spec, "/v1/media-items", "get"))
+
+    assert "#/components/parameters/ExpectedVersion" in _parameter_names(
+        _path_item(spec, "/v1/collections/{collection_id}/items/{media_item_id}", "delete")
+    )
+
+
+def test_media_inputs_are_first_class_and_not_hidden_in_execution_requests() -> None:
     surface = validate_contract_surface()
-    spec = surface["openapi"]
+    media_defs = surface["media"]["$defs"]
+    media_kind_enum = surface["enums"]["$defs"]["mediaKind"]["enum"]
 
-    create_upload = _path_item(spec, "/v1/transcription-jobs", "post")
-    create_combined = _path_item(spec, "/v1/transcription-jobs/combined", "post")
-    create_from_url = _path_item(spec, "/v1/transcription-jobs/from-url", "post")
-    create_agent_run = _path_item(spec, "/v1/agent-runs", "post")
-    create_report = _path_item(spec, "/v1/transcription-jobs/{job_id}/report-jobs", "post")
-    create_deep_research = _path_item(spec, "/v1/report-jobs/{job_id}/deep-research-jobs", "post")
-    retry_job = _path_item(spec, "/v1/jobs/{job_id}/retry", "post")
-
-    assert "Idempotency-Key" in _parameter_names(create_upload)
-    assert "Idempotency-Key" in _parameter_names(create_combined)
-    assert "Idempotency-Key" in _parameter_names(create_from_url)
-    assert "Idempotency-Key" in _parameter_names(create_agent_run)
-    assert "Idempotency-Key" in _parameter_names(create_report)
-    assert "Idempotency-Key" in _parameter_names(create_deep_research)
-    assert "Idempotency-Key" not in _parameter_names(retry_job)
-
-    combined_schema_ref = create_combined["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
-    agent_schema_ref = create_agent_run["requestBody"]["content"]["application/json"]["schema"]["$ref"]
-    assert combined_schema_ref.endswith("create-transcription-upload.schema.json#/$defs/combinedTranscriptionRequest")
-    assert agent_schema_ref.endswith("create-agent-run.schema.json")
-    assert "agent_run job" in create_report["summary"]
-    assert "harness_name=claude-code" in create_report["description"]
-    assert "operation=report" in create_report["description"]
-    assert "agent_run job" in create_deep_research["summary"]
-    assert "report-backed agent_run parent" in create_deep_research["description"]
-    assert "operation=deep_research" in create_deep_research["description"]
-
-    upload_response = create_upload["responses"]["202"]["content"]["application/json"]["schema"]
-    combined_response = create_combined["responses"]["202"]["content"]["application/json"]["schema"]
-    assert upload_response["required"] == ["jobs"]
-    assert combined_response["$ref"].endswith("job-control.schema.json")
-
-
-def test_batch_transcription_contract_freezes_mixed_source_basket() -> None:
-    surface = validate_contract_surface()
-    spec = surface["openapi"]
-    batch = _load_json(SCHEMA_ROOT / "http" / "create-transcription-batch.schema.json")
-
-    create_batch = _path_item(spec, "/v1/transcription-jobs/batch", "post")
-
-    assert "Idempotency-Key" in _parameter_names(create_batch)
-    assert "worker-transcription aggregate" in create_batch["description"]
-    assert "report/deep_research handoff" in create_batch["description"]
-    batch_schema_ref = create_batch["requestBody"]["content"]["multipart/form-data"]["schema"]["$ref"]
-    assert batch_schema_ref.endswith("create-transcription-batch.schema.json")
-    assert create_batch["responses"]["202"]["content"]["application/json"]["schema"]["$ref"].endswith("job-control.schema.json")
-
-    request = batch["$defs"]["batchTranscriptionRequest"]
-    manifest = batch["$defs"]["sourceManifest"]
-    source = batch["$defs"]["batchSource"]
-    uploaded = batch["$defs"]["uploadedFileSource"]
-    url_source = batch["$defs"]["urlSource"]
-
-    assert request["required"] == ["source_manifest"]
-    assert request["properties"]["files"]["items"]["$ref"] == "#/$defs/binaryFileField"
-    assert request["properties"]["source_manifest"]["$ref"] == "#/$defs/sourceManifest"
-    assert request["properties"]["delivery"]["$ref"].endswith("deliveryRequest")
-
-    assert manifest["required"] == [
-        "manifest_version",
-        "ordered_source_labels",
-        "sources",
-        "completion_policy",
-    ]
-    assert manifest["properties"]["ordered_source_labels"]["uniqueItems"] is True
-    assert manifest["properties"]["ordered_source_labels"]["items"]["$ref"] == "#/$defs/sourceLabel"
-    assert manifest["properties"]["sources"]["propertyNames"]["$ref"] == "#/$defs/sourceLabel"
-    assert manifest["properties"]["sources"]["additionalProperties"]["$ref"] == "#/$defs/batchSource"
-    assert manifest["properties"]["completion_policy"]["enum"] == ["succeed_when_all_sources_succeed", "succeed_when_any_source_succeeds"]
-
-    assert source["oneOf"] == [
-        {"$ref": "#/$defs/uploadedFileSource"},
+    assert media_kind_enum == ["text", "url", "file", "photo", "image", "audio", "voice", "video", "document"]
+    assert media_defs["source"]["oneOf"] == [
+        {"$ref": "#/$defs/textSource"},
         {"$ref": "#/$defs/urlSource"},
+        {"$ref": "#/$defs/objectSource"},
     ]
-    assert uploaded["required"] == ["source_kind", "file_part"]
-    assert uploaded["properties"]["source_kind"]["enum"] == ["uploaded_file", "telegram_upload"]
-    assert uploaded["properties"]["file_part"]["minLength"] == 1
-    assert url_source["required"] == ["source_kind", "url"]
-    assert url_source["properties"]["source_kind"]["enum"] == ["youtube_url", "external_url"]
+    assert media_defs["textSource"]["properties"]["origin_type"]["const"] == "text"
+    assert media_defs["urlSource"]["properties"]["origin_type"]["const"] == "url"
+    assert media_defs["objectSource"]["properties"]["origin_type"]["const"] == "object"
+    assert media_defs["addMediaItemRequest"]["required"] == ["owner", "kind", "source"]
+    assert media_defs["addMediaItemMultipartRequest"]["properties"]["metadata"]["contentSchema"]["$ref"] == (
+        "#/$defs/addMediaItemMultipartMetadata"
+    )
+    assert media_defs["mediaItem"]["properties"]["diagnostics"]["items"]["$ref"].endswith(
+        "diagnostic.schema.json#/$defs/diagnosticSummary"
+    )
 
 
-def test_batch_draft_add_item_splits_json_url_and_multipart_upload_body() -> None:
+def test_collections_inbox_and_optimistic_versions_are_contractual() -> None:
     surface = validate_contract_surface()
-    spec = surface["openapi"]
-    batch_draft = surface["batch_draft"]
+    collection_defs = surface["collection"]["$defs"]
+    pagination_defs = surface["pagination"]["$defs"]
 
-    add_item = _path_item(spec, "/v1/batch-drafts/{draft_id}/items", "post")
-    content = add_item["requestBody"]["content"]
-    assert content["application/json"]["schema"]["$ref"].endswith("batch-draft.schema.json#/$defs/addBatchDraftItemRequest")
-    assert content["multipart/form-data"]["schema"]["$ref"].endswith("batch-draft.schema.json#/$defs/addBatchDraftItemMultipartRequest")
+    collection = collection_defs["collection"]
+    collection_item = collection_defs["collectionItem"]
+    update_request = collection_defs["updateCollectionItemsRequest"]
 
-    uploaded = batch_draft["$defs"]["uploadedDraftItemSource"]
-    assert uploaded["required"] == ["source_kind", "uploaded_source_ref"]
-    assert uploaded["properties"]["source_kind"]["enum"] == ["uploaded_file", "telegram_upload"]
-    assert "content_type" in uploaded["properties"]
-    assert uploaded["properties"]["size_bytes"]["minimum"] == 1
-
-    json_request = batch_draft["$defs"]["addBatchDraftItemRequest"]
-    assert json_request["properties"]["item"]["$ref"] == "#/$defs/urlDraftItemSource"
-    assert batch_draft["$defs"]["urlDraftItemSource"]["properties"]["source_kind"]["enum"] == ["youtube_url", "external_url"]
-
-    multipart = batch_draft["$defs"]["addBatchDraftItemMultipartRequest"]
-    assert multipart["required"] == ["owner", "expected_version", "item"]
-    assert multipart["properties"]["owner"]["contentMediaType"] == "application/json"
-    assert multipart["properties"]["item"]["contentMediaType"] == "application/json"
-    assert multipart["properties"]["item"]["contentSchema"]["$ref"] == "#/$defs/uploadedDraftItemMultipartMetadata"
-    assert multipart["properties"]["file"]["$ref"] == "#/$defs/binaryDraftUpload"
-    assert multipart["properties"]["files"]["$ref"] == "#/$defs/binaryDraftUpload"
-    assert batch_draft["$defs"]["binaryDraftUpload"]["format"] == "binary"
-
-    metadata = batch_draft["$defs"]["uploadedDraftItemMultipartMetadata"]
-    assert metadata["required"] == ["source_kind"]
-    assert metadata["properties"]["source_kind"]["enum"] == ["uploaded_file", "telegram_upload"]
-    assert "uploaded_source_ref" not in metadata["properties"]
+    assert collection["required"] == [
+        "collection_id",
+        "owner",
+        "kind",
+        "name",
+        "status",
+        "version",
+        "items",
+        "created_at",
+        "updated_at",
+    ]
+    assert collection["properties"]["kind"]["$ref"].endswith("collectionKind")
+    assert collection["properties"]["version"]["$ref"].endswith("optimisticVersion")
+    assert collection_item["required"] == ["media_item_id", "position", "added_at"]
+    assert update_request["required"] == ["owner", "expected_version", "items"]
+    assert update_request["properties"]["expected_version"]["$ref"].endswith("optimisticVersion")
+    assert pagination_defs["conflictEnvelope"]["required"] == ["code", "message", "expected_version", "actual_version"]
 
 
-def test_delivery_rules_and_v1_artifact_enum_are_frozen() -> None:
+def test_selection_snapshot_is_immutable_and_run_creation_requires_selection() -> None:
     surface = validate_contract_surface()
+    selection_defs = surface["selection"]["$defs"]
+    run_defs = surface["analysis_run"]["$defs"]
+
+    selection = selection_defs["selection"]
+    item_snapshot = selection_defs["selectionItemSnapshot"]
+    run_request = run_defs["createAnalysisRunRequest"]
+    retry_request = run_defs["retryAnalysisRunRequest"]
+    run = run_defs["analysisRun"]
+
+    assert selection["required"] == [
+        "selection_id",
+        "owner",
+        "status",
+        "items",
+        "option_snapshot",
+        "created_by",
+        "created_at",
+        "sealed_at",
+    ]
+    assert selection["properties"]["items"]["minItems"] == 1
+    assert selection["properties"]["status"]["$ref"].endswith("selectionStatus")
+    assert item_snapshot["required"] == [
+        "selection_item_id",
+        "position",
+        "media_item_id",
+        "kind",
+        "media_kind",
+        "mime_type",
+        "role",
+        "labels",
+        "source_snapshot",
+        "display_name",
+        "status_at_selection",
+        "retention_snapshot",
+    ]
+    assert item_snapshot["properties"]["media_kind"]["$ref"].endswith("mediaKind")
+    assert item_snapshot["properties"]["labels"]["$ref"] == "#/$defs/selectionItemLabels"
+    assert selection_defs["selectionItemLabels"]["required"] == ["display_label"]
+    assert run_request["required"] == ["owner", "selection_id", "run_type"]
+    assert retry_request["required"] == ["owner"]
+    assert run["properties"]["selection"]["$ref"].endswith("selection.schema.json#/$defs/selection")
+    assert run["properties"]["status"]["$ref"].endswith("analysisRunStatus")
+    assert run["properties"]["idempotency"]["$ref"].endswith("idempotencyRecord")
+
+
+def test_run_events_artifacts_diagnostics_and_retention_are_first_class() -> None:
+    surface = validate_contract_surface()
+    run_defs = surface["analysis_run"]["$defs"]
+    artifact_defs = surface["artifact"]["$defs"]
+    diagnostic_defs = surface["diagnostic"]["$defs"]
     enums = surface["enums"]["$defs"]
-    upload_defs = surface["upload"]["$defs"]
 
-    assert enums["deliveryStrategy"]["enum"] == ["polling", "webhook"]
-    assert "source_original" not in enums["artifactKind"]["enum"]
-    assert "external_url" in enums["sourceKind"]["enum"]
-    assert "batch_transcription" in enums["sourceSetInputKind"]["enum"]
-    assert "agent_run" in enums["jobType"]["enum"]
-    assert "agent_run_create" in enums["submissionKind"]["enum"]
-    assert "agent_run" in enums["sourceSetInputKind"]["enum"]
-    assert enums["workerKind"]["enum"] == ["transcription", "agent_runner"]
-    assert enums["taskType"]["enum"] == ["transcription.run", "transcription.aggregate", "agent_run.run"]
-    assert "agent_result_json" in enums["artifactKind"]["enum"]
-    assert "source_manifest_json" in enums["artifactKind"]["enum"]
-    assert "batch_diagnostics_json" in enums["artifactKind"]["enum"]
+    assert "partially_succeeded" in enums["analysisRunStatus"]["enum"]
+    assert "artifact.created" in enums["runEventType"]["enum"]
+    assert "diagnostic.recorded" in enums["runEventType"]["enum"]
+    assert "retention_denied" in enums["diagnosticCode"]["enum"]
+    assert "artifact_resolution_failed" in enums["diagnosticCode"]["enum"]
+    assert "orphan_object_cleanup_failed" in enums["diagnosticCode"]["enum"]
+    assert "run_manifest" in enums["artifactKind"]["enum"]
+    assert "run_diagnostics" in enums["artifactKind"]["enum"]
 
-    delivery_request = upload_defs["deliveryRequest"]
-    webhook_requirement = delivery_request["allOf"][0]
-    webhook_consistency = delivery_request["allOf"][1]
+    event = run_defs["runEvent"]
+    assert event["required"] == ["event_id", "analysis_run_id", "event_type", "version", "emitted_at", "payload"]
+    assert event["properties"]["artifact"]["$ref"].endswith("artifact.schema.json#/$defs/artifactSummary")
+    assert event["properties"]["diagnostic"]["$ref"].endswith("diagnostic.schema.json#/$defs/diagnosticSummary")
 
-    assert webhook_requirement["if"]["properties"]["strategy"]["const"] == "webhook"
-    assert webhook_requirement["then"]["required"] == ["webhook"]
-    assert webhook_consistency["then"]["properties"]["strategy"]["const"] == "webhook"
+    artifact = artifact_defs["artifact"]
+    assert artifact["properties"]["preview"]["$ref"] == "#/$defs/artifactPreview"
+    assert artifact["properties"]["download"]["$ref"] == "#/$defs/artifactDownload"
+    assert artifact["properties"]["retention"]["$ref"].endswith("retentionMetadata")
+
+    diagnostic = diagnostic_defs["diagnostic"]
+    assert diagnostic["required"] == [
+        "diagnostic_id",
+        "owner",
+        "subject",
+        "severity",
+        "code",
+        "message",
+        "created_at",
+    ]
+    observability = diagnostic_defs["observabilitySnapshot"]
+    assert observability["required"] == [
+        "queue_tasks",
+        "queue_lag_seconds",
+        "cleanup_failures",
+        "artifact_resolution_failures",
+        "generated_at",
+    ]
 
 
-def test_canonical_job_snapshot_is_reused_across_http_ws_webhook_and_worker_surfaces() -> None:
+def test_owner_scope_error_pagination_and_adapter_identity_are_shared_envelopes() -> None:
     surface = validate_contract_surface()
-    job_control = surface["job_control"]
-    artifact_resolution = surface["artifact_resolution"]
-    worker_control = surface["worker_control"]["$defs"]
-    ws_event = surface["ws_event"]
-    webhook_event = surface["webhook_event"]
-    job_snapshot = surface["job_snapshot"]
+    owner_defs = surface["owner"]["$defs"]
+    error = surface["error"]
+    pagination_defs = surface["pagination"]["$defs"]
 
-    assert job_control["properties"]["job"]["$ref"] == "../common/job-snapshot.schema.json"
-    assert artifact_resolution["properties"]["artifact_kind"]["$ref"] == "../common/enums.schema.json#/$defs/artifactKind"
-    assert worker_control["finalizeRequest"]["properties"]["outcome"]["$ref"] == "../common/enums.schema.json#/$defs/workerOutcome"
-    assert worker_control["agentRunRequestAccessResponse"]["properties"]["request_ref"]["minLength"] == 1
-    assert worker_control["claimResponse"]["properties"]["ordered_inputs"]["items"]["$ref"] == "#/$defs/orderedWorkerInput"
-    assert worker_control["orderedWorkerInput"]["properties"]["source_label"]["$ref"] == "../common/job-snapshot.schema.json#/$defs/sourceLabel"
-    worker_claim_rule = worker_control["claimResponse"]["allOf"][0]
-    assert worker_claim_rule["if"]["properties"]["job_type"]["const"] == "agent_run"
-    assert worker_claim_rule["then"]["properties"]["ordered_inputs"]["maxItems"] == 0
-    assert worker_claim_rule["else"]["properties"]["ordered_inputs"]["minItems"] == 1
-    assert ws_event["properties"]["payload"]["properties"]["status"]["$ref"] == "../common/enums.schema.json#/$defs/jobStatus"
-    assert webhook_event["properties"]["payload"]["properties"]["status"]["$ref"] == "../common/enums.schema.json#/$defs/jobStatus"
+    assert owner_defs["ownerScope"]["required"] == ["owner_type", "owner_id"]
+    assert owner_defs["ownerScope"]["properties"]["owner_type"]["$ref"].endswith("ownerType")
+    assert {"telegram_chat_id", "telegram_user_id", "web_session_id", "mcp_caller_id"}.issubset(
+        owner_defs["adapterIdentity"]["properties"]
+    )
+    assert error["properties"]["error"]["properties"]["diagnostics"]["items"]["$ref"].endswith(
+        "diagnostic.schema.json#/$defs/diagnosticSummary"
+    )
+    assert error["properties"]["error"]["properties"]["conflict"]["$ref"].endswith("conflictEnvelope")
+    assert pagination_defs["paginatedResponse"]["required"] == ["items", "page"]
+    assert pagination_defs["page"]["required"] == ["page_size", "has_more"]
 
-    required_snapshot_fields = {"job_id", "root_job_id", "job_type", "status", "version", "delivery", "source_set"}
-    assert required_snapshot_fields.issubset(job_snapshot["required"])
-    source_set_rule = job_snapshot["$defs"]["sourceSet"]["allOf"][0]
-    assert source_set_rule["if"]["properties"]["input_kind"]["const"] == "agent_run"
-    assert source_set_rule["then"]["properties"]["items"]["maxItems"] == 0
-    assert source_set_rule["else"]["properties"]["items"]["minItems"] == 1
-    assert job_snapshot["$defs"]["sourceSetItem"]["properties"]["source_label"]["$ref"] == "#/$defs/sourceLabel"
-    assert {"total_sources", "completed_sources", "failed_sources", "current_source_label"}.issubset(
-        job_snapshot["$defs"]["progressState"]["properties"]
+
+def test_internal_worker_contract_consumes_sealed_selection_and_publishes_run_outputs() -> None:
+    surface = validate_contract_surface()
+    worker_defs = surface["worker_control"]["$defs"]
+    enums = surface["enums"]["$defs"]
+
+    claim_response = worker_defs["claimResponse"]
+    selection_input = worker_defs["sealedSelectionInput"]
+    artifact_request = worker_defs["artifactUpsertRequest"]
+    diagnostic_request = worker_defs["diagnosticUpsertRequest"]
+    queue_response = worker_defs["analysisRunQueueResponse"]
+    request_access_response = worker_defs["requestAccessResponse"]
+    cancel_check_response = worker_defs["cancelCheckResponse"]
+    artifact_download_response = worker_defs["artifactDownloadAccessResponse"]
+
+    assert claim_response["required"] == [
+        "execution_id",
+        "analysis_run_id",
+        "run_type",
+        "selection",
+        "params",
+        "claimed_at",
+    ]
+    assert claim_response["properties"]["selection"]["$ref"] == "#/$defs/sealedSelectionInput"
+    assert selection_input["properties"]["items"]["items"]["$ref"] == "../http/selection.schema.json#/$defs/selectionItemSnapshot"
+    assert request_access_response["required"] == [
+        "provider",
+        "url",
+        "expires_at",
+        "request_ref",
+        "request_digest_sha256",
+        "request_bytes",
+    ]
+    assert request_access_response["properties"]["request_digest_sha256"]["pattern"] == "^[a-f0-9]{64}$"
+    assert cancel_check_response["required"] == ["cancel_requested", "status"]
+    assert cancel_check_response["properties"]["status"]["$ref"].endswith("analysisRunStatus")
+    assert artifact_download_response["properties"]["artifact_kind"]["$ref"] == "#/$defs/workerArtifactDescriptorKind"
+    assert artifact_download_response["properties"]["download"]["required"] == ["provider", "url", "expires_at"]
+    item_props = surface["selection"]["$defs"]["selectionItemSnapshot"]["properties"]
+    assert {"selection_item_id", "media_item_id", "media_kind", "mime_type", "role", "labels"}.issubset(item_props)
+    assert queue_response["properties"]["items"]["items"]["$ref"] == "#/$defs/analysisRunQueueItem"
+    assert artifact_request["properties"]["artifacts"]["items"]["$ref"] == "#/$defs/artifactDescriptor"
+    assert diagnostic_request["properties"]["diagnostics"]["items"]["$ref"] == "#/$defs/diagnosticDescriptor"
+    artifact_descriptor = worker_defs["artifactDescriptor"]
+    assert {"artifact_kind", "mime_type", "object_key", "size_bytes", "filename", "format"}.issubset(
+        artifact_descriptor["properties"]
+    )
+    assert artifact_descriptor["properties"]["artifact_kind"]["$ref"] == "#/$defs/workerArtifactDescriptorKind"
+    worker_artifact_kinds = worker_defs["workerArtifactDescriptorKind"]["enum"]
+    assert {"transcript_plain", "transcript_segmented_markdown", "summary_markdown", "agent_result_json"}.issubset(
+        worker_artifact_kinds
+    )
+    assert not {"transcript_plain", "transcript_segmented_markdown", "summary_markdown", "agent_result_json"}.intersection(
+        enums["artifactKind"]["enum"]
+    )
+    diagnostic_descriptor = worker_defs["diagnosticDescriptor"]
+    assert {"diagnostic_id", "subject_type", "subject_id", "context", "created_at"}.issubset(
+        diagnostic_descriptor["properties"]
     )
 
 
-def test_agent_run_create_schema_is_request_only_and_redaction_oriented() -> None:
-    surface = validate_contract_surface()
-    agent_run = surface["agent_run"]
-    request = agent_run["properties"]["request"]
-    request_def = agent_run["$defs"]["agentRunRequest"]
-
-    assert request["$ref"] == "#/$defs/agentRunRequest"
-    assert "harness_name" in agent_run["required"]
-    assert "request" in agent_run["required"]
-    assert "job_type" not in agent_run["properties"]
-    assert "source_set_id" not in agent_run["properties"]
-    assert "root_job_id" not in agent_run["properties"]
-    assert request_def["additionalProperties"] is False
-    assert {"prompt", "payload", "input_artifacts"}.issubset(request_def["properties"])
-    assert request_def["properties"]["prompt"]["pattern"] == "\\S"
-    assert request_def["properties"]["input_artifacts"]["minItems"] == 1
-
-
-def test_report_and_deep_research_public_schemas_are_agent_run_orchestration_surfaces() -> None:
-    surface = validate_contract_surface()
-    report = surface["report"]
-    deep_research = surface["deep_research"]
-
-    assert "agent_run job" in report["description"]
-    assert "harness_name=claude-code" in report["description"]
-    assert "operation=report" in report["description"]
-    assert "job_type" not in report["properties"]
-    assert "harness_name" not in report["properties"]
-    assert "request" not in report["properties"]
-
-    assert "report-backed agent_run parent" in deep_research["description"]
-    assert "harness_name=claude-code" in deep_research["description"]
-    assert "operation=deep_research" in deep_research["description"]
-    assert "job_type" not in deep_research["properties"]
-    assert "harness_name" not in deep_research["properties"]
-    assert "request" not in deep_research["properties"]
-
-
-def test_compose_topology_uses_agent_runner_without_dedicated_ai_workers() -> None:
-    compose_path = ROOT.parents[1] / "infra" / "docker-compose.yml"
-
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "config", "--services"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-
-    services = set(result.stdout.splitlines())
-    assert "worker-agent-runner" in services
-    assert "worker-transcription" in services
-    assert "worker-report" not in services
-    assert "worker-deep-research" not in services
+def test_stale_public_route_and_schema_vocabulary_is_absent_from_contract_package() -> None:
+    for path in [OPENAPI_PATH, *SCHEMA_ROOT.rglob("*.json")]:
+        text = path.read_text(encoding="utf-8")
+        for token in STALE_PUBLIC_TOKENS:
+            assert token not in text, f"{token!r} leaked into {path.relative_to(ROOT)}"

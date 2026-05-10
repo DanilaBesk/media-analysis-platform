@@ -15,7 +15,7 @@
 #
 # START_MODULE_MAP
 #   launch-agent-runner-worker - Build the API client, object-store adapter, and shared worker loop.
-#   build-agent-runner - Adapt claimed job IDs into runAgentHarness calls without duplicating queue logic.
+#   build-agent-runner - Adapt claimed analysis run IDs into runAgentHarness calls without duplicating queue logic.
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import os
 from typing import Mapping
 
 from transcriber_worker_agent_runner import DefaultAgentHarnessRegistry, LocalAgentHarnessLeaseClient, runAgentHarness
-from transcriber_workers_common.api import JobApiClient
+from transcriber_workers_common.api import AnalysisRunControlClient
 from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
 from transcriber_workers_common.runtime import WorkerRuntimeConfig, run_worker_loop
 
@@ -39,16 +39,16 @@ __all__ = ["build_runner", "main"]
 def build_runner(
     config: WorkerRuntimeConfig,
     *,
-    api_client: JobApiClient,
+    api_client: AnalysisRunControlClient,
     object_store: WorkerObjectStore,
     env: Mapping[str, str] | None = None,
 ):
     harness_registry = DefaultAgentHarnessRegistry.from_env(env)
     lease_client = LocalAgentHarnessLeaseClient.from_env(env)
 
-    def _runner(job_id: str) -> object:
+    def _runner(analysis_run_id: str) -> object:
         return runAgentHarness(
-            job_id,
+            analysis_run_id,
             workspace_root=config.workspace_root,
             api_client=api_client,
             artifact_store=object_store,
@@ -64,11 +64,11 @@ def main(env: Mapping[str, str] | None = None) -> int:
     values = os.environ if env is None else env
     config = WorkerRuntimeConfig.from_env(
         worker_kind="agent_runner",
-        task_type="agent_run.run",
-        job_type="agent_run",
+        task_type="selection.analysis",
+        run_type="custom",
         env=values,
     )
-    api_client = JobApiClient(config.api_config)
+    api_client = AnalysisRunControlClient(config.api_config)
     object_store = WorkerObjectStore(WorkerObjectStoreConfig.from_env(values))
     _LOGGER.info("%s workspace_root=%s", _LOG_MARKER_LAUNCH_AGENT_RUNNER, config.workspace_root)
     run_worker_loop(

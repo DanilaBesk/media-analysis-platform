@@ -1,295 +1,503 @@
-// FILE: apps/web/tests/routes.test.tsx
-// VERSION: 1.0.0
-// START_MODULE_CONTRACT
-// PURPOSE: Prove the Web UI routes exercise create, details, artifact, and action flows while keeping API ownership external.
-// SCOPE: Render the jobs workspace and job details route against a mock runtime, then verify create, child-action, and artifact-resolve behavior.
-// DEPENDS: M-WEB-UI
-// LINKS: V-M-WEB-UI
-// ROLE: TEST
-// MAP_MODE: SUMMARY
-// END_MODULE_CONTRACT
-//
-// START_CHANGE_SUMMARY
-//   LAST_CHANGE: v1.0.0 - Replaced placeholder route checks with concrete jobs and details route interaction coverage.
-// END_CHANGE_SUMMARY
-//
-// START_MODULE_MAP
-//   verify-jobs-route-shell - Confirm the jobs route renders list data and submits create-from-url through the API boundary.
-//   verify-job-details-route-shell - Confirm the details route renders artifacts and child actions through the API boundary.
-// END_MODULE_MAP
-
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { createWebUiRoutes } from "../src/app/routes";
 import type { WebUiRuntime } from "../src/app/runtime";
+import type { WebUiApiClient } from "../src/lib/api/client";
 
-function makeJob(overrides: Record<string, unknown> = {}) {
+const owner = {
+  owner_type: "web" as const,
+  owner_id: "web-console",
+};
+
+function mediaItem(overrides = {}) {
   return {
-    job_id: "11111111-1111-1111-1111-111111111111",
-    root_job_id: "11111111-1111-1111-1111-111111111111",
-    job_type: "transcription",
-    status: "running",
-    version: 2,
-    display_name: "Example transcription",
-    delivery: { strategy: "polling" },
-    source_set: {
-      source_set_id: "source-set-1",
-      input_kind: "single_source",
-      items: [
-        {
-          position: 0,
-          source: {
-            source_id: "source-1",
-            source_kind: "uploaded_file",
-            original_filename: "clip.mp3",
-          },
-        },
-      ],
+    media_item_id: "media-1",
+    owner,
+    kind: "text",
+    status: "ready",
+    display_name: "Call note",
+    source: {
+      source_id: "source-1",
+      origin_type: "text",
+      text_ref: "text:source-1",
     },
-    artifacts: [
-      {
-        artifact_id: "artifact-1",
-        artifact_kind: "transcript_plain",
-        filename: "transcript.txt",
-        mime_type: "text/plain",
-        size_bytes: 512,
-        created_at: "2026-04-23T00:00:00Z",
-      },
-    ],
-    children: [],
-    created_at: "2026-04-23T00:00:00Z",
+    diagnostics_count: 0,
+    retention: { state: "active" },
+    created_at: "2026-05-10T00:00:00Z",
+    updated_at: "2026-05-10T00:00:00Z",
     ...overrides,
   };
 }
 
-function renderRoute(initialEntry: string, runtimeOverrides?: Partial<WebUiRuntime["apiClient"]>) {
+function secondMediaItem() {
+  return mediaItem({
+    media_item_id: "media-2",
+    kind: "audio",
+    display_name: "Interview audio",
+    source: {
+      source_id: "source-2",
+      origin_type: "object",
+      object_key: "web-local://interview.wav",
+      mime_type: "audio/wav",
+      size_bytes: 2048,
+    },
+  });
+}
+
+function collection(overrides = {}) {
+  return {
+    collection_id: "collection-1",
+    owner,
+    kind: "user",
+    name: "Research set",
+    status: "active",
+    version: 3,
+    items: [
+      {
+        media_item_id: "media-1",
+        position: 0,
+        media_item: mediaItem(),
+        added_at: "2026-05-10T00:00:00Z",
+      },
+    ],
+    created_at: "2026-05-10T00:00:00Z",
+    updated_at: "2026-05-10T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function analysisRun(overrides = {}) {
+  return {
+    analysis_run_id: "run-1",
+    owner,
+    selection_id: "selection-1",
+    selection: {
+      selection_id: "selection-1",
+      owner,
+      status: "sealed",
+      items: [
+        {
+          position: 0,
+          media_item_id: "media-1",
+          kind: "text",
+          source_snapshot: { source_id: "source-1", origin_type: "text" },
+          display_name: "Call note",
+          status_at_selection: "ready",
+          retention_snapshot: { state: "active" },
+        },
+      ],
+      option_snapshot: {},
+      created_by: "web",
+      created_at: "2026-05-10T00:00:00Z",
+      sealed_at: "2026-05-10T00:00:00Z",
+    },
+    run_type: "summary",
+    status: "running",
+    version: 2,
+    delivery: { strategy: "polling" },
+    evidence_gate_state: "not_required",
+    artifact_count: 1,
+    diagnostics_count: 2,
+    artifacts: [
+      {
+        artifact_id: "artifact-1",
+        analysis_run_id: "run-1",
+        kind: "summary",
+        status: "available",
+        content_type: "text/markdown; charset=utf-8",
+        size_bytes: 128,
+        preview: { available: true, kind: "text", text_excerpt: "## Summary\n\nInterview notes" },
+        created_at: "2026-05-10T00:00:00Z",
+      },
+      {
+        artifact_id: "artifact-manifest",
+        analysis_run_id: "run-1",
+        kind: "run_manifest",
+        status: "available",
+        content_type: "application/json; charset=utf-8",
+        size_bytes: 512,
+        preview: {
+          available: true,
+          kind: "text",
+          format: "json",
+          text_excerpt: JSON.stringify({
+            schema_version: "analysis_run_manifest/v2",
+            summary: { included_count: 1, skipped_count: 0, failed_count: 0 },
+            items: [
+              {
+                selection_item_id: "selection-item-1",
+                media_item_id: "media-1",
+                position: 0,
+                outcome: "succeeded",
+                included: true,
+                lineage: { source_id: "source-1", role: "primary" },
+                artifact_kinds: ["summary", "run_manifest"],
+                diagnostic_ids: [],
+              },
+            ],
+          }),
+        },
+        created_at: "2026-05-10T00:00:00Z",
+      },
+      {
+        artifact_id: "artifact-diagnostics",
+        analysis_run_id: "run-1",
+        kind: "run_diagnostics",
+        status: "available",
+        content_type: "application/json; charset=utf-8",
+        size_bytes: 256,
+        preview: { available: true, kind: "text", format: "json", text_excerpt: "{\"diagnostics\":[]}" },
+        created_at: "2026-05-10T00:00:00Z",
+      },
+    ],
+    diagnostics: [],
+    created_at: "2026-05-10T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
+  const apiClient: WebUiApiClient = {
+    listMediaItems: vi.fn().mockResolvedValue({
+      items: [mediaItem(), secondMediaItem()],
+      page: { page_size: 50, has_more: false },
+    }),
+    getMediaItem: vi.fn().mockResolvedValue(mediaItem()),
+    addMediaItem: vi.fn().mockResolvedValue(mediaItem({ media_item_id: "media-2", display_name: "Fresh note" })),
+    removeMediaItem: vi.fn().mockResolvedValue(mediaItem({ status: "deleted" })),
+    getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
+    listCollections: vi.fn().mockResolvedValue({
+      items: [collection()],
+      page: { page_size: 50, has_more: false },
+    }),
+    getCollection: vi.fn().mockResolvedValue(collection()),
+    createCollection: vi.fn().mockResolvedValue(collection({ collection_id: "collection-2", name: "Created set" })),
+    updateCollection: vi.fn().mockResolvedValue(collection({ name: "Renamed set" })),
+    replaceCollectionItems: vi.fn().mockResolvedValue(collection()),
+    removeCollectionItem: vi.fn().mockResolvedValue(collection({ items: [] })),
+    createSelection: vi.fn().mockResolvedValue({
+      selection_id: "selection-2",
+      owner,
+      status: "sealed",
+      items: [],
+      created_by: "web",
+      created_at: "2026-05-10T00:00:00Z",
+      sealed_at: "2026-05-10T00:00:00Z",
+    }),
+    getSelection: vi.fn(),
+    createAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ analysis_run_id: "run-2", status: "queued" })),
+    listAnalysisRuns: vi.fn().mockResolvedValue({
+      items: [analysisRun()],
+      page: { page_size: 25, has_more: false },
+    }),
+    getAnalysisRun: vi.fn().mockResolvedValue(analysisRun()),
+    cancelAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ status: "cancel_requested" })),
+    retryAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ analysis_run_id: "run-3", status: "queued" })),
+    listAnalysisRunEvents: vi.fn().mockResolvedValue({
+      items: [
+        {
+          event_id: "event-1",
+          analysis_run_id: "run-1",
+          event_type: "analysis_run.progress",
+          version: 2,
+          status: "running",
+          emitted_at: "2026-05-10T00:00:00Z",
+          payload: {
+            stage: "transcribing",
+            message: "Running transcription pipeline",
+          },
+        },
+      ],
+      page: { page_size: 50, has_more: false },
+    }),
+    listArtifacts: vi.fn().mockResolvedValue({
+      items: analysisRun().artifacts,
+      page: { page_size: 50, has_more: false },
+    }),
+    getArtifact: vi.fn().mockImplementation(async (_owner, artifactId) => {
+      const found = analysisRun().artifacts.find((candidate) => candidate.artifact_id === artifactId) ?? analysisRun().artifacts[0];
+      const embeddedDiagnostics =
+        artifactId === "artifact-manifest"
+          ? [
+              {
+                diagnostic_id: "diagnostic-artifact",
+                severity: "info",
+                code: "artifact_preview_ready",
+                message: "Preview generated",
+                created_at: "2026-05-10T00:00:00Z",
+              },
+            ]
+          : [];
+      return {
+        ...found,
+        owner,
+        visibility: "owner",
+        download: {
+          available: true,
+          provider: "minio_presigned_url",
+          url: `https://minio.local/${artifactId}.txt`,
+          filename: `${artifactId}.txt`,
+        },
+        retention: { state: "active" },
+        diagnostics: embeddedDiagnostics,
+      };
+    }),
+    refreshArtifact: vi.fn().mockResolvedValue({
+      ...analysisRun().artifacts[0],
+      owner,
+      visibility: "owner",
+      download: {
+        available: true,
+        provider: "minio_presigned_url",
+        url: "https://minio.local/refreshed-artifact-1.txt",
+        filename: "refreshed-artifact-1.txt",
+      },
+      retention: { state: "active" },
+      diagnostics: [],
+    }),
+    listDiagnostics: vi.fn().mockImplementation(async (_owner, filter) => {
+      const diagnostics = [
+        {
+          diagnostic_id: "diagnostic-run",
+          owner,
+          subject: { subject_type: "analysis_run", subject_id: "run-1" },
+          severity: "warning",
+          code: "worker_failed",
+          message: "Worker reported a bounded warning",
+          created_at: "2026-05-10T00:00:00Z",
+        },
+        {
+          diagnostic_id: "diagnostic-source",
+          owner,
+          subject: { subject_type: "source", subject_id: "source-1" },
+          severity: "warning",
+          code: "source_unavailable",
+          message: "Source warning kept with lineage",
+          created_at: "2026-05-10T00:00:00Z",
+        },
+        {
+          diagnostic_id: "diagnostic-artifact",
+          owner,
+          subject: { subject_type: "artifact", subject_id: "artifact-manifest" },
+          severity: "info",
+          code: "artifact_preview_ready",
+          message: "Preview generated",
+          created_at: "2026-05-10T00:00:00Z",
+        },
+      ];
+      return {
+        items: diagnostics.filter((diagnostic) => {
+          if (filter?.subjectType && diagnostic.subject.subject_type !== filter.subjectType) {
+            return false;
+          }
+          if (filter?.subjectId && diagnostic.subject.subject_id !== filter.subjectId) {
+            return false;
+          }
+          return true;
+        }),
+        page: { page_size: 50, has_more: false },
+      };
+    }),
+    reconcileAnalysisRunQueue: vi.fn().mockResolvedValue({ reconciled: 2 }),
+    getObservabilitySnapshot: vi.fn().mockResolvedValue({
+      queue_tasks: 3,
+      queue_lag_seconds: 42,
+      cleanup_failures: 1,
+      artifact_resolution_failures: 2,
+      generated_at: "2026-05-10T00:00:00Z",
+    }),
+    subscribeToRunEvents: vi.fn().mockReturnValue({ close: vi.fn() }),
+    ...overrides,
+  };
   const runtime: WebUiRuntime = {
     env: {
       apiBaseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
     },
-    apiClient: {
-      listJobs: vi.fn().mockResolvedValue({
-        items: [makeJob()],
-        page: 1,
-        page_size: 20,
-      }),
-      getJob: vi.fn().mockResolvedValue(
-        makeJob({
-          children: [
-            {
-              job_id: "child-1",
-              job_type: "report",
-              status: "queued",
-              version: 1,
-              job_url: "/v1/jobs/child-1",
-              root_job_id: "11111111-1111-1111-1111-111111111111",
-            },
-          ],
-        }),
-      ),
-      createUpload: vi.fn().mockResolvedValue([makeJob()]),
-      createCombinedUpload: vi.fn().mockResolvedValue(makeJob()),
-      createFromUrl: vi.fn().mockResolvedValue(
-        makeJob({
-          job_id: "url-job-1",
-          root_job_id: "url-job-1",
-          source_set: {
-            source_set_id: "source-set-2",
-            input_kind: "single_source",
-            items: [
-              {
-                position: 0,
-                source: {
-                  source_id: "source-2",
-                  source_kind: "youtube_url",
-                  source_url: "https://youtu.be/example",
-                },
-              },
-            ],
-          },
-        }),
-      ),
-      createReport: vi.fn().mockResolvedValue(
-        makeJob({
-          job_id: "report-job-1",
-          job_type: "report",
-          status: "queued",
-          root_job_id: "11111111-1111-1111-1111-111111111111",
-          parent_job_id: "11111111-1111-1111-1111-111111111111",
-        }),
-      ),
-      createDeepResearch: vi.fn().mockResolvedValue(
-        makeJob({
-          job_id: "deep-job-1",
-          job_type: "deep_research",
-          status: "queued",
-          root_job_id: "11111111-1111-1111-1111-111111111111",
-          parent_job_id: "11111111-1111-1111-1111-111111111111",
-        }),
-      ),
-      cancelJob: vi.fn().mockResolvedValue(makeJob({ status: "cancel_requested" })),
-      retryJob: vi.fn().mockResolvedValue(
-        makeJob({
-          job_id: "retry-job-1",
-          retry_of_job_id: "11111111-1111-1111-1111-111111111111",
-          status: "queued",
-        }),
-      ),
-      resolveArtifact: vi.fn().mockResolvedValue({
-        artifact_id: "artifact-1",
-        job_id: "11111111-1111-1111-1111-111111111111",
-        artifact_kind: "transcript_plain",
-        filename: "transcript.txt",
-        mime_type: "text/plain",
-        size_bytes: 512,
-        created_at: "2026-04-23T00:00:00Z",
-        download: {
-          provider: "minio_presigned_url",
-          url: "https://minio.local/transcript.txt",
-          expires_at: "2026-04-23T00:10:00Z",
-        },
-      }),
-      listJobEvents: vi.fn().mockResolvedValue([
-        {
-          event_id: "event-1",
-          event_type: "job.updated",
-          job_id: "11111111-1111-1111-1111-111111111111",
-          root_job_id: "11111111-1111-1111-1111-111111111111",
-          version: 2,
-          emitted_at: "2026-04-23T00:00:00Z",
-          payload: {
-            status: "running",
-            progress_stage: "transcribing",
-            progress_message: "50%",
-          },
-        },
-      ]),
-      subscribeToJobEvents: vi.fn().mockReturnValue({
-        close: vi.fn(),
-      }),
-      ...runtimeOverrides,
-    },
+    apiClient,
   };
+  return runtime;
+}
+
+function renderRoute(path: string, overrides?: Partial<WebUiApiClient>) {
+  const runtime = makeRuntime(overrides);
   const router = createMemoryRouter(createWebUiRoutes(runtime), {
-    initialEntries: [initialEntry],
-    future: {
-      v7_fetcherPersist: true,
-      v7_normalizeFormMethod: true,
-      v7_partialHydration: true,
-      v7_relativeSplatPath: true,
-      v7_skipActionErrorRevalidation: true,
-      v7_startTransition: true,
-    },
+    initialEntries: [path],
   });
-
-  render(
-    <RouterProvider
-      future={{
-        v7_fetcherPersist: true,
-        v7_normalizeFormMethod: true,
-        v7_partialHydration: true,
-        v7_relativeSplatPath: true,
-        v7_skipActionErrorRevalidation: true,
-        v7_startTransition: true,
-      }}
-      router={router}
-    />,
-  );
-
+  render(<RouterProvider router={router} />);
   return runtime;
 }
 
 describe("createWebUiRoutes", () => {
-  // START_BLOCK_BLOCK_VERIFY_JOBS_ROUTE_SHELL
-  it("renders the jobs route and submits the url create flow through the API boundary", async () => {
+  it("renders the inbox-first surface and adds text media through the API boundary", async () => {
     const runtime = renderRoute("/");
 
-    expect(await screen.findByRole("heading", { name: "Media Analysis Web UI" })).toBeVisible();
-    expect(await screen.findByText("Example transcription")).toBeVisible();
-    expect(screen.getByRole("option", { name: "Agent run" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Inbox" })).toBeVisible();
+    const primaryNav = within(screen.getByRole("navigation", { name: "Primary" }));
+    expect(primaryNav.getAllByRole("link")).toHaveLength(5);
+    expect(primaryNav.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/");
+    expect(primaryNav.getByRole("link", { name: "Collections" })).toHaveAttribute("href", "/collections");
+    expect(primaryNav.getByRole("link", { name: "Run builder" })).toHaveAttribute("href", "/runs");
+    expect(primaryNav.getByRole("link", { name: "Artifacts" })).toHaveAttribute("href", "/artifacts");
+    expect(primaryNav.getByRole("link", { name: "Admin" })).toHaveAttribute("href", "/diagnostics");
+    expect(await screen.findByText("Call note")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Submission mode"), {
-      target: { value: "url" },
-    });
-    fireEvent.change(screen.getByLabelText("YouTube URL"), {
-      target: { value: "https://youtu.be/example" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Create job" }));
+    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Fresh note" } });
+    fireEvent.change(screen.getByLabelText("Text"), { target: { value: "New meeting note" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.createFromUrl).toHaveBeenCalledWith(
+      expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
+        owner,
         expect.objectContaining({
-          url: "https://youtu.be/example",
+          kind: "text",
+          displayName: "Fresh note",
         }),
       );
     });
   });
-  // END_BLOCK_BLOCK_VERIFY_JOBS_ROUTE_SHELL
 
-  // START_BLOCK_BLOCK_VERIFY_JOB_DETAILS_ROUTE_SHELL
-  it("renders the job details route and resolves artifact plus child actions through the API boundary", async () => {
-    const runtime = renderRoute("/jobs/job-123", {
-      getJob: vi.fn().mockResolvedValue(
-        makeJob({
-          status: "succeeded",
-          children: [],
-        }),
-      ),
-    });
+  it("creates a collection from selected inbox items", async () => {
+    const runtime = renderRoute("/");
 
-    expect(await screen.findByRole("heading", { name: "Job details" })).toBeVisible();
-    expect(screen.getByText("Artifacts")).toBeVisible();
+    fireEvent.click(await screen.findByLabelText("Select Call note"));
+    fireEvent.change(screen.getByLabelText("New collection"), { target: { value: "Important set" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create collection" }));
 
-    fireEvent.click(screen.getByRole("button", { name: "Resolve download" }));
     await waitFor(() => {
-      expect(runtime.apiClient.resolveArtifact).toHaveBeenCalledWith("artifact-1");
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Create report job" }));
-    await waitFor(() => {
-      expect(runtime.apiClient.createReport).toHaveBeenCalled();
+      expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(owner, {
+        name: "Important set",
+        items: ["media-1"],
+      });
     });
   });
 
-  it("allows deep research from an agent_run report job with a report markdown artifact", async () => {
-    const runtime = renderRoute("/jobs/agent-report-1", {
-      getJob: vi.fn().mockResolvedValue(
-        makeJob({
-          job_id: "agent-report-1",
-          root_job_id: "11111111-1111-1111-1111-111111111111",
-          parent_job_id: "11111111-1111-1111-1111-111111111111",
-          job_type: "agent_run",
-          status: "succeeded",
-          display_name: "Report agent run",
-          artifacts: [
-            {
-              artifact_id: "report-md-1",
-              artifact_kind: "report_markdown",
-              filename: "report.md",
-              mime_type: "text/markdown",
-              size_bytes: 1024,
-              created_at: "2026-04-23T00:00:00Z",
-            },
-          ],
-          children: [],
-        }),
-      ),
-    });
+  it("offers keyboard-reachable bulk selection controls for selection-heavy flows", async () => {
+    renderRoute("/runs");
 
-    expect(await screen.findByRole("heading", { name: "Job details" })).toBeVisible();
+    const selectAll = await screen.findByRole("button", { name: "Select all" });
+    selectAll.focus();
+    expect(selectAll).toHaveFocus();
+    fireEvent.click(selectAll);
 
-    fireEvent.click(screen.getByRole("button", { name: "Create deep research job" }));
+    expect(screen.getByRole("button", { name: "Create run from 2 items" })).toBeEnabled();
+
+    const clearSelection = screen.getByRole("button", { name: "Clear selection" });
+    clearSelection.focus();
+    expect(clearSelection).toHaveFocus();
+    fireEvent.click(clearSelection);
+
+    expect(screen.getByRole("button", { name: "Create run from 0 items" })).toBeDisabled();
+  });
+
+  it("edits a collection by adding an inbox item", async () => {
+    const runtime = renderRoute("/collections");
+
+    fireEvent.change(await screen.findByLabelText("Add inbox item"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+
     await waitFor(() => {
-      expect(runtime.apiClient.createDeepResearch).toHaveBeenCalledWith(
-        "agent-report-1",
+      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
+        expectedVersion: 3,
+        items: [
+          { media_item_id: "media-1", position: 0 },
+          { media_item_id: "media-2", position: 1 },
+        ],
+      });
+    });
+  });
+
+  it("creates a sealed selection before queuing a run", async () => {
+    const runtime = renderRoute("/runs");
+
+    fireEvent.click(await screen.findByLabelText("Select Call note"));
+    fireEvent.change(screen.getByLabelText("Run type"), { target: { value: "summary" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.createSelection).toHaveBeenCalledWith(
+        owner,
         expect.objectContaining({
-          delivery: expect.objectContaining({ strategy: "polling" }),
+          items: [{ media_item_id: "media-1", position: 0 }],
+        }),
+      );
+      expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          runType: "summary",
+          selectionId: "selection-2",
         }),
       );
     });
   });
-  // END_BLOCK_BLOCK_VERIFY_JOB_DETAILS_ROUTE_SHELL
+
+  it("preloads run planning from a collection link", async () => {
+    renderRoute("/runs?collection=collection-1");
+
+    expect(await screen.findByText("Research set")).toBeVisible();
+    expect(await screen.findByText("#1 Call note")).toBeVisible();
+  });
+
+  it("renders run detail with events, artifacts, and diagnostics", async () => {
+    renderRoute("/runs/run-1");
+
+    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
+    expect(await screen.findByText("analysis_run.progress")).toBeVisible();
+    expect(await screen.findByText("transcribing: Running transcription pipeline")).toBeVisible();
+    expect(await screen.findByText("worker_failed")).toBeVisible();
+    expect(await screen.findAllByText("source_unavailable")).toHaveLength(2);
+    expect(await screen.findByText("succeeded")).toBeVisible();
+    expect(await screen.findByRole("link", { name: "summary" })).toHaveAttribute("href", "/artifacts/artifact-1");
+  });
+
+  it("opens markdown artifact previews from the artifact browser", async () => {
+    const runtime = renderRoute("/artifacts/artifact-1");
+
+    expect(await screen.findByRole("heading", { name: "Artifact browser" })).toBeVisible();
+    expect(await screen.findByText(/Interview notes/)).toBeVisible();
+    expect(await screen.findByRole("link", { name: "Open artifact" })).toHaveAttribute(
+      "href",
+      "https://minio.local/artifact-1.txt",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh access" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.refreshArtifact).toHaveBeenCalledWith(owner, "artifact-1");
+    });
+  });
+
+  it("opens json artifact previews and artifact diagnostics", async () => {
+    renderRoute("/artifacts/artifact-manifest");
+
+    expect(await screen.findByText(/analysis_run_manifest\/v2/)).toBeVisible();
+    expect(await screen.findByText("artifact_preview_ready")).toBeVisible();
+    expect(await screen.findAllByText("artifact_preview_ready")).toHaveLength(1);
+    expect(await screen.findByRole("link", { name: "run_manifest" })).toHaveAttribute(
+      "href",
+      "/artifacts/artifact-manifest",
+    );
+  });
+
+  it("does not register the old jobs entrypoint", async () => {
+    renderRoute("/jobs/job-123");
+
+    expect(await screen.findByRole("heading", { name: "Surface not found" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open inbox" })).toHaveAttribute("href", "/");
+  });
+
+  it("exposes final admin lifecycle operations and observability", async () => {
+    const runtime = renderRoute("/diagnostics");
+
+    expect(await screen.findByText("42s")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Limit"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile queue" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(10);
+    });
+    expect(await screen.findByText("Reconciled 2 run tasks")).toBeVisible();
+  });
 });

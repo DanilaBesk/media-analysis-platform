@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Russian-first ASR Models for Self-hosted Transcription</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%2317191d'/%3E%3Ccircle cx='20' cy='32' r='7' fill='%232457c5'/%3E%3Ccircle cx='32' cy='32' r='7' fill='%230f7f8c'/%3E%3Ccircle cx='44' cy='32' r='7' fill='%23247246'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      --paper: #f7f7f2;
+      --ink: #17191d;
+      --muted: #626a73;
+      --line: #d8d8cf;
+      --panel: #ffffff;
+      --panel-2: #eef4f3;
+      --blue: #2457c5;
+      --cyan: #0f7f8c;
+      --green: #247246;
+      --amber: #a96810;
+      --red: #b3382c;
+      --violet: #5e438f;
+      --shadow: 0 18px 48px rgba(20, 25, 30, 0.12);
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(23,25,29,0.045) 1px, transparent 1px) 0 0 / 38px 38px,
+        linear-gradient(rgba(23,25,29,0.035) 1px, transparent 1px) 0 0 / 38px 38px,
+        var(--paper);
+      font-family: Georgia, "Times New Roman", serif;
+      line-height: 1.55;
+    }
+
+    a {
+      color: inherit;
+      text-decoration-color: rgba(36, 87, 197, 0.45);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 3px;
+    }
+
+    a:hover {
+      color: var(--blue);
+      text-decoration-color: var(--blue);
+    }
+
+    .page {
+      width: min(1500px, calc(100vw - 40px));
+      margin: 0 auto;
+    }
+
+    .hero {
+      min-height: 74vh;
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+      gap: 36px;
+      align-items: end;
+      padding: 56px 0 34px;
+      border-bottom: 3px solid var(--ink);
+    }
+
+    .kicker {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      padding: 7px 10px;
+      border: 1px solid var(--ink);
+      border-radius: 999px;
+      background: var(--panel);
+      font: 700 12px/1.2 "Avenir Next", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 99px;
+      background: var(--green);
+      box-shadow: 14px 0 0 var(--amber), 28px 0 0 var(--blue);
+    }
+
+    h1 {
+      margin: 22px 0 18px;
+      max-width: 1020px;
+      font: 900 clamp(46px, 6.4vw, 104px) / 0.92 "Iowan Old Style", Georgia, serif;
+      letter-spacing: 0;
+    }
+
+    .lede {
+      max-width: 940px;
+      margin: 0;
+      color: #30343a;
+      font-size: clamp(19px, 2vw, 29px);
+      line-height: 1.24;
+    }
+
+    .hero-panel {
+      background: var(--ink);
+      color: white;
+      border-radius: var(--radius);
+      padding: 22px;
+      box-shadow: var(--shadow);
+      font-family: "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .hero-panel h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .signal-list {
+      display: grid;
+      gap: 12px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .signal-list li {
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 10px;
+      align-items: start;
+      border-top: 1px solid rgba(255,255,255,0.18);
+      padding-top: 12px;
+      font-size: 14px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      border-radius: 99px;
+      background: white;
+      color: var(--ink);
+      font-weight: 800;
+      font-size: 12px;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      margin: 0 -20px;
+      padding: 10px 20px;
+      background: rgba(247,247,242,0.88);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--line);
+      font: 700 13px/1.2 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    nav .links {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    nav a {
+      white-space: nowrap;
+      text-decoration: none;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 8px 11px;
+    }
+
+    section {
+      padding: 42px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.38fr) minmax(0, 0.62fr);
+      gap: 34px;
+      align-items: start;
+      margin-bottom: 20px;
+    }
+
+    h2 {
+      margin: 0;
+      font: 900 clamp(30px, 3.4vw, 54px) / 0.98 "Iowan Old Style", Georgia, serif;
+      letter-spacing: 0;
+    }
+
+    .section-copy {
+      margin: 4px 0 0;
+      color: #343941;
+      font-size: 18px;
+    }
+
+    .score-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .score-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: 0 8px 24px rgba(20,25,30,0.06);
+    }
+
+    .score-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font: 900 17px/1.1 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .score-card p {
+      margin: 0;
+      color: var(--muted);
+      font: 500 14px/1.45 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .accent-blue { border-top: 5px solid var(--blue); }
+    .accent-green { border-top: 5px solid var(--green); }
+    .accent-amber { border-top: 5px solid var(--amber); }
+    .accent-red { border-top: 5px solid var(--red); }
+    .accent-cyan { border-top: 5px solid var(--cyan); }
+    .accent-violet { border-top: 5px solid var(--violet); }
+
+    .table-wrap {
+      overflow-x: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 30px rgba(20,25,30,0.07);
+    }
+
+    table {
+      width: 100%;
+      min-width: 1180px;
+      border-collapse: collapse;
+      font: 500 13px/1.38 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    caption {
+      text-align: left;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    th {
+      position: sticky;
+      top: 50px;
+      z-index: 3;
+      text-align: left;
+      background: #20242a;
+      color: white;
+      padding: 12px 10px;
+      font-size: 12px;
+      vertical-align: bottom;
+    }
+
+    td {
+      padding: 12px 10px;
+      border-top: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    tr:nth-child(even) td {
+      background: #fbfbf8;
+    }
+
+    .model {
+      min-width: 215px;
+      font-weight: 850;
+    }
+
+    .metric {
+      min-width: 150px;
+    }
+
+    .num {
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 2px 4px 2px 0;
+      padding: 3px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f7f7f2;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .chip.good { color: var(--green); border-color: rgba(36,114,70,0.32); }
+    .chip.warn { color: var(--amber); border-color: rgba(169,104,16,0.35); }
+    .chip.risk { color: var(--red); border-color: rgba(179,56,44,0.32); }
+    .chip.info { color: var(--blue); border-color: rgba(36,87,197,0.32); }
+
+    .rank {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .rank-card {
+      position: relative;
+      min-height: 210px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 10px 28px rgba(20,25,30,0.08);
+      overflow: hidden;
+    }
+
+    .rank-card::before {
+      content: attr(data-rank);
+      position: absolute;
+      right: 8px;
+      bottom: -34px;
+      color: rgba(23,25,29,0.07);
+      font: 900 124px/1 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .rank-card h3 {
+      position: relative;
+      margin: 0 0 10px;
+      font: 900 18px/1.1 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .rank-card p {
+      position: relative;
+      margin: 0;
+      color: var(--muted);
+      font: 500 14px/1.42 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .note {
+      background: var(--panel-2);
+      border-left: 6px solid var(--cyan);
+      border-radius: var(--radius);
+      padding: 18px;
+      font: 500 15px/1.5 "Avenir Next", "Segoe UI", sans-serif;
+      color: #263038;
+    }
+
+    .note strong {
+      color: var(--ink);
+    }
+
+    .benchmark {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      counter-reset: bench;
+    }
+
+    .bench-item {
+      counter-increment: bench;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 15px;
+      font: 500 14px/1.4 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    .bench-item::before {
+      content: counter(bench);
+      display: inline-flex;
+      width: 24px;
+      height: 24px;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 10px;
+      border-radius: 99px;
+      background: var(--ink);
+      color: white;
+      font-weight: 900;
+    }
+
+    footer {
+      padding: 34px 0 56px;
+      color: var(--muted);
+      font: 500 13px/1.5 "Avenir Next", "Segoe UI", sans-serif;
+    }
+
+    @media (max-width: 1100px) {
+      .hero,
+      .section-head,
+      .two-col {
+        grid-template-columns: 1fr;
+      }
+
+      .score-grid,
+      .rank,
+      .benchmark {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      th {
+        top: 48px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        width: min(100% - 22px, 1500px);
+      }
+
+      .hero {
+        min-height: auto;
+        padding-top: 34px;
+      }
+
+      h1 {
+        font-size: clamp(38px, 11vw, 44px);
+        line-height: 0.98;
+      }
+
+      .score-grid,
+      .rank,
+      .benchmark {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        margin: 0 -11px;
+        padding-left: 11px;
+        padding-right: 11px;
+      }
+    }
+
+    @media print {
+      body {
+        background: white;
+      }
+
+      nav {
+        display: none;
+      }
+
+      .page {
+        width: 100%;
+      }
+
+      .hero {
+        min-height: auto;
+      }
+
+      th {
+        position: static;
+      }
+
+      .table-wrap {
+        overflow: visible;
+        box-shadow: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <div class="kicker"><span class="dot"></span><span>HF ASR Research - Russian-first self-hosted</span></div>
+        <h1>Сводка моделей для русской транскрибации</h1>
+        <p class="lede">Фокус: self-hosted обработка подкастов, интервью, Telegram-аудио и YouTube-видео. Русский - основной язык, английский - вторичный без критичной деградации.</p>
+      </div>
+      <aside class="hero-panel">
+        <h2>Главный вывод</h2>
+        <ul class="signal-list">
+          <li><span class="badge">1</span><span><strong>GigaAM-v3</strong> - лучший кандидат на качество русского, но английский нужно проверять на ваших данных.</span></li>
+          <li><span class="badge">2</span><span><strong>bond005/whisper-podlodka-turbo</strong> - лучший общий production-компромисс для RU+EN.</span></li>
+          <li><span class="badge">3</span><span><strong>GGML/CT2 quants</strong> - практичный путь для CPU-only и дешевого batch, но качество зависит от quant.</span></li>
+        </ul>
+      </aside>
+    </header>
+
+    <nav aria-label="Разделы отчета">
+      <div class="links">
+        <a href="#shortlist">Shortlist</a>
+        <a href="#metrics">Метрики</a>
+        <a href="#russian-first">Russian-first</a>
+        <a href="#deployment">Deployment</a>
+        <a href="#ranking">Ranking</a>
+        <a href="#benchmark">Benchmark</a>
+      </div>
+    </nav>
+
+    <section id="shortlist">
+      <div class="section-head">
+        <h2>Shortlist</h2>
+        <p class="section-copy">Кандидаты разбиты не по популярности, а по пригодности для self-hosted production: качество русского, английский, long-form, скорость, лицензия и понятный runtime.</p>
+      </div>
+
+      <div class="score-grid">
+        <div class="score-card accent-green">
+          <strong>Максимум RU качества</strong>
+          <p>GigaAM-v3 e2e_rnnt. Лучшие опубликованные русские метрики среди найденных Russian-first моделей.</p>
+        </div>
+        <div class="score-card accent-blue">
+          <strong>Лучший RU+EN баланс</strong>
+          <p>bond005/whisper-podlodka-turbo. Явно заявлены русский и английский, есть фокус на шуме и hallucinations.</p>
+        </div>
+        <div class="score-card accent-amber">
+          <strong>CPU-only</strong>
+          <p>CT2 int8 или whisper.cpp/GGML Q8/Q5 для Whisper; GigaAM-v3 ONNX как русский challenger.</p>
+        </div>
+        <div class="score-card accent-red">
+          <strong>Не primary</strong>
+          <p>T-one, Vosk, wav2vec2 и NVIDIA RU-only хороши как baseline, но не закрывают английский.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="metrics">
+      <div class="section-head">
+        <h2>Ключевые Метрики</h2>
+        <p class="section-copy">`н/д` означает, что опубликованная метрика или объем обучения в карточке модели не найдены. Поля качества приведены только там, где есть источники в model card или связанной карточке.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <caption>Главная сравнительная таблица по объему обучения, качеству, языкам, runtime и production-рискам</caption>
+          <thead>
+            <tr>
+              <th>Модель</th>
+              <th>Семейство</th>
+              <th>Объем обучения / fine-tune</th>
+              <th>RU качество</th>
+              <th>EN</th>
+              <th>Пунктуация</th>
+              <th>Long-form / шум</th>
+              <th>Runtime</th>
+              <th>CPU</th>
+              <th>GPU</th>
+              <th>Риск</th>
+              <th>Вердикт</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/ai-sage/GigaAM-v3">ai-sage/GigaAM-v3</a></td>
+              <td>Conformer, CTC/RNNT/e2e</td>
+              <td class="metric"><span class="num">700k</span> часов RU pretrain; internal domains: callcenter, music, natural, atypical speech</td>
+              <td>WER avg: RNNT <span class="num">8.4%</span>, CTC <span class="num">9.2%</span>; open datasets <span class="num">2.6-3.0%</span></td>
+              <td><span class="chip info">заявлен</span> English WER не найден</td>
+              <td><span class="chip good">да</span> в e2e_ctc/e2e_rnnt</td>
+              <td>Сильные RU domain metrics; long-form через chunking</td>
+              <td>Custom Transformers, ONNX, MLX, sherpa-onnx</td>
+              <td><span class="chip good">хорошо</span> ONNX</td>
+              <td><span class="chip good">отлично</span></td>
+              <td>custom code, EN не доказан</td>
+              <td><strong>Лучший RU quality candidate</strong></td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/bond005/whisper-podlodka-turbo">bond005/whisper-podlodka-turbo</a></td>
+              <td>Whisper large-v3-turbo fine-tune</td>
+              <td>Часы не указаны; CV17, RuLibriSpeech, Podlodka, Golos crowd/farfield, Taiga, AudioSet non-speech</td>
+              <td>Borealis card reports avg RU WER <span class="num">9.38%</span>; own full WER table не найден</td>
+              <td><span class="chip good">явно ru/en</span></td>
+              <td><span class="chip good">да</span></td>
+              <td>Long-form examples; фокус на шуме, non-speech и hallucinations</td>
+              <td>Transformers; practical CT2/GGML conversion</td>
+              <td><span class="chip good">хорошо</span> after int8/quant</td>
+              <td><span class="chip good">отлично</span></td>
+              <td>CT2/GGML нужно собрать и проверить</td>
+              <td><strong>Лучший production-компромисс RU+EN</strong></td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/antony66/whisper-large-v3-russian">antony66/whisper-large-v3-russian</a></td>
+              <td>Whisper large-v3 fine-tune</td>
+              <td>CV17 RU: <span class="num">225,761</span> train / <span class="num">11,883</span> test rows</td>
+              <td>WER <span class="num">6.39%</span> vs base <span class="num">9.84%</span> on own CV17 split</td>
+              <td>Inherited Whisper multilingual; post-finetune EN metric не найден</td>
+              <td><span class="chip good">да</span></td>
+              <td>Whisper chunking; шумная речь отдельно не опубликована</td>
+              <td>Transformers, CT2 ports</td>
+              <td><span class="chip warn">средне</span> лучше CT2 int8</td>
+              <td><span class="chip good">хорошо</span></td>
+              <td>license metadata not found; EN не доказан</td>
+              <td>Сильный RU baseline</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/Apel-sin/whisper-large-v3-russian-ties-podlodka-v1.2">Apel-sin TIES Podlodka</a></td>
+              <td>Whisper TIES merge</td>
+              <td>Merge Antony66 Russian + bond005 Podlodka; часы не указаны</td>
+              <td>Published benchmark not found</td>
+              <td>Not proven</td>
+              <td><span class="chip good">да</span></td>
+              <td>Whisper-like</td>
+              <td>Transformers; Pomni GGML allquants</td>
+              <td><span class="chip good">хорошо</span> GGML Q8/Q5</td>
+              <td><span class="chip good">хорошо</span></td>
+              <td>license not clear, no metrics</td>
+              <td>Экспериментальный кандидат</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/Pomni/whisper-large-v3-russian-ties-podlodka-v1.2-ggml-allquants">Pomni GGML allquants</a></td>
+              <td>whisper.cpp GGML quant</td>
+              <td>Same Apel-sin base</td>
+              <td>Published benchmark not found</td>
+              <td>Not proven</td>
+              <td><span class="chip good">да</span></td>
+              <td>Depends on quant; Q8/Q5 safer</td>
+              <td>whisper.cpp</td>
+              <td><span class="chip good">отлично</span></td>
+              <td><span class="chip warn">можно</span> but CT2 often easier</td>
+              <td>community quant, unclear license</td>
+              <td>CPU-only benchmark candidate</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/dvislobokov/whisper-large-v3-turbo-russian">dvislobokov turbo Russian</a></td>
+              <td>Whisper large-v3-turbo fine-tune</td>
+              <td><span class="num">118k</span> CV17 samples</td>
+              <td>Published benchmark not found</td>
+              <td>Inherited, unbenchmarked</td>
+              <td><span class="chip good">да</span></td>
+              <td>No separate metrics</td>
+              <td>Transformers, faster-whisper port</td>
+              <td><span class="chip good">хорошо</span> faster-whisper</td>
+              <td><span class="chip good">отлично</span></td>
+              <td>weak public evidence</td>
+              <td>Fast RU turbo fallback</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/t-tech/T-one">t-tech/T-one</a></td>
+              <td>Streaming Conformer CTC</td>
+              <td><span class="num">80k+</span> часов Russian speech, 57.9k telephony</td>
+              <td>Call-center WER <span class="num">8.63%</span>; CommonVoice19 <span class="num">5.32%</span>; named entities <span class="num">5.83%</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td>Limited, CTC style</td>
+              <td>Excellent streaming, 300 ms chunks</td>
+              <td>ONNX, Triton, custom pipeline</td>
+              <td><span class="chip good">отлично</span></td>
+              <td><span class="chip good">отлично</span></td>
+              <td>Russian-only, telephony bias</td>
+              <td>Лучший RU streaming, не bilingual primary</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/nvidia/stt_ru_fastconformer_hybrid_large_pc">NVIDIA FastConformer Hybrid PC</a></td>
+              <td>NeMo FastConformer RNNT/CTC</td>
+              <td><span class="num">1,840</span> часов RU: Golos, Sova, Dusha, RuLS, MCV12</td>
+              <td>MCV12 test <span class="num">5.3%</span> no PnC; <span class="num">7.3%</span> with PnC; Golos farfield <span class="num">5.76%</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td><span class="chip good">да</span> `. , ?` + case</td>
+              <td>Good RU baseline, domain limitations listed</td>
+              <td>NeMo, ONNX port</td>
+              <td><span class="chip good">хорошо</span> ONNX</td>
+              <td><span class="chip good">хорошо</span></td>
+              <td>CC-BY-4.0 attribution; RU-only</td>
+              <td>Strong RU baseline, not bilingual</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/bond005/wav2vec2-large-ru-golos">bond005/wav2vec2-large-ru-golos</a></td>
+              <td>wav2vec2 CTC</td>
+              <td>Golos + SOVA + RuLibriSpeech; hours not summarized in card</td>
+              <td>Golos crowd WER <span class="num">10.144%</span>, CER <span class="num">2.168%</span>; farfield WER <span class="num">20.353%</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td>Farfield weaker; no long-form polish</td>
+              <td>Transformers</td>
+              <td><span class="chip good">хорошо</span></td>
+              <td><span class="chip good">хорошо</span></td>
+              <td>No punctuation, no English</td>
+              <td>Only as RU acoustic baseline</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/Vikhrmodels/Borealis">Vikhrmodels/Borealis</a></td>
+              <td>Audio LLM / ASR</td>
+              <td>~<span class="num">7,000</span> часов Russian audio</td>
+              <td>Avg WER <span class="num">6.33%</span>; RuLS <span class="num">6.39%</span>; CV22 <span class="num">2.67%</span>; Sova <span class="num">15.37%</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td><span class="chip good">да</span></td>
+              <td>30s-style inference; long-form requires chunking</td>
+              <td>Transformers custom code</td>
+              <td><span class="chip risk">плохо</span></td>
+              <td><span class="chip warn">нужно GPU</span></td>
+              <td>Audio-LLM risk, custom code</td>
+              <td>R&D candidate, not default production ASR</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/Vikhrmodels/Borealis-5b-it">Vikhrmodels/Borealis-5b-it</a></td>
+              <td>Whisper encoder + Qwen3-4B</td>
+              <td>70k speech instructions, ~2M speech-description, audiobooks</td>
+              <td>RuLS <span class="num">5.64-6.63%</span>; Tone Webinars <span class="num">56-60%</span>; Sova <span class="num">17-21%</span></td>
+              <td><span class="chip good">заявлен</span></td>
+              <td><span class="chip good">да</span></td>
+              <td>Card says optimized up to 30s; noisy may degrade</td>
+              <td>Transformers, vLLM plugin</td>
+              <td><span class="chip risk">нет</span></td>
+              <td><span class="chip warn">12-16GB+ VRAM</span></td>
+              <td>Heavy, not ASR-first</td>
+              <td>Use only if audio QA/summarization needed</td>
+            </tr>
+            <tr>
+              <td class="model"><a href="https://huggingface.co/alphacep/vosk-model-small-ru">alphacep/vosk-model-small-ru</a></td>
+              <td>Vosk/k2 Zipformer2 ONNX</td>
+              <td>н/д</td>
+              <td>Borealis card cites VOSK ru 0.42 avg WER <span class="num">11.30%</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td><span class="chip risk">нет</span></td>
+              <td>CPU-friendly, lower quality</td>
+              <td>ONNX/Vosk/k2</td>
+              <td><span class="chip good">отлично</span></td>
+              <td>Usually unnecessary</td>
+              <td>quality ceiling</td>
+              <td>Lightweight fallback only</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="russian-first">
+      <div class="section-head">
+        <h2>Russian-first Отсев</h2>
+        <p class="section-copy">Эта таблица показывает, какие семейства реально проходят критерий Russian-first и где они ломаются относительно английского, пунктуации или production-deployment.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <caption>Фокус по семействам моделей</caption>
+          <thead>
+            <tr>
+              <th>Семейство</th>
+              <th>Найденные модели</th>
+              <th>Russian-first evidence</th>
+              <th>English-capable</th>
+              <th>Production readiness</th>
+              <th>Решение</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Whisper RU fine-tunes</td>
+              <td>Podlodka Turbo, Antony66, Dvislobokov, Apel/Pomni</td>
+              <td>RU datasets, RU fine-tunes, Podlodka/Golos/Taiga/CV</td>
+              <td><span class="chip good">да</span> лучше всего у Podlodka Turbo</td>
+              <td>High: Transformers, CT2, GGML</td>
+              <td><strong>Primary production lane</strong></td>
+            </tr>
+            <tr>
+              <td>GigaAM</td>
+              <td>ai-sage/GigaAM-v3, ONNX, MLX, sherpa ports</td>
+              <td>700k h RU pretrain, strong RU WER table</td>
+              <td><span class="chip warn">заявлен</span> EN WER not found</td>
+              <td>Medium-high: custom code or ONNX</td>
+              <td><strong>Quality challenger</strong></td>
+            </tr>
+            <tr>
+              <td>T-one</td>
+              <td>t-tech/T-one</td>
+              <td>80k+ h RU, telephony-first</td>
+              <td><span class="chip risk">нет</span></td>
+              <td>High for streaming RU</td>
+              <td>Use only for RU streaming/telephony</td>
+            </tr>
+            <tr>
+              <td>NVIDIA NeMo RU</td>
+              <td>FastConformer, Conformer CTC/RNNT</td>
+              <td>RU composite datasets and WER tables</td>
+              <td><span class="chip risk">нет</span></td>
+              <td>Medium: NeMo/ONNX</td>
+              <td>RU baseline, not primary</td>
+            </tr>
+            <tr>
+              <td>wav2vec2 RU</td>
+              <td>jonatasgrosman, bond005 Golos</td>
+              <td>RU CTC fine-tunes</td>
+              <td><span class="chip risk">нет</span></td>
+              <td>Medium: easy but dated</td>
+              <td>Benchmark baseline only</td>
+            </tr>
+            <tr>
+              <td>Borealis</td>
+              <td>Borealis, Borealis-5b-it</td>
+              <td>Russian audio LLM / ASR datasets</td>
+              <td><span class="chip warn">only 5B-it</span></td>
+              <td>Low-medium: heavy/custom</td>
+              <td>R&D, not default ASR worker</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="deployment">
+      <div class="section-head">
+        <h2>Deployment</h2>
+        <p class="section-copy">Самая важная инженерная развилка: брать качество Whisper/GigaAM и приводить к production runtime, а не держать сырой research inference в воркере.</p>
+      </div>
+
+      <div class="two-col">
+        <div class="note">
+          <strong>Whisper path:</strong> прототипировать в Transformers, для сервера конвертировать в CTranslate2. Для CPU использовать int8, для GPU - float16 или int8_float16. Для word timestamps и diarization подключать WhisperX/pyannote.
+        </div>
+        <div class="note">
+          <strong>GigaAM path:</strong> качество русского проверять через `e2e_rnnt`; для production рассмотреть ONNX/sherpa-onnx, чтобы убрать часть риска `trust_remote_code` и упростить Docker.
+        </div>
+      </div>
+
+      <div class="table-wrap" style="margin-top: 18px;">
+        <table>
+          <caption>GGML/GGUF/quantization решения</caption>
+          <thead>
+            <tr>
+              <th>Формат</th>
+              <th>Лучше для</th>
+              <th>Практичные варианты</th>
+              <th>Что теряется</th>
+              <th>Production оценка</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Transformers</td>
+              <td>Быстрый research/prototype, проверка качества</td>
+              <td>bf16/fp16 on GPU</td>
+              <td>Скорость и RAM/VRAM хуже, cold start тяжелее</td>
+              <td>Хорошо для экспериментов, хуже для массового batch</td>
+            </tr>
+            <tr>
+              <td>CTranslate2 / faster-whisper</td>
+              <td>GPU/CPU server inference</td>
+              <td>float16, int8, int8_float16</td>
+              <td>Минимальные потери при int8, но нужен benchmark имен и code-switching</td>
+              <td><strong>Лучший Whisper production path</strong></td>
+            </tr>
+            <tr>
+              <td>whisper.cpp / GGML</td>
+              <td>CPU-only, edge, маленький Docker/cache</td>
+              <td>Q8_0, Q6_K, Q5_K/Q5_0</td>
+              <td>Q4 и ниже могут ломать редкие слова, английские вставки, пунктуацию и шум</td>
+              <td>Хорошо для batch CPU, но проверять quant строго</td>
+            </tr>
+            <tr>
+              <td>ONNX</td>
+              <td>GigaAM/T-one/NVIDIA Conformer на CPU/GPU</td>
+              <td>fp32/fp16/int8 depending export</td>
+              <td>Может быть меньше tooling вокруг timestamps/diarization</td>
+              <td>Сильный путь для Russian-first non-Whisper</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="ranking">
+      <div class="section-head">
+        <h2>Final Ranking</h2>
+        <p class="section-copy">Рейтинг именно под цель проекта: длинные медиа, русский основной, английский вторичный, Docker/self-hosted, разумная стоимость.</p>
+      </div>
+
+      <div class="rank">
+        <article class="rank-card accent-green" data-rank="1">
+          <h3>GigaAM-v3 e2e_rnnt</h3>
+          <p>Лучшее качество русского по опубликованным данным. Брать как quality challenger и проверять EN/code-switching.</p>
+        </article>
+        <article class="rank-card accent-blue" data-rank="2">
+          <h3>Podlodka Turbo</h3>
+          <p>Лучший общий выбор RU+EN: качество, пунктуация, long-form, шум, hallucination control.</p>
+        </article>
+        <article class="rank-card accent-cyan" data-rank="3">
+          <h3>Podlodka Turbo CT2</h3>
+          <p>Скорее всего лучший production speed/cost после собственной CTranslate2-конверсии и benchmark.</p>
+        </article>
+        <article class="rank-card accent-amber" data-rank="4">
+          <h3>Antony66 CT2</h3>
+          <p>Сильный RU large-v3 baseline, но есть caveat по лицензии и английскому после fine-tune.</p>
+        </article>
+        <article class="rank-card accent-violet" data-rank="5">
+          <h3>GGML Q8/Q5</h3>
+          <p>CPU-only candidate. Помни: Q2/Q3 не годятся для серьезной транскрибации.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="benchmark">
+      <div class="section-head">
+        <h2>Benchmark Plan</h2>
+        <p class="section-copy">Финальный выбор нельзя делать по чужим WER: нужен маленький, но честный benchmark на ваших Telegram, YouTube и интервью.</p>
+      </div>
+
+      <div class="benchmark">
+        <div class="bench-item"><strong>Telegram short</strong><br>30 клипов по 10-90 секунд, шум, телефонный микрофон, быстрый latency замер.</div>
+        <div class="bench-item"><strong>Podcasts/interviews</strong><br>10 фрагментов по 5-15 минут, речь с перебиваниями, имена и термины.</div>
+        <div class="bench-item"><strong>Long YouTube</strong><br>5 файлов по 45-120 минут, throughput, memory peak, timestamp drift.</div>
+        <div class="bench-item"><strong>RU/EN mix</strong><br>30 клипов с английскими словами, брендами, цитатами, code-switching.</div>
+        <div class="bench-item"><strong>Non-speech</strong><br>20 сегментов тишины, музыки, шума. Считать hallucinations per hour.</div>
+      </div>
+
+      <div class="table-wrap" style="margin-top: 18px;">
+        <table>
+          <caption>Что измерять в каждом прогоне</caption>
+          <thead>
+            <tr>
+              <th>Ось</th>
+              <th>Метрики</th>
+              <th>Почему важно</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Качество</td>
+              <td>RU WER, EN WER, CER имен, punctuation F1, hallucination count, manual error buckets</td>
+              <td>WER не ловит пунктуацию, имена, английские вставки и ложный текст на шуме.</td>
+            </tr>
+            <tr>
+              <td>Скорость</td>
+              <td>Latency P50/P95 для Telegram, RTF CPU/GPU, throughput часов/час, cold start</td>
+              <td>Для продукта важен не только средний RTF, но и время первого результата.</td>
+            </tr>
+            <tr>
+              <td>Стоимость</td>
+              <td>RAM/VRAM peak, model cache, Docker image size, parallel workers, $ per transcribed hour</td>
+              <td>Лучшее качество может быть экономически хуже, если воркеров нужно много.</td>
+            </tr>
+            <tr>
+              <td>Интеграция</td>
+              <td>timestamps, word timestamps, diarization path, retry behavior, memory leaks, failure rate</td>
+              <td>ASR модель должна жить в batch pipeline, а не только работать в notebook.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      Generated for media-analysis-platform. Данные основаны на Hugging Face model cards и опубликованных метриках, доступных на момент исследования. `published benchmark not found` означает отсутствие найденной опубликованной метрики, а не плохое качество модели.
+    </footer>
+  </main>
+</body>
+</html>

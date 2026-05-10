@@ -1,8 +1,8 @@
 // FILE: apps/mcp-server/src/tools/registry.ts
-// VERSION: 1.0.0
+// VERSION: 2.0.0
 // START_MODULE_CONTRACT
-// PURPOSE: Provide the thin MCP tool registry that maps required tool calls onto the existing HTTP API without adding local business logic.
-// SCOPE: Register required MCP tools, expose their stable definitions, emit the required mapping marker, and preserve contract-shaped failures.
+// PURPOSE: Register domain-first tools on the official MCP SDK server while preserving a testable builder surface.
+// SCOPE: Create the MCP server instance, register tools with SDK metadata, expose direct test calls, and shape known adapter errors.
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: RUNTIME
@@ -10,124 +10,255 @@
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
-//   LAST_CHANGE: v2.0.0 - Replaced the empty shell with the required MCP tool registry and marker-aware dispatch surface.
+//   LAST_CHANGE: v2.0.0 - Moved registration onto McpServer.registerTool while keeping deterministic unit-test access to domain handlers.
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
-//   register-required-tools - Materialize the required MCP tool definitions for the adapter packet.
-//   dispatch-tool-calls - Route packet-local tool calls to thin API mappings and shape deterministic errors.
+//   register-sdk-tools - Register every domain tool on the official MCP SDK server.
+//   expose-test-builder - Let tests inspect definitions and call handlers without starting stdio.
+//   shape-known-errors - Convert adapter validation and upstream API failures into structured MCP error results.
 // END_MODULE_MAP
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { ZodError } from "zod/v4";
 
 import {
   McpAdapterApiClientError,
   type McpAdapterApiClient,
 } from "../client/api-client.ts";
-import { createMappedMcpTools } from "./mapped-tools.ts";
+import {
+  createDomainMcpTools,
+  listDomainMcpToolDefinitions,
+  type DomainMcpTool,
+  type DomainMcpToolDefinition,
+} from "./mapped-tools.ts";
 import {
   McpAdapterContractError,
+  McpAdapterToolError,
   createErrorToolResult,
   type JsonObject,
   type McpAdapterLogger,
-  type McpMappedTool,
-  type McpToolCall,
-  type McpToolDefinition,
-  type McpToolResult,
 } from "./protocol.ts";
 
-export interface McpToolRegistryShell {
-  listTools(): readonly McpToolDefinition[];
-  callTool(call: McpToolCall): Promise<McpToolResult>;
-  hasTools(): boolean;
+export interface McpDomainRuntime {
+  server: McpServer;
+  tools: readonly DomainMcpTool[];
+  listTools(): readonly DomainMcpToolDefinition[];
+  callTool(name: string, arguments_?: JsonObject): Promise<CallToolResult>;
 }
 
-export interface CreateMcpToolRegistryOptions {
+export interface CreateMcpDomainRuntimeOptions {
   apiClient: McpAdapterApiClient;
   logger?: McpAdapterLogger;
 }
 
 export const MCP_TOOL_MAPPING_MARKER =
-  "[McpAdapter][mapToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]";
+  "[McpAdapter][mapDomainToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]";
 
-function toToolDefinitions(tools: McpMappedTool[]): McpToolDefinition[] {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.inputSchema,
-  }));
-}
-
-function toToolIndex(tools: McpMappedTool[]): Map<string, McpMappedTool> {
-  return new Map(tools.map((tool) => [tool.name, tool]));
-}
-
-function describeMapping(tool: McpMappedTool): string {
+function describeMapping(tool: DomainMcpTool): string {
   return `${MCP_TOOL_MAPPING_MARKER} tool=${tool.name} api=${tool.apiPathHint}`;
 }
 
-function shapeKnownError(error: unknown): McpToolResult | undefined {
+function zodErrorDetails(error: ZodError): JsonObject {
+  return {
+    issues: error.issues.map((issue) => ({
+      path: issue.path.join("."),
+      message: issue.message,
+    })),
+  };
+}
+
+function apiErrorHint(error: McpAdapterApiClientError): {
+  retryable: boolean;
+  action: string;
+} {
+  if (error.code === "artifact_resolution_failed") {
+    return {
+      retryable: true,
+      action: "refresh_artifact_then_retry_preview",
+    };
+  }
+  if (error.code === "run_cancel_not_allowed") {
+    return {
+      retryable: false,
+      action: "inspect_run_state_before_retry",
+    };
+  }
+  if (error.code === "retry_requires_terminal_run") {
+    return {
+      retryable: false,
+      action: "wait_for_terminal_run_before_retry",
+    };
+  }
+  if (error.code === "collection_version_conflict") {
+    return {
+      retryable: false,
+      action: "reload_resource_and_retry_with_latest_version",
+    };
+  }
+  if (error.code === "not_found") {
+    return {
+      retryable: false,
+      action: "check_resource_id_owner_scope",
+    };
+  }
+  if (error.code === "invalid_request") {
+    return {
+      retryable: false,
+      action: "fix_request",
+    };
+  }
+  if ([408, 425, 429, 500, 502, 503, 504].includes(error.status)) {
+    return {
+      retryable: true,
+      action: "retry_later",
+    };
+  }
+  return {
+    retryable: false,
+    action: "inspect_upstream_error",
+  };
+}
+
+function apiErrorDetails(error: McpAdapterApiClientError): JsonObject {
+  return {
+    path: error.path,
+    status: error.status,
+    ...(error.details ? { upstream_details: error.details } : {}),
+  };
+}
+
+function shapeKnownError(error: unknown): CallToolResult | undefined {
+  if (error instanceof ZodError) {
+    return createErrorToolResult({
+      code: "mcp_contract_violation",
+      message: "Tool input did not match the domain contract.",
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: zodErrorDetails(error),
+    });
+  }
+
   if (error instanceof McpAdapterContractError) {
     return createErrorToolResult({
       code: error.code,
       message: error.message,
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: error.details,
+    });
+  }
+
+  if (error instanceof McpAdapterToolError) {
+    return createErrorToolResult({
+      code: error.code,
+      message: error.message,
+      category: error.category,
+      retryable: error.retryable,
+      action: error.action,
       details: error.details,
     });
   }
 
   if (error instanceof McpAdapterApiClientError) {
+    const hint = apiErrorHint(error);
     return createErrorToolResult({
       code: error.code ?? "api_request_failed",
       message: error.message,
-      details: {
-        path: error.path,
-        status: error.status,
-      },
+      category: "upstream_api",
+      retryable: hint.retryable,
+      action: hint.action,
+      correlationId: error.correlationId,
+      details: apiErrorDetails(error),
+      diagnostics: error.diagnostics,
+      conflict: error.conflict,
     });
   }
 
   return undefined;
 }
 
-// START_BLOCK_BLOCK_CREATE_MCP_TOOL_REGISTRY
-export function createMcpToolRegistryShell({
+async function executeDomainTool(
+  tool: DomainMcpTool,
+  arguments_: JsonObject | undefined,
+  logger?: McpAdapterLogger,
+): Promise<CallToolResult> {
+  try {
+    const parsedArgs = tool.inputSchema.parse(arguments_ ?? {});
+    logger?.log(describeMapping(tool));
+    return await tool.execute(parsedArgs);
+  } catch (error) {
+    const shapedError = shapeKnownError(error);
+    if (shapedError) {
+      return shapedError;
+    }
+    throw error;
+  }
+}
+
+function registerToolsOnServer(
+  server: McpServer,
+  tools: readonly DomainMcpTool[],
+  logger?: McpAdapterLogger,
+): void {
+  for (const tool of tools) {
+    server.registerTool(
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        outputSchema: tool.outputSchema,
+        annotations: tool.annotations,
+        _meta: {
+          api_path_hint: tool.apiPathHint,
+          examples: tool.examples,
+        },
+      },
+      async (args) => executeDomainTool(tool, args as JsonObject, logger),
+    );
+  }
+}
+
+// START_BLOCK_BLOCK_CREATE_MCP_DOMAIN_RUNTIME
+export function createMcpDomainRuntime({
   apiClient,
   logger,
-}: CreateMcpToolRegistryOptions): McpToolRegistryShell {
-  const tools = createMappedMcpTools(apiClient);
-  const definitions = toToolDefinitions(tools);
-  const toolIndex = toToolIndex(tools);
+}: CreateMcpDomainRuntimeOptions): McpDomainRuntime {
+  const server = new McpServer({
+    name: "media-analysis-platform",
+    version: "0.1.0",
+  });
+  const tools = createDomainMcpTools(apiClient);
+  const toolIndex = new Map(tools.map((tool) => [tool.name, tool]));
+
+  registerToolsOnServer(server, tools, logger);
 
   return {
-    listTools(): readonly McpToolDefinition[] {
-      return definitions;
+    server,
+    tools,
+    listTools() {
+      return listDomainMcpToolDefinitions(tools);
     },
-    async callTool(call: McpToolCall): Promise<McpToolResult> {
-      const arguments_ = (call.arguments ?? {}) as JsonObject;
-      const tool = toolIndex.get(call.name);
+    async callTool(name, arguments_) {
+      const tool = toolIndex.get(name);
       if (!tool) {
         return createErrorToolResult({
           code: "mcp_contract_violation",
-          message: `Unknown MCP tool: ${call.name}`,
+          message: `Unknown MCP tool: ${name}`,
+          category: "adapter_contract",
+          retryable: false,
+          action: "check_tool_name",
           details: {
-            tool: call.name,
+            tool: name,
           },
         });
       }
-
-      logger?.log(describeMapping(tool));
-
-      try {
-        return await tool.execute(arguments_);
-      } catch (error) {
-        const shapedError = shapeKnownError(error);
-        if (shapedError) {
-          return shapedError;
-        }
-        throw error;
-      }
-    },
-    hasTools(): boolean {
-      return tools.length > 0;
+      return executeDomainTool(tool, arguments_, logger);
     },
   };
 }
-// END_BLOCK_BLOCK_CREATE_MCP_TOOL_REGISTRY
+// END_BLOCK_BLOCK_CREATE_MCP_DOMAIN_RUNTIME

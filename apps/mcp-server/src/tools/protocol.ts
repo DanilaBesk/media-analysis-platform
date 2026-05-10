@@ -1,8 +1,8 @@
 // FILE: apps/mcp-server/src/tools/protocol.ts
-// VERSION: 1.0.0
+// VERSION: 2.0.0
 // START_MODULE_CONTRACT
-// PURPOSE: Define the packet-local MCP tool protocol surface that the adapter exposes without depending on the external MCP SDK.
-// SCOPE: Describe tool definitions, tool calls, result envelopes, logger hooks, and contract-shaped adapter errors for the MCP packet.
+// PURPOSE: Define shared MCP tool result helpers and adapter-side contract errors for the SDK-backed server.
+// SCOPE: Keep structuredContent/text result shaping and deterministic adapter validation failures reusable across domain tools.
 // DEPENDS: M-MCP-ADAPTER, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: TYPES
@@ -10,42 +10,18 @@
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
-//   LAST_CHANGE: v1.0.0 - Added the packet-local MCP tool protocol types and contract error surface.
+//   LAST_CHANGE: v2.0.0 - Updated result helpers for the real MCP SDK runtime and domain-first tool surface.
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
-//   define-tool-protocol - Describe packet-local tool definitions, calls, and structured results.
+//   define-json-protocol - Describe JSON object payloads used by structured MCP results.
 //   define-contract-error - Keep adapter-side validation failures contract-shaped without embedding business logic.
+//   shape-sdk-results - Return SDK-compatible content and structuredContent envelopes.
 // END_MODULE_MAP
 
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+
 export type JsonObject = Record<string, unknown>;
-
-export interface McpToolTextContent {
-  type: "text";
-  text: string;
-}
-
-export interface McpToolResult {
-  content: McpToolTextContent[];
-  structuredContent: JsonObject;
-  isError?: boolean;
-}
-
-export interface McpToolCall {
-  name: string;
-  arguments?: JsonObject;
-}
-
-export interface McpToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: JsonObject;
-}
-
-export interface McpMappedTool extends McpToolDefinition {
-  apiPathHint: string;
-  execute(arguments_: JsonObject): Promise<McpToolResult>;
-}
 
 export interface McpAdapterLogger {
   log(message: string): void;
@@ -62,7 +38,32 @@ export class McpAdapterContractError extends Error {
   }
 }
 
-export function createSuccessToolResult(structuredContent: JsonObject): McpToolResult {
+export class McpAdapterToolError extends Error {
+  readonly code: string;
+  readonly category: string;
+  readonly retryable: boolean;
+  readonly action: string;
+  readonly details?: JsonObject;
+
+  constructor(error: {
+    code: string;
+    message: string;
+    category: string;
+    retryable: boolean;
+    action: string;
+    details?: JsonObject;
+  }) {
+    super(error.message);
+    this.name = "McpAdapterToolError";
+    this.code = error.code;
+    this.category = error.category;
+    this.retryable = error.retryable;
+    this.action = error.action;
+    this.details = error.details;
+  }
+}
+
+export function createSuccessToolResult(structuredContent: JsonObject): CallToolResult {
   return {
     content: [
       {
@@ -77,13 +78,25 @@ export function createSuccessToolResult(structuredContent: JsonObject): McpToolR
 export function createErrorToolResult(error: {
   code: string;
   message: string;
+  category?: string;
+  retryable?: boolean;
+  action?: string;
   details?: JsonObject;
-}): McpToolResult {
+  correlationId?: string;
+  diagnostics?: unknown[];
+  conflict?: unknown;
+}): CallToolResult {
   const structuredContent: JsonObject = {
     error: {
       code: error.code,
       message: error.message,
+      ...(error.category ? { category: error.category } : {}),
+      ...(error.retryable !== undefined ? { retryable: error.retryable } : {}),
+      ...(error.action ? { action: error.action } : {}),
+      ...(error.correlationId ? { correlation_id: error.correlationId } : {}),
       ...(error.details ? { details: error.details } : {}),
+      ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}),
+      ...(error.conflict ? { conflict: error.conflict } : {}),
     },
   };
 

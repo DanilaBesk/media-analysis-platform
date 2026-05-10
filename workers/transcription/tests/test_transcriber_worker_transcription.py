@@ -1,7 +1,7 @@
 # FILE: workers/transcription/tests/test_transcriber_worker_transcription.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Verify the dedicated transcription worker claims jobs through the shared control plane, preserves transcript artifacts, and handles ordered combined inputs plus cancellation deterministically.
+# PURPOSE: Verify the dedicated transcription worker claims analysis runs through the shared control plane, preserves transcript artifacts, and handles ordered combined inputs plus cancellation deterministically.
 # SCOPE: Success finalization ordering, combined-media concatenation, cancellation checkpoints, local extraction reuse, and deterministic failure classification.
 # DEPENDS: M-WORKER-TRANSCRIPTION, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION
@@ -20,7 +20,7 @@
 #   RecordingTranscriber - Records worker transcription calls while returning deterministic transcript results.
 #   test_run_transcription_claims_and_finalizes_after_all_artifacts_exist - Verifies the shared claim client, preserved transcript artifacts, and success finalization ordering.
 #   test_run_transcription_combines_sorted_inputs_before_one_final_pass - Verifies ordered combined-media concatenation before the single transcription pass.
-#   test_run_transcription_checks_cancellation_inside_worker_loop - Verifies cancellation is observed by the dedicated worker loop instead of legacy Telegram orchestration.
+#   test_run_transcription_checks_cancellation_inside_worker_loop - Verifies cancellation is observed by the dedicated worker loop.
 #   test_process_local_transcription_reuses_extracted_local_pipeline - Verifies the extracted local pipeline preserves current transcript artifacts for the service shell.
 #   test_run_transcription_classifies_source_materialization_failures - Verifies deterministic `source_fetch_failed` finalization.
 # END_MODULE_MAP
@@ -32,17 +32,16 @@ import logging
 from pathlib import Path
 
 import pytest
-from docx import Document
 
 from transcriber_workers_common.api import (
     ArtifactResolutionResult,
-    ArtifactSummary,
     CancelCheckResult,
-    ChildJobReference,
-    ClaimedJobExecution,
-    JobSnapshot,
+    ClaimedAnalysisRunExecution,
+    MediaSourceSnapshot,
     OrderedWorkerInput,
-    SourceSetItem,
+    SealedSelectionInput,
+    SelectionItemLabels,
+    SelectionItemSnapshot,
 )
 from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
 import transcriber_worker_transcription as worker_module
@@ -50,7 +49,6 @@ from transcriber_worker_transcription import (
     WorkerCancellationRequested,
     materialize_local_source,
     process_local_transcription,
-    runTranscriptionAggregate,
     runTranscription,
 )
 
@@ -58,30 +56,28 @@ from transcriber_worker_transcription import (
 class RecordingApiClient:
     def __init__(
         self,
-        execution: ClaimedJobExecution,
+        execution: ClaimedAnalysisRunExecution,
         *,
         cancel_results: list[CancelCheckResult] | None = None,
-        snapshots: dict[str, JobSnapshot] | None = None,
         artifact_downloads: dict[str, Path] | None = None,
     ) -> None:
         self.execution = execution
         self.cancel_results = list(cancel_results or [])
-        self.snapshots = dict(snapshots or {})
         self.artifact_downloads = dict(artifact_downloads or {})
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def claim_job(self, job_id: str, *, worker_kind: str, task_type: str) -> ClaimedJobExecution:
+    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunExecution:
         self.calls.append(
             (
-                "claim_job",
-                {"job_id": job_id, "worker_kind": worker_kind, "task_type": task_type},
+                "claim_analysis_run",
+                {"analysis_run_id": analysis_run_id, "worker_kind": worker_kind, "task_type": task_type},
             )
         )
         return self.execution
 
     def publish_progress(
         self,
-        job_id: str,
+        analysis_run_id: str,
         *,
         execution_id: str,
         progress_stage: str,
@@ -91,7 +87,7 @@ class RecordingApiClient:
             (
                 "publish_progress",
                 {
-                    "job_id": job_id,
+                    "analysis_run_id": analysis_run_id,
                     "execution_id": execution_id,
                     "progress_stage": progress_stage,
                     "progress_message": progress_message,
@@ -99,21 +95,33 @@ class RecordingApiClient:
             )
         )
 
-    def register_artifacts(self, job_id: str, *, execution_id: str, artifacts) -> None:
+    def register_artifacts(self, analysis_run_id: str, *, execution_id: str, artifacts) -> None:
         self.calls.append(
             (
                 "register_artifacts",
                 {
-                    "job_id": job_id,
+                    "analysis_run_id": analysis_run_id,
                     "execution_id": execution_id,
                     "artifacts": tuple(artifacts),
                 },
             )
         )
 
-    def finalize_job(
+    def register_diagnostics(self, analysis_run_id: str, *, execution_id: str, diagnostics) -> None:
+        self.calls.append(
+            (
+                "register_diagnostics",
+                {
+                    "analysis_run_id": analysis_run_id,
+                    "execution_id": execution_id,
+                    "diagnostics": tuple(diagnostics),
+                },
+            )
+        )
+
+    def finalize_analysis_run(
         self,
-        job_id: str,
+        analysis_run_id: str,
         *,
         execution_id: str,
         outcome: str,
@@ -124,9 +132,9 @@ class RecordingApiClient:
     ) -> None:
         self.calls.append(
             (
-                "finalize_job",
+                "finalize_analysis_run",
                 {
-                    "job_id": job_id,
+                    "analysis_run_id": analysis_run_id,
                     "execution_id": execution_id,
                     "outcome": outcome,
                     "progress_stage": progress_stage,
@@ -137,27 +145,23 @@ class RecordingApiClient:
             )
         )
 
-    def check_cancel(self, job_id: str, *, execution_id: str) -> CancelCheckResult:
+    def check_cancel(self, analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
         self.calls.append(
             (
                 "check_cancel",
-                {"job_id": job_id, "execution_id": execution_id},
+                {"analysis_run_id": analysis_run_id, "execution_id": execution_id},
             )
         )
         if self.cancel_results:
             return self.cancel_results.pop(0)
         return CancelCheckResult(cancel_requested=False, status="running")
 
-    def get_job_snapshot(self, job_id: str) -> JobSnapshot:
-        self.calls.append(("get_job_snapshot", {"job_id": job_id}))
-        return self.snapshots[job_id]
-
     def resolve_artifact(self, artifact_id: str) -> ArtifactResolutionResult:
         self.calls.append(("resolve_artifact", {"artifact_id": artifact_id}))
         path = self.artifact_downloads[artifact_id]
         return ArtifactResolutionResult(
             artifact_id=artifact_id,
-            job_id="child-job",
+            analysis_run_id="child-job",
             artifact_kind="transcript_plain",
             filename=path.name,
             mime_type="text/plain; charset=utf-8",
@@ -251,7 +255,7 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
     transcriber = RecordingTranscriber()
 
     result = runTranscription(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         source_store=source_store,
@@ -261,8 +265,8 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
 
     claim_call = api_client.calls[0]
     assert claim_call == (
-        "claim_job",
-        {"job_id": execution.job_id, "worker_kind": "transcription", "task_type": "transcription.run"},
+        "claim_analysis_run",
+        {"analysis_run_id": execution.analysis_run_id, "worker_kind": "transcription", "task_type": "selection.transcription"},
     )
     assert [call[1]["progress_stage"] for call in api_client.calls if call[0] == "publish_progress"] == [
         "materializing_sources",
@@ -274,15 +278,24 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
         "transcript_plain",
         "transcript_segmented_markdown",
         "transcript_docx",
+        "run_manifest",
+        "run_diagnostics",
     ]
     finalize_call = api_client.calls[-1]
-    assert finalize_call[0] == "finalize_job"
+    assert finalize_call[0] == "finalize_analysis_run"
     assert finalize_call[1]["outcome"] == "succeeded"
     assert api_client.calls.index(register_call) < api_client.calls.index(finalize_call)
     assert result.artifacts.text_path.exists()
     assert result.artifacts.markdown_path.exists()
     assert result.artifacts.docx_path.exists()
-    assert len(artifact_store.calls) == 3
+    assert len(artifact_store.calls) == 5
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["analysis_run_id"] == execution.analysis_run_id
+    assert manifest["summary"]["included_count"] == 1
+    assert manifest["items"][0]["lineage"]["media_item_id"] == "media-source-1"
+    assert manifest["items"][0]["outcome"] == "succeeded"
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == []
     assert _required_marker() in caplog.text
 
 
@@ -323,7 +336,7 @@ def test_run_transcription_combines_sorted_inputs_before_one_final_pass(tmp_path
     monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fake_concat)
 
     result = runTranscription(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         source_store=source_store,
@@ -332,14 +345,14 @@ def test_run_transcription_combines_sorted_inputs_before_one_final_pass(tmp_path
     )
 
     assert [call[0] for call in source_store.calls] == ["uploads/first.ogg", "uploads/second.ogg"]
-    assert concat_calls == [["first.ogg", "second.ogg"]]
+    assert concat_calls == [["item-0000-source-1.ogg", "item-0001-source-2.ogg"]]
     assert len(transcriber.calls) == 1
     assert transcriber.calls[0][0].local_path == result.source.local_path
     assert result.source.local_path is not None
     assert result.source.local_path.name == "combined.wav"
 
 
-def test_run_transcription_batch_child_preserves_ordered_source_label_without_concat(
+def test_run_transcription_uses_selection_metadata_source_label_for_single_object_item(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -352,8 +365,7 @@ def test_run_transcription_batch_child_preserves_ordered_source_label_without_co
             display_name="Voice A",
             original_filename="voice.ogg",
             object_key="uploads/voice.ogg",
-        ),
-        params={"batch": {"role": "source", "source_label": "params_label"}},
+        )
     )
     api_client = RecordingApiClient(execution)
     source_store = FakeSourceStore({"uploads/voice.ogg": b"audio"})
@@ -361,12 +373,12 @@ def test_run_transcription_batch_child_preserves_ordered_source_label_without_co
     transcriber = RecordingTranscriber()
 
     def fail_concat(input_paths: list[Path], output_path: Path) -> None:
-        raise AssertionError("batch source children must not concatenate inputs first")
+        raise AssertionError("single selection item must not be concatenated")
 
     monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fail_concat)
 
     result = runTranscription(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         source_store=source_store,
@@ -375,12 +387,12 @@ def test_run_transcription_batch_child_preserves_ordered_source_label_without_co
     )
 
     assert result.source.display_name == "voice_a"
-    assert result.source.file_name == "voice.ogg"
+    assert result.source.file_name == "item-0000-source-voice.ogg"
     assert result.transcript.source_label == "voice_a"
     assert [call[0] for call in source_store.calls] == ["uploads/voice.ogg"]
 
 
-def test_run_transcription_batch_child_preserves_params_source_label_for_telegram_document_media(
+def test_run_transcription_uses_selection_metadata_source_label_for_video_object_item(
     tmp_path: Path,
 ) -> None:
     execution = _build_execution(
@@ -391,8 +403,8 @@ def test_run_transcription_batch_child_preserves_params_source_label_for_telegra
             display_name="Video attachment",
             original_filename="clip.mp4",
             object_key="telegram/clip.mp4",
-        ),
-        params={"batch": {"role": "source", "source_label": "video_b"}},
+            source_label="video_b",
+        )
     )
     api_client = RecordingApiClient(execution)
     source_store = FakeSourceStore({"telegram/clip.mp4": b"video"})
@@ -400,7 +412,7 @@ def test_run_transcription_batch_child_preserves_params_source_label_for_telegra
     transcriber = RecordingTranscriber()
 
     result = runTranscription(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         source_store=source_store,
@@ -410,11 +422,11 @@ def test_run_transcription_batch_child_preserves_params_source_label_for_telegra
 
     assert result.source.kind == "telegram_video"
     assert result.source.display_name == "video_b"
-    assert result.source.file_name == "clip.mp4"
+    assert result.source.file_name == "item-0000-source-video.mp4"
     assert result.transcript.source_label == "video_b"
 
 
-def test_run_transcription_batch_child_preserves_source_label_for_youtube_input(tmp_path: Path) -> None:
+def test_run_transcription_rejects_url_only_selection_with_item_diagnostic(tmp_path: Path) -> None:
     execution = _build_execution(
         OrderedWorkerInput(
             position=0,
@@ -423,16 +435,86 @@ def test_run_transcription_batch_child_preserves_source_label_for_youtube_input(
             source_kind="youtube_url",
             display_name="Demo video",
             source_url="https://youtu.be/demo123",
-        ),
-        params={"batch": {"role": "source", "source_label": "params_label"}},
+        )
     )
     api_client = RecordingApiClient(execution)
     source_store = FakeSourceStore({})
     artifact_store = InMemoryArtifactStore()
     transcriber = RecordingTranscriber()
 
+    with pytest.raises(worker_module.SourceMaterializationError, match="no object-backed media items"):
+        runTranscription(
+            execution.analysis_run_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            source_store=source_store,
+            artifact_store=artifact_store,
+            transcriber=transcriber,
+        )
+
+    assert source_store.calls == []
+    diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
+    diagnostics = diagnostics_call[1]["diagnostics"]
+    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == ["media-source-youtube"]
+    assert diagnostics[0]["context"]["origin_type"] == "url"
+    assert api_client.calls[-1][0] == "finalize_analysis_run"
+    assert api_client.calls[-1][1]["outcome"] == "failed"
+    assert "no object-backed media items" in api_client.calls[-1][1]["error_message"]
+    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
+    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
+        "run_manifest",
+        "run_diagnostics",
+    ]
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["summary"] == {"included_count": 0, "skipped_count": 1, "failed_count": 0}
+    assert manifest["items"][0]["outcome"] == "skipped"
+    assert manifest["items"][0]["diagnostic_ids"] == [diagnostics[0]["diagnostic_id"]]
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == list(diagnostics)
+
+
+def test_run_transcription_mixed_selection_records_item_diagnostics_and_partial_outcome(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-audio",
+            source_label="voice_a",
+            source_kind="uploaded_file",
+            display_name="Voice A",
+            original_filename="voice.ogg",
+            object_key="uploads/voice.ogg",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-note",
+            source_kind="text",
+            display_name="Manual note",
+        ),
+        OrderedWorkerInput(
+            position=2,
+            source_id="source-url",
+            source_kind="youtube_url",
+            display_name="Reference URL",
+            source_url="https://youtu.be/demo123",
+        ),
+        analysis_run_id="11111111-1111-1111-1111-111111111111",
+        root_analysis_run_id="22222222-2222-2222-2222-222222222222",
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/voice.ogg": b"audio"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    def fail_concat(input_paths: list[Path], output_path: Path) -> None:
+        raise AssertionError("single object-backed item must not be concatenated with unsupported text/url items")
+
+    monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fail_concat)
+
     result = runTranscription(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         source_store=source_store,
@@ -440,11 +522,180 @@ def test_run_transcription_batch_child_preserves_source_label_for_youtube_input(
         transcriber=transcriber,
     )
 
-    assert source_store.calls == []
-    assert result.source.kind == "youtube_url"
-    assert result.source.url == "https://youtu.be/demo123"
-    assert result.source.display_name == "youtube_c"
-    assert result.transcript.source_label == "youtube_c"
+    assert [call[0] for call in source_store.calls] == ["uploads/voice.ogg"]
+    assert len(transcriber.calls) == 1
+    assert result.source.display_name == "voice_a"
+    diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
+    diagnostics = diagnostics_call[1]["diagnostics"]
+    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == ["media-source-note", "media-source-url"]
+    assert [diagnostic["context"]["item_position"] for diagnostic in diagnostics] == [1, 2]
+    assert {diagnostic["context"]["origin_type"] for diagnostic in diagnostics} == {"text", "url"}
+    assert all(diagnostic["context"]["analysis_run_id"] == execution.analysis_run_id for diagnostic in diagnostics)
+    assert all(diagnostic["context"]["selection_id"] == execution.selection.selection_id for diagnostic in diagnostics)
+    assert all(diagnostic["context"]["selection_item_id"] for diagnostic in diagnostics)
+    assert all(diagnostic["context"]["media_item_id"] for diagnostic in diagnostics)
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "skipped", "skipped"]
+    assert manifest["summary"] == {"included_count": 1, "skipped_count": 2, "failed_count": 0}
+    assert manifest["items"][0]["artifact_kinds"] == [
+        "transcript_plain",
+        "transcript_segmented_markdown",
+        "transcript_docx",
+    ]
+    assert manifest["items"][1]["lineage"]["selection_item_id"] == "selection-item-1"
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == list(diagnostics)
+    finalize_call = api_client.calls[-1]
+    assert finalize_call[0] == "finalize_analysis_run"
+    assert finalize_call[1]["outcome"] == "partially_succeeded"
+    assert result.diagnostics == diagnostics
+
+
+def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    execution = ClaimedAnalysisRunExecution(
+        execution_id="exec-v2",
+        analysis_run_id="run-v2",
+        run_type="transcription",
+        selection=SealedSelectionInput(
+            selection_id="selection-v2",
+            option_snapshot={},
+            sealed_at="2026-05-10T12:00:00Z",
+            items=(
+                _v2_selection_item(
+                    position=0,
+                    selection_item_id="sel-item-audio",
+                    media_item_id="media-audio",
+                    source_id="source-audio",
+                    media_kind="audio",
+                    mime_type="audio/ogg",
+                    object_key="objects/audio-source",
+                    display_label="Voice message",
+                    source_label="voice_a",
+                    original_filename="misleading-video.mp4",
+                ),
+                _v2_selection_item(
+                    position=1,
+                    selection_item_id="sel-item-text",
+                    media_item_id="media-text",
+                    source_id="source-text",
+                    media_kind="text",
+                    origin_type="text",
+                    display_label="Manual note",
+                    role="context",
+                ),
+                _v2_selection_item(
+                    position=2,
+                    selection_item_id="sel-item-url",
+                    media_item_id="media-url",
+                    source_id="source-url",
+                    media_kind="url",
+                    origin_type="url",
+                    external_uri="https://example.test/reference",
+                    display_label="Reference URL",
+                    role="reference",
+                ),
+                _v2_selection_item(
+                    position=3,
+                    selection_item_id="sel-item-document",
+                    media_item_id="media-document",
+                    source_id="source-document",
+                    media_kind="document",
+                    mime_type="application/pdf",
+                    object_key="objects/document-source",
+                    display_label="Evidence PDF",
+                    original_filename="contract.mp3",
+                    role="reference",
+                ),
+            ),
+        ),
+        params={},
+        claimed_at="2026-05-10T12:01:00Z",
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"objects/audio-source": b"audio", "objects/document-source": b"pdf"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    def fail_concat(input_paths: list[Path], output_path: Path) -> None:
+        raise AssertionError("only one transcribable object-backed item should be sent to the transcriber")
+
+    monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fail_concat)
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert {Path(call[1]).name for call in source_store.calls} == {
+        "item-0000-source-audio.ogg",
+        "item-0003-source-document.pdf",
+    }
+    assert result.source.kind == "telegram_audio"
+    assert result.source.display_name == "voice_a"
+    assert result.source.file_name == "item-0000-source-audio.ogg"
+    assert result.source.local_path is not None
+    assert result.source.local_path.name == "item-0000-source-audio.ogg"
+    diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
+    diagnostics = diagnostics_call[1]["diagnostics"]
+    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == [
+        "media-text",
+        "media-url",
+        "media-document",
+    ]
+    assert [diagnostic["context"]["role"] for diagnostic in diagnostics] == ["context", "reference", "reference"]
+    assert [diagnostic["context"]["selection_item_id"] for diagnostic in diagnostics] == [
+        "sel-item-text",
+        "sel-item-url",
+        "sel-item-document",
+    ]
+    assert diagnostics[2]["context"]["materialized_filename"] == "item-0003-source-document.pdf"
+    assert api_client.calls[-1][1]["outcome"] == "partially_succeeded"
+
+
+def test_run_transcription_records_per_item_fetch_failure_without_silent_drop(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-broken",
+            source_kind="uploaded_file",
+            display_name="Broken voice",
+            original_filename="broken.ogg",
+            object_key="uploads/missing.ogg",
+        )
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({})
+    artifact_store = InMemoryArtifactStore()
+
+    with pytest.raises(worker_module.SourceMaterializationError, match="missing.ogg"):
+        runTranscription(
+            execution.analysis_run_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            source_store=source_store,
+            artifact_store=artifact_store,
+            transcriber=RecordingTranscriber(),
+        )
+
+    diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
+    diagnostics = diagnostics_call[1]["diagnostics"]
+    assert diagnostics[0]["subject_id"] == "media-source-broken"
+    assert diagnostics[0]["severity"] == "error"
+    assert diagnostics[0]["context"]["selection_item_id"] == "selection-item-0"
+    assert diagnostics[0]["context"]["media_item_id"] == "media-source-broken"
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["summary"] == {"included_count": 0, "skipped_count": 0, "failed_count": 1}
+    assert manifest["items"][0]["outcome"] == "failed"
+    assert manifest["items"][0]["diagnostic_ids"] == [diagnostics[0]["diagnostic_id"]]
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == list(diagnostics)
 
 
 def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path) -> None:
@@ -472,7 +723,7 @@ def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path
 
     with pytest.raises(WorkerCancellationRequested, match="was canceled"):
         runTranscription(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             source_store=source_store,
@@ -487,9 +738,9 @@ def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path
     ]
     assert not any(call[0] == "register_artifacts" for call in api_client.calls)
     assert api_client.calls[-1] == (
-        "finalize_job",
+        "finalize_analysis_run",
         {
-            "job_id": execution.job_id,
+            "analysis_run_id": execution.analysis_run_id,
             "execution_id": execution.execution_id,
             "outcome": "canceled",
             "progress_stage": "canceled",
@@ -571,7 +822,7 @@ def test_run_transcription_classifies_source_materialization_failures(tmp_path: 
 
     with pytest.raises(worker_module.SourceMaterializationError, match="object_key"):
         runTranscription(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             source_store=source_store,
@@ -580,15 +831,15 @@ def test_run_transcription_classifies_source_materialization_failures(tmp_path: 
         )
 
     assert api_client.calls[-1] == (
-        "finalize_job",
+        "finalize_analysis_run",
         {
-            "job_id": execution.job_id,
+            "analysis_run_id": execution.analysis_run_id,
             "execution_id": execution.execution_id,
             "outcome": "failed",
             "progress_stage": "failed",
             "progress_message": "Transcription failed",
             "error_code": "source_fetch_failed",
-            "error_message": "uploaded_file input must include object_key",
+            "error_message": "object-backed media source is missing object_key",
         },
     )
 
@@ -610,7 +861,7 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
 
     with pytest.raises(RuntimeError, match="whisper crashed"):
         runTranscription(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             source_store=source_store,
@@ -619,9 +870,9 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
         )
 
     assert api_client.calls[-1] == (
-        "finalize_job",
+        "finalize_analysis_run",
         {
-            "job_id": execution.job_id,
+            "analysis_run_id": execution.analysis_run_id,
             "execution_id": execution.execution_id,
             "outcome": "failed",
             "progress_stage": "failed",
@@ -632,272 +883,149 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
     )
 
 
-def test_run_transcription_aggregate_merges_child_artifacts_in_source_set_order(tmp_path: Path) -> None:
-    execution = _build_execution(
-        job_id="root-job",
-        root_job_id="root-job",
-        params={
-            "batch": {
-                "role": "aggregate",
-                "completion_policy": "succeed_when_all_sources_succeed",
-                "ordered_source_labels": ["voice_b", "voice_a"],
-            }
-        },
-    )
-    downloads = {
-        "plain-a": _download_file(tmp_path, "plain-a.txt", "Voice A plain\n"),
-        "md-a": _download_file(tmp_path, "md-a.md", "# Child A\n\nA segmented\n"),
-        "plain-b": _download_file(tmp_path, "plain-b.txt", "Voice B plain\n"),
-        "md-b": _download_file(tmp_path, "md-b.md", "# Child B\n\nB segmented\n"),
-    }
-    snapshots = {
-        "root-job": _snapshot(
-            "root-job",
-            labels=["voice_b", "voice_a"],
-            children=[
-                ChildJobReference(job_id="child-a", job_type="transcription", status="succeeded", version=2),
-                ChildJobReference(job_id="child-b", job_type="transcription", status="succeeded", version=2),
-            ],
-        ),
-        "child-a": _snapshot(
-            "child-a",
-            parent_job_id="root-job",
-            labels=["voice_a"],
-            artifacts=[
-                _artifact("plain-a", "transcript_plain", "a.txt"),
-                _artifact("md-a", "transcript_segmented_markdown", "a.md"),
-            ],
-        ),
-        "child-b": _snapshot(
-            "child-b",
-            parent_job_id="root-job",
-            labels=["voice_b"],
-            artifacts=[
-                _artifact("plain-b", "transcript_plain", "b.txt"),
-                _artifact("md-b", "transcript_segmented_markdown", "b.md"),
-            ],
-        ),
-    }
-    api_client = RecordingApiClient(execution, snapshots=snapshots, artifact_downloads=downloads)
-    artifact_store = InMemoryArtifactStore()
-
-    result = runTranscriptionAggregate(
-        execution.job_id,
-        workspace_root=tmp_path,
-        api_client=api_client,
-        artifact_store=artifact_store,
-    )
-
-    assert api_client.calls[0] == (
-        "claim_job",
-        {"job_id": "root-job", "worker_kind": "transcription", "task_type": "transcription.aggregate"},
-    )
-    markdown = result.artifacts.markdown_path.read_text(encoding="utf-8")
-    assert markdown.index("## Транскрибация voice_b") < markdown.index("## Транскрибация voice_a")
-    assert "B segmented" in markdown
-    assert "A segmented" in markdown
-    assert result.artifacts.text_path.read_text(encoding="utf-8") == (
-        "## Транскрибация voice_b\n\nVoice B plain\n\n"
-        "## Транскрибация voice_a\n\nVoice A plain\n"
-    )
-    assert result.artifacts.docx_path.exists()
-    docx_text = "\n".join(paragraph.text for paragraph in Document(result.artifacts.docx_path).paragraphs)
-    assert docx_text.index("Транскрибация voice_b") < docx_text.index("Транскрибация voice_a")
-    assert "Voice B plain" in docx_text
-    assert "Voice A plain" in docx_text
-    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
-    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
-        "transcript_plain",
-        "transcript_segmented_markdown",
-        "transcript_docx",
-        "source_manifest_json",
-        "batch_diagnostics_json",
-    ]
-    finalize_call = api_client.calls[-1]
-    assert finalize_call[0] == "finalize_job"
-    assert api_client.calls.index(register_call) < api_client.calls.index(finalize_call)
-    diagnostics_upload = next(call for call in artifact_store.calls if call["object_key"].endswith("batch-diagnostics.json"))
-    diagnostics = json.loads(diagnostics_upload["content"].decode("utf-8"))
-    assert diagnostics["included_count"] == 2
-    assert diagnostics["skipped_sources"] == []
-    manifest_upload = next(call for call in artifact_store.calls if call["object_key"].endswith("source-manifest.json"))
-    manifest = json.loads(manifest_upload["content"].decode("utf-8"))
-    assert manifest == {
-        "manifest_version": "batch-transcription.aggregate.v1",
-        "root_job_id": "root-job",
-        "ordered_source_labels": ["voice_b", "voice_a"],
-        "included_sources": [
-            {"source_label": "voice_b", "child_job_id": "child-b"},
-            {"source_label": "voice_a", "child_job_id": "child-a"},
-        ],
-    }
-
-
-def test_run_transcription_aggregate_fails_when_succeeded_child_artifact_is_missing(tmp_path: Path) -> None:
-    execution = _build_execution(
-        job_id="root-job",
-        root_job_id="root-job",
-        params={
-            "batch": {
-                "role": "aggregate",
-                "completion_policy": "succeed_when_all_sources_succeed",
-                "ordered_source_labels": ["voice_a"],
-            }
-        },
-    )
-    snapshots = {
-        "root-job": _snapshot(
-            "root-job",
-            labels=["voice_a"],
-            children=[ChildJobReference(job_id="child-a", job_type="transcription", status="succeeded", version=2)],
-        ),
-        "child-a": _snapshot(
-            "child-a",
-            parent_job_id="root-job",
-            labels=["voice_a"],
-            artifacts=[_artifact("plain-a", "transcript_plain", "a.txt")],
-        ),
-    }
-    api_client = RecordingApiClient(execution, snapshots=snapshots)
-
-    with pytest.raises(worker_module.MissingChildTranscriptArtifactError, match="transcript_segmented_markdown"):
-        runTranscriptionAggregate(
-            execution.job_id,
-            workspace_root=tmp_path,
-            api_client=api_client,
-            artifact_store=InMemoryArtifactStore(),
-        )
-
-    assert not any(call[0] == "register_artifacts" for call in api_client.calls)
-    assert api_client.calls[-1] == (
-        "finalize_job",
-        {
-            "job_id": "root-job",
-            "execution_id": execution.execution_id,
-            "outcome": "failed",
-            "progress_stage": "failed",
-            "progress_message": "Batch transcript aggregation failed",
-            "error_code": "missing_child_artifact",
-            "error_message": "source voice_a child child-a is missing artifact(s): transcript_segmented_markdown",
-        },
-    )
-
-
-def test_run_transcription_aggregate_best_effort_skips_failed_children(tmp_path: Path) -> None:
-    execution = _build_execution(
-        job_id="root-job",
-        root_job_id="root-job",
-        params={
-            "batch": {
-                "role": "aggregate",
-                "completion_policy": "succeed_when_any_source_succeeds",
-                "ordered_source_labels": ["voice_a", "voice_b"],
-            }
-        },
-    )
-    downloads = {
-        "plain-a": _download_file(tmp_path, "plain-a.txt", "Voice A plain\n"),
-        "md-a": _download_file(tmp_path, "md-a.md", "# Child A\n\nA segmented\n"),
-    }
-    snapshots = {
-        "root-job": _snapshot(
-            "root-job",
-            labels=["voice_a", "voice_b"],
-            children=[
-                ChildJobReference(job_id="child-a", job_type="transcription", status="succeeded", version=2),
-                ChildJobReference(job_id="child-b", job_type="transcription", status="failed", version=2),
-            ],
-        ),
-        "child-a": _snapshot(
-            "child-a",
-            parent_job_id="root-job",
-            labels=["voice_a"],
-            artifacts=[
-                _artifact("plain-a", "transcript_plain", "a.txt"),
-                _artifact("md-a", "transcript_segmented_markdown", "a.md"),
-            ],
-        ),
-        "child-b": _snapshot("child-b", parent_job_id="root-job", labels=["voice_b"], status="failed"),
-    }
-    api_client = RecordingApiClient(execution, snapshots=snapshots, artifact_downloads=downloads)
-
-    result = runTranscriptionAggregate(
-        execution.job_id,
-        workspace_root=tmp_path,
-        api_client=api_client,
-        artifact_store=InMemoryArtifactStore(),
-    )
-
-    assert [section.source_label for section in result.sections] == ["voice_a"]
-    assert result.diagnostics["skipped_sources"] == [
-        {
-            "source_label": "voice_b",
-            "reason": "child_not_succeeded",
-            "child_statuses": ["failed"],
-            "child_job_ids": ["child-b"],
-        }
-    ]
-    assert api_client.calls[-1][0] == "finalize_job"
-    assert api_client.calls[-1][1]["outcome"] == "succeeded"
-
-
 def _build_execution(
     *ordered_inputs: OrderedWorkerInput,
-    job_id: str = "job-1",
-    root_job_id: str = "root-1",
+    analysis_run_id: str = "job-1",
+    root_analysis_run_id: str = "root-1",
     params: dict[str, object] | None = None,
-) -> ClaimedJobExecution:
-    return ClaimedJobExecution(
+) -> ClaimedAnalysisRunExecution:
+    items = tuple(_selection_item_from_ordered_input(item) for item in ordered_inputs)
+    if not items:
+        items = (
+            SelectionItemSnapshot(
+                position=0,
+                media_item_id="media-empty",
+                kind="audio",
+                source_snapshot=MediaSourceSnapshot(source_id="source-empty", origin_type="object", object_key="empty.wav"),
+                display_name="empty.wav",
+                status_at_selection="ready",
+                metadata_snapshot={},
+                retention_snapshot={"state": "active"},
+            ),
+        )
+    return ClaimedAnalysisRunExecution(
         execution_id="exec-1",
-        job_id=job_id,
-        root_job_id=root_job_id,
-        parent_job_id=None,
-        retry_of_job_id=None,
-        job_type="transcription",
-        version=1,
-        ordered_inputs=ordered_inputs,
+        analysis_run_id=analysis_run_id,
+        run_type="transcription",
+        selection=SealedSelectionInput(
+            selection_id=root_analysis_run_id,
+            items=items,
+            option_snapshot={},
+            sealed_at="2026-05-10T12:00:00Z",
+        ),
         params=params or {},
+        claimed_at="2026-05-10T12:01:00Z",
     )
 
 
-def _snapshot(
-    job_id: str,
+def _selection_item_from_ordered_input(ordered_input: OrderedWorkerInput) -> SelectionItemSnapshot:
+    if ordered_input.source_kind in {"uploaded_file", "telegram_upload"}:
+        origin_type = "object"
+    elif ordered_input.source_kind in {"youtube_url", "external_url"}:
+        origin_type = "url"
+    else:
+        origin_type = ordered_input.source_kind
+    metadata_snapshot = {}
+    if ordered_input.original_filename:
+        metadata_snapshot["original_filename"] = ordered_input.original_filename
+    if ordered_input.source_label:
+        metadata_snapshot["source_label"] = ordered_input.source_label
+    if origin_type == "text":
+        kind = "text"
+    elif origin_type == "url":
+        kind = "url"
+    elif (ordered_input.original_filename or "").endswith(".mp4"):
+        kind = "video"
+    else:
+        kind = "audio"
+    mime_type = "video/mp4" if kind == "video" else "audio/ogg"
+    return SelectionItemSnapshot(
+        position=ordered_input.position,
+        selection_item_id=f"selection-item-{ordered_input.position}",
+        media_item_id=f"media-{ordered_input.source_id}",
+        kind=kind,
+        media_kind=kind,
+        mime_type=mime_type,
+        role=metadata_snapshot.get("role", "primary"),
+        labels=SelectionItemLabels(
+            display_label=ordered_input.display_name or ordered_input.source_id,
+            source_label=ordered_input.source_label,
+            original_filename=ordered_input.original_filename,
+        ),
+        source_snapshot=MediaSourceSnapshot(
+            source_id=ordered_input.source_id,
+            origin_type=origin_type,
+            external_uri=ordered_input.source_url,
+            object_key=ordered_input.object_key,
+            checksum=ordered_input.sha256,
+            size_bytes=ordered_input.size_bytes,
+            mime_type=mime_type,
+        ),
+        display_name=ordered_input.display_name or ordered_input.source_id,
+        status_at_selection="ready",
+        metadata_snapshot=metadata_snapshot,
+        retention_snapshot={"state": "active"},
+    )
+
+
+def _v2_selection_item(
     *,
-    labels: list[str],
-    status: str = "succeeded",
-    parent_job_id: str | None = None,
-    artifacts: list[ArtifactSummary] | None = None,
-    children: list[ChildJobReference] | None = None,
-) -> JobSnapshot:
-    return JobSnapshot(
-        job_id=job_id,
-        root_job_id="root-job",
-        parent_job_id=parent_job_id,
-        job_type="transcription",
-        status=status,
-        version=2,
-        source_set_items=tuple(SourceSetItem(position=index, source_label=label) for index, label in enumerate(labels)),
-        artifacts=tuple(artifacts or ()),
-        children=tuple(children or ()),
+    position: int,
+    selection_item_id: str,
+    media_item_id: str,
+    source_id: str,
+    media_kind: str,
+    origin_type: str = "object",
+    mime_type: str | None = None,
+    object_key: str | None = None,
+    external_uri: str | None = None,
+    display_label: str,
+    source_label: str | None = None,
+    original_filename: str | None = None,
+    role: str = "primary",
+) -> SelectionItemSnapshot:
+    return SelectionItemSnapshot(
+        position=position,
+        selection_item_id=selection_item_id,
+        media_item_id=media_item_id,
+        kind=media_kind,
+        media_kind=media_kind,
+        mime_type=mime_type,
+        role=role,
+        labels=SelectionItemLabels(
+            display_label=display_label,
+            source_label=source_label,
+            original_filename=original_filename,
+        ),
+        source_snapshot=MediaSourceSnapshot(
+            source_id=source_id,
+            origin_type=origin_type,
+            external_uri=external_uri,
+            object_key=object_key,
+            text_ref=f"text:{source_id}" if origin_type == "text" else None,
+            mime_type=mime_type,
+        ),
+        display_name=display_label,
+        status_at_selection="ready",
+        metadata_snapshot={
+            key: value
+            for key, value in {
+                "source_label": source_label,
+                "original_filename": original_filename,
+                "role": role,
+            }.items()
+            if value is not None
+        },
+        retention_snapshot={"state": "active"},
     )
-
-
-def _artifact(artifact_id: str, artifact_kind: str, filename: str) -> ArtifactSummary:
-    return ArtifactSummary(
-        artifact_id=artifact_id,
-        artifact_kind=artifact_kind,
-        filename=filename,
-        mime_type="text/plain; charset=utf-8",
-        size_bytes=10,
-    )
-
-
-def _download_file(tmp_path: Path, filename: str, content: str) -> Path:
-    path = tmp_path / "downloads" / filename
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return path
 
 
 def _required_marker() -> str:
     return "[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]"
+
+
+def _artifact_json(artifact_store: InMemoryArtifactStore, object_key_suffix: str) -> dict[str, object]:
+    artifact = next(call for call in artifact_store.calls if str(call["object_key"]).endswith(object_key_suffix))
+    content = artifact["content"]
+    assert isinstance(content, bytes)
+    return json.loads(content.decode("utf-8"))

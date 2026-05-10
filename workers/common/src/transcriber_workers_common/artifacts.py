@@ -32,26 +32,28 @@ _ARTIFACT_KINDS = frozenset(
         "transcript_plain",
         "transcript_segmented_markdown",
         "transcript_docx",
+        "summary_markdown",
         "report_markdown",
         "report_docx",
         "deep_research_markdown",
         "agent_result_json",
         "execution_log",
-        "source_manifest_json",
-        "batch_diagnostics_json",
+        "run_manifest",
+        "run_diagnostics",
     }
 )
 _ARTIFACT_KEY_SEGMENTS = {
     "transcript_plain": ("transcript", "plain"),
     "transcript_segmented_markdown": ("transcript", "segmented"),
     "transcript_docx": ("transcript", "docx"),
+    "summary_markdown": ("summary", "markdown"),
     "report_markdown": ("report", "markdown"),
     "report_docx": ("report", "docx"),
     "deep_research_markdown": ("deep-research", "markdown"),
     "agent_result_json": ("agent", "result"),
     "execution_log": ("logs",),
-    "source_manifest_json": (),
-    "batch_diagnostics_json": (),
+    "run_manifest": ("run", "manifest"),
+    "run_diagnostics": ("run", "diagnostics"),
 }
 
 __all__ = [
@@ -109,31 +111,31 @@ class ArtifactDescriptor:
 
 # START_CONTRACT: build_artifact_object_key
 # PURPOSE: Derive the canonical object-store key for one worker artifact.
-# INPUTS: { job_id: str - Owning job identifier, artifact_kind: str - Frozen artifact kind, filename: str - Stored filename }
+# INPUTS: { analysis_run_id: str - Owning analysis run identifier, artifact_kind: str - Frozen artifact kind, filename: str - Stored filename }
 # OUTPUTS: { str - Canonical `artifacts/...` object key }
 # SIDE_EFFECTS: none
 # LINKS: M-WORKER-COMMON, M-CONTRACTS
 # END_CONTRACT: build_artifact_object_key
-def build_artifact_object_key(job_id: str, artifact_kind: str, filename: str) -> str:
+def build_artifact_object_key(analysis_run_id: str, artifact_kind: str, filename: str) -> str:
     # START_BLOCK_BLOCK_BUILD_CANONICAL_ARTIFACT_KEY
-    _require(bool(job_id), "job_id must not be empty")
+    _require(bool(analysis_run_id), "analysis_run_id must not be empty")
     _require(artifact_kind in _ARTIFACT_KEY_SEGMENTS, "invalid artifact_kind")
     _require(bool(filename), "filename must not be empty")
-    return str(PurePosixPath("artifacts", job_id, *_ARTIFACT_KEY_SEGMENTS[artifact_kind], filename))
+    return str(PurePosixPath("artifacts", analysis_run_id, *_ARTIFACT_KEY_SEGMENTS[artifact_kind], filename))
     # END_BLOCK_BLOCK_BUILD_CANONICAL_ARTIFACT_KEY
 
 
 # START_CONTRACT: ArtifactWriter
 # PURPOSE: Persist artifacts through an injected store and return canonical descriptors for API registration.
-# INPUTS: { job_id: str - Owning job identifier, object_store: ArtifactObjectStore - Durable object-store boundary }
+# INPUTS: { analysis_run_id: str - Owning analysis run identifier, object_store: ArtifactObjectStore - Durable object-store boundary }
 # OUTPUTS: { ArtifactWriter - Reusable artifact-writing helper }
 # SIDE_EFFECTS: object storage IO through the injected store
 # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
 # END_CONTRACT: ArtifactWriter
 class ArtifactWriter:
-    def __init__(self, *, job_id: str, object_store: ArtifactObjectStore) -> None:
-        _require(bool(job_id), "job_id must not be empty")
-        self.job_id = job_id
+    def __init__(self, *, analysis_run_id: str, object_store: ArtifactObjectStore) -> None:
+        _require(bool(analysis_run_id), "analysis_run_id must not be empty")
+        self.analysis_run_id = analysis_run_id
         self.object_store = object_store
 
     # START_CONTRACT: write_bytes_artifact
@@ -153,7 +155,7 @@ class ArtifactWriter:
         format: str | None = None,
     ) -> ArtifactDescriptor:
         # START_BLOCK_BLOCK_WRITE_ARTIFACT_BYTES
-        object_key = build_artifact_object_key(self.job_id, artifact_kind, filename)
+        object_key = build_artifact_object_key(self.analysis_run_id, artifact_kind, filename)
         self.object_store.put_bytes(object_key=object_key, content=content, mime_type=mime_type)
         return ArtifactDescriptor(
             artifact_kind=artifact_kind,

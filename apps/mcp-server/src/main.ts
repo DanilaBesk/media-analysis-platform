@@ -1,8 +1,8 @@
 // FILE: apps/mcp-server/src/main.ts
-// VERSION: 1.0.0
+// VERSION: 2.0.0
 // START_MODULE_CONTRACT
-// PURPOSE: Provide the compose-ready executable launcher for the MCP adapter shell.
-// SCOPE: Bootstrap the mapped MCP shell, log readiness, and keep the process alive for runtime health convergence.
+// PURPOSE: Provide the executable stdio launcher for the real MCP protocol runtime.
+// SCOPE: Bootstrap the domain-first MCP server, connect StdioServerTransport, and keep all protocol traffic on stdio.
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-INFRA-COMPOSE
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: SCRIPT
@@ -10,22 +10,42 @@
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
-//   LAST_CHANGE: v1.0.0 - Added the compose-ready MCP adapter launcher for runtime health convergence.
+//   LAST_CHANGE: v2.0.0 - Replaced the keep-alive launcher with official MCP SDK stdio transport connection.
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
-//   launch-mcp-adapter - Bootstrap the MCP shell, log readiness, and keep the process alive under compose.
+//   launch-mcp-stdio - Bootstrap the SDK server and connect it to StdioServerTransport.
 // END_MODULE_MAP
 
-import { bootstrapMcpServerShell, describeMcpServerShell } from "./index.ts";
+import { pathToFileURL } from "node:url";
 
-const MARKER = "[McpAdapter][main][BLOCK_LAUNCH_MCP_ADAPTER]";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-export function main(): void {
-  const shell = bootstrapMcpServerShell();
-  const description = describeMcpServerShell(shell);
-  console.info(`${MARKER} api_base_url=${description.apiBaseUrl} tool_count=${description.toolCount}`);
+import { bootstrapMcpServerRuntime, describeMcpServerRuntime } from "./index.ts";
+
+const MARKER = "[McpAdapter][main][BLOCK_LAUNCH_MCP_STDIO]";
+
+function isDirectRun(): boolean {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(entrypoint).href);
 }
 
-main();
-setInterval(() => undefined, 60_000);
+// START_BLOCK_BLOCK_LAUNCH_MCP_STDIO
+export async function main(): Promise<void> {
+  const runtime = bootstrapMcpServerRuntime();
+  const transport = new StdioServerTransport();
+  await runtime.domainRuntime.server.connect(transport);
+
+  const description = describeMcpServerRuntime(runtime);
+  console.error(
+    `${MARKER} api_base_url=${description.apiBaseUrl} tool_count=${description.toolCount}`,
+  );
+}
+// END_BLOCK_BLOCK_LAUNCH_MCP_STDIO
+
+if (isDirectRun()) {
+  main().catch((error: unknown) => {
+    console.error("[McpAdapter][main][ERROR]", error);
+    process.exit(1);
+  });
+}

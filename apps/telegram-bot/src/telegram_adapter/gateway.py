@@ -1,467 +1,360 @@
 # FILE: apps/telegram-bot/src/telegram_adapter/gateway.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Provide the API-backed processing gateway that lets the Telegram adapter preserve UX while delegating business logic to the HTTP API.
-# SCOPE: Submit single or combined Telegram sources, poll for terminal jobs, resolve artifacts, download files to packet-local storage, and shape callback flows without local orchestration logic.
+# PURPOSE: Adapt Telegram inputs and controls to API-owned inbox, selection, and analysis_run state.
+# SCOPE: Ingest text, links, Telegram file metadata, refresh inbox status, remove items, create selections, and start runs.
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP, M-CONTRACTS
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
 # MAP_MODE: SUMMARY
 # END_MODULE_CONTRACT
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added the packet-local Telegram gateway that turns API jobs into Telegram-sendable artifacts.
-# END_CHANGE_SUMMARY
-#
-# START_MODULE_MAP
-#   submit-telegram-sources - Route single and combined Telegram sources to the API with polling-default delivery.
-#   wait-for-terminal-job - Poll job snapshots until terminal state without taking over API lineage ownership.
-#   materialize-artifacts - Resolve and download transcript, report, and deep-research artifacts into packet-local storage.
-# END_MODULE_MAP
 
 from __future__ import annotations
 
-import hashlib
 import re
-import time
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Any, Literal
+from urllib.parse import urlparse
 
-from telegram_adapter.api_client import TelegramApiClient, UploadFilePart
+from telegram_adapter.api_client import TelegramApiClient
+from telegram_adapter.policy import TelegramChatPolicy, TelegramChatScope
 
-from transcriber_workers_common.domain import (
-    ProcessedJob,
-    ReportArtifacts,
-    SourceCandidate,
-    TranscriptArtifacts,
-)
-
-TERMINAL_JOB_STATUSES = {"succeeded", "failed", "canceled"}
-BATCH_MANIFEST_VERSION = "batch-transcription.v1"
-BATCH_COMPLETION_POLICY = "succeed_when_all_sources_succeed"
+JsonObject = dict[str, Any]
+IngressStatus = Literal["accepted", "rejected"]
+ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested"}
+TERMINAL_RUN_STATUSES = {"partially_succeeded", "succeeded", "failed", "canceled", "expired"}
+VISIBLE_RUN_STATUSES = ACTIVE_RUN_STATUSES | TERMINAL_RUN_STATUSES
+URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s<>]+", re.IGNORECASE)
+SUPPORTED_URL_SCHEMES = {"http", "https"}
 
 
-class TelegramApiProcessingGateway:
+@dataclass(frozen=True, slots=True)
+class TelegramFileInput:
+    kind: str
+    file_id: str
+    file_unique_id: str | None = None
+    file_name: str | None = None
+    content_type: str | None = None
+    size_bytes: int | None = None
+    caption: str | None = None
+    media_group_id: str | None = None
+    message_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IngressRecord:
+    status: IngressStatus
+    label: str
+    reason: str | None = None
+    media_item: JsonObject | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InboxStatus:
+    owner: JsonObject
+    collection: JsonObject | None
+    items: list[JsonObject]
+    page: JsonObject
+    active_runs: list[JsonObject]
+    recent_runs: list[JsonObject]
+    artifacts_by_run: dict[str, list[JsonObject]]
+    diagnostics_by_run: dict[str, list[JsonObject]]
+    rejected: list[IngressRecord]
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisStartResult:
+    selection: JsonObject
+    analysis_run: JsonObject
+
+
+class TelegramInboxGateway:
     def __init__(
         self,
         api_client: TelegramApiClient,
-        storage_dir: Path,
         *,
-        poll_interval_seconds: float = 1.0,
-        poll_timeout_seconds: float = 300.0,
+        page_size: int = 5,
+        chat_policy: TelegramChatPolicy | None = None,
     ) -> None:
         self.api_client = api_client
-        self.storage_dir = storage_dir
-        self.poll_interval_seconds = poll_interval_seconds
-        self.poll_timeout_seconds = poll_timeout_seconds
+        self.page_size = page_size
+        self.chat_policy = chat_policy or TelegramChatPolicy()
 
-    def process_source(self, source: SourceCandidate) -> ProcessedJob:
-        if source.kind == "youtube_url" and source.url:
-            response = self.api_client.create_from_url(
-                url=source.url,
-                display_name=source.display_name,
-                delivery_strategy="polling",
-            )
-            job_snapshot = self._unwrap_job(response)
-            terminal_job = self._wait_for_terminal_job(job_snapshot["job_id"])
-            return self._materialize_transcription_job(terminal_job, source)
-
-        upload_part = self._build_upload_part(source)
-        response = self.api_client.create_upload(
-            files=[upload_part],
-            display_name=source.display_name,
-            delivery_strategy="polling",
-        )
-        jobs = response.get("jobs", [])
-        if not jobs:
-            raise RuntimeError("API did not return transcription jobs")
-        terminal_job = self._wait_for_terminal_job(jobs[0]["job_id"])
-        return self._materialize_transcription_job(terminal_job, source)
-
-    def process_source_group(self, sources: list[SourceCandidate]) -> ProcessedJob:
-        if not sources:
-            raise RuntimeError("Telegram batch submission requires at least one source")
-        manifest, upload_parts = self._build_batch_manifest_and_files(sources)
-        response = self.api_client.create_batch(
-            files=upload_parts,
-            source_manifest=manifest,
-            display_name=_build_batch_display_name(sources),
-            delivery_strategy="polling",
-        )
-        job_snapshot = self._unwrap_job(response)
-        terminal_job = self._wait_for_terminal_job(job_snapshot["job_id"])
-        synthetic_source = SourceCandidate(
-            source_id=sources[0].source_id,
-            kind=sources[0].kind,
-            display_name=_build_batch_display_name(sources),
-            url=None,
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=None,
-        )
-        return self._materialize_transcription_job(terminal_job, synthetic_source)
-
-    def create_batch_draft(self, *, owner: dict[str, str], display_name: str | None = None) -> dict:
-        response = self.api_client.create_batch_draft(owner=owner, display_name=display_name)
-        return self._unwrap_draft(response)
-
-    def load_batch_draft(self, *, draft_id: str, owner: dict[str, str]) -> dict:
-        response = self.api_client.get_batch_draft(draft_id=draft_id, owner=owner)
-        return self._unwrap_draft(response)
-
-    def add_source_to_draft(self, draft: dict, *, owner: dict[str, str], source: SourceCandidate) -> dict:
-        expected_version = int(draft["version"])
-        draft_id = draft["draft_id"]
-        if source.kind == "youtube_url":
-            if not source.url:
-                raise RuntimeError("Draft URL source is missing a URL")
-            response = self.api_client.add_batch_draft_url_item(
-                draft_id=draft_id,
-                owner=owner,
-                expected_version=expected_version,
-                item={
-                    "source_kind": "youtube_url",
-                    "url": source.url,
-                    "display_name": source.display_name,
-                },
-            )
-            return self._unwrap_draft(response)
-
-        upload_part = self._build_upload_part(source)
-        response = self.api_client.add_batch_draft_upload_item(
-            draft_id=draft_id,
-            owner=owner,
-            expected_version=expected_version,
-            item={
-                "source_kind": "telegram_upload",
-                "display_name": source.display_name,
-                "original_filename": upload_part.filename,
-                "content_type": upload_part.content_type,
-                "size_bytes": len(upload_part.content_bytes),
-            },
-            file=UploadFilePart(
-                filename=upload_part.filename,
-                content_type=upload_part.content_type,
-                content_bytes=upload_part.content_bytes,
-                field_name="file",
-            ),
-        )
-        return self._unwrap_draft(response)
-
-    def remove_draft_item(
+    def scope_for(
         self,
         *,
-        draft_id: str,
-        owner: dict[str, str],
-        expected_version: int,
-        item_id: str,
-    ) -> dict:
-        return self._unwrap_draft(
-            self.api_client.remove_batch_draft_item(
-                draft_id=draft_id,
-                owner=owner,
-                expected_version=expected_version,
-                item_id=item_id,
-            )
+        chat_id: int,
+        user_id: int | None,
+        chat_type: str | None = "private",
+        message_thread_id: int | None = None,
+    ) -> TelegramChatScope:
+        return self.chat_policy.resolve(
+            chat_id=chat_id,
+            user_id=user_id,
+            chat_type=chat_type,
+            message_thread_id=message_thread_id,
         )
 
-    def clear_batch_draft(self, *, draft_id: str, owner: dict[str, str], expected_version: int) -> dict:
-        return self._unwrap_draft(
-            self.api_client.clear_batch_draft(
-                draft_id=draft_id,
-                owner=owner,
-                expected_version=expected_version,
-            )
-        )
-
-    def submit_batch_draft(
+    def owner_for(
         self,
         *,
-        draft_id: str,
-        owner: dict[str, str],
-        expected_version: int,
-    ) -> ProcessedJob:
-        response = self.api_client.submit_batch_draft(
-            draft_id=draft_id,
+        chat_id: int,
+        user_id: int | None,
+        chat_type: str | None = "private",
+        message_thread_id: int | None = None,
+    ) -> JsonObject:
+        return self.scope_for(
+            chat_id=chat_id,
+            user_id=user_id,
+            chat_type=chat_type,
+            message_thread_id=message_thread_id,
+        ).owner
+
+    def add_text(self, *, owner: JsonObject, text: str, message_id: int | None = None) -> IngressRecord:
+        clean = text.strip()
+        if not clean:
+            return IngressRecord(status="rejected", label="Text message", reason="empty_text")
+        item = self.api_client.add_media_item(
             owner=owner,
-            expected_version=expected_version,
-            delivery_strategy="polling",
+            kind="text",
+            source={"origin_type": "text", "text": clean},
+            display_name=_display_name(clean, fallback="Text"),
+            metadata=_telegram_metadata(message_id=message_id),
         )
-        job_snapshot = response.get("job") or {}
-        if not job_snapshot:
-            draft = self._unwrap_draft(response)
-            submitted_root_job_id = draft.get("submitted_root_job_id")
-            if not submitted_root_job_id:
-                raise RuntimeError("API did not return submitted batch root job")
-            job_snapshot = self._unwrap_job(self.api_client.get_job(submitted_root_job_id))
-        terminal_job = self._wait_for_terminal_job(job_snapshot["job_id"])
-        synthetic_source = SourceCandidate(
-            source_id=draft_id,
-            kind="telegram_audio",
-            display_name=terminal_job.get("display_name") or "Telegram basket",
-            url=None,
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=None,
-        )
-        return self._materialize_transcription_job(terminal_job, synthetic_source)
+        return IngressRecord(status="accepted", label=item.get("display_name", "Text"), media_item=item)
 
-    def load_job(self, job_id: str) -> ProcessedJob:
-        job_snapshot = self._unwrap_job(self.api_client.get_job(job_id))
-        source = self._source_from_job(job_snapshot)
-        return self._materialize_transcription_job(job_snapshot, source)
-
-    def ensure_report(self, job_id: str, report_prompt_suffix: str = "") -> ProcessedJob:
-        del report_prompt_suffix
-        report_job = self._unwrap_job(
-            self.api_client.create_report(job_id, delivery_strategy="polling")
+    def add_link(self, *, owner: JsonObject, url: str, message_id: int | None = None) -> IngressRecord:
+        clean = url.strip().rstrip(".,)")
+        parsed = urlparse(clean)
+        if parsed.scheme not in SUPPORTED_URL_SCHEMES:
+            return IngressRecord(status="rejected", label=clean or "Link", reason="unsupported_url_scheme")
+        if not parsed.netloc:
+            return IngressRecord(status="rejected", label=clean or "Link", reason="invalid_url")
+        item = self.api_client.add_media_item(
+            owner=owner,
+            kind="url",
+            source={"origin_type": "url", "url": clean},
+            display_name=clean,
+            metadata=_telegram_metadata(message_id=message_id),
         )
-        terminal_report_job = self._wait_for_terminal_job(report_job["job_id"])
-        parent = self.load_job(job_id)
-        report = self._download_report_artifacts(
-            terminal_report_job["artifacts"],
-            parent.workspace_dir,
-            report_job_id=terminal_report_job["job_id"],
-        )
-        return ProcessedJob(
-            job_id=parent.job_id,
-            source=parent.source,
-            workspace_dir=parent.workspace_dir,
-            transcript=parent.transcript,
-            report=report,
-            metadata_path=parent.metadata_path,
-            errors=parent.errors,
-        )
+        return IngressRecord(status="accepted", label=item.get("display_name", clean), media_item=item)
 
-    def ensure_deep_research(self, job_id: str) -> Path:
-        deep_job = self._unwrap_job(
-            self.api_client.create_deep_research(job_id, delivery_strategy="polling")
-        )
-        terminal_job = self._wait_for_terminal_job(deep_job["job_id"])
-        workspace_dir = self.storage_dir / "api-jobs" / terminal_job["job_id"]
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        return self._download_artifact_by_kind(
-            terminal_job["artifacts"],
-            "deep_research_markdown",
-            workspace_dir / "deep_research",
-            fallback_name="evidence-research-final-report.md",
-        )
-
-    def _wait_for_terminal_job(self, job_id: str) -> dict:
-        started_at = time.monotonic()
-        while True:
-            job = self._unwrap_job(self.api_client.get_job(job_id))
-            status = job.get("status")
-            if status in TERMINAL_JOB_STATUSES:
-                if status != "succeeded":
-                    raise RuntimeError(f"API job {job_id} finished with status {status}")
-                return job
-            if time.monotonic() - started_at > self.poll_timeout_seconds:
-                raise TimeoutError(f"Timed out waiting for job {job_id}")
-            time.sleep(self.poll_interval_seconds)
-
-    def _materialize_transcription_job(self, job_snapshot: dict, source: SourceCandidate) -> ProcessedJob:
-        workspace_dir = self.storage_dir / "api-jobs" / job_snapshot["job_id"]
-        workspace_dir.mkdir(parents=True, exist_ok=True)
-        transcript_dir = workspace_dir / "transcript"
-        transcript_dir.mkdir(parents=True, exist_ok=True)
-
-        transcript = TranscriptArtifacts(
-            markdown_path=self._download_artifact_by_kind(
-                job_snapshot["artifacts"],
-                "transcript_segmented_markdown",
-                transcript_dir,
-                fallback_name="transcript.md",
-            ),
-            docx_path=self._download_artifact_by_kind(
-                job_snapshot["artifacts"],
-                "transcript_docx",
-                transcript_dir,
-                fallback_name="transcript.docx",
-            ),
-            text_path=self._download_artifact_by_kind(
-                job_snapshot["artifacts"],
-                "transcript_plain",
-                transcript_dir,
-                fallback_name="transcript.txt",
-            ),
-        )
-
-        return ProcessedJob(
-            job_id=job_snapshot["job_id"],
+    def add_file(self, *, owner: JsonObject, file_input: TelegramFileInput) -> IngressRecord:
+        if not file_input.file_id.strip():
+            return IngressRecord(status="rejected", label=file_input.file_name or file_input.kind, reason="missing_file_id")
+        display_name = file_input.file_name or _kind_label(file_input.kind)
+        object_ref = f"telegram://file/{file_input.file_id}"
+        source: JsonObject = {
+            "origin_type": "object",
+            "object_ref": object_ref,
+            "original_filename": display_name,
+        }
+        if file_input.content_type:
+            source["content_type"] = file_input.content_type
+        if file_input.size_bytes:
+            source["size_bytes"] = file_input.size_bytes
+        item = self.api_client.add_media_item(
+            owner=owner,
+            kind=file_input.kind,
             source=source,
-            workspace_dir=workspace_dir,
-            transcript=transcript,
-            report=None,
-            metadata_path=None,
-        )
-
-    def _download_report_artifacts(
-        self,
-        artifacts: list[dict],
-        workspace_dir: Path,
-        *,
-        report_job_id: str | None = None,
-    ) -> ReportArtifacts:
-        report_dir = workspace_dir / "report"
-        report_dir.mkdir(parents=True, exist_ok=True)
-        return ReportArtifacts(
-            job_id=report_job_id,
-            markdown_path=self._download_artifact_by_kind(
-                artifacts,
-                "report_markdown",
-                report_dir,
-                fallback_name="report.md",
-            ),
-            docx_path=self._download_artifact_by_kind(
-                artifacts,
-                "report_docx",
-                report_dir,
-                fallback_name="report.docx",
+            display_name=display_name,
+            metadata=_telegram_metadata(
+                message_id=file_input.message_id,
+                media_group_id=file_input.media_group_id,
+                file_unique_id=file_input.file_unique_id,
+                caption=file_input.caption,
             ),
         )
+        return IngressRecord(status="accepted", label=item.get("display_name", display_name), media_item=item)
 
-    def _download_artifact_by_kind(
+    def add_message_inputs(
         self,
-        artifacts: list[dict],
-        artifact_kind: str,
-        target_dir: Path,
         *,
-        fallback_name: str,
-    ) -> Path:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        artifact = next((item for item in artifacts if item.get("artifact_kind") == artifact_kind), None)
-        if artifact is None:
-            raise FileNotFoundError(f"Artifact {artifact_kind} is missing")
+        owner: JsonObject,
+        text: str | None = None,
+        files: list[TelegramFileInput] | None = None,
+        message_id: int | None = None,
+    ) -> list[IngressRecord]:
+        records: list[IngressRecord] = []
+        if text:
+            links = list(extract_links(text))
+            if links:
+                records.extend(self.add_link(owner=owner, url=link, message_id=message_id) for link in links)
+                remaining_text = URL_RE.sub("", text).strip()
+                if remaining_text:
+                    records.append(self.add_text(owner=owner, text=remaining_text, message_id=message_id))
+            else:
+                records.append(self.add_text(owner=owner, text=text, message_id=message_id))
+        for file_input in files or []:
+            records.append(self.add_file(owner=owner, file_input=file_input))
+        if not records:
+            records.append(IngressRecord(status="rejected", label="Telegram message", reason="unsupported_message"))
+        return records
 
-        artifact_resolution = self.api_client.resolve_internal_artifact_download_access(artifact["artifact_id"])
-        filename = artifact_resolution.get("filename") or fallback_name
-        destination = target_dir / filename
-        destination.write_bytes(self.api_client.download_bytes(artifact_resolution["download"]["url"]))
-        return destination
-
-    def _build_upload_part(self, source: SourceCandidate) -> UploadFilePart:
-        if source.local_path is None:
-            raise RuntimeError("Telegram source must be downloaded locally before API submission")
-        content_type = source.mime_type or "application/octet-stream"
-        return UploadFilePart(
-            filename=source.file_name or source.local_path.name,
-            content_type=content_type,
-            content_bytes=source.local_path.read_bytes(),
-        )
-
-    def _build_batch_manifest_and_files(
+    def restore_status(
         self,
-        sources: list[SourceCandidate],
-    ) -> tuple[dict, list[UploadFilePart]]:
-        labels = _build_stable_source_labels(sources)
-        manifest_sources: dict[str, dict[str, str]] = {}
-        upload_parts: list[UploadFilePart] = []
-
-        for label, source in zip(labels, sources):
-            if source.kind == "youtube_url":
-                if not source.url:
-                    raise RuntimeError("Batch URL source is missing a URL")
-                manifest_sources[label] = {
-                    "source_kind": "youtube_url",
-                    "url": source.url,
-                    "display_name": source.display_name,
-                }
-                continue
-
-            if source.local_path is None:
-                raise RuntimeError("Telegram source must be downloaded locally before API batch submission")
-            file_name = source.file_name or source.local_path.name
-            manifest_sources[label] = {
-                "source_kind": "telegram_upload",
-                "file_part": label,
-                "display_name": source.display_name,
-                "original_filename": file_name,
-            }
-            upload_parts.append(
-                UploadFilePart(
-                    filename=file_name,
-                    content_type=source.mime_type or "application/octet-stream",
-                    content_bytes=source.local_path.read_bytes(),
-                    field_name=label,
-                )
+        *,
+        owner: JsonObject,
+        cursor: str | None = None,
+        rejected: list[IngressRecord] | None = None,
+    ) -> InboxStatus:
+        collection: JsonObject | None
+        try:
+            collection = self.api_client.get_inbox_collection(owner=owner)
+        except Exception:
+            collection = None
+        page = self.api_client.list_media_items(owner=owner, cursor=cursor, page_size=self.page_size)
+        runs_page = self.api_client.list_analysis_runs(owner=owner, page_size=10)
+        recent_runs = [
+            run
+            for run in runs_page.get("items", [])
+            if run.get("status") in VISIBLE_RUN_STATUSES
+        ]
+        active_runs = [
+            run
+            for run in recent_runs
+            if run.get("status") in ACTIVE_RUN_STATUSES
+        ]
+        terminal_runs = [
+            run
+            for run in recent_runs
+            if run.get("status") in TERMINAL_RUN_STATUSES and run.get("analysis_run_id")
+        ]
+        artifacts_by_run: dict[str, list[JsonObject]] = {}
+        diagnostics_by_run: dict[str, list[JsonObject]] = {}
+        for run in terminal_runs[:5]:
+            run_id = str(run["analysis_run_id"])
+            artifacts_by_run[run_id] = list(
+                self.api_client.list_artifacts(owner=owner, analysis_run_id=run_id, page_size=3).get("items", [])
             )
-
-        return (
-            {
-                "manifest_version": BATCH_MANIFEST_VERSION,
-                "ordered_source_labels": labels,
-                "sources": manifest_sources,
-                "completion_policy": BATCH_COMPLETION_POLICY,
-            },
-            upload_parts,
+            diagnostics_by_run[run_id] = list(
+                self.api_client.list_diagnostics(
+                    owner=owner,
+                    subject_type="analysis_run",
+                    subject_id=run_id,
+                    page_size=3,
+                ).get("items", [])
+            )
+        return InboxStatus(
+            owner=owner,
+            collection=collection,
+            items=list(page.get("items", [])),
+            page=dict(page.get("page", {})),
+            active_runs=active_runs,
+            recent_runs=recent_runs,
+            artifacts_by_run=artifacts_by_run,
+            diagnostics_by_run=diagnostics_by_run,
+            rejected=list(rejected or []),
         )
 
-    def _source_from_job(self, job_snapshot: dict) -> SourceCandidate:
-        items = (job_snapshot.get("source_set") or {}).get("items") or []
-        source = items[0]["source"] if items else {}
-        return SourceCandidate(
-            source_id=source.get("source_id", job_snapshot["job_id"]),
-            kind=source.get("source_kind", "telegram_audio"),
-            display_name=source.get("display_name") or job_snapshot.get("display_name") or "Telegram source",
-            url=source.get("source_url"),
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=source.get("original_filename"),
+    def remove_visible_slot(self, *, owner: JsonObject, slot: int, cursor: str | None = None) -> InboxStatus:
+        status = self.restore_status(owner=owner, cursor=cursor)
+        if slot < 1 or slot > len(status.items):
+            raise RuntimeError("slot_not_visible")
+        media_item_id = status.items[slot - 1].get("media_item_id")
+        if not media_item_id:
+            raise RuntimeError("slot_missing_media_item_id")
+        collection = status.collection or self.api_client.get_inbox_collection(owner=owner)
+        self.api_client.remove_collection_item(
+            owner=owner,
+            collection_id=collection["collection_id"],
+            media_item_id=media_item_id,
+            expected_version=int(collection["version"]),
         )
+        return self.restore_status(owner=owner, cursor=cursor)
 
-    def _unwrap_job(self, payload: dict) -> dict:
-        job = payload.get("job")
-        if isinstance(job, dict):
-            return job
-        return payload
+    def clear_visible_items(self, *, owner: JsonObject, cursor: str | None = None) -> InboxStatus:
+        status = self.restore_status(owner=owner, cursor=cursor)
+        if not status.items:
+            return status
+        collection = status.collection or self.api_client.get_inbox_collection(owner=owner)
+        version = int(collection["version"])
+        for item in status.items:
+            media_item_id = item.get("media_item_id")
+            if not media_item_id:
+                continue
+            collection = self.api_client.remove_collection_item(
+                owner=owner,
+                collection_id=collection["collection_id"],
+                media_item_id=media_item_id,
+                expected_version=version,
+            )
+            version = int(collection["version"])
+        return self.restore_status(owner=owner, cursor=cursor)
 
-    def _unwrap_draft(self, payload: dict) -> dict:
-        draft = payload.get("draft")
-        if not isinstance(draft, dict):
-            raise RuntimeError("API did not return batch draft")
-        return draft
+    def start_analysis(
+        self,
+        *,
+        owner: JsonObject,
+        media_item_ids: list[str] | None = None,
+        run_type: str = "transcription",
+    ) -> AnalysisStartResult:
+        collection = self.api_client.get_inbox_collection(owner=owner)
+        item_ids = media_item_ids or [
+            item["media_item_id"]
+            for item in collection.get("items", [])
+            if item.get("media_item_id")
+        ]
+        if not item_ids:
+            raise RuntimeError("inbox_empty")
+        selection = self.api_client.create_selection(
+            owner=owner,
+            source_collection_id=collection["collection_id"],
+            items=[
+                {"media_item_id": media_item_id, "position": index}
+                for index, media_item_id in enumerate(item_ids)
+            ],
+            option_snapshot={"adapter": "telegram", "source": "inbox"},
+            created_by="telegram",
+        )
+        run = self.api_client.create_analysis_run(
+            owner=owner,
+            selection_id=selection["selection_id"],
+            run_type=run_type,
+            delivery={"strategy": "polling"},
+        )
+        return AnalysisStartResult(selection=selection, analysis_run=run)
+
+    def get_run_status(self, *, owner: JsonObject, analysis_run_id: str) -> JsonObject:
+        return self.api_client.get_analysis_run(owner=owner, analysis_run_id=analysis_run_id)
 
 
-def _build_batch_display_name(sources: list[SourceCandidate]) -> str:
-    if len(sources) == 1:
-        return sources[0].display_name
-    return f"Telegram basket ({len(sources)} sources)"
+def extract_links(text: str) -> tuple[str, ...]:
+    return tuple(match.group(0) for match in URL_RE.finditer(text or ""))
 
 
-def _build_stable_source_labels(sources: list[SourceCandidate]) -> list[str]:
-    labels: list[str] = []
-    used: set[str] = set()
-    for index, source in enumerate(sources, start=1):
-        label = _source_label_from_candidate(source, index=index)
-        if label in used:
-            label = f"{label}_{_short_hash(_source_label_seed(source, index=index))}"
-        while label in used:
-            label = f"{label[:55]}_{index}"
-        used.add(label)
-        labels.append(label[:64])
-    return labels
+def _display_name(text: str, *, fallback: str) -> str:
+    clean = " ".join(text.split())
+    return clean[:64] if clean else fallback
 
 
-def _source_label_from_candidate(source: SourceCandidate, *, index: int) -> str:
-    seed = _source_label_seed(source, index=index)
-    slug = re.sub(r"[^a-z0-9_-]+", "_", seed.lower()).strip("_-")
-    slug = re.sub(r"_+", "_", slug)
-    if not slug or not slug[0].isalpha():
-        prefix = "url" if source.kind == "youtube_url" else "telegram"
-        slug = f"{prefix}_{slug or index}"
-    digest = _short_hash(seed)
-    max_stem = 64 - len(digest) - 1
-    return f"{slug[:max_stem].rstrip('_-')}_{digest}"
+def _kind_label(kind: str) -> str:
+    labels = {
+        "photo": "Telegram photo",
+        "image": "Telegram image",
+        "video": "Telegram video",
+        "document": "Telegram document",
+        "audio": "Telegram audio",
+        "voice": "Telegram voice",
+        "file": "Telegram file",
+    }
+    return labels.get(kind, "Telegram media")
 
 
-def _source_label_seed(source: SourceCandidate, *, index: int) -> str:
-    if source.url:
-        return source.url
-    for value in (source.source_id, source.file_name, source.file_unique_id, source.telegram_file_id):
-        if value:
-            return value
-    return f"source-{index}"
-
-
-def _short_hash(value: str) -> str:
-    return hashlib.sha1(value.encode("utf-8")).hexdigest()[:8]
+def _telegram_metadata(
+    *,
+    message_id: int | None = None,
+    media_group_id: str | None = None,
+    file_unique_id: str | None = None,
+    caption: str | None = None,
+) -> JsonObject:
+    metadata: JsonObject = {"adapter": "telegram"}
+    if message_id is not None:
+        metadata["message_id"] = message_id
+    if media_group_id:
+        metadata["media_group_id"] = media_group_id
+    if file_unique_id:
+        metadata["file_unique_id"] = file_unique_id
+    if caption:
+        metadata["caption"] = caption
+    return metadata

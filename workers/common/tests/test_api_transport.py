@@ -29,7 +29,7 @@ from urllib import error
 import pytest
 
 import transcriber_workers_common.api as api_module
-from transcriber_workers_common.api import InternalApiConfig, InternalApiUnavailableError, JobApiClient
+from transcriber_workers_common.api import InternalApiConfig, InternalApiUnavailableError, AnalysisRunControlClient
 
 
 class DummyResponse:
@@ -49,10 +49,13 @@ class DummyResponse:
 def test_build_url_normalizes_paths_and_query() -> None:
     config = InternalApiConfig(base_url="http://internal.local/")
 
-    assert config.build_url("internal/v1/jobs/job-1/claim") == "http://internal.local/internal/v1/jobs/job-1/claim"
     assert (
-        config.build_url("/internal/v1/jobs/job-1/cancel-check", query={"execution_id": "exec-1"})
-        == "http://internal.local/internal/v1/jobs/job-1/cancel-check?execution_id=exec-1"
+        config.build_url("internal/v1/analysis-runs/run-1/executions/claim")
+        == "http://internal.local/internal/v1/analysis-runs/run-1/executions/claim"
+    )
+    assert (
+        config.build_url("/internal/v1/analysis-runs/run-1/executions/cancel-check", query={"execution_id": "exec-1"})
+        == "http://internal.local/internal/v1/analysis-runs/run-1/executions/cancel-check?execution_id=exec-1"
     )
 
 
@@ -73,13 +76,13 @@ def test_urllib_transport_serializes_json_payload_and_parses_response(monkeypatc
 
     response = transport.request(
         method="POST",
-        url="http://internal.local/internal/v1/jobs/job-1/claim",
+        url="http://internal.local/internal/v1/analysis-runs/run-1/executions/claim",
         payload={"worker_kind": "transcription"},
     )
 
     assert response == {"status": "ok"}
     assert captured == {
-        "url": "http://internal.local/internal/v1/jobs/job-1/claim",
+        "url": "http://internal.local/internal/v1/analysis-runs/run-1/executions/claim",
         "timeout": 12.5,
         "content_type": "application/json",
         "accept": "application/json",
@@ -108,87 +111,117 @@ def test_urllib_transport_handles_empty_body_and_failures(monkeypatch) -> None:
 
 
 def test_shared_api_client_validation_rejects_invalid_inputs() -> None:
-    client = JobApiClient(InternalApiConfig(base_url="http://internal.local"), transport=SimpleNamespace(request=lambda **kwargs: None))
+    client = AnalysisRunControlClient(InternalApiConfig(base_url="http://internal.local"), transport=SimpleNamespace(request=lambda **kwargs: None))
 
     with pytest.raises(ValueError, match="invalid worker_kind"):
-        client.claim_job("job-1", worker_kind="unknown", task_type="transcription.run")
+        client.claim_analysis_run("run-1", worker_kind="unknown", task_type="selection.transcription")
     with pytest.raises(ValueError, match="progress_stage"):
         client.publish_progress("job-1", execution_id="exec-1", progress_stage="   ")
     with pytest.raises(ValueError, match="artifacts must not be empty"):
         client.register_artifacts("job-1", execution_id="exec-1", artifacts=[])
     with pytest.raises(ValueError, match="invalid worker outcome"):
-        client.finalize_job("job-1", execution_id="exec-1", outcome="unknown")
+        client.finalize_analysis_run("job-1", execution_id="exec-1", outcome="unknown")
 
 
-def test_claim_job_passes_through_internal_api_unavailable() -> None:
-    client = JobApiClient(
+def test_claim_analysis_run_passes_through_internal_api_unavailable() -> None:
+    client = AnalysisRunControlClient(
         InternalApiConfig(base_url="http://internal.local"),
         transport=SimpleNamespace(request=lambda **kwargs: (_ for _ in ()).throw(InternalApiUnavailableError("offline"))),
     )
 
     with pytest.raises(InternalApiUnavailableError, match="offline"):
-        client.claim_job("job-1", worker_kind="transcription", task_type="transcription.run")
+        client.claim_analysis_run("run-1", worker_kind="transcription", task_type="selection.transcription")
 
 
-def test_claim_job_rejects_unexpected_and_invalid_fields() -> None:
-    client = JobApiClient(
+def test_claim_analysis_run_rejects_unexpected_and_invalid_fields() -> None:
+    client = AnalysisRunControlClient(
         InternalApiConfig(base_url="http://internal.local"),
         transport=SimpleNamespace(
             request=lambda **kwargs: {
                 "execution_id": "exec-1",
-                "job_id": "job-1",
-                "root_job_id": "root-1",
-                "parent_job_id": None,
-                "retry_of_job_id": None,
-                "job_type": "transcription",
-                "version": 1,
-                "ordered_inputs": [
+                "analysis_run_id": "11111111-1111-1111-1111-111111111111",
+                "run_type": "transcription",
+                "selection": {
+                    "selection_id": "22222222-2222-2222-2222-222222222222",
+                    "items": [
                     {
+                        "selection_item_id": "selection-item-0",
                         "position": 0,
-                        "source_id": "source-1",
-                        "source_kind": "youtube_url",
-                        "size_bytes": -1,
+                        "media_item_id": "33333333-3333-3333-3333-333333333333",
+                        "kind": "audio",
+                        "media_kind": "audio",
+                        "mime_type": "audio/wav",
+                        "role": "primary",
+                        "labels": {"display_label": "source.wav"},
+                        "source_snapshot": {
+                            "source_id": "44444444-4444-4444-4444-444444444444",
+                            "origin_type": "object",
+                            "object_key": "media/source.wav",
+                            "size_bytes": -1,
+                        },
+                        "display_name": "source.wav",
+                        "status_at_selection": "ready",
+                        "retention_snapshot": {"state": "active"},
                     }
-                ],
+                    ],
+                    "option_snapshot": {},
+                    "sealed_at": "2026-05-10T12:00:00Z",
+                },
                 "params": {},
+                "claimed_at": "2026-05-10T12:01:00Z",
                 "unexpected": True,
             }
         ),
     )
 
     with pytest.raises(ValueError, match="unexpected field"):
-        client.claim_job("job-1", worker_kind="transcription", task_type="transcription.run")
+        client.claim_analysis_run("run-1", worker_kind="transcription", task_type="selection.transcription")
 
-    client = JobApiClient(
+    client = AnalysisRunControlClient(
         InternalApiConfig(base_url="http://internal.local"),
         transport=SimpleNamespace(
             request=lambda **kwargs: {
                 "execution_id": "exec-1",
-                "job_id": "job-1",
-                "root_job_id": "root-1",
-                "parent_job_id": None,
-                "retry_of_job_id": None,
-                "job_type": "transcription",
-                "version": 1,
-                "ordered_inputs": [
+                "analysis_run_id": "11111111-1111-1111-1111-111111111111",
+                "run_type": "transcription",
+                "selection": {
+                    "selection_id": "22222222-2222-2222-2222-222222222222",
+                    "items": [
                     {
+                        "selection_item_id": "selection-item-0",
                         "position": 0,
-                        "source_id": "source-1",
-                        "source_kind": "youtube_url",
-                        "size_bytes": -1,
+                        "media_item_id": "33333333-3333-3333-3333-333333333333",
+                        "kind": "audio",
+                        "media_kind": "audio",
+                        "mime_type": "audio/wav",
+                        "role": "primary",
+                        "labels": {"display_label": "source.wav"},
+                        "source_snapshot": {
+                            "source_id": "44444444-4444-4444-4444-444444444444",
+                            "origin_type": "object",
+                            "object_key": "media/source.wav",
+                            "size_bytes": -1,
+                        },
+                        "display_name": "source.wav",
+                        "status_at_selection": "ready",
+                        "retention_snapshot": {"state": "active"},
                     }
-                ],
+                    ],
+                    "option_snapshot": {},
+                    "sealed_at": "2026-05-10T12:00:00Z",
+                },
                 "params": {},
+                "claimed_at": "2026-05-10T12:01:00Z",
             }
         ),
     )
 
     with pytest.raises(ValueError, match="size_bytes"):
-        client.claim_job("job-1", worker_kind="transcription", task_type="transcription.run")
+        client.claim_analysis_run("run-1", worker_kind="transcription", task_type="selection.transcription")
 
 
 def test_check_cancel_rejects_invalid_status() -> None:
-    client = JobApiClient(
+    client = AnalysisRunControlClient(
         InternalApiConfig(base_url="http://internal.local"),
         transport=SimpleNamespace(
             request=lambda **kwargs: {

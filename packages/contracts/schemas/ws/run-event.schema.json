@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/ws/run-event.schema.json",
+  "title": "RunEventStreamMessage",
+  "type": "object",
+  "required": [
+    "event_id",
+    "event_type",
+    "emitted_at",
+    "payload"
+  ],
+  "properties": {
+    "event_id": {
+      "$ref": "../common/enums.schema.json#/$defs/uuid"
+    },
+    "event_type": {
+      "$ref": "../common/enums.schema.json#/$defs/runEventType"
+    },
+    "emitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "payload": {
+      "$ref": "../http/analysis-run.schema.json#/$defs/runEvent"
+    }
+  },
+  "additionalProperties": false
+}

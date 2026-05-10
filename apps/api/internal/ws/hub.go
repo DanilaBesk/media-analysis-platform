@@ -85,7 +85,7 @@ func requestHostname(hostport string) string {
 	return hostport
 }
 
-func (h *Hub) Broadcast(ctx context.Context, envelope JobEventEnvelope) error {
+func (h *Hub) Broadcast(ctx context.Context, envelope RunEventEnvelope) error {
 	clients := h.snapshotClients()
 	for _, client := range clients {
 		select {
@@ -123,7 +123,7 @@ func (h *Hub) snapshotClients() []*websocketClient {
 	return clients
 }
 
-func (c *websocketClient) send(envelope JobEventEnvelope) error {
+func (c *websocketClient) send(envelope RunEventEnvelope) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return websocket.JSON.Send(c.conn, envelope)

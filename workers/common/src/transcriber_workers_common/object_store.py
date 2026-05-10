@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Route claimed artifact downloads to the artifact bucket while preserving source downloads for transcription jobs.
+#   LAST_CHANGE: v1.1.0 - Route claimed artifact downloads to the artifact bucket while preserving source downloads for transcription runs.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP

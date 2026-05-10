@@ -1,29 +1,23 @@
 # FILE: apps/telegram-bot/tests/test_api_client.py
-# VERSION: 1.0.0
+# VERSION: 2.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Prove the packet-local Telegram adapter client keeps polling-default request shaping and multipart combined-upload semantics.
-# SCOPE: Verify default polling delivery for URL submits and multipart field shaping for combined Telegram uploads.
+# PURPOSE: Prove the Telegram adapter client speaks the final inbox-first HTTP API.
+# SCOPE: Verify media ingestion, inbox removal, selection creation, run creation, and restore/read request shaping.
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: TEST
 # MAP_MODE: SUMMARY
 # END_MODULE_CONTRACT
-#
-# START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added packet-local Telegram adapter client tests for default polling and combined multipart shaping.
-# END_CHANGE_SUMMARY
-#
-# START_MODULE_MAP
-#   verify-default-polling - Confirm URL submits preserve polling as the default delivery strategy.
-#   verify-combined-multipart-shape - Confirm combined Telegram uploads use multipart form data and retain polling delivery fields.
-# END_MODULE_MAP
 
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
+from urllib.error import URLError
 
-from telegram_adapter.api_client import TelegramApiClient, UploadFilePart
+import pytest
+
+from telegram_adapter.api_client import TelegramApiClient, TelegramApiClientError
+from telegram_adapter.errors import TelegramUserErrorCode, classify_user_error, user_error_text
 
 
 class FakeHttpResponse:
@@ -40,153 +34,130 @@ class FakeHttpResponse:
         return self.payload
 
 
-def test_create_from_url_defaults_delivery_to_polling() -> None:
+OWNER = {
+    "owner_type": "telegram",
+    "owner_id": "chat:10:user:7",
+    "adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"},
+}
+
+
+def test_add_media_item_posts_final_media_item_payload() -> None:
     captured = {}
 
     def fake_urlopen(request):
         captured["request"] = request
-        return FakeHttpResponse(json.dumps({"job": {"job_id": "job-1"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"media_item": {"media_item_id": "media-1"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
-    client.create_from_url(url="https://youtu.be/demo")
+    item = client.add_media_item(
+        owner=OWNER,
+        kind="text",
+        source={"origin_type": "text", "text": "hello"},
+        display_name="hello",
+        metadata={"message_id": 42},
+    )
 
     payload = json.loads(captured["request"].data.decode("utf-8"))
-    assert payload["delivery"] == {"strategy": "polling"}
+    assert item == {"media_item_id": "media-1"}
+    assert captured["request"].full_url == "http://localhost:8080/v1/media-items"
+    assert payload["owner"] == OWNER
+    assert payload["kind"] == "text"
+    assert payload["source"] == {"origin_type": "text", "text": "hello"}
+    assert payload["adapter_origin"] == "telegram"
+    assert payload["metadata"] == {"message_id": 42}
 
 
-def test_create_combined_upload_uses_multipart_and_polling_fields() -> None:
+def test_remove_collection_item_uses_owner_query_and_expected_version() -> None:
     captured = {}
 
     def fake_urlopen(request):
         captured["request"] = request
-        return FakeHttpResponse(json.dumps({"job": {"job_id": "job-1"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"collection": {"collection_id": "inbox-1", "version": 3}}).encode("utf-8"))
 
-    client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
-    client.create_combined_upload(
-        files=[
-            UploadFilePart("a.ogg", "audio/ogg", b"a"),
-            UploadFilePart("b.mp4", "video/mp4", b"b"),
-        ]
-    )
-
-    content_type = captured["request"].headers["Content-type"]
-    body = captured["request"].data.decode("utf-8", errors="replace")
-    assert "multipart/form-data" in content_type
-    assert 'name="delivery_strategy"' in body
-    assert "polling" in body
-
-
-def test_create_batch_uses_manifest_and_source_label_file_parts() -> None:
-    captured = {}
-
-    def fake_urlopen(request):
-        captured["request"] = request
-        return FakeHttpResponse(json.dumps({"job": {"job_id": "batch-root-1"}}).encode("utf-8"))
-
-    client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
-    client.create_batch(
-        files=[
-            UploadFilePart(
-                filename="voice.ogg",
-                content_type="audio/ogg",
-                content_bytes=b"voice",
-                field_name="voice_abc123",
-            )
-        ],
-        source_manifest={
-            "manifest_version": "batch-transcription.v1",
-            "ordered_source_labels": ["voice_abc123", "url_def456"],
-            "sources": {
-                "voice_abc123": {
-                    "source_kind": "telegram_upload",
-                    "file_part": "voice_abc123",
-                    "display_name": "Voice",
-                    "original_filename": "voice.ogg",
-                },
-                "url_def456": {
-                    "source_kind": "youtube_url",
-                    "url": "https://youtu.be/demo",
-                    "display_name": "YouTube: demo",
-                },
-            },
-            "completion_policy": "succeed_when_all_sources_succeed",
-        },
-    )
-
-    body = captured["request"].data.decode("utf-8", errors="replace")
-    assert captured["request"].full_url == "http://localhost:8080/v1/transcription-jobs/batch"
-    assert 'name="source_manifest"' in body
-    assert '"ordered_source_labels":["voice_abc123","url_def456"]' in body
-    assert 'name="voice_abc123"; filename="voice.ogg"' in body
-    assert 'name="files"' not in body
-
-
-def test_add_batch_draft_upload_item_uses_contract_multipart_fields() -> None:
-    captured = {}
-
-    def fake_urlopen(request):
-        captured["request"] = request
-        return FakeHttpResponse(
-            json.dumps(
-                {
-                    "draft": {
-                        "draft_id": "11111111-1111-1111-1111-111111111111",
-                        "version": 2,
-                        "owner": {
-                            "owner_type": "telegram",
-                            "telegram_chat_id": "10",
-                            "telegram_user_id": "7",
-                        },
-                        "status": "open",
-                        "items": [],
-                    }
-                }
-            ).encode("utf-8")
-        )
-
-    client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
-    client.add_batch_draft_upload_item(
-        draft_id="11111111-1111-1111-1111-111111111111",
-        owner={
-            "owner_type": "telegram",
-            "telegram_chat_id": "10",
-            "telegram_user_id": "7",
-        },
-        expected_version=1,
-        item={
-            "source_kind": "telegram_upload",
-            "display_name": "Audio: voice.ogg",
-            "original_filename": "voice.ogg",
-            "content_type": "audio/ogg",
-            "size_bytes": 5,
-        },
-        file=UploadFilePart("voice.ogg", "audio/ogg", b"voice", field_name="file"),
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    client.remove_collection_item(
+        owner=OWNER,
+        collection_id="inbox-1",
+        media_item_id="media-1",
+        expected_version=2,
     )
 
     request = captured["request"]
-    body = request.data.decode("utf-8", errors="replace")
-    assert request.full_url == "http://localhost:8080/v1/batch-drafts/11111111-1111-1111-1111-111111111111/items"
-    assert request.get_method() == "POST"
-    assert "multipart/form-data" in request.headers["Content-type"]
-    assert 'name="owner"' in body
-    assert '"owner_type":"telegram"' in body
-    assert 'name="expected_version"' in body
-    assert "\r\n1\r\n" in body
-    assert 'name="item"' in body
-    assert '"source_kind":"telegram_upload"' in body
-    assert 'name="file"; filename="voice.ogg"' in body
-    assert "voice" in body
+    assert request.get_method() == "DELETE"
+    assert request.full_url == (
+        "http://api:8080/v1/collections/inbox-1/items/media-1"
+        "?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7&expected_version=2"
+    )
 
 
-def test_resolve_internal_artifact_download_access_uses_internal_route() -> None:
-    captured = {}
+def test_create_selection_and_analysis_run_use_final_identifiers() -> None:
+    requests = []
 
     def fake_urlopen(request):
-        captured["request"] = request
-        return FakeHttpResponse(json.dumps({"artifact_id": "artifact-1"}).encode("utf-8"))
+        requests.append(request)
+        if request.full_url.endswith("/v1/selections"):
+            return FakeHttpResponse(json.dumps({"selection": {"selection_id": "sel-1"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    client.resolve_internal_artifact_download_access("artifact-1")
+    selection = client.create_selection(
+        owner=OWNER,
+        source_collection_id="inbox-1",
+        items=[{"media_item_id": "media-1", "position": 0}],
+        option_snapshot={"adapter": "telegram"},
+    )
+    run = client.create_analysis_run(owner=OWNER, selection_id=selection["selection_id"])
 
-    assert captured["request"].full_url == "http://api:8080/internal/v1/artifacts/artifact-1/download-access"
-    assert captured["request"].get_method() == "GET"
+    selection_payload = json.loads(requests[0].data.decode("utf-8"))
+    run_payload = json.loads(requests[1].data.decode("utf-8"))
+    assert selection == {"selection_id": "sel-1"}
+    assert run == {"analysis_run_id": "run-1"}
+    assert selection_payload["source_collection_id"] == "inbox-1"
+    assert selection_payload["items"] == [{"media_item_id": "media-1", "position": 0}]
+    assert run_payload == {
+        "owner": OWNER,
+        "selection_id": "sel-1",
+        "run_type": "transcription",
+        "delivery": {"strategy": "polling"},
+    }
+
+
+def test_restore_reads_inbox_media_and_runs_with_owner_query() -> None:
+    urls = []
+
+    def fake_urlopen(request):
+        urls.append(request.full_url)
+        if "/v1/collections/inbox" in request.full_url:
+            return FakeHttpResponse(json.dumps({"collection": {"collection_id": "inbox-1"}}).encode("utf-8"))
+        if "/v1/media-items" in request.full_url:
+            return FakeHttpResponse(json.dumps({"items": [], "page": {"page_size": 5, "has_more": False}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"items": [], "page": {"page_size": 10, "has_more": False}}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    client.get_inbox_collection(owner=OWNER)
+    client.list_media_items(owner=OWNER, page_size=5)
+    client.list_analysis_runs(owner=OWNER, page_size=10)
+
+    assert urls == [
+        "http://api:8080/v1/collections/inbox?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7",
+        "http://api:8080/v1/media-items?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7&page_size=5",
+        "http://api:8080/v1/analysis-runs?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7&page_size=10",
+    ]
+
+
+def test_backend_connection_failure_is_categorized_without_raw_exception_copy() -> None:
+    def fake_urlopen(request):
+        raise URLError("Connection refused at 127.0.0.1:8080")
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+
+    with pytest.raises(TelegramApiClientError) as error:
+        client.list_media_items(owner=OWNER, page_size=5)
+
+    user_error = classify_user_error(error.value)
+    copy = user_error_text(error.value)
+    assert error.value.code == "backend_unavailable"
+    assert user_error.code == TelegramUserErrorCode.BACKEND_UNAVAILABLE
+    assert "Connection refused" not in copy
+    assert "127.0.0.1" not in copy
+    assert "Try again" in copy

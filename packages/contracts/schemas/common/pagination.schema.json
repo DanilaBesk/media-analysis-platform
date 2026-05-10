@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/common/pagination.schema.json",
+  "title": "PaginationIdempotencyRetention",
+  "$defs": {
+    "pageCursor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pageSize": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100,
+      "default": 20
+    },
+    "page": {
+      "type": "object",
+      "required": [
+        "page_size",
+        "has_more"
+      ],
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "page_size": {
+          "$ref": "#/$defs/pageSize"
+        },
+        "has_more": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "paginatedResponse": {
+      "type": "object",
+      "required": [
+        "items",
+        "page"
+      ],
+      "properties": {
+        "items": {
+          "type": "array"
+        },
+        "page": {
+          "$ref": "#/$defs/page"
+        }
+      },
+      "additionalProperties": false
+    },
+    "optimisticVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "conflictEnvelope": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "expected_version",
+        "actual_version"
+      ],
+      "properties": {
+        "code": {
+          "const": "collection_version_conflict"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_version": {
+          "$ref": "#/$defs/optimisticVersion"
+        },
+        "actual_version": {
+          "$ref": "#/$defs/optimisticVersion"
+        }
+      },
+      "additionalProperties": false
+    },
+    "idempotencyRecord": {
+      "type": "object",
+      "required": [
+        "key",
+        "scope",
+        "replayed"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "./enums.schema.json#/$defs/idempotencyKey"
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "retentionMetadata": {
+      "type": "object",
+      "required": [
+        "state"
+      ],
+      "properties": {
+        "state": {
+          "$ref": "./enums.schema.json#/$defs/retentionState"
+        },
+        "policy_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "deleted_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "hold_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,8 +1,8 @@
 // FILE: apps/mcp-server/tests/index.test.ts
-// VERSION: 1.0.0
+// VERSION: 2.0.0
 // START_MODULE_CONTRACT
-// PURPOSE: Prove the MCP adapter bootstrap wires env, local client boundary, and mapped registry into one bounded shell surface.
-// SCOPE: Verify bootstrap composition, tool exposure, marker logging, and shell description without introducing direct infra ownership.
+// PURPOSE: Prove the MCP adapter bootstrap wires env, local client boundary, and SDK-backed domain runtime into one bounded surface.
+// SCOPE: Verify bootstrap composition, tool exposure, marker logging, and runtime description without starting stdio.
 // DEPENDS: M-MCP-ADAPTER
 // LINKS: V-M-MCP-ADAPTER
 // ROLE: TEST
@@ -10,13 +10,13 @@
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
-//   LAST_CHANGE: v2.0.0 - Expanded shell-bootstrap verification to cover mapped tools and packet-local tool entrypoints.
+//   LAST_CHANGE: v2.0.0 - Updated bootstrap verification for the real MCP runtime and final domain tool surface.
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
-//   verify-shell-bootstrap - Confirm the shell composes env, client, and mapped registry without direct infra access.
-//   verify-tool-entrypoints - Confirm the shell exposes tool listing and tool invocation with the required marker.
-//   verify-shell-description - Confirm the shell can be described for packet-level readiness checks.
+//   verify-runtime-bootstrap - Confirm env, client, and SDK-backed runtime composition.
+//   verify-tool-entrypoints - Confirm direct test entrypoints invoke domain tools and emit the mapping marker.
+//   verify-runtime-description - Confirm readiness metadata reflects registered tools and connection state.
 // END_MODULE_MAP
 
 import test from "node:test";
@@ -24,14 +24,20 @@ import assert from "node:assert/strict";
 
 import {
   MCP_TOOL_MAPPING_MARKER,
-  bootstrapMcpServerShell,
+  bootstrapMcpServerRuntime,
   callMcpTool,
-  describeMcpServerShell,
+  describeMcpServerRuntime,
   listMcpTools,
 } from "../src/index.ts";
+import type {
+  McpAdapterApiClient,
+  McpAdapterApiRequest,
+} from "../src/client/api-client.ts";
 
-test("bootstrapMcpServerShell composes the bounded shell surface", () => {
-  // START_BLOCK_BLOCK_VERIFY_SHELL_BOOTSTRAP
+const MEDIA_ID = "00000000-0000-4000-8000-000000000001";
+
+test("bootstrapMcpServerRuntime composes the bounded SDK runtime surface", () => {
+  // START_BLOCK_BLOCK_VERIFY_RUNTIME_BOOTSTRAP
   const apiClient = {
     request: async () => ({
       status: 200,
@@ -39,38 +45,44 @@ test("bootstrapMcpServerShell composes the bounded shell surface", () => {
     }),
   };
 
-  const shell = bootstrapMcpServerShell({
+  const runtime = bootstrapMcpServerRuntime({
     env: {
       API_BASE_URL: "https://api.example.test",
     },
     apiClient,
   });
 
-  assert.equal(shell.env.apiBaseUrl, "https://api.example.test");
-  assert.equal(shell.apiClient, apiClient);
-  assert.equal(shell.toolRegistry.hasTools(), true);
-  assert.equal(shell.toolRegistry.listTools().length, 10);
-  // END_BLOCK_BLOCK_VERIFY_SHELL_BOOTSTRAP
+  assert.equal(runtime.env.apiBaseUrl, "https://api.example.test");
+  assert.equal(runtime.apiClient, apiClient);
+  assert.equal(runtime.domainRuntime.server.isConnected(), false);
+  assert.equal(runtime.domainRuntime.listTools().length, 24);
+  // END_BLOCK_BLOCK_VERIFY_RUNTIME_BOOTSTRAP
 });
 
-test("bootstrapMcpServerShell exposes tool entrypoints and mapping marker", async () => {
+test("bootstrapMcpServerRuntime exposes domain tool entrypoints and mapping marker", async () => {
   // START_BLOCK_BLOCK_VERIFY_TOOL_ENTRYPOINTS
   const logs: string[] = [];
-  const shell = bootstrapMcpServerShell({
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      assert.deepEqual(request, {
+        path: `/v1/media-items/${MEDIA_ID}`,
+      });
+      return {
+        status: 200,
+        data: {
+          media_item: {
+            media_item_id: MEDIA_ID,
+            status: "ready",
+          },
+        } as TPayload,
+      };
+    },
+  };
+  const runtime = bootstrapMcpServerRuntime({
     env: {
       API_BASE_URL: "https://api.example.test",
     },
-    apiClient: {
-      request: async () => ({
-        status: 200,
-        data: {
-          job: {
-            job_id: "job-1",
-            status: "queued",
-          },
-        },
-      }),
-    },
+    apiClient,
     logger: {
       log(message) {
         logs.push(message);
@@ -78,18 +90,18 @@ test("bootstrapMcpServerShell exposes tool entrypoints and mapping marker", asyn
     },
   });
 
-  assert.equal(listMcpTools(shell).length, 10);
-  const result = await callMcpTool(shell, {
-    name: "get_job",
+  assert.equal(listMcpTools(runtime).length, 24);
+  const result = await callMcpTool(runtime, {
+    name: "get_media",
     arguments: {
-      job_id: "job-1",
+      media_item_id: MEDIA_ID,
     },
   });
 
   assert.deepEqual(result.structuredContent, {
-    job: {
-      job_id: "job-1",
-      status: "queued",
+    media_item: {
+      media_item_id: MEDIA_ID,
+      status: "ready",
     },
   });
   assert.equal(logs.length, 1);
@@ -98,18 +110,18 @@ test("bootstrapMcpServerShell exposes tool entrypoints and mapping marker", asyn
   // END_BLOCK_BLOCK_VERIFY_TOOL_ENTRYPOINTS
 });
 
-test("describeMcpServerShell exposes shell readiness with mapped tools", () => {
-  // START_BLOCK_BLOCK_VERIFY_SHELL_DESCRIPTION
-  const shell = bootstrapMcpServerShell({
+test("describeMcpServerRuntime exposes readiness with registered domain tools", () => {
+  // START_BLOCK_BLOCK_VERIFY_RUNTIME_DESCRIPTION
+  const runtime = bootstrapMcpServerRuntime({
     env: {
       API_BASE_URL: "https://api.example.test",
     },
   });
 
-  assert.deepEqual(describeMcpServerShell(shell), {
+  assert.deepEqual(describeMcpServerRuntime(runtime), {
     apiBaseUrl: "https://api.example.test",
-    toolCount: 10,
-    hasRegisteredTools: true,
+    toolCount: 24,
+    isConnected: false,
   });
-  // END_BLOCK_BLOCK_VERIFY_SHELL_DESCRIPTION
+  // END_BLOCK_BLOCK_VERIFY_RUNTIME_DESCRIPTION
 });

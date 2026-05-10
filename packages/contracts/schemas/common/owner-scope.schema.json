@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/common/owner-scope.schema.json",
+  "title": "OwnerScope",
+  "$defs": {
+    "ownerScope": {
+      "type": "object",
+      "required": [
+        "owner_type",
+        "owner_id"
+      ],
+      "properties": {
+        "owner_type": {
+          "$ref": "./enums.schema.json#/$defs/ownerType"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenant_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "adapter_identity": {
+          "$ref": "#/$defs/adapterIdentity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "adapterIdentity": {
+      "type": "object",
+      "properties": {
+        "telegram_chat_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "telegram_user_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "web_session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mcp_caller_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "service_name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

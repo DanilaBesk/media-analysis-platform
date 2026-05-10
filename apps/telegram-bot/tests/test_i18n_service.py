@@ -45,17 +45,16 @@ def test_text_formats_catalog_values_with_typed_keys() -> None:
     service = TelegramLocaleService()
 
     assert service.text(TelegramTextKey.START_PROMPT, locale="en") == (
-        "Send a voice message, audio, video, document, or a link. "
-        "In collection mode I gather several sources and run one shared transcript."
+        "Send text, links, photos, videos, or documents. Everything accepted lands in inbox first."
     )
-    assert service.text(TelegramTextKey.BASKET_SUMMARY_ADDED, locale="ru", count=3) == "Добавлено: 3"
+    assert service.text(TelegramTextKey.INBOX_SUMMARY_ADDED, locale="ru", count=3) == "Принято: 3"
 
 
 def test_text_raises_for_missing_format_arguments() -> None:
     service = TelegramLocaleService()
 
     with pytest.raises(ValueError, match="count"):
-        service.text(TelegramTextKey.BASKET_SUMMARY_ADDED, locale="en")
+        service.text(TelegramTextKey.INBOX_SUMMARY_ADDED, locale="en")
 
 
 def test_build_localized_commands_returns_stable_registry_with_localized_descriptions() -> None:
@@ -63,9 +62,7 @@ def test_build_localized_commands_returns_stable_registry_with_localized_descrip
 
     assert [command.command for command in commands] == [key.value for key in TelegramCommandKey]
     assert [command.description for command in commands] == [
-        "Open the menu",
-        "How to use the bot",
-        "Turn collection mode on or off",
-        "Show the current collection",
-        "Clear the collection",
+        "Open inbox",
+        "How to manage inbox",
+        "Show current inbox",
     ]

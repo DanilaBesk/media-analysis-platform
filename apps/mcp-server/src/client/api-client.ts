@@ -45,13 +45,32 @@ export class McpAdapterApiClientError extends Error {
   readonly status: number;
   readonly path: string;
   readonly code?: string;
+  readonly correlationId?: string;
+  readonly details?: Record<string, unknown>;
+  readonly diagnostics?: unknown[];
+  readonly conflict?: unknown;
 
-  constructor(path: string, status: number, message: string, code?: string) {
+  constructor(
+    path: string,
+    status: number,
+    message: string,
+    code?: string,
+    options: {
+      correlationId?: string;
+      details?: Record<string, unknown>;
+      diagnostics?: unknown[];
+      conflict?: unknown;
+    } = {},
+  ) {
     super(message);
     this.name = "McpAdapterApiClientError";
     this.status = status;
     this.path = path;
     this.code = code;
+    this.correlationId = options.correlationId;
+    this.details = options.details;
+    this.diagnostics = options.diagnostics;
+    this.conflict = options.conflict;
   }
 }
 
@@ -62,10 +81,17 @@ function toRequestUrl(baseUrl: string, path: string): URL {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function extractErrorEnvelope(payload: unknown): { code?: string; message?: string } {
+function extractErrorEnvelope(payload: unknown): {
+  code?: string;
+  message?: string;
+  correlationId?: string;
+  details?: Record<string, unknown>;
+  diagnostics?: unknown[];
+  conflict?: unknown;
+} {
   if (!isRecord(payload) || !isRecord(payload.error)) {
     return {};
   }
@@ -73,6 +99,17 @@ function extractErrorEnvelope(payload: unknown): { code?: string; message?: stri
   return {
     code: typeof payload.error.code === "string" ? payload.error.code : undefined,
     message: typeof payload.error.message === "string" ? payload.error.message : undefined,
+    correlationId:
+      typeof payload.error.correlation_id === "string"
+        ? payload.error.correlation_id
+        : undefined,
+    details: isRecord(payload.error.details)
+      ? payload.error.details
+      : undefined,
+    diagnostics: Array.isArray(payload.error.diagnostics)
+      ? payload.error.diagnostics
+      : undefined,
+    conflict: payload.error.conflict,
   };
 }
 
@@ -142,6 +179,12 @@ export function createMcpAdapterApiClient({
           response.status,
           errorEnvelope.message ?? `API request failed with status ${response.status}`,
           errorEnvelope.code,
+          {
+            correlationId: errorEnvelope.correlationId,
+            details: errorEnvelope.details,
+            diagnostics: errorEnvelope.diagnostics,
+            conflict: errorEnvelope.conflict,
+          },
         );
       }
 

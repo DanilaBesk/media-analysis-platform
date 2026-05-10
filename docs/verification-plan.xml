@@ -1,845 +1,136 @@
-<VerificationPlan VERSION="0.3.0">
+<VerificationPlan VERSION="1.0.0">
   <GlobalPolicy>
-    <log-format>[Module][function][BLOCK_NAME] message</log-format>
     <deterministic-first>true</deterministic-first>
-    <module-level-focus>Fast deterministic checks close to the module, especially for contract validation, state transitions, and artifact rules.</module-level-focus>
-    <wave-level-focus>Checks only merged surfaces touched by the current wave: API plus worker, or API plus adapter, or compose plus service health.</wave-level-focus>
-    <phase-level-focus>Cross-stack regression confidence across Go API, Python workers, adapters, and local runtime topology.</phase-level-focus>
-    <required-structured-fields>jobId, rootJobId, sourceId, workerKind, attemptNo, deliveryStrategy</required-structured-fields>
-    <trace-policy>Prefer ordered block markers and stable event fields over prose-heavy log assertions.</trace-policy>
-    <semantic-verification-policy>Use semantic evaluation only when deterministic equality or ordered trace assertions cannot express correctness safely.</semantic-verification-policy>
-    <polling-truth-rule>Polling remains the authoritative read path even when WebSocket or webhook delivery succeeds.</polling-truth-rule>
-    <redaction>Never log secrets, raw bot tokens, presigned URLs, or large prompt payloads.</redaction>
+    <source-of-truth>Verify the canonical chain media_item -&gt; collection/inbox -&gt; immutable selection -&gt; analysis_run -&gt; artifacts.</source-of-truth>
+    <owner-scope>Every verification must include same-owner success and cross-owner denial where the surface reads or mutates durable state.</owner-scope>
+    <diagnostics-policy>Rejected and partially processed records must produce stable diagnostics instead of disappearing.</diagnostics-policy>
+    <retention-policy>Retention checks must prove metadata, source bodies, artifacts, diagnostics, and selection snapshots follow their separate lifecycle rules.</retention-policy>
+    <redaction>Never assert on raw secrets, raw bot tokens, private object URLs, or full prompt payloads.</redaction>
   </GlobalPolicy>
 
-  <PreservationMap>
-    <section original="25.1 Contract Tests" target="VerificationPlan/TestingStrategy/ContractTests" note="OpenAPI, JSON schema, and SDK compatibility expectations are preserved." />
-    <section original="25.2 API Integration Tests" target="VerificationPlan/TestingStrategy/ApiIntegrationTests" note="Create, read, child-job, cancel, retry, artifact, idempotency, and webhook tests are preserved." />
-    <section original="25.3 Worker Integration Tests" target="VerificationPlan/TestingStrategy/WorkerIntegrationTests" note="Transcription, report, and deep-research worker integration expectations are preserved." />
-    <section original="25.4 UI Tests" target="VerificationPlan/TestingStrategy/WebUiTests" note="Web UI submission, monitoring, artifact, and late-wave admin checks are preserved." />
-    <section original="25.5 Telegram Bot Tests" target="VerificationPlan/TestingStrategy/TelegramBotTests" note="Thin-adapter Telegram regression checks are preserved." />
-    <section original="25.6 MCP Tests" target="VerificationPlan/TestingStrategy/McpTests" note="MCP tool-to-API mapping checks are preserved." />
-  </PreservationMap>
-
   <TestingStrategy>
-    <BaselineFreeze>
-      <purpose>Wave 0 preserves the current behavior matrix so later parity checks remain grounded in existing supported flows.</purpose>
-      <required-baseline-checks>
-        <check>Conceptual preservation of YouTube, Telegram voice or audio or video or document, media groups, plain transcript, segmented transcript, report generation, and deep research generation.</check>
-        <check>Artifact-name preservation for transcript.txt, transcript.md, transcript.docx, report.md, report.docx, and deep-research final report semantics.</check>
-        <check>Current Python tests remain the reference baseline until equivalent platform tests replace them.</check>
-      </required-baseline-checks>
-    </BaselineFreeze>
-
     <ContractTests>
       <required>
-        <item>OpenAPI schema validation</item>
-        <item>JSON schema tests for WebSocket events</item>
-        <item>JSON schema tests for webhook delivery envelopes</item>
-        <item>SDK compatibility tests for generated or thin clients</item>
-        <item>Validation of delivery strategy shape, webhook requirements, and idempotency request normalization</item>
+        <item>OpenAPI validates media_item, source, collection, inbox, selection, analysis_run, artifact, diagnostic, owner, lifecycle, retention, pagination, idempotency, and error envelopes.</item>
+        <item>Schema tests fail if public contracts expose old product route vocabulary or grouped-submission concepts.</item>
+        <item>Enum tests cover media_item, collection, selection, analysis_run, and artifact statuses.</item>
+        <item>Diagnostic code tests cover ingestion rejection, owner mismatch, invalid selection, unavailable source, worker failure, artifact expiry, retention denial, and adapter conflict.</item>
       </required>
-      <important-rules>
-        <rule>Retry endpoint is intentionally non-idempotent.</rule>
-        <rule>Create-child semantics are stronger than idempotency and must return canonical existing children when appropriate.</rule>
-      </important-rules>
     </ContractTests>
 
-    <ApiIntegrationTests>
+    <StorageTests>
       <required>
-        <item>create transcription job from multipart upload</item>
-        <item>create batch transcription root from a mixed source manifest and referenced multipart file parts</item>
-        <item>create, read, mutate, clear, and submit API-owned batch drafts with owner and version checks</item>
-        <item>create transcription job from supported YouTube URL</item>
-        <item>get job</item>
-        <item>list jobs</item>
-        <item>create report job</item>
-        <item>create deep-research job</item>
-        <item>cancel</item>
-        <item>retry</item>
-        <item>artifact resolution with presigned MinIO link</item>
-        <item>idempotency behavior for create endpoints</item>
-        <item>webhook callback mode persistence and delivery</item>
+        <item>Create media_item from text, URL, and uploaded body with owner scope and source metadata.</item>
+        <item>Default inbox membership is created for accepted media_item records.</item>
+        <item>Collection add, remove, reorder, archive, restore, and delete use version checks.</item>
+        <item>Selection snapshot remains unchanged after collection membership and media_item metadata changes.</item>
+        <item>analysis_run creation requires a sealed selection owned by the caller.</item>
+        <item>Artifact rows link to owner and analysis_run and enforce retention status.</item>
+        <item>Diagnostics are persisted for invalid media, invalid selection, worker error, artifact error, and retention action.</item>
+        <item>Cross-owner reads and mutations fail for every table family.</item>
       </required>
-      <must-prove>
-        <proof>Canonical child reuse works for report and deep-research creates.</proof>
-        <proof>Retry creates a new job row and does not mutate historical rows.</proof>
-        <proof>Polling remains authoritative for webhook-configured jobs.</proof>
-        <proof>Batch upload creates one root aggregate transcription job, per-source transcription children, and a root aggregate artifact set.</proof>
-        <proof>Batch draft submit is idempotent and maps exactly once to the existing root aggregate graph.</proof>
-        <proof>Version mismatch, submitted draft, expired draft, canceled draft, and owner mismatch return explicit stale-button outcomes.</proof>
-      </must-prove>
-    </ApiIntegrationTests>
+    </StorageTests>
 
-    <WorkerIntegrationTests>
+    <ApiTests>
       <required>
-        <item>transcription worker end-to-end against MinIO, PostgreSQL, Redis, and internal claim or finalize endpoints</item>
-        <item>batch aggregate worker path with child artifact merging, source manifest artifact, and diagnostics artifact persistence</item>
-        <item>agent-runner integration with report artifact output and deep-research markdown persistence</item>
+        <item>Create and list media_item records across supported input kinds.</item>
+        <item>Read inbox and user collections with pagination and diagnostics summary.</item>
+        <item>Create, mutate, archive, restore, and delete collections.</item>
+        <item>Create sealed selections from ordered media_item references and option snapshots.</item>
+        <item>Create analysis_run from selection with idempotency behavior.</item>
+        <item>Poll analysis_run events and diagnostics.</item>
+        <item>Cancel analysis_run cooperatively.</item>
+        <item>Resolve artifact preview and download metadata through owner-scoped API access.</item>
+        <item>Query diagnostics by subject, severity, code, and correlation id.</item>
       </required>
-      <must-prove>
-        <proof>Success finalization never happens before required artifacts are present and registered.</proof>
-        <proof>Cancellation is observed around expensive phases and subprocess handling.</proof>
-        <proof>SkipRetry cases are honored for deterministic business failures.</proof>
-        <proof>Batch transcription jobs preserve stable source-label ordering across per-source children and root aggregate artifact assembly.</proof>
-      </must-prove>
-    </WorkerIntegrationTests>
+    </ApiTests>
 
-    <WebUiTests>
+    <WorkerTests>
       <required>
-        <item>upload file</item>
-        <item>upload multiple files</item>
-        <item>create URL job</item>
-        <item>observe live transition via polling</item>
-        <item>observe live transition via WebSocket with REST reconciliation on reconnect or version gap</item>
-        <item>artifact download flow</item>
-        <item>report and deep-research triggers</item>
-        <item>cancel and retry buttons</item>
-        <item>late-wave admin delete and artifact refresh actions</item>
+        <item>Worker claim loads sealed selection material through internal control-plane contracts.</item>
+        <item>Per-item execution diagnostics are recorded without mutating the selection snapshot.</item>
+        <item>Successful execution publishes artifacts under analysis_run.</item>
+        <item>Partial execution can finish as partially_succeeded when policy allows and diagnostics explain the skipped or failed items.</item>
+        <item>Worker cancellation records the phase where cancellation was observed.</item>
       </required>
-      <must-prove>
-        <proof>UI treats polling as truth and never trusts stale WebSocket state blindly.</proof>
-        <proof>Expired artifact links can be re-resolved through the API.</proof>
-      </must-prove>
-    </WebUiTests>
+    </WorkerTests>
 
-    <TelegramBotTests>
-      <required>
-        <item>upload flow through API mock or live API test double</item>
-        <item>Telegram basket flow through `/v1/transcription-jobs/batch`</item>
-        <item>Telegram API-owned batch draft flow through draft_id plus version callback data</item>
-        <item>concurrent forwarded single-source Telegram updates for one chat/user coalesce into one API-owned draft and one delayed basket summary</item>
-        <item>Telegram command registry and batch-mode toggle behavior</item>
-        <item>URL flow through API mock or live API test double</item>
-        <item>button callbacks map to API child-job or artifact actions</item>
-        <item>plain transcript delivery remains first-class</item>
-        <item>short readable `transcript_plain` delivery is sent inline as exact Telegram text with the result keyboard</item>
-        <item>long, empty or whitespace-only, or unreadable existing `transcript_plain` delivery falls back to document sending with the result keyboard</item>
-        <item>missing or non-file `transcript_plain` paths send an unavailable-artifact status message with the result keyboard and do not attempt document upload</item>
-        <item>segmented transcript button remains preserved</item>
-        <item>report and deep-research button behavior remain preserved</item>
-      </required>
-      <must-prove>
-        <proof>Telegram adapter no longer imports or executes the local execution core.</proof>
-        <proof>Default delivery strategy is polling in bot flows.</proof>
-        <proof>Media groups and user-curated baskets map to one batch root job instead of unrelated per-file jobs.</proof>
-        <proof>Forwarded voice or media bursts without media_group_id do not create multiple API drafts for the same owner and do not spam duplicate basket summaries.</proof>
-        <proof>Stale inline buttons never process an unrelated chat/user basket and never report false empty state caused by adapter-local memory.</proof>
-        <proof>Inline short transcript presentation uses the gateway-materialized `transcript_plain` artifact exactly, preserving batch aggregate content boundaries and avoiding bot-side stitching.</proof>
-      </must-prove>
-    </TelegramBotTests>
+    <AdapterTests>
+      <Telegram>
+        <item>Accepted message, file, URL, photo, image, voice, audio, video, and document inputs call add_media and update inbox state.</item>
+        <item>Inline actions manage API-owned inbox or collection items, create selections, start analysis_run records, view diagnostics, and fetch artifacts.</item>
+        <item>Callbacks use API ids and versions and cannot mutate another owner state.</item>
+        <item>No user-facing execution mode is required to accumulate multiple items.</item>
+      </Telegram>
+      <Web>
+        <item>Inbox, collection, selection builder, run list, run detail, artifact, diagnostics, and retention views use the same public API contract.</item>
+        <item>Collection edits after run creation do not change the run detail selection snapshot.</item>
+      </Web>
+      <MCP>
+        <item>Tools add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, and get_diagnostics share API behavior with Web and Telegram.</item>
+      </MCP>
+    </AdapterTests>
 
-    <McpTests>
+    <RuntimeTests>
       <required>
-        <item>tool-to-API mapping</item>
-        <item>artifact metadata responses</item>
-        <item>error propagation without hidden business logic</item>
+        <item>Compose smoke ingests at least one file or URL, shows it in inbox, seals a selection, creates analysis_run, publishes artifacts, and exposes diagnostics.</item>
+        <item>Runtime owner isolation check proves another owner cannot read the media_item, selection, run, artifact, or diagnostics.</item>
+        <item>Retention smoke expires or soft-deletes an artifact without corrupting selection or run history.</item>
       </required>
-      <must-prove>
-        <proof>MCP never requires direct DB, Redis, or MinIO access.</proof>
-      </must-prove>
-    </McpTests>
-
-    <CutoverParity>
-      <required>
-        <item>Compose-wide smoke verification passes with all required services healthy.</item>
-        <item>Functional parity against the frozen acceptance matrix is demonstrated.</item>
-        <item>The old single-process runtime path is not removed until parity evidence exists.</item>
-      </required>
-    </CutoverParity>
+    </RuntimeTests>
   </TestingStrategy>
 
-  <CriticalFlows>
-    <VF-001 NAME="UploadedFileTranscription" USE_CASES="UC-001,UC-003" DATA_FLOW="DF-001" PRIORITY="high">
-      <scenario>User uploads one or more files and receives versioned transcription jobs plus final transcript artifacts.</scenario>
-      <expected-outcome>Each file creates exactly one job, source upload is persisted, worker produces required transcript artifacts, and polling returns a succeeded snapshot.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiJobs][createTranscriptionJobs][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
-        <log-marker>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</log-marker>
-        <trace-sequence>API_CREATE -&gt; ASYNQ_ENQUEUE -&gt; WORKER_CLAIM -&gt; WORKER_FINALIZE_SUCCEEDED</trace-sequence>
-      </required-signals>
-    </VF-001>
-
-    <VF-001B NAME="BatchTranscriptionAggregate" USE_CASES="UC-001B,UC-003,UC-008" DATA_FLOW="DF-007" PRIORITY="high">
-      <scenario>User submits a mixed source basket as one batch transcription request and receives one succeeded aggregate root with child lineage and aggregate artifacts.</scenario>
-      <expected-outcome>API persists one root batch source set with stable source labels, creates one per-source transcription child per manifest source, enqueues per-source tasks first, schedules `job:transcription.aggregate` for the root when completion policy permits, and polling returns a succeeded root snapshot with transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, and batch_diagnostics_json.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiJobs][createBatchTranscriptionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
-        <log-marker>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</log-marker>
-        <trace-sequence>API_CREATE_BATCH_ROOT -&gt; SOURCE_CHILDREN_ENQUEUED -&gt; SOURCE_CHILDREN_FINALIZED -&gt; AGGREGATE_ENQUEUED -&gt; AGGREGATE_ARTIFACTS_REGISTERED -&gt; ROOT_FINALIZE_SUCCEEDED</trace-sequence>
-      </required-signals>
-    </VF-001B>
-
-    <VF-001C NAME="ApiOwnedTelegramBatchDraft" USE_CASES="UC-001C,UC-001B,UC-008" DATA_FLOW="DF-009" PRIORITY="high">
-      <scenario>Telegram renders a batch draft button, the draft changes or is submitted elsewhere, and the old button is clicked later.</scenario>
-      <expected-outcome>API validates draft_id, owner scope, status, and expected version before every mutation or submit; stale callbacks return version_conflict, draft_submitted, draft_expired, draft_canceled, or draft_owner_mismatch; repeated submit returns the same submitted root job; no callback mutates or submits a current unrelated chat/user basket.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiJobs][submitBatchDraft][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
-        <log-marker>[TelegramAdapter][handleDraftCallback][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</log-marker>
-        <trace-sequence>DRAFT_CREATE -&gt; DRAFT_MUTATE_VERSION_INCREMENT -&gt; STALE_CALLBACK_REJECTED_OR_SUBMITTED_REPLAY -&gt; SINGLE_BATCH_ROOT_PROMOTED</trace-sequence>
-      </required-signals>
-      <implementation-evidence status="verified" verified-at="2026-04-27">`go test ./internal/storage ./internal/api ./internal/jobs` from `apps/api` passed; `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` from `apps/api` passed; `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py` passed with 9 tests; `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py` passed with 78 tests; live compose DB E2E inside the `api` container with `API_STORAGE_POSTGRES_DSN=postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable` passed `TestApiBatchDraftMixedUploadURLPostgresE2E`; `git diff --check` was clean. Known limitation: repository-root Telegram adapter pytest still needs explicit `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src`.</implementation-evidence>
-    </VF-001C>
-
-    <VF-002 NAME="YouTubeTranscription" USE_CASES="UC-002,UC-003" DATA_FLOW="DF-002" PRIORITY="high">
-      <scenario>User submits a valid YouTube URL and receives transcript artifacts without local file upload.</scenario>
-      <expected-outcome>API accepts supported hosts only, worker resolves the media/transcript path correctly, and final artifacts are persisted.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiHttp][createTranscriptionFromUrl][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</log-marker>
-        <log-marker>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</log-marker>
-      </required-signals>
-    </VF-002>
-
-    <VF-003 NAME="WebhookAndPollingConsistency" USE_CASES="UC-003" DATA_FLOW="DF-003" PRIORITY="high">
-      <scenario>A job created with `delivery.strategy=webhook` still remains readable and correct through polling.</scenario>
-      <expected-outcome>API emits versioned events, persists webhook delivery records, retries bounded failures, and `GET /v1/jobs/{job_id}` remains authoritative.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</log-marker>
-        <trace-sequence>JOB_VERSION_INCREMENT -&gt; TIMELINE_EVENT -&gt; WEBSOCKET_BROADCAST -&gt; WEBHOOK_SCHEDULE</trace-sequence>
-      </required-signals>
-    </VF-003>
-
-    <VF-004 NAME="ReportChildReuse" USE_CASES="UC-004" DATA_FLOW="DF-004" PRIORITY="high">
-      <scenario>User requests a report twice for the same succeeded transcription.</scenario>
-      <expected-outcome>API returns the same canonical `agent_run` child job unless explicit retry is requested, and worker-agent-runner produces markdown and DOCX artifacts.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiJobs][createChildJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
-        <log-marker>[AgentRunner][dispatchHarness][BLOCK_DISPATCH_AGENT_HARNESS]</log-marker>
-      </required-signals>
-    </VF-004>
-
-    <VF-005 NAME="DeepResearchChildReuse" USE_CASES="UC-005" DATA_FLOW="DF-005" PRIORITY="high">
-      <scenario>User requests deep research from a succeeded report and later retries the child explicitly.</scenario>
-      <expected-outcome>Initial create reuses or creates one canonical `agent_run` child, retry creates a new row linked by `retry_of_job_id`, and worker-agent-runner persists final markdown output.</expected-outcome>
-      <required-signals>
-        <log-marker>[AgentRunner][dispatchHarness][BLOCK_DISPATCH_AGENT_HARNESS]</log-marker>
-      </required-signals>
-    </VF-005>
-
-    <VF-006 NAME="CancelAndRetryLineage" USE_CASES="UC-006" DATA_FLOW="DF-006" PRIORITY="high">
-      <scenario>User cancels a running job and later retries it.</scenario>
-      <expected-outcome>Running job transitions through `cancel_requested` to `canceled`, retry creates a new job row, and historical artifacts/events remain intact.</expected-outcome>
-      <required-signals>
-        <log-marker>[ApiJobs][cancelJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</log-marker>
-        <trace-sequence>RUNNING -&gt; CANCEL_REQUESTED -&gt; CANCELED</trace-sequence>
-      </required-signals>
-    </VF-006>
-  </CriticalFlows>
-
-  <ModuleVerification>
-    <V-M-CONTRACTS MODULE="M-CONTRACTS" PRIORITY="high">
-      <test-files>
-        <file>packages/contracts/tests/test_contract_surfaces.py</file>
-      </test-files>
-      <module-checks>
-        <check-1>.venv/bin/python -m pytest --no-cov packages/contracts/tests/test_contract_surfaces.py</check-1>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Polling and webhook create requests share the same canonical job snapshot envelope.</scenario-1>
-        <scenario-2 kind="failure">Invalid delivery strategy or missing webhook URL is rejected deterministically.</scenario-2>
-        <scenario-3 kind="success">Batch transcription create freezes `/v1/transcription-jobs/batch`, source manifests, stable source labels, root aggregate jobs, per-source children, and aggregate artifact kinds.</scenario-3>
-        <scenario-4 kind="success">Batch draft contract freezes create, get, add item, remove item, clear, and submit endpoints with draft_id, version, owner scope, ordered items, status, stale outcomes, and submitted root job response.</scenario-4>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[Contracts][validateContractSurface][BLOCK_VALIDATE_CONTRACT_SURFACE]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Retry endpoint must remain non-idempotent while create endpoints support `Idempotency-Key`.</assertion-1>
-        <assertion-2>Telegram draft callback data must carry draft_id and version; contract wording must not allow `basket:start` without draft identity as canonical submit input.</assertion-2>
-      </required-trace-assertions>
-      <wave-follow-up>Regenerate any typed client stubs after contract changes.</wave-follow-up>
-      <phase-follow-up>Freeze contract diffs before starting major code waves.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft contract evidence passed: `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py` reported 9 passed, covering `/v1/batch-drafts` surfaces, stale outcome enum, batch transcription source labels, artifact kinds, and single worker-agent-runner topology.</phase-follow-up>
-    </V-M-CONTRACTS>
-
-    <V-M-API-STORAGE MODULE="M-API-STORAGE" PRIORITY="high">
-      <test-files>
-        <file>apps/api/internal/storage/*_test.go</file>
-      </test-files>
-      <module-checks>
-        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiStorage</check-1>
-        <check-2>cd apps/api &amp;&amp; go test ./internal/storage -run ApiStorageMigration</check-2>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Source rows, jobs, artifacts, events, and webhook deliveries persist with correct lineage and constraints.</scenario-1>
-        <scenario-2 kind="failure">Artifact resolution fails cleanly when object store or DB is unavailable.</scenario-2>
-        <scenario-3 kind="success">Batch transcription persistence creates root and child source sets with stable source labels, root aggregate job lineage, per-source children, and aggregate artifact metadata.</scenario-3>
-        <scenario-4 kind="failure">Internal worker execution ids remain authoritative and storage-backed rather than being inferred from route-local or in-memory claim state.</scenario-4>
-        <scenario-5 kind="success">Batch draft tables persist owner scope, status, monotonic version, ordered item positions, submitted_root_job_id, and terminal timestamps with transactional submit.</scenario-5>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[ApiStorage][persistJob][BLOCK_PERSIST_JOB_AND_ARTIFACT]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Successful artifact uploads must create DB rows only after object persistence succeeds.</assertion-1>
-        <assertion-2>Internal worker claim, progress, artifact, finalize, and cancel-check flows must rely on authoritative execution-claim state instead of reconstructing ownership from `started_at` or process-local memory.</assertion-2>
-        <assertion-3>DB-backed draft tests must prove expected-version compare-and-swap, owner mismatch rejection, submitted/expired/canceled mutation rejection, and repeated submit returning the same submitted_root_job_id.</assertion-3>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Migration application and rollback smoke passed against compose PostgreSQL through `docker compose -f infra/docker-compose.yml exec -e API_STORAGE_POSTGRES_DSN=postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable api go test ./internal/storage -run ApiStorageMigration -count=1 -v`; the env-gated test created a temporary database, applied all Up tables including job_executions and webhook_deliveries, applied Down, verified the tables were removed, and dropped the temporary database.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">Presigned artifact URL validation passed against the compose MinIO container and host browser path: Web UI resolved job c018df69-65c3-4b90-9620-6051df367448 artifact f13d1902-bdf9-4fc8-be19-8a5d2ebc7c3b to `http://localhost:9000/...` with `X-Amz-Signature`, and host curl downloaded 2336 bytes with HTTP 200.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft storage evidence passed through `go test ./internal/storage ./internal/api ./internal/jobs` and `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` from `apps/api`. Focused storage coverage proves owner scope, monotonic version, ordered item persistence, terminal submitted mutation rejection, repeated submit idempotence, submitted_root_job_id persistence, and API-owned uploaded source object persistence at add-item time.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">`media-9kk` storage evidence proves artifact download access is audience-scoped: public artifact resolution uses the public presign client and internal artifact download-access uses the internal presign client without falling back to Telegram-side URL rewriting. Evidence: `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` passed from `apps/api`.</phase-follow-up>
-    </V-M-API-STORAGE>
-
-    <V-M-API-QUEUE MODULE="M-API-QUEUE" PRIORITY="high">
-      <test-files>
-        <file>apps/api/internal/queue/*_test.go</file>
-      </test-files>
-      <module-checks>
-        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiQueue</check-1>
-        <check-2>cd apps/api &amp;&amp; API_QUEUE_REDIS_ADDR=$REDIS_ADDR go test ./internal/queue -run ApiQueueSmoke</check-2>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Jobs enqueue with correct task types, payloads, retries, and timeouts.</scenario-1>
-        <scenario-2 kind="failure">Deterministic business failures use `SkipRetry` rather than repeating indefinitely.</scenario-2>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[ApiQueue][enqueue][BLOCK_ENQUEUE_JOB]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Queue payload must not contain full mutable job metadata.</assertion-1>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Compose Redis/asynq smoke passed through `docker compose -f infra/docker-compose.yml exec -e API_QUEUE_REDIS_ADDR=redis:6379 api go test ./internal/queue -run ApiQueueSmoke -count=1 -v`; the asynq inspector observed the queued transcription task with minimal job_id/attempt payload, queue name, retry count, and timeout.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">Queue outage and cancel behavior were verified through API routes. With Redis stopped, public upload returned HTTP 503 `queue_unavailable` after the first divergent block exposed a prior HTTP 500 mapping drift; the minimal fix maps `queue.ErrQueueUnavailable` to the frozen error envelope. Cancel smoke used public create, internal claim execution 60c38c9d-b3dd-4b47-8d59-df47887db794, public cancel, internal cancel-check returning `cancel_requested=true`, and internal finalize to `canceled` for job 260bd721-3a92-4807-8e96-edd1d3baa05e.</phase-follow-up>
-    </V-M-API-QUEUE>
-
-    <V-M-API-JOBS MODULE="M-API-JOBS" PRIORITY="high">
-      <test-files>
-        <file>apps/api/internal/jobs/*_test.go</file>
-      </test-files>
-      <module-checks>
-        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiJobs</check-1>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Create root and child jobs under correct lineage and delivery rules.</scenario-1>
-        <scenario-2 kind="failure">Reject invalid transitions, malformed idempotency replays, and missing artifact prerequisites.</scenario-2>
-        <scenario-3 kind="success">Batch transcription create produces one root aggregate job plus per-source children without breaking one-file-to-one-job upload semantics.</scenario-3>
-        <scenario-4 kind="success">Batch draft submit atomically promotes open ordered draft items into one batch transcription root and marks the draft submitted with submitted_root_job_id.</scenario-4>
-        <scenario-5 kind="failure">Draft mutation and submit reject version mismatch, submitted, expired, canceled, and owner-mismatch callbacks without inspecting adapter-local basket state.</scenario-5>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[ApiJobs][transitionJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Retry must create a new row and never mutate terminal historical rows.</assertion-1>
-        <assertion-2>Batch transcription create must fan out only into the owned root aggregate plus per-source child graph, not unrelated top-level jobs.</assertion-2>
-        <assertion-3>Repeated submit of a submitted draft must return the same root job or submitted draft response and must not create another root or source-set graph.</assertion-3>
-      </required-trace-assertions>
-      <wave-follow-up>Exercise cancel and retry against real workers, not only storage mocks.</wave-follow-up>
-      <phase-follow-up>Cross-check child reuse and retry lineage in UI and Telegram flows.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft job promotion evidence passed through both focused Go commands from `apps/api`. `SubmitBatchDraft` reads the API-owned draft, reuses an already submitted root when present, builds the existing `batch-transcription.v1` manifest from ordered draft items, promotes through the existing batch root/children graph, enqueues per-source transcription work, and keeps report/deep_research handoff on `agent_run` plus worker-agent-runner only.</phase-follow-up>
-    </V-M-API-JOBS>
-
-    <V-M-API-HTTP MODULE="M-API-HTTP" PRIORITY="high">
-      <test-files>
-        <file>apps/api/internal/api/*_test.go</file>
-      </test-files>
-      <module-checks>
-        <check-1>go test ./... -run ApiHttp</check-1>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Public endpoints shape accepted requests and responses according to the canonical contract.</scenario-1>
-        <scenario-2 kind="failure">Invalid UUIDs, missing webhook URLs, oversized uploads, and unsupported source URLs return stable error envelopes.</scenario-2>
-        <scenario-3 kind="success">Batch multipart plus source-manifest upload is validated independently from the per-file upload endpoint and returns one root job envelope.</scenario-3>
-        <scenario-4 kind="failure">Internal worker routes reject missing or stale execution ids instead of accepting request-local ownership assumptions.</scenario-4>
-        <scenario-5 kind="success">Local Web UI origins receive CORS headers for REST polling and action routes without opening non-local origins.</scenario-5>
-        <scenario-6 kind="failure">Batch draft endpoints shape stale callback responses for version mismatch, submitted, expired, canceled, and owner mismatch using the canonical error envelope or draft-state response.</scenario-6>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[ApiHttp][validateRequest][BLOCK_VALIDATE_REQUEST_AND_SHAPE_RESPONSE]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Internal worker endpoints must not be confused with public client endpoints.</assertion-1>
-        <assertion-2>Internal worker routes validate `execution_id` against authoritative control-plane state rather than route-local memory.</assertion-2>
-        <assertion-3>Browser CORS is an HTTP boundary concern and must remain limited to local development origins.</assertion-3>
-        <assertion-4>Draft submit route validates expected_version from callback data before calling batch promotion logic.</assertion-4>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Executable API runtime, authoritative execution-claim backing, and live route regression are verified against the compose stack.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">Historical `/combined` route regression passed with direct curl and browser evidence before the batch root/children/aggregate redesign. Current active route evidence is captured by `BATCH-TRANSCRIPTION-GRACE-REFRESH`; the older combined-upload job ids remain historical parity lineage only.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Batch draft HTTP route evidence passed through `go test ./internal/storage ./internal/api ./internal/jobs` and `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` from `apps/api`. Route coverage parses owner scope and expected_version, supports JSON URL add and multipart upload add, maps stale errors to version_conflict, draft_submitted, draft_expired, draft_canceled, and draft_owner_mismatch, and validates submit before promotion.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">`media-9kk` HTTP route evidence adds `/internal/v1/artifacts/{artifact_id}/download-access` as the server-side artifact materialization route while preserving public `/v1/artifacts/{artifact_id}` for browser and host clients. Evidence: `go test -count=1 ./internal/storage ./internal/api ./internal/jobs` passed and contract-surface tests include the new internal route.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Live compose artifact-access evidence after restarting `api`, `telegram-bot`, `worker-transcription`, and `worker-agent-runner`: from inside `telegram-bot`, public artifact resolution for artifact `2bf6ac96-39c2-4466-8c6b-1e1cce2c72fe` returned `localhost:9000` and direct download failed with Errno 111 as expected for a container-local client, while internal download-access returned `minio:9000` and direct download read 32 bytes successfully.</phase-follow-up>
-    </V-M-API-HTTP>
-
-    <V-M-API-EVENTS MODULE="M-API-EVENTS" PRIORITY="high">
-      <test-files>
-        <file>apps/api/internal/ws/*_test.go</file>
-      </test-files>
-      <module-checks>
-        <check-1>cd apps/api &amp;&amp; go test ./... -run ApiEvents</check-1>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Versioned job events emit to timeline, WebSocket, and webhook delivery persistence.</scenario-1>
-        <scenario-2 kind="failure">Webhook retries back off and persist state across restarts until delivered or dead.</scenario-2>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Polling must remain authoritative even when WebSocket or webhook delivery succeeds.</assertion-1>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Webhook 5xx retry is verified by `go test ./internal/ws -run ApiEvents -count=1` and live compose evidence. Live job b8a845c2-c713-4be4-871b-60e8c22257e3 used webhook delivery to a host callback that returned 502 first and 204 later; API logs show delivery d31aebdd-64e5-4760-98b9-1c25ca2b490a pending attempt=1 http_status=502, then after API restart/due replay delivered attempt=2 http_status=204. Storage row confirmed state=delivered, attempt_count=2, last_http_status=204.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">WebSocket reconnect refresh was verified in a real browser at http://localhost:3300/jobs/b8a845c2-c713-4be4-871b-60e8c22257e3. After API restart, browser console emitted `[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE] reason=reconnect route_job_id=b8a845c2-c713-4be4-871b-60e8c22257e3` with zero browser errors or warnings.</phase-follow-up>
-    </V-M-API-EVENTS>
-
-    <V-M-WORKER-COMMON MODULE="M-WORKER-COMMON" PRIORITY="medium">
-      <test-files>
-        <file>workers/common/tests</file>
-      </test-files>
-      <module-checks>
-        <check-1>.venv/bin/python -m pytest --no-cov workers/common/tests</check-1>
-        <check-2>uv run pytest workers/agent-runner/tests workers/common/tests packages/contracts/tests/test_contract_surfaces.py -q</check-2>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Shared worker API client and artifact helpers produce valid internal control-plane payloads.</scenario-1>
-        <scenario-2 kind="failure">Internal API unavailability or malformed artifact payloads fail deterministically before worker-specific execution continues.</scenario-2>
-        <scenario-3 kind="success">Workers and the Telegram adapter import source/domain helper contracts from transcriber_workers_common instead of the legacy bot package.</scenario-3>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</marker-1>
-        <marker-2>[WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]</marker-2>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Workers must not bypass internal control-plane contracts.</assertion-1>
-        <assertion-2>Artifact helper output must remain compatible with the canonical worker finalize and artifact-registration DTOs.</assertion-2>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-26">Packet-local verification now keeps the broad worker-common gate aligned with the single AI worker topology. `uv run pytest workers/agent-runner/tests workers/common/tests packages/contracts/tests/test_contract_surfaces.py -q` passed with 81 tests after deleting the dedicated report and deep-research worker runtimes.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">`media-9kk` worker-common evidence proves shared server-side artifact materialization calls `/internal/v1/artifacts/{artifact_id}/download-access` and parses the unchanged artifact-resolution envelope. Evidence: the focused 47-test command passed, followed by the broader `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py apps/telegram-bot/tests workers/common/tests workers/agent-runner/tests packages/contracts/tests/test_contract_surfaces.py -q` gate with 163 passed.</phase-follow-up>
-      <phase-follow-up status="closed">No DTO drift was observed across the April 23 cutover parity reruns and the April 24 explicit worker-common coverage replay; reopen this follow-up only if public or internal worker contracts change again.</phase-follow-up>
-    </V-M-WORKER-COMMON>
-
-    <V-M-WORKER-TRANSCRIPTION MODULE="M-WORKER-TRANSCRIPTION" PRIORITY="high">
-      <test-files>
-        <file>tests/test_transcribers.py</file>
-        <file>tests/test_documents.py</file>
-        <file>workers/transcription/tests</file>
-      </test-files>
-      <module-checks>
-        <check-1>.venv/bin/python -m pytest --no-cov tests/test_transcribers.py tests/test_documents.py</check-1>
-        <check-2>.venv/bin/python -m pytest --no-cov workers/transcription/tests</check-2>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Worker produces plain, segmented, and DOCX transcript artifacts from uploaded and YouTube sources.</scenario-1>
-        <scenario-2 kind="failure">Unsupported URLs, empty transcripts, and downloader failures surface deterministic terminal errors.</scenario-2>
-        <scenario-3 kind="success">Worker preserves stable source-label ordering and emits aggregate root artifacts for batch transcription jobs.</scenario-3>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Success finalization must not happen before all required transcript artifacts exist.</assertion-1>
-        <assertion-2>Batch roots do not use concat-first transcription; they merge succeeded child transcript artifacts in source-label order and register diagnostics before success finalization.</assertion-2>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Historical pre-batch worker E2E ran against real MinIO and internal API claim/finalize endpoints. Live evidence: worker-transcription runtime image provided /usr/bin/ffmpeg version 5.1.8-0+deb12u1; single upload job e609da17-e2a7-4daf-9d53-42c3270ad7bd succeeded with transcript_plain, transcript_docx, and transcript_segmented_markdown artifacts; historical combined upload job f15f4c2a-8ac3-4827-84ab-053a1cd19199 reached [WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE] ordered_input_count=2 and succeeded with the transcript artifact set. This remains lineage evidence only; current batch proof is the April 26 root/children/aggregate evidence below.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">Telegram thin-adapter expectations were replayed through the compose stack and are captured under `V-M-TELEGRAM-ADAPTER`; transcription, report, and deep-research UX now stay API-owned rather than worker-local.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">Batch transcription implementation is verified by focused worker tests and focused Go API storage/jobs/queue/API tests. Evidence covers root aggregate job creation, per-source child creation, stable source labels, aggregate enqueue through `job:transcription.aggregate`, root artifact registration for transcript_plain, transcript_segmented_markdown, transcript_docx, source_manifest_json, and batch_diagnostics_json, best-effort diagnostics when failed children are skipped, and failure when required child transcript artifacts are missing. The host live PostgreSQL control-plane E2E command `go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v` was run but skipped because `API_STORAGE_POSTGRES_DSN` was unset, with a PASS wrapper around the skip. Follow-up live DB-backed evidence passed inside the compose API container against the compose PostgreSQL test DB: `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v'`; result `PASS`, `ok github.com/danila/media-analysis-platform/apps/api/internal/api 0.512s`. Commands recorded for the completed slice include focused Go API storage/jobs/queue/API tests and `uv run pytest --no-cov workers/transcription/tests`.</phase-follow-up>
-    </V-M-WORKER-TRANSCRIPTION>
-
-    <V-M-WEB-UI MODULE="M-WEB-UI" PRIORITY="medium">
-      <test-files>
-        <file>apps/web/tests</file>
-      </test-files>
-      <module-checks>
-        <check-1>pnpm --dir apps/web test</check-1>
-      </module-checks>
-      <execution-prerequisites>
-        <prerequisite-1>If `apps/web` is absent, first materialize the scoped app shell and test harness so the module check is runnable before UI feature work starts.</prerequisite-1>
-        <prerequisite-2>The shell packet should leave behind route or layout wiring, `VITE_API_BASE_URL` and `VITE_WS_URL` env contract coverage, and a mockable API client boundary under `apps/web/src/lib/api`.</prerequisite-2>
-        <prerequisite-3>If `packages/sdk-ts` is still absent, keep a thin packet-local client under `apps/web/src/lib/api` instead of blocking the feature packet on a separate SDK extraction.</prerequisite-3>
-      </execution-prerequisites>
-      <scenarios>
-        <scenario-1 kind="success">UI creates jobs, reconciles polling and WebSocket state, and resolves artifacts via API.</scenario-1>
-        <scenario-2 kind="failure">Expired links and unsupported admin operations fail through API responses rather than client-side guesswork.</scenario-2>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>UI must re-fetch from REST on WebSocket reconnect or version gap.</assertion-1>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Browser smoke was replayed against the live Web UI at `http://localhost:3300`. Fresh Playwright screenshots confirmed the rendered jobs workspace shell (`/tmp/telegram-web-ui.png`) and the live job-details route shell for MCP-created transcription job `b9065337-64fa-400b-b338-39334d030ece` (`/tmp/telegram-web-ui-job.png`). Earlier April 23 browser evidence in this file already covered load or list or create or details flows with zero console warnings or errors and WebSocket refresh behavior; this adapter-parity fix did not touch `apps/web`.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">Late-wave admin actions remain API-owned in the live UI shell: create, lineage navigation, artifact resolve, cancel, retry, report, and deep-research controls are still surfaced through the HTTP API contract rather than client-side inference.</phase-follow-up>
-    </V-M-WEB-UI>
-
-    <V-M-TELEGRAM-ADAPTER MODULE="M-TELEGRAM-ADAPTER" PRIORITY="medium">
-      <test-files>
-        <file>tests/test_bot.py</file>
-        <file>tests/test_media_groups.py</file>
-        <file>tests/test_main.py</file>
-        <file>apps/telegram-bot/tests/test_api_client.py</file>
-        <file>apps/telegram-bot/tests/test_gateway.py</file>
-        <file>apps/telegram-bot/tests/test_i18n_catalogs.py</file>
-        <file>apps/telegram-bot/tests/test_i18n_service.py</file>
-      </test-files>
-      <module-checks>
-        <check-1>.venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py</check-1>
-        <check-2>PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py</check-2>
-        <check-3>uv run pytest --no-cov tests/test_bot.py -k "send_transcript_result or start_processing_group_delivers_short_transcript_inline"</check-3>
-        <check-4>PYTHONPATH=workers/common/src:apps/telegram-bot/src .venv/bin/pytest apps/telegram-bot/tests/test_gateway.py -q</check-4>
-        <check-5>PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q</check-5>
-        <check-6>PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q</check-6>
-      </module-checks>
-      <execution-prerequisites>
-        <prerequisite-1>If `apps/telegram-bot` is absent, materialize the minimal adapter root inside the packet together with package metadata and env contract files needed for the adapter to run.</prerequisite-1>
-        <prerequisite-2>If `packages/sdk-py` is still absent, keep a thin packet-local API client under the Telegram adapter boundary instead of blocking the packet on a separate SDK extraction.</prerequisite-2>
-      </execution-prerequisites>
-      <scenarios>
-        <scenario-1 kind="success">Telegram adapter uploads media to the API and returns resulting artifacts while preserving current UX.</scenario-1>
-        <scenario-2 kind="failure">Telegram callback flows do not bypass API lineage and child-job rules.</scenario-2>
-        <scenario-3 kind="success">Telegram adapter sends a readable non-empty `transcript_plain` artifact at exactly `TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS` characters inline with the result keyboard.</scenario-3>
-        <scenario-4 kind="failure">Telegram adapter falls back to document delivery when an existing `transcript_plain` is longer than the inline limit, empty or whitespace-only, or unreadable.</scenario-4>
-        <scenario-5 kind="failure">Telegram adapter falls back to document delivery when inline `status_message.answer` rejects the transcript with `TelegramBadRequest`.</scenario-5>
-        <scenario-6 kind="failure">Telegram adapter sends a clear unavailable-artifact status message with the result keyboard, and no document upload, when the `transcript_plain` path is missing or not a file.</scenario-6>
-        <scenario-7 kind="failure">Telegram stale draft callbacks containing old draft_id plus version receive submitted, expired, canceled, version-conflict, or owner-mismatch copy from the API response and never call a chat/user keyed in-memory basket.</scenario-7>
-        <scenario-8 kind="success">Telegram command descriptions, start/help text, draft keyboards, source-label fallbacks, and report/deep-research copy resolve correctly for RU and EN through the packet-local typed i18n catalogs.</scenario-8>
-        <scenario-9 kind="success">Telegram preserves the active locale through delayed basket summaries and buffered media-group flushes so deferred UX copy matches the originating message locale.</scenario-9>
-        <scenario-10 kind="failure">Access-denied, selection-invalid, stale-button, version-conflict, and representative report or deep-research error copy remain locale-aware without changing API draft or batch persistence semantics.</scenario-10>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Default Telegram delivery strategy remains polling.</assertion-1>
-        <assertion-2>Media groups and user-curated baskets map to the batch transcription flow instead of the per-file upload flow.</assertion-2>
-        <assertion-3>Telegram command registry exposes `/start`, `/help`, `/batch`, `/basket`, and `/clear`, and batch mode can be toggled without adding business orchestration to the adapter.</assertion-3>
-        <assertion-4>Inline transcript delivery is a presentation transport choice over `transcript_plain`; it must not introduce an API contract change, worker change, bot-side transcript stitching, or altered batch aggregate content.</assertion-4>
-        <assertion-5>Draft callback buttons must carry draft_id and version, and the adapter must not treat adapter-local BasketStore as canonical durable state.</assertion-5>
-        <assertion-6>Locale is resolved in the adapter from Telegram user language metadata, reused for delayed summary and media-group follow-up flows, and is not persisted as API-owned draft business state.</assertion-6>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Live Telegram adapter replay used `apps/telegram-bot` gateway against compose API `http://localhost:8080`: transcription job `b8a845c2-c713-4be4-871b-60e8c22257e3` loaded plain and segmented transcript artifacts successfully, `ensure_report(...)` downloaded report markdown or DOCX successfully, and the gateway now preserves the created report child id `0e991c7e-c7ad-495d-a0a8-39942abb590b` inside `ReportArtifacts.job_id` instead of collapsing everything back to the parent transcription id.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-25">Compose-stack Telegram UX parity exposed and closed a real callback-id drift. Before the fix, the report message built `deep:b8a845c2-c713-4be4-871b-60e8c22257e3` from the parent transcription job id; live `ensure_deep_research(b8a845c2-c713-4be4-871b-60e8c22257e3)` failed with API error `job state does not allow this operation`, while `ensure_deep_research(0e991c7e-c7ad-495d-a0a8-39942abb590b)` succeeded and materialized deep-research artifact `/tmp/telegram-adapter-parity-live-fixed/api-jobs/d674cb10-0d40-4d2b-b5a4-15b2961a9553/deep_research/evidence-research-final-report.md`. The strict contract is now: `ReportArtifacts.job_id` is the only authoritative deep-callback target. The former local compatibility shell used the parent transcription id there; the compose-owned API flow preserves the report child id instead. Regression evidence: `uv run pytest --no-cov tests/test_bot.py -k handle_generate_report` and `PYTHONPATH=apps/telegram-bot/src uv run pytest --no-cov apps/telegram-bot/tests/test_api_client.py`.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">Compose Telegram runtime now starts the real aiogram polling adapter instead of the placeholder sleep loop. `docker compose -f infra/docker-compose.yml up -d --build telegram-bot` built `infra/images/telegram-bot/Dockerfile`, injected the local root `.env` token without writing it into tracked env templates, and logs show `[TelegramAdapter][main][BLOCK_LAUNCH_TELEGRAM_ADAPTER] api_base_url=http://api:8080 mode=token_configured`, `Start polling`, and `Run polling for bot`. The container token check confirms a non-placeholder token, and `PYTHONPATH=src:../../workers/common/src uv run pytest tests -q` passed for the app-local Telegram adapter suite.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">Telegram basket behavior now matches the batch API rather than the historical combined endpoint. Adapter and bot tests cover stable manifest source-label file parts, mixed URL plus Telegram-file baskets, one API batch call per basket, basket clear/remove behavior, and report/deep-research callbacks staying on API-owned lineage. Evidence commands recorded for the completed slice include `uv run pytest --no-cov tests/test_bot.py -k basket`, `PYTHONPATH=apps/telegram-bot/src uv run pytest --no-cov apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py`, and the app-local Telegram adapter suite.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">Telegram command registry and batch-mode controls are verified. The bot registers `/start`, `/help`, `/batch`, `/basket`, and `/clear`; start/help surfaces include the batch toggle; `/batch` and the inline toggle switch per-chat/user mode; disabled mode processes one source immediately or asks the user to select one source from a multi-source message. Evidence command: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest tests/test_bot.py apps/telegram-bot/tests -q` passed with 55 tests before the final gate replay.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">`media-20e` Telegram inline transcript presentation is verified as a bounded adapter delivery delta. Focused coverage proves a threshold-length readable `transcript_plain` artifact is sent as exact inline Telegram text with the result keyboard; long, empty or whitespace-only, unreadable existing files, and TelegramBadRequest inline-rejection paths fall back to document delivery with the same result keyboard; missing or non-file artifact paths send a clear unavailable-artifact status message with the same result keyboard and no document upload; batch processing paths continue to deliver the gateway-materialized `transcript_plain` content rather than bot-side stitched text. Evidence commands: `.venv/bin/pytest tests/test_bot.py -q` passed with 58 tests before hardening, and focused final-gate replay `.venv/bin/pytest tests/test_bot.py -k send_transcript_result -q` passed with 8 tests.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">Telegram gateway artifact materialization is verified for inline transcript delivery. `PYTHONPATH=workers/common/src:apps/telegram-bot/src .venv/bin/pytest apps/telegram-bot/tests/test_gateway.py -q` passed with 5 tests and proves API `transcript_plain` artifacts are resolved/downloaded into `ProcessedJob.transcript.text_path` before bot presentation.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">API-owned draft Telegram evidence passed: `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py` reported 78 passed. Coverage proves transient Telegram file download followed by API draft-item upload, callback rendering with draft_id/version or draft-scoped item token, old `basket:*` callbacks answering as stale without local/current basket processing, stale API outcomes surfaced to the user, and report/deep_research callbacks still routed through API-owned job lineage.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">`media-9kk` Telegram artifact evidence proves the gateway resolves transcript, report, and deep-research artifacts through the internal download-access route and downloads the returned URL without local MinIO host rewriting. Evidence: the focused Telegram adapter and gateway subset in the 47-test command passed.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Live Telegram runtime was restarted on the real bot token after the internal artifact download-access change; logs show `[TelegramAdapter][main][BLOCK_LAUNCH_TELEGRAM_ADAPTER] api_base_url=http://api:8080 mode=token_configured`, `Start polling`, and `Run polling for bot @information_lalalu_bot id=8724268181`.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">`media-dac` RU/EN Telegram i18n coverage passed with `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q` reporting `32 passed in 1.33s`. Coverage proves localized command registration, localized source-label fallback presentation, localized deep-research/report and representative stale/error/access-denied copy, and packet-local locale normalization.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Broader Telegram adapter regression passed with `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q` reporting `46 passed in 1.71s`. The broader replay proves locale propagation through delayed basket summaries and media-group flushes alongside the existing Telegram batch/report/deep-research and artifact-delivery surfaces.</phase-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-27">Explicit DB-backed non-regression evidence for the i18n delta passed against the live compose API/PostgreSQL stack: `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchDraftMixedUploadURLPostgresE2E -count=1 -v'` reported `PASS` and `ok github.com/danila/media-analysis-platform/apps/api/internal/api 1.019s`, proving locale coverage changes did not alter API-owned draft semantics.</phase-follow-up>
-    </V-M-TELEGRAM-ADAPTER>
-
-    <V-M-MCP-ADAPTER MODULE="M-MCP-ADAPTER" PRIORITY="medium">
-      <test-files>
-        <file>apps/mcp-server/tests</file>
-      </test-files>
-      <module-checks>
-        <check-1>pnpm --dir apps/mcp-server test</check-1>
-      </module-checks>
-      <execution-prerequisites>
-        <prerequisite-1>If `apps/mcp-server` is absent, first materialize the scoped MCP app shell and test harness so the module check is runnable before tool-mapping work starts.</prerequisite-1>
-        <prerequisite-2>The shell packet should leave behind `API_BASE_URL` env contract coverage, server or tool-registry bootstrap, and a mockable local API client boundary under the MCP adapter scope.</prerequisite-2>
-        <prerequisite-3>If `packages/sdk-ts` is still absent, keep a thin packet-local client under `apps/mcp-server/src` instead of blocking the packet on a separate SDK extraction.</prerequisite-3>
-      </execution-prerequisites>
-      <scenarios>
-        <scenario-1 kind="success">MCP tools map cleanly onto API operations without hidden business logic.</scenario-1>
-        <scenario-2 kind="failure">Adapter-level validation and error propagation stay contract-shaped and do not fall back to direct storage or queue access.</scenario-2>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[McpAdapter][mapToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>MCP must not require direct DB, queue, or MinIO access.</assertion-1>
-      </required-trace-assertions>
-      <wave-follow-up status="verified" verified-at="2026-04-23">Tool-level live integration passed inside the compose `mcp-server` container. The adapter mapped live calls for `list_jobs`, `create_transcription_job_from_url`, `get_job`, `create_report_job`, `create_deep_research_job`, `list_job_artifacts`, and `get_artifact_download_info` to the same API boundary while emitting `[McpAdapter][mapToolToApi][BLOCK_MAP_MCP_TOOL_TO_API_CALL]` for each call.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-23">Parity with the Web UI and Telegram capability surface is now evidenced on a fresh live chain. MCP-created transcription job `b9065337-64fa-400b-b338-39334d030ece`, report child `b62b5bf7-d555-44da-af31-ea646f01b397`, and deep-research child `489502a0-b1a9-4780-81c9-42456fb292fb` all reached `succeeded`; `list_job_artifacts` returned two deep-research artifacts, and `get_artifact_download_info` returned a localhost MinIO presigned URL for `evidence-research-final-report.md`. The adapter still required no direct DB, queue, or MinIO access.</phase-follow-up>
-    </V-M-MCP-ADAPTER>
-
-    <V-M-INFRA-COMPOSE MODULE="M-INFRA-COMPOSE" PRIORITY="high">
-      <test-files>
-        <file>infra/docker-compose.yml</file>
-        <file>infra/env/*.env.example</file>
-        <file>infra/scripts/compose-smoke.sh</file>
-      </test-files>
-      <module-checks>
-        <check-1>docker compose -f infra/docker-compose.yml config</check-1>
-        <check-2>bash infra/scripts/compose-smoke.sh --check-config</check-2>
-        <check-3>bash infra/scripts/compose-smoke.sh --live-smoke</check-3>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="success">Compose topology defines the required services, env-file contracts, healthchecks, volumes, and startup ordering before runtime modules are implemented.</scenario-1>
-        <scenario-2 kind="failure">Missing services, env contracts, or invalid compose wiring fail fast through config validation and smoke-script checks.</scenario-2>
-        <scenario-3 kind="success">Once runtime modules exist, compose smoke verification proves healthcheck convergence, startup order, and persistent volume wiring before cutover.</scenario-3>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Phase-1 validates topology shape only; full stack boot remains a later phase gate after service modules exist.</assertion-1>
-        <assertion-2>Phase-6 hardening must prove clean stack startup and smoke-script success before the old single-process runtime path is removed.</assertion-2>
-      </required-trace-assertions>
-      <wave-follow-up status="closed">Healthchecks and startup ordering were exercised with runtime services enabled and compose live-smoke convergence.</wave-follow-up>
-      <phase-follow-up status="verified" verified-at="2026-04-26">The compose-owned functional smoke matrix now matches the single AI worker topology. `docker compose -f infra/docker-compose.yml config --services` lists postgres, redis, minio, minio-init, api, mcp-server, web, telegram-bot, worker-agent-runner, and worker-transcription, with no worker-report or worker-deep-research services. `bash infra/scripts/compose-smoke.sh --check-config` passed, and contract tests assert the same service topology.</phase-follow-up>
-    </V-M-INFRA-COMPOSE>
-  </ModuleVerification>
-
-  <CutoverRemainingGates>
-    <Gate id="CUTOVER-PARITY-HTTP" status="verified" owner-module="M-API-HTTP" verified-at="2026-04-23">
-      <description>Run live-stack route regression for multipart upload, historical combined upload, URL submission, child-job creation, artifact resolution, cancel, retry, WebSocket, and internal worker-control routes.</description>
-      <required-evidence>Verified with contract-shaped request and response captures from the compose stack before the batch redesign. Direct curl covered multipart upload, historical combined upload, URL submission, report and deep-research child creation, artifact resolution, cancel, retry, invalid request envelopes, stale execution rejection, and internal worker-control claim/progress/cancel-check/artifact/finalize routes; Playwright covered WebSocket open and browser console cleanliness. Current `/v1/transcription-jobs/batch` proof is tracked separately in `BATCH-TRANSCRIPTION-GRACE-REFRESH`.</required-evidence>
+  <EvidenceGates>
+    <Gate id="EV-GRACE">
+      <description>GRACE docs define only final inbox-first architecture.</description>
+      <required-evidence>XML parsing succeeds for requirements, technology, development-plan, verification-plan, knowledge-graph, and operational-packets.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-WORKER-E2E" status="verified" owner-module="M-WORKER-TRANSCRIPTION,M-WORKER-AGENT-RUNNER" verified-at="2026-04-26">
-      <description>Prove transcription plus report/deep-research operation execution against API, queue, worker-control, and artifact paths with report/deep-research backed only by agent_run jobs.</description>
-      <required-evidence>Verified with deterministic tests and compose topology checks. `cd apps/api &amp;&amp; go test -count=1 ./internal/...` passed; focused API report/deep-research transcript handoff replay `go test ./internal/api -run 'TestApiHttpRuntimeCreateReportCreatesClaudeCodeAgentRunWithTranscriptInput|TestApiHttpRuntimeClaimUsesTranscriptArtifactForReportChild' -count=1 -v` passed; `uv run pytest workers/agent-runner/tests workers/common/tests packages/contracts/tests/test_contract_surfaces.py -q` passed with 81 tests; `bash infra/scripts/compose-smoke.sh --check-config` passed. Added integration coverage proves public report creation returns an `agent_run` job with `operation=report`, `harness_name=claude-code`, transcript input artifacts, redacted params, private request envelope metadata, `job:agent_run.run` queueing, and expected `report_markdown` plus `report_docx`; deep-research creation accepts report-backed `agent_run` parents, rejects missing `report_markdown`, materializes transcript/report artifacts, and persists `deep_research_markdown` from worker-agent-runner.</required-evidence>
+    <Gate id="EV-STALENESS">
+      <description>Stale public product vocabulary is absent from active GRACE docs.</description>
+      <required-evidence>Focused repository searches across the six GRACE XML files show no unacceptable active old product route, grouped-submission, public source grouping, immediate execution target, or dual-path wording.</required-evidence>
     </Gate>
-    <Gate id="BATCH-TRANSCRIPTION-GRACE-REFRESH" status="verified" owner-module="M-CONTRACTS,M-API-HTTP,M-API-JOBS,M-API-STORAGE,M-API-QUEUE,M-WORKER-TRANSCRIPTION,M-TELEGRAM-ADAPTER,M-WORKER-AGENT-RUNNER" verified-at="2026-04-26">
-      <description>Refresh GRACE artifacts to match the completed batch transcription implementation.</description>
-      <required-evidence>Completed evidence spans contract tests, Go API focused tests, worker tests, Telegram adapter tests, agent-runner tests, and a live compose PostgreSQL batch E2E. The host API live PostgreSQL batch E2E command `go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v` was run but skipped because `API_STORAGE_POSTGRES_DSN` was unset; preserve that as host skipped/blocker evidence. The DB-backed follow-up command passed inside the compose API container against the compose PostgreSQL test DB: `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchTranscriptionE2EWithLivePostgresControlPlane -count=1 -v'`; result `PASS`, `ok github.com/danila/media-analysis-platform/apps/api/internal/api 0.512s`. The verified implementation exposes `/v1/transcription-jobs/batch`, validates `batch-transcription.v1` source manifests with stable source labels, creates root aggregate transcription jobs plus per-source transcription children, schedules `job:transcription.aggregate`, persists aggregate root artifacts `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json`, keeps Telegram as a thin basket adapter, and routes report/deep-research through `agent_run` plus worker-agent-runner only. Evidence commands recorded for the completed slice include focused `apps/api/internal/{api,jobs,queue,storage}` Go tests, focused API report/deep-research transcript handoff tests, `uv run pytest --no-cov workers/transcription/tests`, `uv run pytest --no-cov workers/agent-runner/tests workers/common/tests`, Telegram adapter/bot tests, gateway `transcript_plain` materialization tests, and `uv run pytest --no-cov packages/contracts/tests/test_contract_surfaces.py`.</required-evidence>
+    <Gate id="EV-CONTRACTS">
+      <description>Public API and schemas match canonical vocabulary.</description>
+      <required-evidence>Contract tests validate canonical DTOs and fail on removed public product surfaces.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-ADAPTER-PARITY" status="verified" owner-module="M-WEB-UI,M-TELEGRAM-ADAPTER,M-MCP-ADAPTER" verified-at="2026-04-23">
-      <description>Replay browser, Telegram, and MCP adapter parity against the same live API without allowing any adapter to bypass the API boundary.</description>
-      <required-evidence>Verified with adapter-owned evidence only. Web UI browser smoke was replayed at `http://localhost:3300` with fresh Playwright screenshots for the live workspace and job-details routes, while earlier April 23 browser evidence in this file already covers zero-console-error load or list or create or details behavior and WebSocket reconciliation. Telegram replay through `apps/telegram-bot` gateway loaded transcript artifacts for live transcription job `b8a845c2-c713-4be4-871b-60e8c22257e3`, created and downloaded report artifacts for child `0e991c7e-c7ad-495d-a0a8-39942abb590b`, reproduced the deep-research callback-id drift on the wrong parent job id, and then verified the fixed path where `job.report.job_id` drives deep-research child creation to succeeded job `d674cb10-0d40-4d2b-b5a4-15b2961a9553`. MCP live integration inside the compose adapter created succeeded transcription, report, and deep-research jobs (`b9065337-64fa-400b-b338-39334d030ece`, `b62b5bf7-d555-44da-af31-ea646f01b397`, `489502a0-b1a9-4780-81c9-42456fb292fb`) and resolved deep-research artifact download metadata through the API with the required mapping marker on every tool call.</required-evidence>
+    <Gate id="EV-STORAGE">
+      <description>Storage implements owner scope, immutable selection, lifecycle, retention, and diagnostics.</description>
+      <required-evidence>Focused storage tests pass with same-owner and cross-owner cases.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-FAILURE-PATHS" status="verified" owner-module="M-API-STORAGE,M-API-QUEUE,M-API-EVENTS" verified-at="2026-04-23">
-      <description>Close lower-level failure-path smokes that remain open after public presigned MinIO URL validation: migration rollback, Redis/asynq queue smoke, cancel/outage behavior, webhook 5xx retry, and WebSocket reconnect.</description>
-      <required-evidence>Verified with lower-layer owner evidence: live PostgreSQL migration Up/Down smoke in a temporary database; compose Redis/asynq inspector smoke; Redis outage returned HTTP 503 `queue_unavailable` after fixing the first divergent HTTP error-envelope mapping; cancel path went public create - internal claim - public cancel - internal cancel-check - internal finalize to canceled; webhook 502 persisted pending attempt and replayed to delivered attempt 2 after restart; browser WebSocket reconnect triggered REST refresh with the WebUi reconciliation marker and zero console errors.</required-evidence>
+    <Gate id="EV-API">
+      <description>API provides the complete media_item to artifact flow.</description>
+      <required-evidence>Focused API tests pass for ingestion, inbox, collections, selection, analysis_run, cancellation, artifacts, diagnostics, and retention.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-LEGACY-REMOVAL" status="verified" owner-module="M-API-HTTP" verified-at="2026-04-23">
-      <description>The old single-process runtime path was replaced with a fail-fast cutover entrypoint after all functional parity gates passed.</description>
-      <required-evidence>Explicit cutover evidence pack now exists in `docs/architecture/cutover-checklist.md`; the fresh compose-owned speech replay succeeded end-to-end, and `src/media_analysis_platform/__main__.py` now exits with a cutover message directing operators to the compose stack instead of starting local orchestration.</required-evidence>
+    <Gate id="EV-ADAPTERS">
+      <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
+      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state.</required-evidence>
     </Gate>
-    <Gate id="CUTOVER-AGENT-RUNNER-E2E" status="verified" owner-module="M-WORKER-AGENT-RUNNER,M-INFRA-COMPOSE" verified-at="2026-04-26">
-      <description>Delete the dedicated report/deep-research AI worker topology and prove all AI operations route through the container-local worker-agent-runner.</description>
-      <required-evidence>Verified on April 26 with code, contracts, compose, and adapter tests. Dedicated worker paths `workers/report` and `workers/deep-research`, dedicated worker env templates, and dedicated compose services are removed. Public report/deep-research APIs preserve operation semantics while creating `agent_run` jobs; queue policy exposes only `job:transcription.run` and `job:agent_run.run`; worker-agent-runner materializes input artifacts from API-resolved artifact URLs and persists `report_markdown`, `report_docx`, `deep_research_markdown`, `agent_result_json`, and `execution_log` as required. Full verification commands passed across API, worker/common/contracts, web, MCP, Telegram adapter, and compose config.</required-evidence>
+    <Gate id="EV-RUNTIME">
+      <description>Runtime smoke proves end-to-end behavior.</description>
+      <required-evidence>Compose proof captures ingestion, selection, run, artifact, diagnostics, owner denial, and retention behavior.</required-evidence>
     </Gate>
-  </CutoverRemainingGates>
+  </EvidenceGates>
 
-  <VerificationMatrix>
-    <Matrix-1 MODULE="M-CONTRACTS">
-      <success-path>Public and internal contract surfaces remain coherent across HTTP, WebSocket, webhook, and worker DTOs.</success-path>
-      <failure-path>Invalid delivery mode, malformed idempotency replay, or missing webhook URL is rejected with stable error envelopes.</failure-path>
-      <evidence-types>deterministic assertions, schema validation, route-shape assertions</evidence-types>
-      <forbidden-behavior>Do not silently accept a request that violates frozen contract decisions.</forbidden-behavior>
-    </Matrix-1>
-    <Matrix-2 MODULE="M-API-JOBS">
-      <success-path>Root and child jobs are created with correct lineage, versioning, child reuse, and retry semantics.</success-path>
-      <failure-path>Invalid state transitions, missing prerequisite artifacts, and retry misuse fail deterministically.</failure-path>
-      <evidence-types>deterministic assertions, ordered state-transition trace checks</evidence-types>
-      <forbidden-behavior>Do not mutate terminal job rows or spawn sibling child jobs for the same canonical lane.</forbidden-behavior>
-    </Matrix-2>
-    <Matrix-3 MODULE="M-API-EVENTS">
-      <success-path>One authoritative state transition produces one durable event and the correct delivery side effects.</success-path>
-      <failure-path>Webhook dispatch errors are retried with bounded persistence instead of being lost on restart.</failure-path>
-      <evidence-types>deterministic assertions, trace assertions, integration smoke checks</evidence-types>
-      <forbidden-behavior>Do not treat WebSocket or webhook as stronger than polling.</forbidden-behavior>
-    </Matrix-3>
-    <Matrix-4 MODULE="M-WORKER-TRANSCRIPTION">
-      <success-path>Required transcript artifacts exist before finalization and match expected formats.</success-path>
-      <failure-path>Source materialization, downloader, and transcription failures surface terminal error codes without partial success finalization.</failure-path>
-      <evidence-types>deterministic assertions, trace assertions, worker integration checks</evidence-types>
-      <forbidden-behavior>Do not finalize success before all required artifacts are uploaded and registered.</forbidden-behavior>
-    </Matrix-4>
-    <Matrix-5 MODULE="M-WORKER-AGENT-RUNNER">
-      <success-path>Worker-agent-runner materializes input artifacts, executes the selected harness by `harness_name`, and persists report_markdown, report_docx, deep_research_markdown, agent_result_json, and execution_log artifacts when requested by operation envelopes.</success-path>
-      <failure-path>Missing input artifacts, missing required report_markdown for deep-research, provider failures, timeout, cancellation, and lease saturation produce deterministic terminal outcomes with redacted secrets.</failure-path>
-      <evidence-types>deterministic assertions, integration checks, compose topology assertions, live provider smoke</evidence-types>
-      <forbidden-behavior>Do not reintroduce dedicated report/deep-research AI workers or host-side broker execution as the primary path.</forbidden-behavior>
-    </Matrix-5>
-    <Matrix-6 MODULE="M-BATCH-DRAFTS">
-      <success-path>API-owned draft create, add, remove, clear, and submit preserve owner scope, monotonic version, ordered items, uploaded source object references, stale outcome semantics, and idempotent promotion to one existing batch root graph.</success-path>
-      <failure-path>Version mismatch, submitted, expired, canceled, owner mismatch, empty draft, or stale legacy `basket:*` callback fails without mutating or submitting a chat/user-local current basket.</failure-path>
-      <evidence-types>contract assertions, Go storage/API/jobs tests, Telegram adapter tests, live compose PostgreSQL E2E</evidence-types>
-      <forbidden-behavior>Do not restore adapter-local durable basket state, bot-side batch orchestration, a second batch graph, or a dedicated report/deep_research AI worker.</forbidden-behavior>
-    </Matrix-6>
-  </VerificationMatrix>
+  <FailureTaxonomy>
+    <failure code="media_item_invalid">Input is unsupported, unreadable, too large, unsafe, or missing required metadata.</failure>
+    <failure code="owner_mismatch">Caller attempts to read or mutate another owner resource.</failure>
+    <failure code="collection_version_conflict">Mutable collection operation used a stale version.</failure>
+    <failure code="selection_invalid">Selection references unavailable, deleted, quarantined, or cross-owner media_item records.</failure>
+    <failure code="selection_not_sealed">analysis_run creation was attempted from an unsealed selection.</failure>
+    <failure code="source_unavailable">Run cannot access a required source body because retention, deletion, or remote resolution removed it.</failure>
+    <failure code="worker_failed">Internal execution failed and produced diagnostic context.</failure>
+    <failure code="artifact_unavailable">Artifact is failed, expired, deleted, or not yet published.</failure>
+    <failure code="retention_denied">Retention action violates audit, owner, or lifecycle rules.</failure>
+  </FailureTaxonomy>
 
-  <TelemetryRequirements>
-    <Telemetry-1 MODULE="M-API-JOBS">
-      <required-log-1>[ApiJobs][createTranscriptionJobs][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-1>
-      <required-log-2>[ApiJobs][createChildJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-2>
-      <required-log-3>[ApiJobs][cancelJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-3>
-      <required-log-4>[ApiJobs][retryJob][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-4>
-      <required-log-5>[ApiJobs][submitBatchDraft][BLOCK_VALIDATE_AND_TRANSITION_JOB]</required-log-5>
-    </Telemetry-1>
-    <Telemetry-2 MODULE="M-API-EVENTS">
-      <required-log-1>[ApiEvents][emitJobEvent][BLOCK_EMIT_VERSIONED_EVENT]</required-log-1>
-      <required-log-2>[ApiEvents][scheduleWebhook][BLOCK_EMIT_VERSIONED_EVENT]</required-log-2>
-    </Telemetry-2>
-    <Telemetry-3 MODULE="M-WORKER-COMMON">
-      <required-log-1>[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]</required-log-1>
-      <required-log-2>[WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]</required-log-2>
-    </Telemetry-3>
-    <Telemetry-4 MODULE="M-WORKER-TRANSCRIPTION">
-      <required-log-1>[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]</required-log-1>
-    </Telemetry-4>
-    <Telemetry-5 MODULE="M-WORKER-AGENT-RUNNER">
-      <required-log-1>[AgentRunner][dispatchHarness][BLOCK_DISPATCH_AGENT_HARNESS]</required-log-1>
-      <required-log-2>[AgentRunner][materializeInputArtifacts][BLOCK_MATERIALIZE_AGENT_INPUT_ARTIFACTS]</required-log-2>
-    </Telemetry-5>
-    <Telemetry-7 MODULE="M-WEB-UI">
-      <required-log-1>[WebUi][reconcileState][BLOCK_RECONCILE_POLLING_AND_WS_STATE]</required-log-1>
-    </Telemetry-7>
-    <Telemetry-8 MODULE="M-TELEGRAM-ADAPTER">
-      <required-log-1>[TelegramAdapter][handleMedia][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</required-log-1>
-      <required-log-2>[TelegramAdapter][handleDraftCallback][BLOCK_SUBMIT_AND_WAIT_FOR_JOB]</required-log-2>
-    </Telemetry-8>
-  </TelemetryRequirements>
-
-  <AutonomyReadiness>
-    <ModuleReadiness module="M-CONTRACTS" level="ready-after-contract-tests">
-      <reason>Safe for autonomous work once schemas and route surfaces are backed by deterministic validation tests.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-API-STORAGE" level="ready-after-db-and-minio-integration-tests">
-      <reason>Requires real persistence checks before multi-agent execution is trustworthy.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-API-JOBS" level="ready-after-state-transition-tests">
-      <reason>Central business invariants must be locked before parallel worker and adapter development starts.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-API-EVENTS" level="caution">
-      <reason>Webhook retry and WS consistency are failure-prone; treat as review-heavy until live integration checks exist.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-WORKER-TRANSCRIPTION" level="ready-after-worker-integration-tests">
-      <reason>April 24 live-stack evidence proved control-plane claim/finalize integration, real MinIO artifact persistence, and historical combined-upload execution; the April 26 batch slice supersedes concat-first combined semantics with root/children/aggregate verification.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-WEB-UI" level="verified-adapter-parity">
-      <reason>Browser replay on April 23 verified workspace and job-details parity against the live API with zero-console-error behavior and polling plus WebSocket reconciliation.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-TELEGRAM-ADAPTER" level="ready-after-api-and-worker-parity">
-      <reason>Adapter work should start only after the API and transcription flow are already trustworthy.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-MCP-ADAPTER" level="verified-adapter-parity">
-      <reason>April 23 live MCP replay verified thin adapter parity for transcription, report, deep-research creation, and artifact inspection through the API boundary.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-INFRA-COMPOSE" level="verified-compose-cutover">
-      <reason>Compose health convergence, legacy-entrypoint cutover, and the April 24 container-native worker replay are all verified with fresh stack evidence.</reason>
-    </ModuleReadiness>
-    <ModuleReadiness module="M-WORKER-AGENT-RUNNER" level="single-ai-worker-report-deep-research-orchestration-verified">
-      <reason>The architecture contract, `agent_run_create` control-plane slice, generic `workers/agent-runner` runtime slice, worker-local per-harness lease enforcement, container-local Claude Code provider settings, compose service wiring, live fixture-mode compose e2e, live external Claude Code provider smoke, and report/deep-research operation orchestration are verified. The runtime claims `agent_run`, dispatches fixture or container-local `claude-code` harnesses by `harness_name`, materializes input artifacts, persists `agent_result_json`, `execution_log`, `report_markdown`, `report_docx`, and `deep_research_markdown`, finalizes through WorkerCommon, resolves opaque `request_access` through a worker-only internal endpoint, verifies the private request digest, writes Claude Code settings JSON from explicit env, and serves artifact downloads through MinIO presigned URLs.</reason>
-    </ModuleReadiness>
-  </AutonomyReadiness>
-
-  <ArchitectureDecisionFreezes>
-    <V-M-WORKER-AGENT-RUNNER MODULE="M-WORKER-AGENT-RUNNER" PRIORITY="medium">
-      <test-files>
-        <file>docs/requirements.xml</file>
-        <file>docs/technology.xml</file>
-        <file>docs/development-plan.xml</file>
-        <file>docs/verification-plan.xml</file>
-        <file>docs/knowledge-graph.xml</file>
-        <file>docs/operational-packets.xml</file>
-        <file>workers/agent-runner/tests</file>
-        <file>workers/common/tests/test_api.py</file>
-        <file>workers/common/tests/test_runtime.py</file>
-        <file>workers/common/tests/test_artifacts.py</file>
-      </test-files>
-      <module-checks>
-        <check-1>Verify the docs freeze one generic `agent-runner` worker keyed by `harness_name` and explicitly reject provider-specific workers.</check-1>
-        <check-2>Verify generic agent execution is modeled as the `agent_run` job family through the existing `jobs`, `job_executions`, `job_events`, and `job_artifacts` persistence model.</check-2>
-        <check-3>Verify control-plane payloads are limited to normalized result summary plus redacted metadata while full logs and large outputs are stored as artifacts.</check-3>
-        <check-4>Verify first-iteration Claude Code access is frozen as container-local CLI execution with generated Anthropic-compatible settings JSON, and Codex remains out of scope.</check-4>
-        <check-5>Verify per-harness concurrency remains an explicit configuration or policy surface, not a worker-topology split.</check-5>
-        <check-6>Run `uv run pytest --no-cov workers/common/tests/test_api.py workers/common/tests/test_runtime.py workers/common/tests/test_artifacts.py workers/agent-runner/tests` for the focused runtime slice.</check-6>
-        <check-7>Run API, worker-agent-runner, worker-common, contracts, web, MCP, Telegram adapter, and compose-config gates to prove report/deep-research operation semantics are backed only by `agent_run` and not dedicated AI workers.</check-7>
-      </module-checks>
-      <scenarios>
-        <scenario-1 kind="architecture">One generic worker dispatches agent harness implementations by `harness_name` without introducing provider-specific workers.</scenario-1>
-        <scenario-2 kind="architecture">Generic agent runs persist status, ownership, events, and artifacts through the existing control-plane tables under the `agent_run` family.</scenario-2>
-        <scenario-3 kind="architecture">Claude Code provider credentials are supplied only through worker env or secret files, rendered into worker-local settings JSON, and not persisted as raw secrets inside the control plane.</scenario-3>
-        <scenario-4 kind="architecture">Public report and deep-research creation routes produce agent_run operation envelopes with input artifact refs and expected output artifact lists.</scenario-4>
-      </scenarios>
-      <required-log-markers>
-        <marker-1>[AgentRunner][dispatchHarness][BLOCK_DISPATCH_AGENT_HARNESS]</marker-1>
-      </required-log-markers>
-      <required-trace-assertions>
-        <assertion-1>Control-plane persistence stores only normalized result summary, redacted metadata, and opaque request-reference metadata for generic agent runs, while full logs and large outputs are stored as artifacts or private request objects.</assertion-1>
-        <assertion-2>The approved submission and persistence boundary is `agent_run` plus `agent_run_create` on top of the current control-plane model.</assertion-2>
-        <assertion-3>Per-harness concurrency is configured independently, for example claude-code=2.</assertion-3>
-        <assertion-4>Report/deep-research public operations must not enqueue `job:report.run` or `job:deep_research.run` and must not require worker-report or worker-deep-research services.</assertion-4>
-      </required-trace-assertions>
-      <implementation-evidence status="single-ai-worker-report-deep-research-orchestration-verified">`media-av0.1` verified the control-plane slice on 2026-04-24. `media-av0.2` verified the worker runtime slice on 2026-04-24. The April 26 provider update replaced the broker-bound agent-provider path with container-local Claude Code settings-provider execution and was verified by focused `workers/agent-runner` plus worker-common tests, covering private request digest verification, generated `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL`/`CLAUDE_API_KEY`/`CLAUDE_API_BASE_URL`/model override settings, Codex unsupported behavior, per-harness lease saturation and release, and sensitive error redaction. The April 26 topology collapse verified public report/deep-research routes create agent_run operation envelopes, private request metadata stays redacted, queueing uses `job:agent_run.run`, worker-agent-runner materializes input artifacts and persists operation artifacts, and compose has no dedicated report/deep-research worker services.</implementation-evidence>
-      <phase-follow-up status="verified" verified-at="2026-04-27">`media-9kk` agent-runner evidence proves Claude Code input artifact materialization resolves artifacts through `/internal/v1/artifacts/{artifact_id}/download-access` instead of the public browser route. Evidence: the focused worker-agent-runner subset in the 47-test command passed.</phase-follow-up>
-      <wave-follow-up status="verified" verified-at="2026-04-26">Compose service wiring is verified statically: `worker-agent-runner` is part of the default compose service set, has a dedicated env contract and image scaffold, mounts `/tmp/runtime/agent-runner`, and `bash infra/scripts/compose-smoke.sh --check-config` passes with no `worker-report` or `worker-deep-research` services.</wave-follow-up>
-      <phase-follow-up status="verified">Container-local Claude Code settings-provider execution has deterministic worker-local tests, lease policy, live fixture-mode compose e2e by `POST /v1/agent-runs` -> claim/progress/artifacts/finalize plus MinIO artifact download on 2026-04-24T21:12:45Z, live provider smoke with a real Z.ai-compatible Claude Code credential on 2026-04-26 through job `5bb4d608-02ec-478d-9267-8d278a21f0e3`, and full report/deep-research operation e2e coverage against the agent_run-backed topology.</phase-follow-up>
-    </V-M-WORKER-AGENT-RUNNER>
-  </ArchitectureDecisionFreezes>
-
-  <PhaseGates>
-    <Gate-Phase-1 PHASE="Phase-1">
-      <goal>Contracts, GRACE docs, and implementation boundaries are frozen before large code movement starts.</goal>
-      <commands>
-        <command-1>Review docs/requirements.xml, docs/technology.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml for internal consistency.</command-1>
-      </commands>
-      <required-evidence>
-        <evidence-1>All core target modules have graph entries and verification refs.</evidence-1>
-        <evidence-2>Polling, webhook, retry, cancel, idempotency, and child reuse semantics are represented in contracts and verification.</evidence-2>
-      </required-evidence>
-    </Gate-Phase-1>
-
-    <Gate-Phase-2 PHASE="Phase-2">
-      <goal>The Go control plane can create, persist, enqueue, and inspect jobs using contract-compliant routes.</goal>
-      <commands>
-        <command-1>go test ./...</command-1>
-      </commands>
-      <required-evidence>
-        <evidence-1>DB migrations apply cleanly and core routes return canonical envelopes.</evidence-1>
-        <evidence-2>WebSocket and webhook delivery persistence are wired from versioned events.</evidence-2>
-        <evidence-3>Internal worker claim, progress, artifact, finalize, and cancel-check flows are backed by authoritative `execution_id` state rather than request-local or in-memory shortcuts.</evidence-3>
-      </required-evidence>
-    </Gate-Phase-2>
-
-    <Gate-Phase-3 PHASE="Phase-3">
-      <goal>Transcription worker extraction is packet-complete and has a remaining live-control-plane verification gate.</goal>
-      <commands>
-        <command-1>.venv/bin/python -m pytest --no-cov workers/common/tests/test_worker_common_documents.py workers/common/tests/test_worker_common_documents_rendering.py workers/common/tests/test_worker_common_transcribers.py workers/common/tests/test_worker_common_transcribers_runtime.py</command-1>
-        <command-2>.venv/bin/python -m pytest --no-cov workers/common/tests workers/transcription/tests</command-2>
-        <command-3>uv run pytest workers/common/tests workers/transcription/tests tests/test_bot.py -q</command-3>
-      </commands>
-      <required-evidence>
-        <evidence-1>Required transcript artifacts exist before succeeded finalization.</evidence-1>
-        <evidence-2>Live MinIO plus internal API claim/finalize E2E remains required before final cutover.</evidence-2>
-      </required-evidence>
-    </Gate-Phase-3>
-
-    <Gate-Phase-4 PHASE="Phase-4">
-      <goal>Report and deep-research public operations are backed by agent_run orchestration and worker-agent-runner operation artifact persistence.</goal>
-      <commands>
-        <command-1>cd apps/api &amp;&amp; go test -count=1 ./internal/...</command-1>
-        <command-2>uv run pytest workers/agent-runner/tests workers/common/tests packages/contracts/tests/test_contract_surfaces.py -q</command-2>
-        <command-3>bash infra/scripts/compose-smoke.sh --check-config</command-3>
-      </commands>
-      <required-evidence>
-        <evidence-1>Public report/deep-research create requests create or reuse canonical agent_run child rows with redacted private request metadata.</evidence-1>
-        <evidence-2>Worker-agent-runner materializes required input artifacts, persists report/deep-research operation artifacts, and compose exposes no dedicated AI worker services.</evidence-2>
-      </required-evidence>
-    </Gate-Phase-4>
-
-    <Gate-Phase-5 PHASE="Phase-5">
-      <goal>All user-facing entrypoints are thin adapters over the API.</goal>
-      <commands>
-        <command-1>.venv/bin/python -m pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py</command-1>
-        <command-2>pnpm --dir apps/web test</command-2>
-        <command-3>pnpm --dir apps/mcp-server test</command-3>
-        <command-4>PYTHONPATH=apps/telegram-bot/src .venv/bin/python -m pytest --no-cov apps/telegram-bot/tests/test_api_client.py</command-4>
-      </commands>
-      <required-evidence>
-        <evidence-1>Telegram, Web UI, and MCP all consume the same API contracts and do not own business logic.</evidence-1>
-        <evidence-2>`apps/web` and `apps/mcp-server` both exist with env contracts, app-shell bootstrap, and runnable app-local tests before the feature packets start.</evidence-2>
-        <evidence-3>SDK absence is resolved inside packet scope through thin local clients rather than by broadening Phase-5 into unplanned shared-SDK work.</evidence-3>
-      </required-evidence>
-    </Gate-Phase-5>
-
-    <Gate-Phase-6 PHASE="Phase-6">
-      <goal>The full compose stack is healthy and the old single-process path can be removed safely.</goal>
-      <commands>
-        <command-1>bash infra/scripts/compose-smoke.sh --live-smoke</command-1>
-        <command-2>Full route regression with multipart, batch upload, URL, child-job, artifact, cancel, retry, WebSocket, and internal worker fixtures against the live stack.</command-2>
-        <command-3>Acceptance-matrix parity replay proving the new stack covers the frozen baseline before legacy cutover.</command-3>
-      </commands>
-      <required-evidence>
-        <evidence-1>All required services are healthy in local deployment.</evidence-1>
-        <evidence-2>Functional parity against the frozen acceptance matrix is demonstrated.</evidence-2>
-        <evidence-3>Old single-process runtime path is removed only after explicit parity evidence exists.</evidence-3>
-      </required-evidence>
-    </Gate-Phase-6>
-  </PhaseGates>
-
-  <FailurePackets>
-    <triage-policy>When verification fails, produce a failure packet aligned to `docs/operational-packets.xml` and identify the first divergent module, function, or semantic block.</triage-policy>
-    <required-fields>scenario, contract-ref, expected-evidence, observed-evidence, first-divergent-block, suggested-next-action</required-fields>
-    <packet-template>
-      <expected-fields>scenario, expected-evidence, observed-evidence, first-divergent-block, next-action</expected-fields>
-    </packet-template>
-  </FailurePackets>
+  <BeadsVerificationSequence>
+    <bead id="media-36a">Validate GRACE XML and stale vocabulary searches only.</bead>
+    <bead id="media-49h">Run contract and schema checks.</bead>
+    <bead id="media-5cj">Run storage and API orchestration checks.</bead>
+    <bead id="media-sfx">Run worker execution checks.</bead>
+    <bead id="media-7al">Run Telegram adapter checks.</bead>
+    <bead id="media-7wo">Run Web checks.</bead>
+    <bead id="media-uhi">Run MCP checks.</bead>
+    <bead id="runtime-final">Run complete compose evidence gate.</bead>
+  </BeadsVerificationSequence>
 </VerificationPlan>

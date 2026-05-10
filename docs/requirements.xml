@@ -1,283 +1,157 @@
-<RequirementsAnalysis VERSION="0.3.0">
+<RequirementsAnalysis VERSION="1.0.0">
   <Project>
     <name>media-analysis-platform</name>
-    <annotation>Lossless GRACE requirements surface for the completed migration from the former single-process Telegram transcription bot into a local-first monorepo platform with a Go control plane, Python workers, React UI, thin Telegram adapter, thin MCP adapter, PostgreSQL, Redis plus asynq, MinIO, WebSocket, webhook, retry, and cooperative cancellation.</annotation>
-    <keywords>telegram, transcription, whisper, faster-whisper, reports, deep research, go api, python workers, react ui, mcp, minio, postgres, redis, asynq, polling, webhook, docker compose, monorepo</keywords>
+    <annotation>GRACE requirements source of truth for the final inbox-first media analysis product model.</annotation>
+    <keywords>media_item, collection, inbox, selection, analysis_run, source, artifact, telegram, web, mcp, postgres, minio, redis, workers</keywords>
   </Project>
 
   <Purpose>
-    <purpose-1>This document is the GRACE requirements source of truth for the migration from the former monolithic Telegram bot to the target multi-application local platform.</purpose-1>
-    <purpose-2>It exists to preserve the full intent of the original migration plan while translating it into GRACE-governed requirements, constraints, and acceptance expectations.</purpose-2>
-    <purpose-3>It must remain sufficient for architecture alignment, execution sequencing, API and event contract definition, monorepo bootstrapping, worker split design, UI and adapter adaptation, Docker Compose rollout, verification, and cutover without rediscovering major decisions.</purpose-3>
+    <purpose-1>Define the canonical product architecture for accumulating media first and running analysis only from an explicit immutable selection.</purpose-1>
+    <purpose-2>Replace the former public product wording centered on immediate execution requests and grouped pre-run submission state.</purpose-2>
+    <purpose-3>Give later Beads a stable requirements target for contracts, storage, orchestration, workers, Web, Telegram, MCP, diagnostics, retention, and evidence gates.</purpose-3>
   </Purpose>
 
-  <CurrentState>
-    <runtime-entrypoint>src/media_analysis_platform/__main__.py</runtime-entrypoint>
-    <current-shape>compose-owned local platform with a Go control plane, Python workers, and thin adapters; the host-side media_analysis_platform CLI bootstrap only points operators to the compose runtime.</current-shape>
-    <current-modules>
-      <module path="src/media_analysis_platform/bot.py" role="Telegram runtime, source extraction orchestration, attachment download, media-group buffering, callback handlers, status messages, and result delivery" />
-      <module path="workers/transcription/src/transcriber_worker_transcription.py" role="Transcription worker runtime, per-source transcription execution, batch aggregate merging, source-manifest diagnostics, and transcript artifact persistence" />
-      <module path="workers/common/src/transcriber_workers_common/transcribers.py" role="YouTube transcript fast path and Whisper fallback shared by the transcription worker" />
-      <module path="workers/common/src/transcriber_workers_common/documents.py" role="Transcript/report markdown normalization and DOCX artifact rendering" />
-      <module path="workers/agent-runner/src/transcriber_worker_agent_runner.py" role="Single generic AI worker runtime for report and deep-research operations backed by agent_run jobs" />
-    </current-modules>
-    <current-storage>
-      <item>PostgreSQL stores jobs, events, artifacts, submissions, and source-set metadata</item>
-      <item>MinIO stores uploaded sources and produced artifacts</item>
-      <item>Redis backs asynq queues only</item>
-      <item>Go HTTP API owns orchestration and delivery contracts</item>
-      <item>React Web UI consumes the public HTTP and WebSocket surface</item>
-      <item>Telegram and MCP adapters stay thin over the API</item>
-    </current-storage>
-    <preserved-user-capabilities>
-      <item>YouTube transcription</item>
-      <item>Telegram voice, audio, video, and document transcription</item>
-      <item>media group handling</item>
-      <item>plain transcript output</item>
-      <item>segmented transcript output</item>
-      <item>report generation</item>
-      <item>deep research generation</item>
-      <item>mixed-source batch transcription through one aggregate root job with per-source transcription children</item>
-    </preserved-user-capabilities>
-  </CurrentState>
+  <CanonicalVocabulary>
+    <term name="media_item">A durable API-owned record for one user-provided input such as text, URL, file, photo, image, audio, voice, video, or document.</term>
+    <term name="source">The normalized origin and stored body metadata behind a media_item; source is internal enough to hide adapter transport details from the product surface.</term>
+    <term name="collection">A durable owner-scoped grouping of media_item references used for user organization and later analysis.</term>
+    <term name="inbox">The default collection for each owner where new media_item records land unless the caller names another collection.</term>
+    <term name="selection">An immutable ordered snapshot of media_item references, options, and owner scope captured when a user decides what to analyze.</term>
+    <term name="analysis_run">A user-facing run created from one selection; it owns lifecycle, diagnostics, events, and artifact lineage.</term>
+    <term name="artifact">A durable result or diagnostic object produced by analysis_run execution and resolved through API-governed access rules.</term>
+  </CanonicalVocabulary>
 
-  <Principles>
-    <principle-1>All business logic lives behind the API server boundary.</principle-1>
-    <principle-2>Telegram bot, Web UI, and MCP are transport adapters only.</principle-2>
-    <principle-3>Workers perform heavy execution and never expose public transport contracts.</principle-3>
-    <principle-4>PostgreSQL is the persistent system of record for jobs and artifact metadata.</principle-4>
-    <principle-5>Redis is ephemeral infrastructure for asynq queues only, not the source of truth.</principle-5>
-    <principle-6>MinIO stores source files and output artifacts; clients do not write to it directly in v1.</principle-6>
-    <principle-7>Polling is the correctness path; WebSocket is a latency optimization and webhook is a delivery strategy, not a stronger source of truth.</principle-7>
-    <principle-8>Retry creates a new job; historical executions stay immutable.</principle-8>
-    <principle-9>Cancellation is cooperative, explicit, and phase-aware.</principle-9>
-    <principle-10>Migration should reuse the working Python execution core whenever that is safer and cheaper than rewriting it.</principle-10>
-  </Principles>
+  <ModelChain>
+    <chain>media_item -&gt; collection/inbox -&gt; immutable selection -&gt; analysis_run -&gt; artifacts</chain>
+    <rule>Adapters create and manage media_item and collection state before execution; they do not expose transient submission modes as the product model.</rule>
+    <rule>analysis_run creation always references a selection snapshot, never mutable collection contents directly.</rule>
+    <rule>Later edits to the inbox or any collection never mutate an existing selection or analysis_run.</rule>
+  </ModelChain>
 
-  <FrozenDecisions>
-    <decision-1>API server is implemented in Go and acts as the sole control plane.</decision-1>
-    <decision-2>Heavy execution remains in Python workers.</decision-2>
-    <decision-3>Queueing is implemented with asynq, not Redis Streams or Redis lists.</decision-3>
-    <decision-4>Workers must not perform arbitrary business-state mutation through ad hoc SQL writes; they use the control-plane contract or a tightly scoped internal service layer owned by the API.</decision-4>
-    <decision-5>Create endpoints support optional Idempotency-Key.</decision-5>
-    <decision-6>Repeated create-child requests return the existing active or completed canonical child job unless the caller explicitly retries.</decision-6>
-    <decision-7>Progress is stage-based and message-based; fake percentages are forbidden.</decision-7>
-    <decision-8>Cancellation is cooperative and phase-aware from the first version.</decision-8>
-    <decision-9>Retry always creates a new job row.</decision-9>
-    <decision-10>Advanced runtime knobs are not exposed in Web UI or Telegram bot in v1.</decision-10>
-    <decision-11>Artifact downloads use MinIO presigned links in v1.</decision-11>
-    <decision-12>Each job chooses exactly one delivery strategy: polling or webhook.</decision-12>
-    <decision-13>Default delivery strategy is polling.</decision-13>
-    <decision-14>The API always returns job identifiers and initial job snapshots regardless of delivery strategy.</decision-14>
-    <decision-15>Webhook is supported for all job types and requires a callback URL.</decision-15>
-    <decision-16>WebSocket is the live-update channel for the Web UI.</decision-16>
-    <decision-17>First-version file uploads go through the API and support multiple files in one request.</decision-17>
-    <decision-18>There is no legacy compatibility track; the repository is restructured directly toward the target architecture.</decision-18>
-    <decision-19>The current batch transcription contract is root/children/aggregate: `POST /v1/transcription-jobs/batch` creates a root aggregate transcription job, per-source transcription children keyed by stable source labels, and a worker-transcription aggregate task after eligible children complete.</decision-19>
-    <decision-20>Telegram batch basket state is API-owned before submission. The API persists a draft_id, version, owner scope, ordered items, and status open/submitted/expired/canceled; Telegram callback data carries draft_id plus version and never addresses an adapter-local current basket by chat/user alone.</decision-20>
-    <decision-21>Artifact download access is audience-scoped at the API boundary: public clients use `/v1/artifacts/{artifact_id}` and server-side adapters or workers use `/internal/v1/artifacts/{artifact_id}/download-access`. Adapters and workers must not rewrite MinIO hosts locally.</decision-21>
-    <decision-22>Telegram RU/EN localization is packet-local typed adapter presentation. Locale is resolved from Telegram user language metadata per message or callback, defaults to RU, is reused for delayed basket summaries and buffered media-group flushes, and localizes command descriptions, keyboards, source-label fallbacks, stale callback responses, report/deep-research copy, access control, and representative error handling without changing API-owned draft or batch semantics.</decision-22>
-  </FrozenDecisions>
+  <OwnerScope>
+    <scope name="owner">All media_item, collection, selection, analysis_run, artifact, diagnostic, and retention decisions are scoped to an owner identity.</scope>
+    <scope name="adapter_identity">Telegram chat/user, Web account/session, and MCP caller identities are mapped into the same owner model at the API boundary.</scope>
+    <rule>Cross-owner reads, writes, selection reuse, run access, and artifact access are rejected before storage mutation.</rule>
+    <rule>Idempotency keys, pagination cursors, optimistic versions, and diagnostic queries are owner-scoped.</rule>
+  </OwnerScope>
 
-  <Actors>
-    <actor-EndUser>Single local operator submitting media, URLs, and follow-up report or deep-research actions.</actor-EndUser>
-    <actor-TelegramBot>Thin Telegram transport adapter that uploads sources and returns artifacts.</actor-TelegramBot>
-    <actor-WebUI>Browser-based local UI for uploads, monitoring, downloads, and admin actions.</actor-WebUI>
-    <actor-MCPClient>Local MCP consumer that creates jobs and inspects results through the same HTTP API.</actor-MCPClient>
-    <actor-APIControlPlane>Go API service that owns contracts, orchestration, state transitions, artifact metadata, idempotency, lineage, delivery, and cancellation semantics.</actor-APIControlPlane>
-    <actor-Worker>Python worker process executing transcription jobs or generic agent_run jobs for report and deep-research operations.</actor-Worker>
-    <actor-Operator>Local operator maintaining Docker Compose runtime and troubleshooting failed jobs.</actor-Operator>
-  </Actors>
+  <LifecycleStatuses>
+    <media-item>
+      <status>ingesting</status>
+      <status>available</status>
+      <status>invalid</status>
+      <status>quarantined</status>
+      <status>deleted</status>
+    </media-item>
+    <collection>
+      <status>active</status>
+      <status>archived</status>
+      <status>deleted</status>
+    </collection>
+    <selection>
+      <status>created</status>
+      <status>sealed</status>
+      <status>invalidated</status>
+    </selection>
+    <analysis-run>
+      <status>queued</status>
+      <status>claiming</status>
+      <status>running</status>
+      <status>succeeded</status>
+      <status>partially_succeeded</status>
+      <status>failed</status>
+      <status>cancel_requested</status>
+      <status>canceled</status>
+      <status>expired</status>
+    </analysis-run>
+    <artifact>
+      <status>pending</status>
+      <status>available</status>
+      <status>failed</status>
+      <status>expired</status>
+      <status>deleted</status>
+    </artifact>
+  </LifecycleStatuses>
 
-  <UseCases>
-    <UC-001>
-      <Actor>EndUser</Actor>
-      <Action>Submits one or more uploaded files for transcription through the API, Web UI, or Telegram adapter.</Action>
-      <Goal>Receive one queued transcription job per uploaded file without touching MinIO directly.</Goal>
-      <Preconditions>API, PostgreSQL, Redis, and MinIO are reachable; at least one valid non-empty file is supplied.</Preconditions>
-      <AcceptanceCriteria>API persists source objects to MinIO, creates one transcription job per file, returns initial job snapshots immediately, and preserves the chosen delivery strategy.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-001, DF-006</RelatedFlows>
-    </UC-001>
+  <FunctionalRequirements>
+    <Requirement id="REQ-MEDIA-001">
+      <Action>Create media_item records from Telegram, Web, MCP, and server-side import callers through one API-owned ingestion boundary.</Action>
+      <AcceptanceCriteria>Supported inputs include text, URL, generic file, photo/image, audio/voice, and video/document; each accepted item records owner, source metadata, content hash when available, size, MIME type, adapter origin, creation time, validation status, retention policy, and diagnostics pointer.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-COLLECTION-001">
+      <Action>Maintain inbox and user collections independently of execution.</Action>
+      <AcceptanceCriteria>Every owner has a default inbox; callers can list, create, rename, archive, delete, and reorder collection items subject to owner scope and optimistic version checks.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-SELECTION-001">
+      <Action>Create immutable selections from explicit ordered media_item references.</Action>
+      <AcceptanceCriteria>Selection creation validates owner access, media availability, requested analysis options, ordering, duplicate policy, and size limits; the stored snapshot captures item ids, source metadata needed for execution, option values, creator, timestamps, and validation diagnostics.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-RUN-001">
+      <Action>Create analysis_run records only from selections.</Action>
+      <AcceptanceCriteria>analysis_run creation records selection id, owner, run type, delivery preference, initial queued status, idempotency key, evidence-gate status, and diagnostics channel; execution rows may exist behind the run but must not become the public product surface.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-ARTIFACT-001">
+      <Action>Expose artifacts as analysis_run outputs with API-governed preview and download metadata.</Action>
+      <AcceptanceCriteria>Artifacts include transcript, summary, report, extracted structured data, source manifest, execution log, and diagnostic bundles as applicable; each artifact records owner, run id, kind, content type, size, checksum, storage object key, visibility, retention state, and preview metadata.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-DIAGNOSTICS-001">
+      <Action>Preserve rejected or partially processed records as diagnostics instead of silently dropping them.</Action>
+      <AcceptanceCriteria>Ingestion, selection, run, adapter, worker, artifact, cancellation, retention, and permission failures expose stable diagnostic codes, human-readable messages, provider or adapter context when safe, correlation ids, timestamps, and remediation hints.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-RETENTION-001">
+      <Action>Apply retention policies consistently across sources, media_item records, selections, runs, artifacts, diagnostics, and deleted collection membership.</Action>
+      <AcceptanceCriteria>Retention rules define soft delete, hard delete eligibility, artifact expiry, source body expiry, owner export, and audit evidence preservation without orphaning run history.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-ADAPTER-001">
+      <Action>Keep Telegram, Web, and MCP as thin adapters over the same API-owned state.</Action>
+      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API.</AcceptanceCriteria>
+    </Requirement>
+  </FunctionalRequirements>
 
-    <UC-001B>
-      <Actor>EndUser</Actor>
-      <Action>Submits a mixed basket of uploaded media and URL sources as one ordered batch transcription operation through the API or Telegram adapter.</Action>
-      <Goal>Receive one root aggregate transcription job whose final transcript spans all successful sources in stable source-label order while preserving per-source lineage.</Goal>
-      <Preconditions>API, PostgreSQL, Redis, and MinIO are reachable; `source_manifest.manifest_version=batch-transcription.v1` is valid; each uploaded-file source references a non-empty multipart part; each URL source is supported; caller chooses the batch endpoint explicitly.</Preconditions>
-      <AcceptanceCriteria>API accepts `POST /v1/transcription-jobs/batch`, persists a root source set with stable unique source labels, creates one root aggregate transcription job plus one per-source transcription child per manifest source, enqueues per-source `job:transcription.run` tasks first, schedules a root `job:transcription.aggregate` task only after completion policy permits aggregation, and returns the root job snapshot immediately.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-007, DF-006</RelatedFlows>
-    </UC-001B>
+  <DeletedArchitecture>
+    <rule>Former public routes and schemas centered on immediate transcription execution, grouped pre-run submission state, or public source-set terminology are deleted from the target product architecture.</rule>
+    <rule>Former batch toggles and draft semantics are not wrapped, aliased, or preserved as user-facing modes.</rule>
+    <rule>Backend execution rows and worker queue messages may remain as implementation details behind analysis_run, but product requirements must name analysis_run as the public run surface.</rule>
+    <rule>Historical implementation evidence may be kept only when clearly labeled as deleted architecture or internal execution proof; it must not define target user flows.</rule>
+  </DeletedArchitecture>
 
-    <UC-001C>
-      <Actor>TelegramBot</Actor>
-      <Action>Creates, mutates, clears, and submits an API-owned Telegram batch draft through callback-safe HTTP contracts.</Action>
-      <Goal>Prevent stale inline buttons from operating on an unrelated current basket or returning false empty-basket messages after adapter restart or user context drift.</Goal>
-      <Preconditions>API and PostgreSQL are reachable; Telegram adapter supplies owner scope from chat_id and user_id; each callback contains draft_id and version.</Preconditions>
-      <AcceptanceCriteria>API persists pre-submit batch drafts with draft_id, monotonic version, owner scope, ordered items, and status open/submitted/expired/canceled; add/remove/clear operations require matching owner and current version; submit atomically promotes an open draft into the existing batch transcription root/children/aggregate graph; repeated submit returns the same root job or submitted draft response; stale callbacks return explicit version_conflict, draft_submitted, draft_expired, draft_canceled, or draft_owner_mismatch outcomes without processing a chat/user-local basket.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-009, DF-007</RelatedFlows>
-    </UC-001C>
+  <AdapterBoundaries>
+    <Telegram>
+      <rule>Telegram accepts messages, files, URLs, media groups, and inline commands as input capture and management gestures over the owner inbox.</rule>
+      <rule>Telegram shows the current inbox or collection status after accepted input and offers explicit actions to create a selection and run analysis.</rule>
+      <rule>Telegram callback payloads address API-owned media_item, collection, selection, and analysis_run identifiers with versions where mutation is allowed.</rule>
+    </Telegram>
+    <Web>
+      <rule>Web is the full management surface for browsing inbox, creating collections, curating selections, launching analysis_run records, and reviewing artifacts and diagnostics.</rule>
+    </Web>
+    <MCP>
+      <rule>MCP exposes tool calls for add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, and get_diagnostics.</rule>
+    </MCP>
+  </AdapterBoundaries>
 
-    <UC-002>
-      <Actor>EndUser</Actor>
-      <Action>Submits a supported YouTube URL for transcription.</Action>
-      <Goal>Receive a transcription job without first uploading a local file.</Goal>
-      <Preconditions>URL is absolute http or https and matches supported YouTube hosts.</Preconditions>
-      <AcceptanceCriteria>API validates the source URL, creates a source row and a transcription job, and the worker materializes the media or transcript path during execution.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-002</RelatedFlows>
-    </UC-002>
+  <EvidenceGates>
+    <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses media_item, collection/inbox, selection, analysis_run, source, and artifact only.</gate>
+    <gate id="GATE-STORAGE">Storage tests prove owner scope, immutable selections, lifecycle transitions, retention, and diagnostics persistence.</gate>
+    <gate id="GATE-API">API tests prove adapters share the same state and old public product routes are absent from the target contract.</gate>
+    <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed selections and reports results through analysis_run artifacts and diagnostics.</gate>
+    <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions.</gate>
+    <gate id="GATE-RUNTIME">Compose or equivalent runtime proof verifies end-to-end ingestion, selection, run, artifact, diagnostics, and retention behavior.</gate>
+  </EvidenceGates>
 
-    <UC-003>
-      <Actor>EndUser</Actor>
-      <Action>Observes job progress by polling, webhook callbacks, or WebSocket when using the Web UI.</Action>
-      <Goal>Track job execution until terminal state and fetch final artifacts.</Goal>
-      <Preconditions>Job exists; polling or webhook delivery strategy has been selected at creation time.</Preconditions>
-      <AcceptanceCriteria>Polling remains authoritative, webhook notifications are best-effort for all job types, WebSocket is available for UI live updates, and API exposes artifact metadata with presigned MinIO download URLs.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-001, DF-002, DF-003</RelatedFlows>
-    </UC-003>
-
-    <UC-004>
-      <Actor>EndUser</Actor>
-      <Action>Requests a report job from a succeeded transcription job.</Action>
-      <Goal>Generate markdown and DOCX research reports from transcript output.</Goal>
-      <Preconditions>Parent transcription job succeeded and transcript_plain exists.</Preconditions>
-      <AcceptanceCriteria>API returns an existing canonical report operation child if present or creates a new `agent_run` child with `operation=report`, `harness_name=claude-code`, transcript input artifacts, and expected `report_markdown` plus `report_docx` outputs; reruns require explicit retry.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-004</RelatedFlows>
-    </UC-004>
-
-    <UC-005>
-      <Actor>EndUser</Actor>
-      <Action>Requests a deep-research job from a succeeded report job.</Action>
-      <Goal>Produce a deeper evidence-driven markdown report using the generic agent-runner operation path.</Goal>
-      <Preconditions>Parent report operation job succeeded and report_markdown exists.</Preconditions>
-      <AcceptanceCriteria>API creates or reuses the canonical deep-research `agent_run` child with `operation=deep_research`, `harness_name=claude-code`, transcript and report input artifacts, and expected `deep_research_markdown` output; terminal state is visible through polling plus webhook delivery when the job chooses webhook strategy.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-005</RelatedFlows>
-    </UC-005>
-
-    <UC-006>
-      <Actor>EndUser</Actor>
-      <Action>Cancels or retries a queued, running, or terminal job.</Action>
-      <Goal>Stop unnecessary work and rerun failed or canceled work without mutating execution history.</Goal>
-      <Preconditions>Target job exists.</Preconditions>
-      <AcceptanceCriteria>Queued jobs may be canceled immediately, running jobs transition through cancel_requested, and retry always creates a new job row linked by retry_of_job_id.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-006</RelatedFlows>
-    </UC-006>
-
-    <UC-007>
-      <Actor>WebUI</Actor>
-      <Action>Provides a local operational surface for listing jobs, creating jobs, downloading artifacts, deleting jobs, deleting artifacts, and refreshing expired links.</Action>
-      <Goal>Give the operator a usable local admin surface without direct DB or MinIO access.</Goal>
-      <Preconditions>Web UI and API are running in local deployment.</Preconditions>
-      <AcceptanceCriteria>Late-wave admin actions remain API-owned, preserve lineage rules, and block unsafe artifact deletion when descendant jobs still depend on data.</AcceptanceCriteria>
-      <Priority>medium</Priority>
-      <RelatedFlows>DF-001, DF-003, DF-006</RelatedFlows>
-    </UC-007>
-
-    <UC-008>
-      <Actor>TelegramBot</Actor>
-      <Action>Acts as a thin transport adapter over the API.</Action>
-      <Goal>Preserve current Telegram UX while removing business logic from the bot runtime.</Goal>
-      <Preconditions>API is reachable; Telegram media can be downloaded temporarily by the adapter.</Preconditions>
-      <AcceptanceCriteria>Bot remains a thin adapter: it registers `/start`, `/help`, `/batch`, `/basket`, and `/clear` with RU/EN localized command descriptions; lets the user toggle batch draft mode on or off through a command or inline button; creates and mutates API-owned batch drafts while downloading Telegram files only long enough to upload draft items; renders locale-aware keyboards, localized source-label fallbacks, and inline buttons carrying draft_id plus version; preserves locale through delayed basket summaries and buffered media-group flushes; submits drafts through the API so the API atomically promotes them into `/v1/transcription-jobs/batch` root/children/aggregate execution; waits by polling by default; sends returned artifacts to the user; surfaces stale callbacks, access control, report/deep-research flows, and representative error handling in the active locale; and triggers report or deep-research only through API-owned `agent_run` operation children.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-001, DF-004, DF-005, DF-007, DF-008</RelatedFlows>
-    </UC-008>
-
-    <UC-008A>
-      <Actor>TelegramBot</Actor>
-      <Action>Presents a completed transcription result in Telegram after the API and gateway have materialized the canonical `transcript_plain` artifact.</Action>
-      <Goal>Deliver short readable transcripts inline while preserving artifact-backed correctness and the existing result keyboard.</Goal>
-      <Preconditions>The transcription job has reached a terminal success state; the gateway has resolved the job artifacts through the API; `transcript_plain` is the source of truth for the plain transcript content.</Preconditions>
-      <AcceptanceCriteria>If `transcript_plain` is readable, non-empty after whitespace trimming, and no longer than `TELEGRAM_INLINE_TRANSCRIPT_MAX_CHARS` currently set to 3500 characters, Telegram sends the exact `transcript_plain` text as a plain message with the result keyboard. If `transcript_plain` resolves to a missing or non-file `text_path`, Telegram sends an unavailable-artifact message with the result keyboard. If an existing `transcript_plain` file is long, empty, or unreadable, Telegram falls back to document delivery with the same result keyboard. The adapter must not stitch transcript parts, run an AI worker, alter batch boundaries, or require any API contract change.</AcceptanceCriteria>
-      <Priority>high</Priority>
-      <RelatedFlows>DF-008, DF-007, DF-001</RelatedFlows>
-    </UC-008A>
-
-    <UC-009>
-      <Actor>MCPClient</Actor>
-      <Action>Creates and inspects jobs through MCP tools backed by the API.</Action>
-      <Goal>Expose the same platform capabilities to model-driven clients without duplicating business logic.</Goal>
-      <Preconditions>MCP adapter is running and API is reachable.</Preconditions>
-      <AcceptanceCriteria>MCP tools map cleanly onto API operations, expose artifact metadata and download handles, and never talk directly to Redis, MinIO, or worker runtimes.</AcceptanceCriteria>
-      <Priority>medium</Priority>
-      <RelatedFlows>DF-001, DF-004, DF-005</RelatedFlows>
-    </UC-009>
-  </UseCases>
+  <BeadsTrace>
+    <bead id="media-36a" status="current">Rewrite GRACE docs to define only the final inbox-first architecture.</bead>
+    <bead id="media-49h" status="next">Implement public contracts for media_item, collection, selection, analysis_run, diagnostics, and artifacts.</bead>
+    <bead id="media-5cj" status="later">Implement server storage and orchestration bottom-up.</bead>
+    <bead id="media-7al" status="later">Adapt Telegram over the canonical API state.</bead>
+    <bead id="media-7wo" status="later">Adapt Web over the canonical API state.</bead>
+    <bead id="media-uhi" status="later">Adapt MCP over the canonical API state.</bead>
+    <bead id="media-sfx" status="later">Adapt worker execution behind analysis_run.</bead>
+  </BeadsTrace>
 
   <NonGoals>
-    <item-1>Public internet deployment.</item-1>
-    <item-2>Production-grade security model, authentication, authorization, or RBAC.</item-2>
-    <item-3>Quotas, billing, rate limiting, or multi-tenant user isolation.</item-3>
-    <item-4>GPU support for Whisper in v1; target is CPU-only local Docker runtime.</item-4>
-    <item-5>Global dedupe or reuse semantics across uploads and URLs in v1.</item-5>
-    <item-6>Distributed multi-region deployment, Kubernetes, or high-availability failover architecture.</item-6>
-    <item-7>Direct client uploads to MinIO in v1.</item-7>
-    <item-8>A long-lived legacy compatibility layer or legacy subtree.</item-8>
+    <item>Reintroducing old public product route vocabulary as an alias layer.</item>
+    <item>Preserving grouped pre-run submission state as the user-facing collection model.</item>
+    <item>Letting Telegram, Web, or MCP own durable product state independently of the API.</item>
+    <item>Changing application code in this Bead.</item>
   </NonGoals>
-
-  <Constraints>
-    <constraint-1>Must run as a local Docker Compose deployment with PostgreSQL, Redis, MinIO, API, workers, Web UI, Telegram adapter, and MCP adapter.</constraint-1>
-    <constraint-2>Polling remains the correctness path; webhook and WebSocket are delivery or update layers, not stronger sources of truth.</constraint-2>
-    <constraint-3>Artifact downloads must use MinIO presigned URLs returned by the API.</constraint-3>
-    <constraint-4>Retry must create a new job and preserve lineage; terminal rows are immutable.</constraint-4>
-    <constraint-5>Workers must not perform direct arbitrary business-state SQL writes.</constraint-5>
-    <constraint-6>Multi-file upload must be supported through the API in the first version.</constraint-6>
-    <constraint-7>Webhook is a per-job delivery strategy chosen at create time and requires a callback URL.</constraint-7>
-    <constraint-8>Web UI, Telegram bot, and MCP server must all consume the same API contracts.</constraint-8>
-    <constraint-9>The migration must preserve current core capabilities: YouTube, Telegram voice or audio or video or document, media groups, plain transcript, segmented transcript, report generation, and deep research generation.</constraint-9>
-    <constraint-10>The platform must support explicit mixed-source batch transcription as one aggregate root job with per-source transcription children and a worker-transcription aggregate task, without changing the existing per-file upload contract.</constraint-10>
-    <constraint-11>Report and deep-research AI execution must be container-native in the normal runtime through the single `worker-agent-runner`: the worker may receive explicit provider settings, credentials, model, base URL, timeout, generation flags, and container-local cache or config dirs, but must not depend on host CLI invocation, host broker execution, host bridge URLs, host-visible workspace roots, host path remapping, host.docker.internal, or bind-mounted host executables.</constraint-11>
-    <constraint-12>Autonomous AI-agent execution remains behind the existing API control plane as one generic `agent-runner` worker selected by `harness_name`; provider-specific report, deep-research, Claude, or Codex worker services are not part of the approved architecture.</constraint-12>
-    <constraint-13>Generic agent runs must use a new `agent_run` job family in the existing control plane and persist status, execution ownership, events, logs, and artifacts through the existing `jobs`, `job_executions`, `job_events`, and `job_artifacts` model instead of a parallel persistence stack.</constraint-13>
-    <constraint-14>Control-plane and database payloads for generic agent runs must store only normalized result summary data plus redacted metadata plus opaque request reference metadata; full logs, transcripts, prompts, tool traces, and other large outputs belong in private objects or artifacts rather than row payloads.</constraint-14>
-    <constraint-15>For the first autonomous AI-agent execution iteration, only Claude Code with an Anthropic-compatible JSON settings provider is supported. The worker must run `claude-code` inside the container, generate provider settings from explicit env values, and must not use a host-side execution broker or persist raw credentials in control-plane payloads.</constraint-15>
-    <constraint-16>Generic agent execution must expose per-harness concurrency as explicit configuration or policy, so admission control is set per `harness_name` instead of by separate worker type.</constraint-16>
-    <constraint-17>The `agent_run_create` control-plane surface must treat agent runs as request-only jobs: clients may pass `harness_name` and request content, but must not provide job type, source-set id, root id, provider-specific worker identity, or raw session credentials.</constraint-17>
-    <constraint-18>Telegram inline transcript presentation is a bounded adapter delivery choice over the canonical API/worker `transcript_plain` artifact. It must not introduce a new transcription architecture, bot-side transcript assembly, AI worker, artifact kind, or API response contract.</constraint-18>
-    <constraint-19>API-owned batch drafts must be the canonical pre-submit Telegram basket state. Adapter-local durable state, callback payloads without draft identity, bot-side transcript or batch business orchestration, and dedicated AI worker services are not part of this architecture.</constraint-19>
-    <constraint-20>Server-side artifact materialization must use the internal API download-access contract and internal object-store endpoint. Public browser/host artifact resolution must remain reachable through the public MinIO endpoint.</constraint-20>
-    <constraint-21>Telegram adapter mutations for one basket owner, identified by chat_id plus user_id, must be serialized around API draft load, create, add, remove, clear, submit, pointer update, and delayed summary scheduling. Telegram may coalesce burst notifications for UX, but it must not maintain a durable adapter-local basket or split concurrent forwarded single-source updates into multiple API drafts.</constraint-21>
-    <constraint-22>Telegram locale resolution and localized copy remain adapter-local presentation state only. Locale must not be persisted as API-owned draft business state, must not change DB-backed submit or replay semantics, and must flow through delayed basket-summary or media-group buffering without altering owner, version, or root-job contracts.</constraint-22>
-  </Constraints>
-
-  <Risks>
-    <risk-1>Rewriting transport and orchestration at once can hide contract drift between API, workers, UI, Telegram, and MCP.</risk-1>
-    <risk-2>Long-running transcription, report, and deep-research tasks can partially succeed and expose weak retry or cancel semantics.</risk-2>
-    <risk-3>Without explicit artifact and source lifecycle rules, admin delete actions can corrupt descendant jobs or orphan storage objects.</risk-3>
-    <risk-4>Webhook delivery can appear reliable during happy paths but lose retry durability if not persisted across API restarts.</risk-4>
-    <risk-5>Premature Go rewrites of ML or report logic would add risk without architectural gain.</risk-5>
-    <risk-6>Compose stack fragility can obscure whether failures come from contracts, workers, or runtime topology.</risk-6>
-    <risk-7>Inline Telegram buttons can outlive the draft snapshot they were rendered from; without draft_id plus version validation, stale callbacks can submit or mutate a different basket owned by the same chat/user key.</risk-7>
-    <risk-8>Telegram polling can dispatch several forwarded voice or media messages concurrently without a shared media_group_id; without per-owner serialization, each handler can observe no current draft, create a separate API draft, and emit multiple basket summaries while showing only one source in the visible basket.</risk-8>
-  </Risks>
-
-  <ResolvedQuestions>
-    <resolution-1>Go API granularity is fixed for the migration horizon as `internal/api`, `internal/jobs`, `internal/storage`, `internal/queue`, `internal/ws`, and `internal/db`. Finer GRACE subdivision is explicitly deferred until after the first full-system migration cutover and only if implementation pressure proves it necessary.</resolution-1>
-    <resolution-2>API-owned worker-control contracts remain explicit HTTP routes for the entire migration and first platform version. They are not collapsed into an in-process shared service layer during this migration because transport-adapter independence and containerized worker boundaries are part of the target architecture.</resolution-2>
-    <resolution-3>The approved generic agent execution contract is one `agent-runner` worker keyed by `harness_name`; Claude Code does not get a dedicated worker service, and Codex is intentionally out of scope for the first container-local provider iteration.</resolution-3>
-    <resolution-4>The approved control-plane persistence boundary for generic agent execution is a new `agent_run` job family submitted through `agent_run_create` and persisted through the existing job, execution, event, and artifact tables with normalized summary plus redacted metadata in row payloads and a private request envelope referenced by opaque request metadata.</resolution-4>
-    <resolution-5>The implementation slices have added the generic `workers/agent-runner` runtime for deterministic fixture harness dispatch, `agent_run` claim and finalize, artifact-backed `agent_result_json` plus `execution_log` persistence, worker-local per-harness lease enforcement, compose service wiring, worker-only short-lived `request_access` resolution for the private agent-run request envelope, and container-local Claude Code execution through generated Anthropic-compatible settings. Live fixture-mode compose e2e is verified through the public and worker-control APIs plus MinIO artifact download on 2026-04-24T21:12:45Z; live external Claude Code provider smoke was verified on 2026-04-26 with Z.ai GLM `glm-5.1` through job `5bb4d608-02ec-478d-9267-8d278a21f0e3`.</resolution-5>
-    <resolution-6>The approved first container-local provider model for Claude Code mirrors the local `cglm` wrapper: env-supplied `AGENT_RUNNER_CLAUDE_CODE_PROVIDER_API_KEY`, `AGENT_RUNNER_CLAUDE_CODE_BASE_URL`, and `AGENT_RUNNER_CLAUDE_CODE_MODEL` generate Claude Code settings JSON with `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_API_KEY`, `CLAUDE_API_BASE_URL`, and model override env values. `AGENT_RUNNER_CLAUDE_CODE_AUTH_TOKEN` remains a compatibility fallback only; Anthropic Claude subscription login and Codex are not part of this iteration.</resolution-6>
-    <resolution-7>Per-harness concurrency is an explicit policy surface owned by configuration, for example `claude-code` limits, and not a reason to split the worker topology.</resolution-7>
-    <resolution-8>The completed batch transcription implementation supersedes concat-first combined transcription as active architecture. The active contract uses `/v1/transcription-jobs/batch`, stable `source_label` values in a `batch-transcription.v1` source manifest, per-source transcription children, a root aggregate transcription task, aggregate artifacts `transcript_plain`, `transcript_segmented_markdown`, `transcript_docx`, `source_manifest_json`, and `batch_diagnostics_json`, and report/deep-research handoff from the aggregate root through `agent_run` children handled only by worker-agent-runner. Earlier `/combined` and ordered concatenation wording is historical lineage, not the current runtime contract.</resolution-8>
-    <resolution-9>The `media-20e` Telegram inline transcript delta is closed as presentation transport only: short readable `transcript_plain` artifacts are sent inline as exact Telegram text with the result keyboard, missing or non-file `transcript_plain` text paths send an unavailable-artifact message with the result keyboard, and existing long, empty, or unreadable artifact files continue to use document delivery. API/worker artifact ownership, batch aggregate boundaries, and report/deep-research follow-up semantics remain unchanged.</resolution-9>
-    <resolution-10>The `media-9dy` stale inline button fix is architectural, not a bot-local workaround: API-owned batch drafts are the sole canonical pre-submit state, Telegram callback data must carry draft_id and version or an item token scoped to that draft, old `basket:*` callbacks are stale compatibility inputs only, and submit promotes the same ordered draft items into the existing `/v1/transcription-jobs/batch` root/children/aggregate graph without adding bot-side orchestration, adapter-local durable state, or any dedicated AI worker.</resolution-10>
-    <resolution-11>The `media-2oz` evidence refresh records the implemented API-owned draft model: draft add-item stores uploaded Telegram bodies through the API at add-item time, source labels and per-source boundaries survive promotion into the batch graph, the final combined transcript remains one aggregate result with per-source blocks owned by worker-transcription, and report/deep_research continue through `agent_run` plus worker-agent-runner only.</resolution-11>
-    <resolution-12>The `media-9kk` artifact materialization fix is an API contract split, not a Telegram workaround: `/v1/artifacts/{artifact_id}` remains the public browser/host presign surface, `/internal/v1/artifacts/{artifact_id}/download-access` returns the same artifact-resolution envelope using the internal object-store endpoint for server-side adapters and workers, and Telegram plus worker materialization paths consume the internal route without local URL rewriting.</resolution-12>
-    <resolution-13>The `media-1vz` Telegram forwarded-burst fix is an adapter concurrency guard over API-owned drafts: concurrent single-source updates for the same chat/user are serialized through one owner lock, so the API receives one draft mutation sequence, the current draft pointer advances monotonically, and the user receives one debounced basket summary containing all accepted sources. This does not add bot-side batch business logic, transcript stitching, local durable basket storage, or any AI worker topology change.</resolution-13>
-    <resolution-14>The `media-dac` Telegram i18n evidence refresh confirms packet-local typed RU/EN presentation over the existing adapter contract. Focused locale coverage passed with `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q` reporting `32 passed in 1.33s`; broader Telegram adapter coverage passed with `PYTHONPATH=apps/telegram-bot/src:workers/common/src:src uv run pytest --no-cov tests/test_bot.py tests/test_media_groups.py tests/test_main.py apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_gateway.py apps/telegram-bot/tests/test_i18n_catalogs.py apps/telegram-bot/tests/test_i18n_service.py -q` reporting `46 passed in 1.71s`; and the explicit DB-backed non-regression guard `docker compose -f infra/docker-compose.yml exec -T api /bin/sh -lc 'API_STORAGE_POSTGRES_DSN="postgresql://telegram_transcriber:telegram_transcriber@postgres:5432/telegram_transcriber?sslmode=disable" /usr/local/go/bin/go test ./internal/api -run TestApiBatchDraftMixedUploadURLPostgresE2E -count=1 -v'` passed with `ok github.com/danila/media-analysis-platform/apps/api/internal/api 1.019s`, proving locale coverage did not change API-owned draft semantics.</resolution-14>
-  </ResolvedQuestions>
-
-  <PreservationPolicy>
-    <rule-1>These requirements intentionally preserve the full meaning of the original markdown migration plan rather than compressing it into a short summary.</rule-1>
-    <rule-2>The original plan sections on purpose, current state, non-goals, principles, frozen decisions, and preserved user-visible capabilities are represented here verbatim in meaning and must remain synchronized with the GRACE planning artifacts.</rule-2>
-    <rule-3>Detailed contracts, data model, wave structure, testing strategy, definition of done, and execution rules are expanded in the GRACE development and verification artifacts, not discarded.</rule-3>
-  </PreservationPolicy>
 </RequirementsAnalysis>

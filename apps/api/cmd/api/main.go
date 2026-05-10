@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	defaultBindAddr       = "0.0.0.0:8080"
-	defaultMaxUploadBytes = 1 << 30
+	defaultBindAddr               = "0.0.0.0:8080"
+	defaultMaxUploadBytes         = 1 << 30
+	defaultRetentionSweepInterval = time.Hour
+	defaultQueueReconcileInterval = 30 * time.Second
+	defaultQueueReconcileLimit    = 100
 )
 
 type runtimeConfig struct {
@@ -118,6 +121,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	runLifecycleSweep(ctx, logger, repository)
+	go runLifecycleSweeper(ctx, logger, repository, defaultRetentionSweepInterval)
+	if reconciler, ok := deps.Public.(analysisRunQueueReconciler); ok {
+		runQueueReconcile(ctx, logger, reconciler)
+		go runQueueReconciler(ctx, logger, reconciler, defaultQueueReconcileInterval)
+	}
 
 	server := api.NewServer(
 		deps,
@@ -138,6 +147,63 @@ func run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+type analysisRunQueueReconciler interface {
+	ReconcileAnalysisRunQueue(ctx context.Context, limit int) (int, error)
+}
+
+func runLifecycleSweeper(ctx context.Context, logger *log.Logger, repository *storage.Repository, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runLifecycleSweep(ctx, logger, repository)
+		}
+	}
+}
+
+func runLifecycleSweep(ctx context.Context, logger *log.Logger, repository *storage.Repository) {
+	retention, err := repository.ApplyRetentionPolicies(ctx)
+	if err != nil {
+		logger.Printf("retention sweep failed: %v", err)
+		return
+	}
+	orphanCleanup, err := repository.CleanOrphanObjects(ctx)
+	if err != nil {
+		logger.Printf("orphan object cleanup failed: %v", err)
+		return
+	}
+	if retention != (storage.RetentionSweepResult{}) || orphanCleanup.Detected > 0 {
+		logger.Printf("lifecycle sweep retention=%+v orphan_cleanup=%+v", retention, orphanCleanup)
+	}
+}
+
+func runQueueReconciler(ctx context.Context, logger *log.Logger, reconciler analysisRunQueueReconciler, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runQueueReconcile(ctx, logger, reconciler)
+		}
+	}
+}
+
+func runQueueReconcile(ctx context.Context, logger *log.Logger, reconciler analysisRunQueueReconciler) {
+	recovered, err := reconciler.ReconcileAnalysisRunQueue(ctx, defaultQueueReconcileLimit)
+	if err != nil {
+		logger.Printf("analysis run queue reconcile failed: %v", err)
+		return
+	}
+	if recovered > 0 {
+		logger.Printf("analysis run queue reconcile recovered=%d", recovered)
+	}
 }
 
 func loadRuntimeConfig() (runtimeConfig, error) {
@@ -215,11 +281,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return err
 	}
 	if len(migrations) > 0 {
-		hasBootstrapSchema, err := schemaRelationExists(ctx, db, "public.job_submissions")
+		hasFinalSchema, err := schemaRelationExists(ctx, db, "public.media_items")
 		if err != nil {
 			return err
 		}
-		if hasBootstrapSchema {
+		if hasFinalSchema {
 			baseline := migrations[0].Name
 			if _, ok := applied[baseline]; !ok {
 				if err := recordAppliedMigration(ctx, db, baseline); err != nil {

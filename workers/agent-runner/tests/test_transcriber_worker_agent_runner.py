@@ -1,7 +1,7 @@
 # FILE: workers/agent-runner/tests/test_transcriber_worker_agent_runner.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Verify the generic agent-runner worker claims agent_run jobs and persists deterministic agent artifacts.
+# PURPOSE: Verify the generic agent-runner worker claims analysis runs and persists deterministic agent artifacts.
 # SCOPE: Success finalization, unsupported harness failure, cancellation checkpoints, and provider-neutral registry dispatch.
 # DEPENDS: M-WORKER-AGENT-RUNNER, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-AGENT-RUNNER, V-M-WORKER-AGENT-RUNNER
@@ -32,7 +32,14 @@ from pathlib import Path
 import pytest
 
 import transcriber_worker_agent_runner as agent_runner
-from transcriber_workers_common.api import AgentRunRequestAccessResult, CancelCheckResult, ClaimedJobExecution
+from transcriber_workers_common.api import (
+    AgentRunRequestAccessResult,
+    CancelCheckResult,
+    ClaimedAnalysisRunExecution,
+    MediaSourceSnapshot,
+    SealedSelectionInput,
+    SelectionItemSnapshot,
+)
 from transcriber_worker_agent_runner import (
     AgentClaudeCodeConfig,
     AgentClaudeCodeHarness,
@@ -53,23 +60,25 @@ from transcriber_worker_agent_runner import (
 class RecordingApiClient:
     def __init__(
         self,
-        execution: ClaimedJobExecution,
+        execution: ClaimedAnalysisRunExecution,
         *,
         cancel_requested: bool = False,
         request_digest_sha256: str = "digest",
+        request_access_expires_at: str = "2099-04-25T12:00:00Z",
     ) -> None:
         self.execution = execution
         self.cancel_requested = cancel_requested
         self.request_digest_sha256 = request_digest_sha256
+        self.request_access_expires_at = request_access_expires_at
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def claim_job(self, job_id: str, *, worker_kind: str, task_type: str) -> ClaimedJobExecution:
-        self.calls.append(("claim_job", {"job_id": job_id, "worker_kind": worker_kind, "task_type": task_type}))
+    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunExecution:
+        self.calls.append(("claim_analysis_run", {"analysis_run_id": analysis_run_id, "worker_kind": worker_kind, "task_type": task_type}))
         return self.execution
 
     def publish_progress(
         self,
-        job_id: str,
+        analysis_run_id: str,
         *,
         execution_id: str,
         progress_stage: str,
@@ -79,7 +88,7 @@ class RecordingApiClient:
             (
                 "publish_progress",
                 {
-                    "job_id": job_id,
+                    "analysis_run_id": analysis_run_id,
                     "execution_id": execution_id,
                     "progress_stage": progress_stage,
                     "progress_message": progress_message,
@@ -87,21 +96,21 @@ class RecordingApiClient:
             )
         )
 
-    def register_artifacts(self, job_id: str, *, execution_id: str, artifacts) -> None:
+    def register_artifacts(self, analysis_run_id: str, *, execution_id: str, artifacts) -> None:
         self.calls.append(
             (
                 "register_artifacts",
                 {
-                    "job_id": job_id,
+                    "analysis_run_id": analysis_run_id,
                     "execution_id": execution_id,
                     "artifacts": tuple(artifacts),
                 },
             )
         )
 
-    def finalize_job(
+    def finalize_analysis_run(
         self,
-        job_id: str,
+        analysis_run_id: str,
         *,
         execution_id: str,
         outcome: str,
@@ -112,9 +121,9 @@ class RecordingApiClient:
     ) -> None:
         self.calls.append(
             (
-                "finalize_job",
+                "finalize_analysis_run",
                 {
-                    "job_id": job_id,
+                    "analysis_run_id": analysis_run_id,
                     "execution_id": execution_id,
                     "outcome": outcome,
                     "progress_stage": progress_stage,
@@ -125,18 +134,18 @@ class RecordingApiClient:
             )
         )
 
-    def check_cancel(self, job_id: str, *, execution_id: str) -> CancelCheckResult:
-        self.calls.append(("check_cancel", {"job_id": job_id, "execution_id": execution_id}))
+    def check_cancel(self, analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
+        self.calls.append(("check_cancel", {"analysis_run_id": analysis_run_id, "execution_id": execution_id}))
         if self.cancel_requested:
             return CancelCheckResult(cancel_requested=True, status="cancel_requested")
         return CancelCheckResult(cancel_requested=False, status="running")
 
-    def resolve_agent_run_request_access(self, job_id: str, *, execution_id: str) -> AgentRunRequestAccessResult:
-        self.calls.append(("resolve_agent_run_request_access", {"job_id": job_id, "execution_id": execution_id}))
+    def resolve_agent_run_request_access(self, analysis_run_id: str, *, execution_id: str) -> AgentRunRequestAccessResult:
+        self.calls.append(("resolve_agent_run_request_access", {"analysis_run_id": analysis_run_id, "execution_id": execution_id}))
         return AgentRunRequestAccessResult(
             provider="minio_presigned_url",
             url="https://minio.local/private/request.json",
-            expires_at="2026-04-25T12:00:00Z",
+            expires_at=self.request_access_expires_at,
             request_ref="agentreq_digest",
             request_digest_sha256=self.request_digest_sha256,
             request_bytes=123,
@@ -259,7 +268,7 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
     registry = FakeHarnessRegistry()
 
     result = runAgentHarness(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         artifact_store=artifact_store,
@@ -267,18 +276,23 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
     )
 
     assert api_client.calls[0] == (
-        "claim_job",
-        {"job_id": execution.job_id, "worker_kind": "agent_runner", "task_type": "agent_run.run"},
+        "claim_analysis_run",
+        {"analysis_run_id": execution.analysis_run_id, "worker_kind": "agent_runner", "task_type": "selection.analysis"},
     )
     assert registry.requests == [
         (
             "fixture",
-            AgentHarnessRequest(job_id=execution.job_id, workspace_dir=tmp_path / execution.job_id, params=execution.params),
+            AgentHarnessRequest(analysis_run_id=execution.analysis_run_id, workspace_dir=tmp_path / execution.analysis_run_id, params=execution.params),
         )
     ]
     assert registry.leases[0].harness_name == "fixture"
     register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
-    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == ["agent_result_json", "execution_log"]
+    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
+        "agent_result_json",
+        "execution_log",
+        "run_manifest",
+        "run_diagnostics",
+    ]
     assert artifact_store.calls[0]["object_key"] == "artifacts/job-agent/agent/result/result.json"
     assert json.loads(artifact_store.calls[0]["content"]) == {
         "echo": "abc123",
@@ -286,7 +300,15 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
         "status": "ok",
     }
     assert artifact_store.calls[1]["object_key"] == "artifacts/job-agent/logs/execution.log"
-    assert api_client.calls[-1][0] == "finalize_job"
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["analysis_run_id"] == execution.analysis_run_id
+    assert manifest["summary"] == {"included_count": 1, "skipped_count": 0, "failed_count": 0}
+    assert manifest["items"][0]["lineage"]["selection_item_id"] == "selection-item-agent"
+    assert manifest["items"][0]["lineage"]["media_item_id"] == "media-agent"
+    assert manifest["items"][0]["artifact_kinds"] == ["agent_result_json", "execution_log"]
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == []
+    assert api_client.calls[-1][0] == "finalize_analysis_run"
     assert api_client.calls[-1][1]["outcome"] == "succeeded"
     assert result.artifact_descriptors == register_call[1]["artifacts"]
 
@@ -294,7 +316,7 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
 def test_local_fixture_registry_supports_test_fixture_and_redacts_prompt_metadata(tmp_path: Path) -> None:
     registry = LocalAgentHarnessRegistry()
     request = AgentHarnessRequest(
-        job_id="job-agent",
+        analysis_run_id="job-agent",
         workspace_dir=tmp_path / "job-agent",
         params={"harness_name": "test_fixture", "prompt": "raw secret prompt", "temperature": 0},
     )
@@ -319,7 +341,7 @@ def test_run_agent_harness_unsupported_harness_fails_with_stable_error_code(tmp_
 
     with pytest.raises(AgentHarnessNotSupported, match="unsupported"):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=artifact_store,
@@ -327,9 +349,9 @@ def test_run_agent_harness_unsupported_harness_fails_with_stable_error_code(tmp_
 
     assert artifact_store.calls == []
     assert api_client.calls[-1] == (
-        "finalize_job",
+        "finalize_analysis_run",
         {
-            "job_id": execution.job_id,
+            "analysis_run_id": execution.analysis_run_id,
             "execution_id": execution.execution_id,
             "outcome": "failed",
             "progress_stage": "failed",
@@ -347,7 +369,7 @@ def test_run_agent_harness_codex_is_not_supported_in_first_claude_code_iteration
 
     with pytest.raises(AgentHarnessNotSupported, match="codex"):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=artifact_store,
@@ -388,7 +410,7 @@ def test_run_agent_harness_claude_code_runs_container_local_with_private_request
     monkeypatch.setattr(agent_runner.urlrequest, "urlopen", fake_urlopen)
 
     result = runAgentHarness(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         artifact_store=artifact_store,
@@ -427,7 +449,7 @@ def test_run_agent_harness_claude_code_runs_container_local_with_private_request
     result_payload = json.loads(artifact_store.calls[0]["content"])
     assert result_payload["output_text"] == "claude-code result\n"
     assert result_payload["request_ref"] == "agentreq_digest"
-    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"job_id": "job-agent", "execution_id": "exec-agent"})
+    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"analysis_run_id": "job-agent", "execution_id": "exec-agent"})
     assert api_client.calls[-1][1]["outcome"] == "succeeded"
 
 
@@ -465,7 +487,7 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
                 json.dumps(
                     {
                         "artifact_id": artifact_id,
-                        "job_id": "parent-job",
+                        "analysis_run_id": "parent-job",
                         "artifact_kind": "transcript_segmented_markdown",
                         "filename": "transcript.md",
                         "mime_type": "text/markdown; charset=utf-8",
@@ -487,7 +509,7 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
     monkeypatch.setattr(agent_runner.urlrequest, "urlopen", fake_urlopen)
 
     result = runAgentHarness(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         artifact_store=artifact_store,
@@ -501,7 +523,7 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
     )
 
     prompt = runner.calls[0]["input"]
-    local_artifact_path = tmp_path / execution.job_id / "input-artifacts" / "transcript.md"
+    local_artifact_path = tmp_path / execution.analysis_run_id / "input-artifacts" / "transcript.md"
     assert local_artifact_path.read_text(encoding="utf-8") == "# Transcript\n\nSource text\n"
     assert str(local_artifact_path) in prompt
     assert "Build a report from the transcript." in prompt
@@ -512,6 +534,8 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
         "execution_log",
         "report_markdown",
         "report_docx",
+        "run_manifest",
+        "run_diagnostics",
     ]
     report_markdown = next(call for call in artifact_store.calls if call["object_key"].endswith("/report/markdown/report.md"))
     assert report_markdown["content"].decode("utf-8") == "# Исследовательский отчёт\n\n## Findings\n\nImportant result\n"
@@ -522,6 +546,8 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
         "execution_log",
         "report_markdown",
         "report_docx",
+        "run_manifest",
+        "run_diagnostics",
     ]
 
 
@@ -562,7 +588,7 @@ def test_run_agent_harness_claude_code_deep_research_persists_requested_markdown
     )
 
     runAgentHarness(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         artifact_store=artifact_store,
@@ -580,11 +606,160 @@ def test_run_agent_harness_claude_code_deep_research_persists_requested_markdown
         "agent_result_json",
         "execution_log",
         "deep_research_markdown",
+        "run_manifest",
+        "run_diagnostics",
     ]
     deep_research = next(
         call for call in artifact_store.calls if call["object_key"].endswith("/deep-research/markdown/deep-research.md")
     )
     assert deep_research["content"].decode("utf-8") == "# Deep Research\n\nEvidence\n"
+
+
+def test_run_agent_harness_accepts_generic_operation_envelope_with_declared_summary_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope_body, digest = _fake_request_access_envelope(
+        {
+            "schema_version": "agent_run_request_envelope/v1",
+            "harness_name": "claude-code",
+            "request": {
+                "operation": "summary",
+                "expected_output_artifacts": ["summary_markdown"],
+                "prompt": "Summarize the sealed selection.",
+            },
+        }
+    )
+    execution = _execution(
+        {
+            "harness_name": "claude-code",
+            "request": {
+                "operation": "summary",
+                "expected_output_artifacts": ["summary_markdown"],
+            },
+            "request_access_policy": {"required_for_operations": ["summary"], "allow_inline_request": False},
+        }
+    )
+    api_client = RecordingApiClient(execution, request_digest_sha256=digest)
+    artifact_store = InMemoryArtifactStore()
+    runner = FakeClaudeCodeRunner(stdout="# Summary\n\nA concise finding.\n")
+
+    monkeypatch.setattr(agent_runner.urlrequest, "urlopen", lambda url, timeout: FakeHTTPResponse(envelope_body))
+
+    runAgentHarness(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+        harness_registry=DefaultAgentHarnessRegistry(
+            claude_code_harness=AgentClaudeCodeHarness(
+                AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "claude-config"),
+                runner=runner,
+            )
+        ),
+        lease_client=LocalAgentHarnessLeaseClient({"claude-code": 1}),
+    )
+
+    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"analysis_run_id": "job-agent", "execution_id": "exec-agent"})
+    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
+    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
+        "agent_result_json",
+        "execution_log",
+        "summary_markdown",
+        "run_manifest",
+        "run_diagnostics",
+    ]
+    summary = next(call for call in artifact_store.calls if call["object_key"].endswith("/summary/markdown/summary.md"))
+    assert summary["content"].decode("utf-8") == "# Summary\n\nA concise finding.\n"
+
+
+def test_run_agent_harness_request_access_policy_can_require_access_by_operation(tmp_path: Path) -> None:
+    execution = _execution(
+        {
+            "harness_name": "fixture",
+            "payload_hash": "abc123",
+            "request": {"operation": "summary"},
+            "request_access_policy": {"required_for_operations": ["summary"]},
+        }
+    )
+    api_client = RecordingApiClient(execution)
+    artifact_store = InMemoryArtifactStore()
+    registry = FakeHarnessRegistry()
+
+    runAgentHarness(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+        harness_registry=registry,
+    )
+
+    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"analysis_run_id": "job-agent", "execution_id": "exec-agent"})
+    assert registry.requests[0][1].request_access == {
+        "provider": "minio_presigned_url",
+        "url": "https://minio.local/private/request.json",
+        "expires_at": "2099-04-25T12:00:00Z",
+        "request_ref": "agentreq_digest",
+        "request_digest_sha256": "digest",
+        "request_bytes": 123,
+    }
+
+
+def test_run_agent_harness_rejects_expired_request_access_before_download(tmp_path: Path) -> None:
+    execution = _execution({"harness_name": "claude-code"})
+    api_client = RecordingApiClient(
+        execution,
+        request_digest_sha256="unused",
+        request_access_expires_at="2000-01-01T00:00:00Z",
+    )
+    artifact_store = InMemoryArtifactStore()
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="request access is expired"):
+        runAgentHarness(
+            execution.analysis_run_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            artifact_store=artifact_store,
+            harness_registry=DefaultAgentHarnessRegistry(
+                claude_code_harness=AgentClaudeCodeHarness(
+                    AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "claude-config"),
+                    runner=FakeClaudeCodeRunner(),
+                )
+            ),
+            lease_client=LocalAgentHarnessLeaseClient({"claude-code": 1}),
+        )
+
+    assert artifact_store.calls == []
+    assert api_client.calls[-1][1]["error_code"] == "agent_harness_execution_failed"
+
+
+def test_run_agent_harness_rejects_request_envelope_digest_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    execution = _execution({"harness_name": "claude-code"})
+    api_client = RecordingApiClient(execution, request_digest_sha256="0" * 64)
+    artifact_store = InMemoryArtifactStore()
+
+    monkeypatch.setattr(agent_runner.urlrequest, "urlopen", lambda url, timeout: FakeHTTPResponse(b'{"request":{"prompt":"safe"}}'))
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="digest mismatch"):
+        runAgentHarness(
+            execution.analysis_run_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            artifact_store=artifact_store,
+            harness_registry=DefaultAgentHarnessRegistry(
+                claude_code_harness=AgentClaudeCodeHarness(
+                    AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "claude-config"),
+                    runner=FakeClaudeCodeRunner(),
+                )
+            ),
+            lease_client=LocalAgentHarnessLeaseClient({"claude-code": 1}),
+        )
+
+    assert artifact_store.calls == []
+    assert api_client.calls[-1][1]["error_code"] == "agent_harness_execution_failed"
 
 
 def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and_report_artifacts(
@@ -638,7 +813,7 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
         return json.dumps(
             {
                 "artifact_id": artifact_id,
-                "job_id": "source-job",
+                "analysis_run_id": "source-job",
                 "artifact_kind": artifact_kind,
                 "filename": filename,
                 "mime_type": "text/markdown; charset=utf-8",
@@ -684,7 +859,7 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
     monkeypatch.setattr(agent_runner.urlrequest, "urlopen", fake_urlopen)
 
     runAgentHarness(
-        execution.job_id,
+        execution.analysis_run_id,
         workspace_root=tmp_path,
         api_client=api_client,
         artifact_store=artifact_store,
@@ -697,7 +872,7 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
         lease_client=LocalAgentHarnessLeaseClient({"claude-code": 1}),
     )
 
-    workspace_dir = tmp_path / execution.job_id
+    workspace_dir = tmp_path / execution.analysis_run_id
     assert (workspace_dir / "input-artifacts" / "transcript.md").read_text(encoding="utf-8") == "# Transcript\n\nSource text\n"
     assert (workspace_dir / "input-artifacts" / "report.md").read_text(encoding="utf-8") == "# Report\n\nPrior findings\n"
     prompt = runner.calls[0]["input"]
@@ -709,6 +884,8 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
         "agent_result_json",
         "execution_log",
         "deep_research_markdown",
+        "run_manifest",
+        "run_diagnostics",
     ]
     result_payload = json.loads(artifact_store.calls[0]["content"])
     assert result_payload["materialized_input_artifacts"] == [
@@ -766,7 +943,7 @@ def test_run_agent_harness_claude_code_materialization_failure_is_redacted(
 
     with pytest.raises(AgentHarnessExecutionFailed):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=artifact_store,
@@ -825,13 +1002,13 @@ def test_run_agent_harness_enforces_per_harness_concurrency(tmp_path: Path) -> N
     lease_client = LocalAgentHarnessLeaseClient({"fixture": 1})
     held_lease = lease_client.acquire(
         "fixture",
-        AgentHarnessRequest(job_id="already-running", workspace_dir=tmp_path / "held", params={"harness_name": "fixture"}),
+        AgentHarnessRequest(analysis_run_id="already-running", workspace_dir=tmp_path / "held", params={"harness_name": "fixture"}),
     )
 
     try:
         with pytest.raises(AgentHarnessConcurrencyUnavailable, match="fixture"):
             runAgentHarness(
-                execution.job_id,
+                execution.analysis_run_id,
                 workspace_root=tmp_path,
                 api_client=api_client,
                 artifact_store=artifact_store,
@@ -851,7 +1028,7 @@ def test_run_agent_harness_releases_lease_after_success(tmp_path: Path) -> None:
 
     for _ in range(2):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=RecordingApiClient(execution),
             artifact_store=InMemoryArtifactStore(),
@@ -867,7 +1044,7 @@ def test_run_agent_harness_redacts_sensitive_generic_error_message(tmp_path: Pat
 
     with pytest.raises(RuntimeError, match="secret-token"):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=artifact_store,
@@ -889,7 +1066,7 @@ def test_run_agent_harness_redacts_sensitive_claude_code_failure_message(tmp_pat
 
     with pytest.raises(AgentHarnessExecutionFailed):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=InMemoryArtifactStore(),
@@ -910,7 +1087,7 @@ def test_run_agent_harness_cancels_before_dispatch(tmp_path: Path) -> None:
 
     with pytest.raises(WorkerCancellationRequested, match="was canceled"):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=artifact_store,
@@ -921,9 +1098,9 @@ def test_run_agent_harness_cancels_before_dispatch(tmp_path: Path) -> None:
     assert artifact_store.calls == []
     assert not any(call[0] == "register_artifacts" for call in api_client.calls)
     assert api_client.calls[-1] == (
-        "finalize_job",
+        "finalize_analysis_run",
         {
-            "job_id": execution.job_id,
+            "analysis_run_id": execution.analysis_run_id,
             "execution_id": execution.execution_id,
             "outcome": "canceled",
             "progress_stage": "canceled",
@@ -940,17 +1117,17 @@ def test_run_agent_harness_cancels_before_artifact_upload(tmp_path: Path) -> Non
     artifact_store = InMemoryArtifactStore()
     check_count = 0
 
-    def delayed_cancel(job_id: str, *, execution_id: str) -> CancelCheckResult:
+    def delayed_cancel(analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
         nonlocal check_count
         check_count += 1
-        api_client.calls.append(("check_cancel", {"job_id": job_id, "execution_id": execution_id}))
+        api_client.calls.append(("check_cancel", {"analysis_run_id": analysis_run_id, "execution_id": execution_id}))
         return CancelCheckResult(cancel_requested=check_count >= 2, status="cancel_requested")
 
     api_client.check_cancel = delayed_cancel
 
     with pytest.raises(WorkerCancellationRequested, match="was canceled"):
         runAgentHarness(
-            execution.job_id,
+            execution.analysis_run_id,
             workspace_root=tmp_path,
             api_client=api_client,
             artifact_store=artifact_store,
@@ -959,19 +1136,45 @@ def test_run_agent_harness_cancels_before_artifact_upload(tmp_path: Path) -> Non
 
     assert artifact_store.calls == []
     assert not any(call[0] == "register_artifacts" for call in api_client.calls)
-    assert api_client.calls[-1][0] == "finalize_job"
+    assert api_client.calls[-1][0] == "finalize_analysis_run"
     assert api_client.calls[-1][1]["outcome"] == "canceled"
 
 
-def _execution(params: dict[str, object]) -> ClaimedJobExecution:
-    return ClaimedJobExecution(
+def _execution(params: dict[str, object]) -> ClaimedAnalysisRunExecution:
+    return ClaimedAnalysisRunExecution(
         execution_id="exec-agent",
-        job_id="job-agent",
-        root_job_id="job-agent",
-        parent_job_id=None,
-        retry_of_job_id=None,
-        job_type="agent_run",
-        version=1,
-        ordered_inputs=(),
+        analysis_run_id="job-agent",
+        run_type="custom",
+        selection=SealedSelectionInput(
+            selection_id="selection-agent",
+            items=(
+                SelectionItemSnapshot(
+                    selection_item_id="selection-item-agent",
+                    position=0,
+                    media_item_id="media-agent",
+                    kind="text",
+                    media_kind="text",
+                    source_snapshot=MediaSourceSnapshot(
+                        source_id="source-agent",
+                        origin_type="text",
+                        text_ref="selection-agent/source-agent",
+                    ),
+                    display_name="Agent context",
+                    status_at_selection="ready",
+                    metadata_snapshot={},
+                    retention_snapshot={"state": "active"},
+                ),
+            ),
+            option_snapshot={},
+            sealed_at="2026-05-10T12:00:00Z",
+        ),
         params=params,
+        claimed_at="2026-05-10T12:01:00Z",
     )
+
+
+def _artifact_json(artifact_store: InMemoryArtifactStore, object_key_suffix: str) -> dict[str, object]:
+    artifact = next(call for call in artifact_store.calls if str(call["object_key"]).endswith(object_key_suffix))
+    content = artifact["content"]
+    assert isinstance(content, bytes)
+    return json.loads(content.decode("utf-8"))

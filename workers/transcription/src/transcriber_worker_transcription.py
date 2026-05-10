@@ -1,7 +1,7 @@
 # FILE: workers/transcription/src/transcriber_worker_transcription.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Execute claimed transcription jobs through the shared control-plane client while preserving the current transcript artifact contract.
+# PURPOSE: Execute claimed transcription analysis runs through the shared control-plane client while preserving the current transcript artifact contract.
 # SCOPE: Worker claim/run orchestration, ordered-input materialization, combined-media concatenation, transcript artifact persistence, cancellation checks, and packet-local helper functions for local transcription materialization.
 # DEPENDS: M-WORKER-TRANSCRIPTION, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION
@@ -19,8 +19,7 @@
 #   WorkerCancellationRequested - Signals authoritative cancellation observed by the dedicated worker loop.
 #   materialize_local_source - Copies a local source into a workspace without changing current bot semantics.
 #   process_local_transcription - Executes the preserved local transcription pipeline and writes plain, markdown, and DOCX artifacts.
-#   runTranscriptionAggregate - Claims a batch aggregate job, merges child transcript artifacts, registers root artifacts, and finalizes.
-#   runTranscription - Claims a job, executes the worker pipeline, registers artifacts, and finalizes through the shared control-plane client.
+#   runTranscription - Claims an analysis run, executes the worker pipeline, registers artifacts, and finalizes through the shared control-plane client.
 # END_MODULE_MAP
 
 from __future__ import annotations
@@ -33,21 +32,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
-from urllib import request
 
-from docx import Document
-
-from transcriber_workers_common.api import ArtifactSummary, ClaimedJobExecution, JobApiClient, JobSnapshot, OrderedWorkerInput
+from transcriber_workers_common.api import (
+    ClaimedAnalysisRunExecution,
+    AnalysisRunControlClient,
+    SelectionItemMaterialization,
+)
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
 from transcriber_workers_common.documents import build_transcript_markdown, write_transcript_docx
-from transcriber_workers_common.transcribers import _download_youtube_audio
 from transcriber_workers_common.domain import SourceCandidate, TranscriptArtifacts, TranscriptResult
 
 
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_EXECUTE_TRANSCRIPTION_PIPELINE = "[WorkerTranscription][runTranscription][BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE]"
-_AUDIO_SUFFIXES = frozenset({".aac", ".amr", ".flac", ".m4a", ".mp3", ".ogg", ".oga", ".opus", ".wav", ".wma"})
-_VIDEO_SUFFIXES = frozenset({".avi", ".m4v", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm"})
+_TRANSCRIBABLE_MEDIA_KINDS = frozenset({"audio", "voice", "video"})
 
 __all__ = [
     "SourceObjectStore",
@@ -55,7 +53,6 @@ __all__ = [
     "WorkerCancellationRequested",
     "materialize_local_source",
     "process_local_transcription",
-    "runTranscriptionAggregate",
     "runTranscription",
 ]
 
@@ -66,28 +63,12 @@ class SourceObjectStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TranscriptionWorkerResult:
-    execution: ClaimedJobExecution
+    execution: ClaimedAnalysisRunExecution
     source: SourceCandidate
     transcript: TranscriptResult
     artifacts: TranscriptArtifacts
     artifact_descriptors: tuple[ArtifactDescriptor, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AggregateTranscriptSection:
-    source_label: str
-    child_job_id: str
-    plain_text: str
-    markdown_text: str
-
-
-@dataclass(frozen=True, slots=True)
-class AggregateTranscriptionWorkerResult:
-    execution: ClaimedJobExecution
-    sections: tuple[AggregateTranscriptSection, ...]
-    artifacts: TranscriptArtifacts
-    artifact_descriptors: tuple[ArtifactDescriptor, ...]
-    diagnostics: dict[str, object]
+    diagnostics: tuple[Mapping[str, object], ...] = ()
 
 
 class WorkerCancellationRequested(RuntimeError):
@@ -95,15 +76,9 @@ class WorkerCancellationRequested(RuntimeError):
 
 
 class SourceMaterializationError(RuntimeError):
-    pass
-
-
-class AggregateTranscriptionError(RuntimeError):
-    pass
-
-
-class MissingChildTranscriptArtifactError(AggregateTranscriptionError):
-    pass
+    def __init__(self, message: str, *, diagnostics: tuple[Mapping[str, object], ...] = ()) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 def materialize_local_source(source: SourceCandidate, workspace_dir: Path) -> SourceCandidate:
@@ -136,42 +111,48 @@ def process_local_transcription(
 
 
 def runTranscription(
-    job_id: str,
+    analysis_run_id: str,
     *,
     workspace_root: Path,
-    api_client: JobApiClient,
+    api_client: AnalysisRunControlClient,
     source_store: SourceObjectStore,
     artifact_store: ArtifactObjectStore,
     transcriber,
 ) -> TranscriptionWorkerResult:
-    execution = api_client.claim_job(job_id, worker_kind="transcription", task_type="transcription.run")
-    workspace_dir = Path(workspace_root) / execution.job_id
+    execution = api_client.claim_analysis_run(analysis_run_id, worker_kind="transcription", task_type="selection.transcription")
+    workspace_dir = Path(workspace_root) / execution.analysis_run_id
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         # START_BLOCK_BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             progress_stage="materializing_sources",
             progress_message="Resolving claimed transcription inputs",
         )
-        source = _materialize_execution_source(execution, workspace_dir, source_store)
+        source, diagnostics, item_outcomes = _materialize_execution_source(execution, workspace_dir, source_store)
+        if diagnostics:
+            api_client.register_diagnostics(
+                execution.analysis_run_id,
+                execution_id=execution.execution_id,
+                diagnostics=diagnostics,
+            )
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             progress_stage="transcribing",
             progress_message="Running transcription pipeline",
         )
         _LOGGER.info(
-            "%s job_id=%s execution_id=%s ordered_input_count=%s",
+            "%s analysis_run_id=%s execution_id=%s ordered_input_count=%s",
             _LOG_MARKER_EXECUTE_TRANSCRIPTION_PIPELINE,
-            execution.job_id,
+            execution.analysis_run_id,
             execution.execution_id,
-            len(execution.ordered_inputs),
+            len(execution.selection.items),
         )
         materialized_source, transcript_result, artifacts = process_local_transcription(
             source,
@@ -181,24 +162,35 @@ def runTranscription(
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             progress_stage="persisting_artifacts",
             progress_message="Uploading transcript artifacts",
         )
-        artifact_descriptors = _persist_transcript_artifacts(execution.job_id, artifacts, artifact_store)
+        artifact_descriptors = _persist_transcript_artifacts(execution.analysis_run_id, artifacts, artifact_store)
+        item_outcomes = _attach_artifacts_to_successful_outcomes(
+            item_outcomes,
+            artifact_kinds=tuple(artifact.artifact_kind for artifact in artifact_descriptors),
+        )
+        policy_artifacts = _persist_run_policy_artifacts(
+            execution,
+            artifact_store,
+            diagnostics=diagnostics,
+            item_outcomes=item_outcomes,
+        )
         _assert_required_artifacts_exist(artifacts)
         api_client.register_artifacts(
-            execution.job_id,
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
-            artifacts=artifact_descriptors,
+            artifacts=(*artifact_descriptors, *policy_artifacts),
         )
 
         _check_cancellation(api_client, execution)
-        api_client.finalize_job(
-            execution.job_id,
+        outcome = "partially_succeeded" if diagnostics else "succeeded"
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
-            outcome="succeeded",
+            outcome=outcome,
             progress_stage="completed",
             progress_message="Transcript ready",
             error_code=None,
@@ -210,11 +202,12 @@ def runTranscription(
             transcript=transcript_result,
             artifacts=artifacts,
             artifact_descriptors=artifact_descriptors,
+            diagnostics=diagnostics,
         )
         # END_BLOCK_BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE
     except WorkerCancellationRequested:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="canceled",
             progress_stage="canceled",
@@ -223,9 +216,26 @@ def runTranscription(
             error_message=None,
         )
         raise
-    except Exception as exc:
-        api_client.finalize_job(
-            execution.job_id,
+    except SourceMaterializationError as exc:
+        if exc.diagnostics:
+            api_client.register_diagnostics(
+                execution.analysis_run_id,
+                execution_id=execution.execution_id,
+                diagnostics=exc.diagnostics,
+            )
+        policy_artifacts = _persist_run_policy_artifacts(
+            execution,
+            artifact_store,
+            diagnostics=exc.diagnostics,
+            item_outcomes=_outcomes_from_diagnostics(execution, exc.diagnostics),
+        )
+        api_client.register_artifacts(
+            execution.analysis_run_id,
+            execution_id=execution.execution_id,
+            artifacts=policy_artifacts,
+        )
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="failed",
             progress_stage="failed",
@@ -234,97 +244,13 @@ def runTranscription(
             error_message=str(exc),
         )
         raise
-
-
-def runTranscriptionAggregate(
-    job_id: str,
-    *,
-    workspace_root: Path,
-    api_client: JobApiClient,
-    artifact_store: ArtifactObjectStore,
-) -> AggregateTranscriptionWorkerResult:
-    execution = api_client.claim_job(job_id, worker_kind="transcription", task_type="transcription.aggregate")
-    workspace_dir = Path(workspace_root) / execution.job_id
-    workspace_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        _check_cancellation(api_client, execution)
-        api_client.publish_progress(
-            execution.job_id,
-            execution_id=execution.execution_id,
-            progress_stage="resolving_child_artifacts",
-            progress_message="Resolving batch child transcript artifacts",
-        )
-        root_snapshot = api_client.get_job_snapshot(execution.job_id)
-        sections, diagnostics = _load_aggregate_sections(
-            execution,
-            root_snapshot=root_snapshot,
-            workspace_dir=workspace_dir,
-            api_client=api_client,
-        )
-
-        _check_cancellation(api_client, execution)
-        api_client.publish_progress(
-            execution.job_id,
-            execution_id=execution.execution_id,
-            progress_stage="merging_transcripts",
-            progress_message="Merging batch transcripts",
-        )
-        artifacts = _write_aggregate_transcript_artifacts(workspace_dir, sections)
-
-        _check_cancellation(api_client, execution)
-        api_client.publish_progress(
-            execution.job_id,
-            execution_id=execution.execution_id,
-            progress_stage="persisting_artifacts",
-            progress_message="Uploading aggregate transcript artifacts",
-        )
-        artifact_descriptors = (
-            *_persist_transcript_artifacts(execution.job_id, artifacts, artifact_store),
-            *_persist_aggregate_metadata_artifacts(execution, sections, diagnostics, artifact_store),
-        )
-        _assert_required_artifacts_exist(artifacts)
-        api_client.register_artifacts(
-            execution.job_id,
-            execution_id=execution.execution_id,
-            artifacts=artifact_descriptors,
-        )
-
-        _check_cancellation(api_client, execution)
-        api_client.finalize_job(
-            execution.job_id,
-            execution_id=execution.execution_id,
-            outcome="succeeded",
-            progress_stage="completed",
-            progress_message="Aggregate transcript ready",
-            error_code=None,
-            error_message=None,
-        )
-        return AggregateTranscriptionWorkerResult(
-            execution=execution,
-            sections=sections,
-            artifacts=artifacts,
-            artifact_descriptors=artifact_descriptors,
-            diagnostics=diagnostics,
-        )
-    except WorkerCancellationRequested:
-        api_client.finalize_job(
-            execution.job_id,
-            execution_id=execution.execution_id,
-            outcome="canceled",
-            progress_stage="canceled",
-            progress_message="Cancellation requested",
-            error_code=None,
-            error_message=None,
-        )
-        raise
     except Exception as exc:
-        api_client.finalize_job(
-            execution.job_id,
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
             execution_id=execution.execution_id,
             outcome="failed",
             progress_stage="failed",
-            progress_message="Batch transcript aggregation failed",
+            progress_message="Transcription failed",
             error_code=_classify_error_code(exc),
             error_message=str(exc),
         )
@@ -346,227 +272,202 @@ def _write_transcript_artifacts(workspace_dir: Path, transcript_result: Transcri
     )
 
 
-def _load_aggregate_sections(
-    execution: ClaimedJobExecution,
-    *,
-    root_snapshot: JobSnapshot,
-    workspace_dir: Path,
-    api_client: JobApiClient,
-) -> tuple[tuple[AggregateTranscriptSection, ...], dict[str, object]]:
-    ordered_labels = _resolve_aggregate_source_labels(execution, root_snapshot)
-    completion_policy = _resolve_completion_policy(execution)
-    child_snapshots = tuple(
-        api_client.get_job_snapshot(child.job_id)
-        for child in root_snapshot.children
-        if child.job_type == "transcription"
-    )
-    children_by_label: dict[str, list[JobSnapshot]] = {}
-    for child in child_snapshots:
-        label = _source_label_from_snapshot(child)
-        if label:
-            children_by_label.setdefault(label, []).append(child)
-
-    sections: list[AggregateTranscriptSection] = []
-    skipped_sources: list[dict[str, object]] = []
-    child_artifacts: list[dict[str, object]] = []
-    for label in ordered_labels:
-        candidates = sorted(children_by_label.get(label, ()), key=lambda item: (item.status != "succeeded", item.job_id))
-        child = next((candidate for candidate in candidates if candidate.status == "succeeded"), None)
-        if child is None:
-            skipped_sources.append(
-                {
-                    "source_label": label,
-                    "reason": "child_not_succeeded",
-                    "child_statuses": [candidate.status for candidate in candidates],
-                    "child_job_ids": [candidate.job_id for candidate in candidates],
-                }
-            )
-            if completion_policy == "succeed_when_all_sources_succeed":
-                raise AggregateTranscriptionError(f"source {label} has no succeeded transcription child")
-            continue
-
-        plain_artifact = _artifact_by_kind(child, "transcript_plain")
-        markdown_artifact = _artifact_by_kind(child, "transcript_segmented_markdown")
-        if plain_artifact is None or markdown_artifact is None:
-            missing = []
-            if plain_artifact is None:
-                missing.append("transcript_plain")
-            if markdown_artifact is None:
-                missing.append("transcript_segmented_markdown")
-            raise MissingChildTranscriptArtifactError(
-                f"source {label} child {child.job_id} is missing artifact(s): {', '.join(missing)}"
-            )
-
-        child_dir = workspace_dir / "children" / f"{len(sections):02d}-{label}"
-        plain_path = _download_child_artifact(api_client, plain_artifact, child_dir / "transcript.txt")
-        markdown_path = _download_child_artifact(api_client, markdown_artifact, child_dir / "transcript.md")
-        child_artifacts.append(
-            {
-                "source_label": label,
-                "child_job_id": child.job_id,
-                "plain_artifact_id": plain_artifact.artifact_id,
-                "markdown_artifact_id": markdown_artifact.artifact_id,
-            }
-        )
-        sections.append(
-            AggregateTranscriptSection(
-                source_label=label,
-                child_job_id=child.job_id,
-                plain_text=plain_path.read_text(encoding="utf-8").strip(),
-                markdown_text=markdown_path.read_text(encoding="utf-8").strip(),
-            )
-        )
-
-    if not sections:
-        raise AggregateTranscriptionError("batch transcription has no eligible successful source children")
-
-    diagnostics: dict[str, object] = {
-        "diagnostics_version": "batch-transcription.aggregate.diagnostics.v1",
-        "root_job_id": execution.job_id,
-        "completion_policy": completion_policy,
-        "ordered_source_labels": list(ordered_labels),
-        "included_count": len(sections),
-        "skipped_sources": skipped_sources,
-        "child_artifacts": child_artifacts,
-    }
-    return tuple(sections), diagnostics
-
-
-def _write_aggregate_transcript_artifacts(
-    workspace_dir: Path,
-    sections: tuple[AggregateTranscriptSection, ...],
-) -> TranscriptArtifacts:
-    markdown_path = workspace_dir / "transcript.md"
-    text_path = workspace_dir / "transcript.txt"
-    docx_path = workspace_dir / "transcript.docx"
-
-    text_path.write_text(_build_aggregate_plain_text(sections), encoding="utf-8")
-    markdown_path.write_text(_build_aggregate_markdown(sections), encoding="utf-8")
-    _write_aggregate_docx(docx_path, sections)
-    return TranscriptArtifacts(
-        markdown_path=markdown_path,
-        docx_path=docx_path,
-        text_path=text_path,
-    )
-
-
-def _build_aggregate_plain_text(sections: tuple[AggregateTranscriptSection, ...]) -> str:
-    chunks = []
-    for section in sections:
-        chunks.append(f"## Транскрибация {section.source_label}\n\n{section.plain_text.strip()}")
-    return "\n\n".join(chunks).strip() + "\n"
-
-
-def _build_aggregate_markdown(sections: tuple[AggregateTranscriptSection, ...]) -> str:
-    chunks = ["# Транскрибация", ""]
-    for section in sections:
-        chunks.extend(
-            [
-                f"## Транскрибация {section.source_label}",
-                "",
-                section.markdown_text.strip(),
-                "",
-            ]
-        )
-    return "\n".join(chunks).strip() + "\n"
-
-
-def _write_aggregate_docx(output_path: Path, sections: tuple[AggregateTranscriptSection, ...]) -> None:
-    document = Document()
-    document.add_heading("Транскрибация", level=0)
-    for section in sections:
-        document.add_heading(f"Транскрибация {section.source_label}", level=1)
-        for paragraph_text in section.plain_text.splitlines():
-            text = paragraph_text.strip()
-            if text:
-                document.add_paragraph(text)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(output_path)
-
-
 def _materialize_execution_source(
-    execution: ClaimedJobExecution,
+    execution: ClaimedAnalysisRunExecution,
     workspace_dir: Path,
     source_store: SourceObjectStore,
-) -> SourceCandidate:
-    ordered_inputs = tuple(sorted(execution.ordered_inputs, key=lambda item: item.position))
-    if len(ordered_inputs) == 1:
-        return _materialize_single_ordered_input(
-            ordered_inputs[0],
-            workspace_dir,
-            source_store,
-            source_label=_resolve_claimed_source_label(ordered_inputs[0], execution.params),
+) -> tuple[SourceCandidate, tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
+    items = tuple(sorted(execution.selection.items, key=lambda item: item.position))
+    materialized_inputs: list[tuple[SelectionItemMaterialization, Path]] = []
+    diagnostics: list[Mapping[str, object]] = []
+    item_outcomes: list[Mapping[str, object]] = []
+    for item in items:
+        descriptor = SelectionItemMaterialization.from_selection_item(item)
+        if descriptor.is_object_backed and _is_transcribable_descriptor(descriptor):
+            input_dir = workspace_dir / "inputs" / f"{descriptor.position:02d}-{descriptor.source_id}"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                local_path = _download_materialization_descriptor(descriptor, input_dir, source_store)
+            except SourceMaterializationError as exc:
+                diagnostic = _failed_selection_item_diagnostic(execution, descriptor, message=str(exc))
+                diagnostics.append(diagnostic)
+                item_outcomes.append(_item_outcome(execution, descriptor, "failed", diagnostic_ids=(str(diagnostic["diagnostic_id"]),)))
+                continue
+            materialized_inputs.append((descriptor, local_path))
+            item_outcomes.append(_item_outcome(execution, descriptor, "succeeded", materialized_path=local_path))
+            continue
+        materialized_path = None
+        if descriptor.is_object_backed:
+            try:
+                materialized_path = _materialize_unsupported_object_descriptor(descriptor, workspace_dir, source_store)
+            except SourceMaterializationError:
+                materialized_path = None
+        diagnostic = _unsupported_selection_item_diagnostic(execution, descriptor, materialized_path=materialized_path)
+        diagnostics.append(diagnostic)
+        item_outcomes.append(_item_outcome(execution, descriptor, "skipped", diagnostic_ids=(str(diagnostic["diagnostic_id"]),)))
+
+    if not materialized_inputs:
+        error_message = "selection contains no object-backed media items that can be transcribed"
+        object_key_failures = [
+            diagnostic["message"]
+            for diagnostic in diagnostics
+            if isinstance(diagnostic.get("message"), str) and "object_key" in diagnostic["message"]
+        ]
+        if object_key_failures:
+            error_message = object_key_failures[0]
+        else:
+            materialization_failures = [
+                diagnostic["message"]
+                for diagnostic in diagnostics
+                if diagnostic.get("severity") == "error" and isinstance(diagnostic.get("message"), str)
+            ]
+            if materialization_failures:
+                error_message = materialization_failures[0]
+        raise SourceMaterializationError(
+            error_message,
+            diagnostics=tuple(diagnostics),
         )
-    return _materialize_combined_source(ordered_inputs, workspace_dir, source_store)
+
+    if len(materialized_inputs) == 1:
+        materialization, local_path = materialized_inputs[0]
+        return (
+            _source_candidate_from_materialized_path(materialization, local_path),
+            tuple(diagnostics),
+            tuple(item_outcomes),
+        )
+    return _materialize_combined_source(materialized_inputs, workspace_dir), tuple(diagnostics), tuple(item_outcomes)
 
 
-def _materialize_single_ordered_input(
-    ordered_input: OrderedWorkerInput,
-    workspace_dir: Path,
-    source_store: SourceObjectStore,
+def _unsupported_selection_item_diagnostic(
+    execution: ClaimedAnalysisRunExecution,
+    materialization: SelectionItemMaterialization,
     *,
-    source_label: str | None = None,
+    materialized_path: Path | None = None,
+) -> Mapping[str, object]:
+    origin_type = materialization.origin_type
+    if origin_type == "text":
+        message = "Text media is already textual and is not sent to the transcription engine"
+    elif origin_type == "url":
+        message = "URL media is not transcribed directly by the worker; provide object-backed media"
+    elif materialization.unsupported_reason:
+        message = materialization.unsupported_reason
+    elif origin_type == "object":
+        message = f"Object-backed {materialization.media_kind} media is not suitable for transcription"
+    else:
+        message = f"Media source origin {origin_type!r} is not supported by the transcription worker"
+    context: dict[str, object] = {
+        "analysis_run_id": execution.analysis_run_id,
+        "selection_id": execution.selection.selection_id,
+        "selection_item_id": materialization.selection_item_id,
+        "item_position": materialization.position,
+        "media_item_id": materialization.media_item_id,
+        "media_kind": materialization.media_kind,
+        "mime_type": materialization.mime_type,
+        "role": materialization.role,
+        "origin_type": origin_type,
+        "source_id": materialization.source_id,
+        "display_label": materialization.labels.display_label,
+        "source_label": materialization.labels.source_label,
+        "original_filename": materialization.labels.original_filename,
+        "materialization_kind": materialization.materialization_kind,
+    }
+    if materialization.external_uri:
+        context["external_uri"] = materialization.external_uri
+    if materialization.text_ref:
+        context["text_ref"] = materialization.text_ref
+    if materialization.deterministic_filename:
+        context["materialized_filename"] = materialization.deterministic_filename
+    if materialized_path is not None:
+        context["materialized_path"] = str(materialized_path)
+    return {
+        "diagnostic_id": f"{execution.execution_id}:{materialization.position}:unsupported-transcription-source",
+        "subject_type": "media_item",
+        "subject_id": materialization.media_item_id,
+        "severity": "warning",
+        "code": "source_unavailable",
+        "message": message,
+        "context": context,
+        "created_at": execution.claimed_at,
+    }
+
+
+def _failed_selection_item_diagnostic(
+    execution: ClaimedAnalysisRunExecution,
+    materialization: SelectionItemMaterialization,
+    *,
+    message: str,
+) -> Mapping[str, object]:
+    context = _lineage_context(execution, materialization)
+    context["materialization_kind"] = materialization.materialization_kind
+    if materialization.object_key:
+        context["object_key"] = materialization.object_key
+    if materialization.deterministic_filename:
+        context["materialized_filename"] = materialization.deterministic_filename
+    return {
+        "diagnostic_id": f"{execution.execution_id}:{materialization.position}:source-materialization-failed",
+        "subject_type": "media_item",
+        "subject_id": materialization.media_item_id,
+        "severity": "error",
+        "code": "source_unavailable",
+        "message": message,
+        "context": context,
+        "created_at": execution.claimed_at,
+    }
+
+
+def _lineage_context(execution: ClaimedAnalysisRunExecution, materialization: SelectionItemMaterialization) -> dict[str, object]:
+    context: dict[str, object] = {
+        "analysis_run_id": execution.analysis_run_id,
+        "selection_id": execution.selection.selection_id,
+        "selection_item_id": materialization.selection_item_id,
+        "item_position": materialization.position,
+        "media_item_id": materialization.media_item_id,
+        "media_kind": materialization.media_kind,
+        "mime_type": materialization.mime_type,
+        "role": materialization.role,
+        "origin_type": materialization.origin_type,
+        "source_id": materialization.source_id,
+        "display_label": materialization.labels.display_label,
+        "source_label": materialization.labels.source_label,
+        "original_filename": materialization.labels.original_filename,
+    }
+    return context
+
+
+def _materialize_single_selection_item(
+    materialization: SelectionItemMaterialization,
+    workspace_dir: Path,
+    source_store: SourceObjectStore,
 ) -> SourceCandidate:
-    input_dir = workspace_dir / "inputs" / f"{ordered_input.position:02d}-{ordered_input.source_id}"
+    input_dir = workspace_dir / "inputs" / f"{materialization.position:02d}-{materialization.source_id}"
     input_dir.mkdir(parents=True, exist_ok=True)
-    display_name = source_label or _resolve_display_name(ordered_input)
-
-    if ordered_input.source_kind == "youtube_url":
-        if not ordered_input.source_url:
-            raise SourceMaterializationError("youtube_url input must include source_url")
-        return SourceCandidate(
-            source_id=ordered_input.source_id,
-            kind="youtube_url",
-            display_name=display_name,
-            url=ordered_input.source_url,
-            telegram_file_id=None,
-            mime_type=None,
-            file_name=ordered_input.original_filename,
-            file_unique_id=None,
-            local_path=None,
-        )
-
-    local_path = _download_ordered_input(ordered_input, input_dir, source_store)
+    local_path = _download_materialization_descriptor(materialization, input_dir, source_store)
     return SourceCandidate(
-        source_id=ordered_input.source_id,
-        kind=_guess_media_kind(ordered_input),
-        display_name=display_name,
+        source_id=materialization.source_id,
+        kind=_source_candidate_kind(materialization),
+        display_name=materialization.labels.source_display_label(),
         url=None,
         telegram_file_id=None,
-        mime_type=None,
-        file_name=ordered_input.original_filename or local_path.name,
+        mime_type=materialization.mime_type,
+        file_name=local_path.name,
         file_unique_id=None,
         local_path=local_path,
     )
 
 
 def _materialize_combined_source(
-    ordered_inputs: tuple[OrderedWorkerInput, ...],
+    materialized_inputs: list[tuple[SelectionItemMaterialization, Path]],
     workspace_dir: Path,
-    source_store: SourceObjectStore,
 ) -> SourceCandidate:
-    materialized_paths: list[Path] = []
+    materializations = tuple(materialization for materialization, _ in materialized_inputs)
+    materialized_paths = [local_path for _, local_path in materialized_inputs]
     combined_dir = workspace_dir / "combined"
     combined_dir.mkdir(parents=True, exist_ok=True)
-
-    for ordered_input in ordered_inputs:
-        item_dir = combined_dir / f"{ordered_input.position:02d}-{ordered_input.source_id}"
-        item_dir.mkdir(parents=True, exist_ok=True)
-        if ordered_input.source_kind == "youtube_url":
-            if not ordered_input.source_url:
-                raise SourceMaterializationError("youtube_url input must include source_url")
-            try:
-                local_path = _download_youtube_audio(ordered_input.source_url, item_dir)
-            except Exception as exc:
-                raise SourceMaterializationError(str(exc)) from exc
-        else:
-            local_path = _download_ordered_input(ordered_input, item_dir, source_store)
-        materialized_paths.append(local_path)
 
     output_path = combined_dir / "combined.wav"
     _concatenate_media_inputs(materialized_paths, output_path)
     return SourceCandidate(
-        source_id=f"{ordered_inputs[0].source_id}-combined",
+        source_id=f"{materializations[0].source_id}-combined",
         kind="telegram_audio",
         display_name="Audio: combined-inputs.wav",
         url=None,
@@ -578,20 +479,65 @@ def _materialize_combined_source(
     )
 
 
-def _download_ordered_input(
-    ordered_input: OrderedWorkerInput,
+def _source_candidate_from_materialized_path(
+    materialization: SelectionItemMaterialization,
+    local_path: Path,
+) -> SourceCandidate:
+    return SourceCandidate(
+        source_id=materialization.source_id,
+        kind=_source_candidate_kind(materialization),
+        display_name=materialization.labels.source_display_label(),
+        url=None,
+        telegram_file_id=None,
+        mime_type=materialization.mime_type,
+        file_name=local_path.name,
+        file_unique_id=None,
+        local_path=local_path,
+    )
+
+
+def _materialize_unsupported_object_descriptor(
+    materialization: SelectionItemMaterialization,
+    workspace_dir: Path,
+    source_store: SourceObjectStore,
+) -> Path | None:
+    if materialization.materialization_kind != "object":
+        return None
+    unsupported_dir = workspace_dir / "unsupported" / f"{materialization.position:02d}-{materialization.source_id}"
+    unsupported_dir.mkdir(parents=True, exist_ok=True)
+    return _download_materialization_descriptor(materialization, unsupported_dir, source_store)
+
+
+def _download_materialization_descriptor(
+    materialization: SelectionItemMaterialization,
     destination_dir: Path,
     source_store: SourceObjectStore,
 ) -> Path:
-    if not ordered_input.object_key:
-        raise SourceMaterializationError(f"{ordered_input.source_kind} input must include object_key")
+    if not materialization.object_key:
+        raise SourceMaterializationError(f"{materialization.media_kind} input must include object_key")
+    if not materialization.deterministic_filename:
+        raise SourceMaterializationError(f"{materialization.media_kind} input is missing deterministic filename")
 
-    destination = destination_dir / _resolve_materialized_filename(ordered_input)
+    destination = destination_dir / materialization.deterministic_filename
     try:
-        source_store.fetch_file(object_key=ordered_input.object_key, destination=destination)
+        source_store.fetch_file(object_key=materialization.object_key, destination=destination)
     except Exception as exc:
         raise SourceMaterializationError(str(exc)) from exc
     return destination
+
+
+def _is_transcribable_descriptor(materialization: SelectionItemMaterialization) -> bool:
+    if materialization.media_kind in _TRANSCRIBABLE_MEDIA_KINDS:
+        return True
+    mime_type = (materialization.mime_type or "").split(";", 1)[0].strip().casefold()
+    return mime_type.startswith("audio/") or mime_type.startswith("video/")
+
+
+def _source_candidate_kind(materialization: SelectionItemMaterialization) -> str:
+    mime_type = (materialization.mime_type or "").split(";", 1)[0].strip().casefold()
+    if materialization.media_kind == "video" or mime_type.startswith("video/"):
+        return "telegram_video"
+    return "telegram_audio"
 
 
 def _concatenate_media_inputs(input_paths: list[Path], output_path: Path) -> None:
@@ -621,11 +567,11 @@ def _concatenate_media_inputs(input_paths: list[Path], output_path: Path) -> Non
 
 
 def _persist_transcript_artifacts(
-    job_id: str,
+    analysis_run_id: str,
     artifacts: TranscriptArtifacts,
     artifact_store: ArtifactObjectStore,
 ) -> tuple[ArtifactDescriptor, ...]:
-    writer = ArtifactWriter(job_id=job_id, object_store=artifact_store)
+    writer = ArtifactWriter(analysis_run_id=analysis_run_id, object_store=artifact_store)
     return (
         writer.write_file_artifact(
             "transcript_plain",
@@ -648,41 +594,140 @@ def _persist_transcript_artifacts(
     )
 
 
-def _persist_aggregate_metadata_artifacts(
-    execution: ClaimedJobExecution,
-    sections: tuple[AggregateTranscriptSection, ...],
-    diagnostics: dict[str, object],
+def _persist_run_policy_artifacts(
+    execution: ClaimedAnalysisRunExecution,
     artifact_store: ArtifactObjectStore,
+    *,
+    diagnostics: tuple[Mapping[str, object], ...],
+    item_outcomes: tuple[Mapping[str, object], ...],
 ) -> tuple[ArtifactDescriptor, ...]:
-    writer = ArtifactWriter(job_id=execution.job_id, object_store=artifact_store)
-    manifest = {
-        "manifest_version": "batch-transcription.aggregate.v1",
-        "root_job_id": execution.job_id,
-        "ordered_source_labels": [section.source_label for section in sections],
-        "included_sources": [
-            {
-                "source_label": section.source_label,
-                "child_job_id": section.child_job_id,
-            }
-            for section in sections
-        ],
+    writer = ArtifactWriter(analysis_run_id=execution.analysis_run_id, object_store=artifact_store)
+    manifest = _run_manifest_payload(execution, item_outcomes)
+    diagnostics_payload = {
+        "schema_version": "analysis_run_diagnostics/v2",
+        "analysis_run_id": execution.analysis_run_id,
+        "execution_id": execution.execution_id,
+        "selection_id": execution.selection.selection_id,
+        "diagnostics": [dict(diagnostic) for diagnostic in diagnostics],
     }
     return (
         writer.write_text_artifact(
-            "source_manifest_json",
-            "source-manifest.json",
-            _json_dump(manifest),
+            "run_manifest",
+            "run-manifest.json",
+            _canonical_json(manifest),
             mime_type="application/json; charset=utf-8",
             format="json",
         ),
         writer.write_text_artifact(
-            "batch_diagnostics_json",
-            "batch-diagnostics.json",
-            _json_dump(diagnostics),
+            "run_diagnostics",
+            "run-diagnostics.json",
+            _canonical_json(diagnostics_payload),
             mime_type="application/json; charset=utf-8",
             format="json",
         ),
     )
+
+
+def _run_manifest_payload(
+    execution: ClaimedAnalysisRunExecution,
+    item_outcomes: tuple[Mapping[str, object], ...],
+) -> Mapping[str, object]:
+    summary = {
+        "included_count": sum(1 for item in item_outcomes if item.get("outcome") == "succeeded"),
+        "skipped_count": sum(1 for item in item_outcomes if item.get("outcome") == "skipped"),
+        "failed_count": sum(1 for item in item_outcomes if item.get("outcome") == "failed"),
+    }
+    return {
+        "schema_version": "analysis_run_manifest/v2",
+        "analysis_run_id": execution.analysis_run_id,
+        "execution_id": execution.execution_id,
+        "selection_id": execution.selection.selection_id,
+        "run_type": execution.run_type,
+        "created_at": execution.claimed_at,
+        "artifact_policy": {
+            "canonical": ["run_manifest", "run_diagnostics"],
+        },
+        "summary": summary,
+        "items": [dict(item) for item in sorted(item_outcomes, key=lambda item: int(item.get("position", 0)))],
+    }
+
+
+def _item_outcome(
+    execution: ClaimedAnalysisRunExecution,
+    materialization: SelectionItemMaterialization,
+    outcome: str,
+    *,
+    diagnostic_ids: tuple[str, ...] = (),
+    materialized_path: Path | None = None,
+    artifact_kinds: tuple[str, ...] = (),
+) -> Mapping[str, object]:
+    lineage = _lineage_context(execution, materialization)
+    result: dict[str, object] = {
+        "selection_item_id": materialization.selection_item_id,
+        "media_item_id": materialization.media_item_id,
+        "position": materialization.position,
+        "outcome": outcome,
+        "included": outcome == "succeeded",
+        "lineage": lineage,
+        "artifact_kinds": list(artifact_kinds),
+        "diagnostic_ids": list(diagnostic_ids),
+    }
+    if materialized_path is not None:
+        result["materialized_path"] = str(materialized_path)
+    return result
+
+
+def _attach_artifacts_to_successful_outcomes(
+    item_outcomes: tuple[Mapping[str, object], ...],
+    *,
+    artifact_kinds: tuple[str, ...],
+) -> tuple[Mapping[str, object], ...]:
+    updated: list[Mapping[str, object]] = []
+    for item in item_outcomes:
+        if item.get("outcome") != "succeeded":
+            updated.append(item)
+            continue
+        patched = dict(item)
+        patched["artifact_kinds"] = list(artifact_kinds)
+        updated.append(patched)
+    return tuple(updated)
+
+
+def _outcomes_from_diagnostics(
+    execution: ClaimedAnalysisRunExecution,
+    diagnostics: tuple[Mapping[str, object], ...],
+) -> tuple[Mapping[str, object], ...]:
+    diagnostics_by_selection_item: dict[str, Mapping[str, object]] = {}
+    for diagnostic in diagnostics:
+        context = diagnostic.get("context")
+        if not isinstance(context, Mapping):
+            continue
+        selection_item_id = context.get("selection_item_id")
+        if isinstance(selection_item_id, str):
+            diagnostics_by_selection_item[selection_item_id] = diagnostic
+
+    outcomes: list[Mapping[str, object]] = []
+    for item in sorted(execution.selection.items, key=lambda selection_item: selection_item.position):
+        materialization = SelectionItemMaterialization.from_selection_item(item)
+        diagnostic = diagnostics_by_selection_item.get(materialization.selection_item_id)
+        if diagnostic is None:
+            outcomes.append(_item_outcome(execution, materialization, "failed"))
+            continue
+        severity = diagnostic.get("severity")
+        outcome = "failed" if severity == "error" else "skipped"
+        outcomes.append(
+            _item_outcome(
+                execution,
+                materialization,
+                outcome,
+                diagnostic_ids=(str(diagnostic["diagnostic_id"]),),
+            )
+        )
+    return tuple(outcomes)
+
+
+def _canonical_json(payload: Mapping[str, object]) -> str:
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
 def _assert_required_artifacts_exist(artifacts: TranscriptArtifacts) -> None:
@@ -696,125 +741,13 @@ def _assert_required_artifacts_exist(artifacts: TranscriptArtifacts) -> None:
             raise RuntimeError(f"required transcript artifact is missing: {path}")
 
 
-def _check_cancellation(api_client: JobApiClient, execution: ClaimedJobExecution) -> None:
-    cancel_state = api_client.check_cancel(execution.job_id, execution_id=execution.execution_id)
+def _check_cancellation(api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunExecution) -> None:
+    cancel_state = api_client.check_cancel(execution.analysis_run_id, execution_id=execution.execution_id)
     if cancel_state.cancel_requested:
-        raise WorkerCancellationRequested(f"job {execution.job_id} was canceled")
-
-
-def _resolve_claimed_source_label(ordered_input: OrderedWorkerInput, params: Mapping[str, object]) -> str | None:
-    if ordered_input.source_label:
-        return ordered_input.source_label.strip() or None
-
-    batch_params = params.get("batch")
-    if not isinstance(batch_params, Mapping):
-        return None
-    source_label = batch_params.get("source_label")
-    if not isinstance(source_label, str):
-        return None
-    return source_label.strip() or None
-
-
-def _resolve_display_name(ordered_input: OrderedWorkerInput) -> str:
-    if ordered_input.display_name:
-        return ordered_input.display_name
-    if ordered_input.original_filename:
-        media_prefix = "Video" if _guess_media_kind(ordered_input) == "telegram_video" else "Audio"
-        return f"{media_prefix}: {ordered_input.original_filename}"
-    if ordered_input.source_url:
-        return f"YouTube: {ordered_input.source_url}"
-    return ordered_input.source_id
-
-
-def _resolve_materialized_filename(ordered_input: OrderedWorkerInput) -> str:
-    if ordered_input.original_filename:
-        return ordered_input.original_filename
-    if ordered_input.display_name:
-        normalized = ordered_input.display_name.split(":", 1)[-1].strip().replace("/", "-")
-        suffix = Path(normalized).suffix
-        if suffix:
-            return normalized
-    suffix = ".bin"
-    if ordered_input.source_kind == "youtube_url":
-        suffix = ".mp3"
-    return f"{ordered_input.source_id}{suffix}"
-
-
-def _guess_media_kind(ordered_input: OrderedWorkerInput) -> str:
-    source_name = (ordered_input.original_filename or ordered_input.display_name or "").strip()
-    if source_name.startswith("Video:"):
-        return "telegram_video"
-    if source_name.startswith("Audio:"):
-        return "telegram_audio"
-
-    suffix = Path(source_name).suffix.casefold()
-    if suffix in _VIDEO_SUFFIXES:
-        return "telegram_video"
-    if suffix in _AUDIO_SUFFIXES:
-        return "telegram_audio"
-    return "telegram_audio"
-
-
-def _resolve_aggregate_source_labels(execution: ClaimedJobExecution, root_snapshot: JobSnapshot) -> tuple[str, ...]:
-    batch = execution.params.get("batch")
-    if isinstance(batch, Mapping):
-        labels = batch.get("ordered_source_labels")
-        if isinstance(labels, list):
-            normalized = tuple(str(label).strip() for label in labels if str(label).strip())
-            if normalized:
-                return normalized
-
-    snapshot_labels = tuple(
-        item.source_label.strip()
-        for item in sorted(root_snapshot.source_set_items, key=lambda source: source.position)
-        if item.source_label and item.source_label.strip()
-    )
-    if snapshot_labels:
-        return snapshot_labels
-
-    raise AggregateTranscriptionError("aggregate job has no ordered source labels")
-
-
-def _resolve_completion_policy(execution: ClaimedJobExecution) -> str:
-    batch = execution.params.get("batch")
-    if isinstance(batch, Mapping):
-        policy = str(batch.get("completion_policy") or "").strip()
-        if policy:
-            return policy
-    return "succeed_when_all_sources_succeed"
-
-
-def _source_label_from_snapshot(snapshot: JobSnapshot) -> str | None:
-    for item in sorted(snapshot.source_set_items, key=lambda source: source.position):
-        if item.source_label and item.source_label.strip():
-            return item.source_label.strip()
-    return None
-
-
-def _artifact_by_kind(snapshot: JobSnapshot, artifact_kind: str) -> ArtifactSummary | None:
-    for artifact in snapshot.artifacts:
-        if artifact.artifact_kind == artifact_kind:
-            return artifact
-    return None
-
-
-def _download_child_artifact(api_client: JobApiClient, artifact: ArtifactSummary, destination: Path) -> Path:
-    resolution = api_client.resolve_artifact(artifact.artifact_id)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with request.urlopen(resolution.download_url, timeout=60) as response:
-        destination.write_bytes(response.read())
-    return destination
-
-
-def _json_dump(payload: dict[str, object]) -> str:
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+        raise WorkerCancellationRequested(f"analysis run {execution.analysis_run_id} was canceled")
 
 
 def _classify_error_code(error: Exception) -> str:
     if isinstance(error, SourceMaterializationError):
         return "source_fetch_failed"
-    if isinstance(error, MissingChildTranscriptArtifactError):
-        return "missing_child_artifact"
-    if isinstance(error, AggregateTranscriptionError):
-        return "batch_aggregation_failed"
     return "transcription_failed"

@@ -1,0 +1,345 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/media-item.schema.json",
+  "title": "MediaItemContracts",
+  "$defs": {
+    "textSource": {
+      "type": "object",
+      "required": [
+        "origin_type",
+        "text"
+      ],
+      "properties": {
+        "origin_type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "language_hint": {
+          "type": "string",
+          "minLength": 2
+        }
+      },
+      "additionalProperties": false
+    },
+    "urlSource": {
+      "type": "object",
+      "required": [
+        "origin_type",
+        "url"
+      ],
+      "properties": {
+        "origin_type": {
+          "const": "url"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        }
+      },
+      "additionalProperties": false
+    },
+    "objectSource": {
+      "type": "object",
+      "required": [
+        "origin_type",
+        "object_ref"
+      ],
+      "properties": {
+        "origin_type": {
+          "const": "object"
+        },
+        "object_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "original_filename": {
+          "type": "string",
+          "minLength": 1
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "source": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/textSource"
+        },
+        {
+          "$ref": "#/$defs/urlSource"
+        },
+        {
+          "$ref": "#/$defs/objectSource"
+        }
+      ]
+    },
+    "sourceMetadata": {
+      "type": "object",
+      "required": [
+        "source_id",
+        "origin_type"
+      ],
+      "properties": {
+        "source_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "origin_type": {
+          "$ref": "../common/enums.schema.json#/$defs/sourceOriginType"
+        },
+        "external_uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "object_key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "text_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "mime_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "addMediaItemRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "kind",
+        "source"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/mediaKind"
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        },
+        "collection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_origin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "retention": {
+          "$ref": "../common/pagination.schema.json#/$defs/retentionMetadata"
+        }
+      },
+      "additionalProperties": false
+    },
+    "addMediaItemMultipartMetadata": {
+      "type": "object",
+      "required": [
+        "owner",
+        "kind"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/mediaKind"
+        },
+        "collection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_origin": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "addMediaItemMultipartRequest": {
+      "type": "object",
+      "required": [
+        "metadata",
+        "file"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "contentMediaType": "application/json",
+          "contentSchema": {
+            "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+          }
+        },
+        "metadata": {
+          "type": "string",
+          "contentMediaType": "application/json",
+          "contentSchema": {
+            "$ref": "#/$defs/addMediaItemMultipartMetadata"
+          }
+        },
+        "file": {
+          "type": "string",
+          "format": "binary"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mediaItem": {
+      "type": "object",
+      "required": [
+        "media_item_id",
+        "owner",
+        "source",
+        "kind",
+        "status",
+        "display_name",
+        "retention",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "media_item_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "source": {
+          "$ref": "#/$defs/sourceMetadata"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/mediaKind"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/mediaItemStatus"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "adapter_origin": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        },
+        "retention": {
+          "$ref": "../common/pagination.schema.json#/$defs/retentionMetadata"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "deleted_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mediaItemResponse": {
+      "type": "object",
+      "required": [
+        "media_item"
+      ],
+      "properties": {
+        "media_item": {
+          "$ref": "#/$defs/mediaItem"
+        }
+      },
+      "additionalProperties": false
+    },
+    "mediaItemListResponse": {
+      "allOf": [
+        {
+          "$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/mediaItem"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

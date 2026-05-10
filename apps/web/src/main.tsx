@@ -36,30 +36,11 @@ const runtime = {
     wsUrl: runtimeEnv.wsUrl,
   }),
 };
-const router = createBrowserRouter(createWebUiRoutes(runtime), {
-  future: {
-    v7_fetcherPersist: true,
-    v7_normalizeFormMethod: true,
-    v7_partialHydration: true,
-    v7_relativeSplatPath: true,
-    v7_skipActionErrorRevalidation: true,
-    v7_startTransition: true,
-  },
-});
+const router = createBrowserRouter(createWebUiRoutes(runtime));
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <RouterProvider
-      future={{
-        v7_fetcherPersist: true,
-        v7_normalizeFormMethod: true,
-        v7_partialHydration: true,
-        v7_relativeSplatPath: true,
-        v7_skipActionErrorRevalidation: true,
-        v7_startTransition: true,
-      }}
-      router={router}
-    />
+    <RouterProvider router={router} />
   </React.StrictMode>,
 );
 // END_BLOCK_BLOCK_BOOTSTRAP_APP_RUNTIME

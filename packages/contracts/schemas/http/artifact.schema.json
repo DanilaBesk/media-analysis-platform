@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/artifact.schema.json",
+  "title": "ArtifactContracts",
+  "$defs": {
+    "artifactPreview": {
+      "type": "object",
+      "required": [
+        "available"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "text",
+            "image",
+            "table",
+            "none",
+            null
+          ]
+        },
+        "content_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "text_excerpt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thumbnail_url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactDownload": {
+      "type": "object",
+      "required": [
+        "available"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "minio_presigned_url",
+            null
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "filename": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactSummary": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "analysis_run_id",
+        "kind",
+        "status",
+        "content_type",
+        "size_bytes",
+        "preview",
+        "created_at"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactKind"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactStatus"
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "preview": {
+          "$ref": "#/$defs/artifactPreview"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifact_id",
+        "owner",
+        "analysis_run_id",
+        "kind",
+        "status",
+        "content_type",
+        "checksum",
+        "size_bytes",
+        "visibility",
+        "preview",
+        "download",
+        "retention",
+        "created_at"
+      ],
+      "properties": {
+        "artifact_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactKind"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactStatus"
+        },
+        "object_key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "content_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "visibility": {
+          "$ref": "../common/enums.schema.json#/$defs/artifactVisibility"
+        },
+        "preview": {
+          "$ref": "#/$defs/artifactPreview"
+        },
+        "download": {
+          "$ref": "#/$defs/artifactDownload"
+        },
+        "retention": {
+          "$ref": "../common/pagination.schema.json#/$defs/retentionMetadata"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactResponse": {
+      "type": "object",
+      "required": [
+        "artifact"
+      ],
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactListResponse": {
+      "allOf": [
+        {
+          "$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/artifactSummary"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

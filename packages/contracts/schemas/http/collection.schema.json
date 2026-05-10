@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/collection.schema.json",
+  "title": "CollectionContracts",
+  "$defs": {
+    "collectionItem": {
+      "type": "object",
+      "required": [
+        "media_item_id",
+        "position",
+        "added_at"
+      ],
+      "properties": {
+        "media_item_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "media_item": {
+          "$ref": "./media-item.schema.json#/$defs/mediaItem"
+        },
+        "added_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "added_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "collection": {
+      "type": "object",
+      "required": [
+        "collection_id",
+        "owner",
+        "kind",
+        "name",
+        "status",
+        "version",
+        "items",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "collection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/collectionKind"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/collectionStatus"
+        },
+        "version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/collectionItem"
+          }
+        },
+        "page": {
+          "$ref": "../common/pagination.schema.json#/$defs/page"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "archived_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "deleted_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "createCollectionRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "name"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "../common/enums.schema.json#/$defs/uuid"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "updateCollectionRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "expected_version"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "expected_version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/collectionStatus"
+        }
+      },
+      "additionalProperties": false
+    },
+    "updateCollectionItemsRequest": {
+      "type": "object",
+      "required": [
+        "owner",
+        "expected_version",
+        "items"
+      ],
+      "properties": {
+        "owner": {
+          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        },
+        "expected_version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "media_item_id",
+              "position"
+            ],
+            "properties": {
+              "media_item_id": {
+                "$ref": "../common/enums.schema.json#/$defs/uuid"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "collectionResponse": {
+      "type": "object",
+      "required": [
+        "collection"
+      ],
+      "properties": {
+        "collection": {
+          "$ref": "#/$defs/collection"
+        }
+      },
+      "additionalProperties": false
+    },
+    "collectionListResponse": {
+      "allOf": [
+        {
+          "$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/collection"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
