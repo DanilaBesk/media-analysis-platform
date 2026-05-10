@@ -86,9 +86,13 @@ func (s *MinioObjectStore) PutObject(ctx context.Context, bucket, objectKey, con
 
 func (s *MinioObjectStore) PresignGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error) {
 	expiresAt := time.Now().UTC().Add(expiry)
-	url, err := s.presignClient.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
+	url, err := s.client.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
 	if err != nil {
 		return "", time.Time{}, err
+	}
+	if endpoint := s.presignClient.EndpointURL(); endpoint != nil {
+		url.Scheme = endpoint.Scheme
+		url.Host = endpoint.Host
 	}
 	return url.String(), expiresAt, nil
 }

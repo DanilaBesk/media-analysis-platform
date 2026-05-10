@@ -493,6 +493,10 @@ func checksumBytes(body []byte) string {
 	return fmt.Sprintf("sha256:%x", sum)
 }
 
+func artifactObjectStoreKey(objectKey string) string {
+	return strings.TrimPrefix(strings.TrimSpace(objectKey), "artifacts/")
+}
+
 func (r *Repository) ListMediaItems(ctx context.Context, owner OwnerScope) ([]MediaItemRecord, error) {
 	store, err := r.mediaStore()
 	if err != nil {
@@ -814,7 +818,7 @@ func (r *Repository) GetArtifact(ctx context.Context, owner OwnerScope, artifact
 		return ArtifactRecord{}, err
 	}
 	if artifact.Status == "available" && artifact.ObjectKey != "" {
-		url, expiresAt, err := r.objects.PresignGetObject(ctx, ArtifactsBucket, artifact.ObjectKey, r.presignTTL)
+		url, expiresAt, err := r.objects.PresignGetObject(ctx, ArtifactsBucket, artifactObjectStoreKey(artifact.ObjectKey), r.presignTTL)
 		if err != nil {
 			_, _ = r.RecordDiagnostics(ctx, artifact.Owner, artifact.AnalysisRunID, []DiagnosticRecord{{
 				SubjectType: "artifact",
@@ -845,7 +849,7 @@ func (r *Repository) GetInternalArtifactDownloadAccess(ctx context.Context, arti
 		return ArtifactRecord{}, err
 	}
 	if artifact.Status == "available" && artifact.ObjectKey != "" {
-		url, expiresAt, err := r.objects.PresignGetObject(ctx, ArtifactsBucket, artifact.ObjectKey, r.presignTTL)
+		url, expiresAt, err := r.objects.PresignGetObject(ctx, ArtifactsBucket, artifactObjectStoreKey(artifact.ObjectKey), r.presignTTL)
 		if err != nil {
 			_, _ = r.RecordDiagnostics(ctx, artifact.Owner, artifact.AnalysisRunID, []DiagnosticRecord{{
 				SubjectType: "artifact",

@@ -614,6 +614,47 @@ func TestApiStorageRecordsArtifactResolutionFailuresForObservability(t *testing.
 	}
 }
 
+func TestApiStorageArtifactResolutionStripsArtifactsPrefixBeforePresign(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	owner := OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	state.artifacts["artifact-1"] = ArtifactRecord{
+		ID:            "artifact-1",
+		Owner:         owner,
+		AnalysisRunID: "run-1",
+		Kind:          "run_manifest",
+		Status:        ArtifactStatusAvailable,
+		ObjectKey:     "artifacts/run-1/run/manifest/run-manifest.json",
+		ContentType:   "application/json; charset=utf-8",
+		Visibility:    "owner",
+		Retention:     RetentionMetadata{State: RetentionStateActive},
+		CreatedAt:     time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+	}
+	objectStore := newFakeObjectStore()
+	repo, err := NewRepository(state, objectStore)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	artifact, err := repo.GetArtifact(context.Background(), owner, "artifact-1")
+	if err != nil {
+		t.Fatalf("GetArtifact() error = %v", err)
+	}
+	if artifact.Download == nil {
+		t.Fatalf("artifact = %#v, want download descriptor", artifact)
+	}
+	if len(objectStore.presigns) != 1 {
+		t.Fatalf("presigns = %#v, want one presign call", objectStore.presigns)
+	}
+	if objectStore.presigns[0].bucket != ArtifactsBucket {
+		t.Fatalf("presign bucket = %q, want %q", objectStore.presigns[0].bucket, ArtifactsBucket)
+	}
+	if objectStore.presigns[0].objectKey != "run-1/run/manifest/run-manifest.json" {
+		t.Fatalf("presign object key = %q, want stripped artifact key", objectStore.presigns[0].objectKey)
+	}
+}
+
 func TestApiStorageRetentionSweepTransitionsExpiredState(t *testing.T) {
 	t.Parallel()
 
@@ -902,7 +943,14 @@ func TestApiStorageRecordsWorkerRunArtifactsDiagnosticsAndFinalizeState(t *testi
 	if err != nil {
 		t.Fatalf("RecordArtifacts() error = %v", err)
 	}
-	if len(artifacts) != 2 || artifacts[0].AnalysisRunID != run.ID || artifacts[1].Kind != "run_diagnostics" {
+	kinds := map[string]bool{}
+	for _, artifact := range artifacts {
+		if artifact.AnalysisRunID != run.ID {
+			t.Fatalf("artifact = %#v, want analysis_run_id %q", artifact, run.ID)
+		}
+		kinds[artifact.Kind] = true
+	}
+	if len(artifacts) != 2 || !kinds["run_manifest"] || !kinds["run_diagnostics"] {
 		t.Fatalf("artifacts = %#v, want canonical run artifacts owned by analysis_run", artifacts)
 	}
 
@@ -1650,7 +1698,8 @@ func due(expiresAt *time.Time, now time.Time) bool {
 }
 
 type fakeObjectStore struct {
-	puts []objectPutRecord
+	puts     []objectPutRecord
+	presigns []objectPresignRecord
 }
 
 type objectPutRecord struct {
@@ -1658,6 +1707,11 @@ type objectPutRecord struct {
 	objectKey   string
 	contentType string
 	body        []byte
+}
+
+type objectPresignRecord struct {
+	bucket    string
+	objectKey string
 }
 
 func newFakeObjectStore() *fakeObjectStore {
@@ -1674,7 +1728,11 @@ func (f *fakeObjectStore) PutObject(_ context.Context, bucket, objectKey, conten
 	return nil
 }
 
-func (f *fakeObjectStore) PresignGetObject(context.Context, string, string, time.Duration) (string, time.Time, error) {
+func (f *fakeObjectStore) PresignGetObject(_ context.Context, bucket, objectKey string, _ time.Duration) (string, time.Time, error) {
+	f.presigns = append(f.presigns, objectPresignRecord{
+		bucket: bucket,
+		objectKey: objectKey,
+	})
 	return "https://minio.local/presigned", time.Now().UTC().Add(time.Minute), nil
 }
 

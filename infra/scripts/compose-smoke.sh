@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ROOT_DIR=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 COMPOSE_FILE="${ROOT_DIR}/infra/docker-compose.yml"
+RUNTIME_E2E_SCRIPT="${ROOT_DIR}/infra/scripts/runtime-final-e2e.py"
 MARKER='[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]'
 RUNTIME_SERVICES=(
   api
@@ -108,6 +109,7 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
   require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
   require_file "${ROOT_DIR}/infra/images/worker-agent-runner/Dockerfile"
+  require_file "${RUNTIME_E2E_SCRIPT}"
 
   for service in "${RUNTIME_SERVICES[@]}"; do
     require_service "${service}"
@@ -221,7 +223,9 @@ run_live_smoke() {
   done
 
   printf '%s starting compose stack and waiting for health convergence\n' "${MARKER}"
-  docker compose -f "${COMPOSE_FILE}" up -d --wait >/dev/null
+  docker compose -f "${COMPOSE_FILE}" up -d --force-recreate --wait >/dev/null
+  printf '%s running runtime-final inbox-first proof\n' "${MARKER}"
+  python3 "${RUNTIME_E2E_SCRIPT}" >/dev/null
   printf '%s compose live smoke completed successfully\n' "${MARKER}"
 }
 
