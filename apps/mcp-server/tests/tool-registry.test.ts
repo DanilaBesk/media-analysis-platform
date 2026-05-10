@@ -1109,6 +1109,150 @@ test("createMcpDomainRuntime supports real SDK listTools and callTool protocol f
   // END_BLOCK_BLOCK_VERIFY_SDK_PROTOCOL_FLOW
 });
 
+test("createMcpDomainRuntime preserves explicit retention-touching contract parity", async () => {
+  // START_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_PARITY
+  const requests: McpAdapterApiRequest[] = [];
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      requests.push(request);
+      if (request.path === `/v1/media-items/${MEDIA_ID}` && request.method === "DELETE") {
+        return {
+          status: 200,
+          data: {
+            media_item: {
+              media_item_id: MEDIA_ID,
+              status: "deleted",
+              retention: {
+                state: "soft_deleted",
+                deleted_at: "2026-05-10T01:00:00Z",
+              },
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === `/v1/artifacts/${ARTIFACT_ID}/refresh` && request.method === "POST") {
+        return {
+          status: 200,
+          data: {
+            artifact: {
+              artifact_id: ARTIFACT_ID,
+              download: {
+                available: true,
+                url: "https://minio.local/refreshed-artifact-1.txt",
+              },
+              preview: {
+                available: true,
+                kind: "text",
+                content_type: "text/markdown",
+                text_excerpt: "# Refreshed preview",
+              },
+              retention: {
+                state: "active",
+              },
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === "/v1/diagnostics?page_size=5&subject_type=retention&severity=error") {
+        return {
+          status: 200,
+          data: {
+            items: [
+              {
+                diagnostic_id: "diagnostic-retention",
+                severity: "error",
+                code: "retention_hold_pending",
+                subject: {
+                  subject_type: "retention",
+                  subject_id: MEDIA_ID,
+                },
+              },
+            ],
+            page: {
+              page_size: 5,
+              has_more: false,
+            },
+          } as TPayload,
+        };
+      }
+      throw new Error(`unexpected request path ${request.path}`);
+    },
+  };
+  const runtime = createMcpDomainRuntime({ apiClient });
+
+  const removeResult = await runtime.callTool("remove_media", {
+    media_item_id: MEDIA_ID,
+  });
+  const refreshResult = await runtime.callTool("refresh_artifact", {
+    artifact_id: ARTIFACT_ID,
+  });
+  const diagnosticsResult = await runtime.callTool("get_diagnostics", {
+    page_size: 5,
+    subject_type: "retention",
+    severity: "error",
+  });
+
+  assert.deepEqual(removeResult.structuredContent, {
+    media_item: {
+      media_item_id: MEDIA_ID,
+      status: "deleted",
+      retention: {
+        state: "soft_deleted",
+        deleted_at: "2026-05-10T01:00:00Z",
+      },
+    },
+  });
+  assert.deepEqual(refreshResult.structuredContent, {
+    artifact: {
+      artifact_id: ARTIFACT_ID,
+      download: {
+        available: true,
+        url: "https://minio.local/refreshed-artifact-1.txt",
+      },
+      preview: {
+        available: true,
+        kind: "text",
+        content_type: "text/markdown",
+        text_excerpt: "# Refreshed preview",
+      },
+      retention: {
+        state: "active",
+      },
+    },
+  });
+  assert.deepEqual(diagnosticsResult.structuredContent, {
+    items: [
+      {
+        diagnostic_id: "diagnostic-retention",
+        severity: "error",
+        code: "retention_hold_pending",
+        subject: {
+          subject_type: "retention",
+          subject_id: MEDIA_ID,
+        },
+      },
+    ],
+    page: {
+      page_size: 5,
+      has_more: false,
+    },
+  });
+  assert.deepEqual(requests, [
+    {
+      path: `/v1/media-items/${MEDIA_ID}`,
+      method: "DELETE",
+    },
+    {
+      path: `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+      method: "POST",
+    },
+    {
+      path: "/v1/diagnostics?page_size=5&subject_type=retention&severity=error",
+    },
+  ]);
+  // END_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_PARITY
+});
+
 test("createMcpDomainRuntime keeps adapter validation and upstream failures structured", async () => {
   // START_BLOCK_BLOCK_VERIFY_ERROR_SHAPING
   const runtime = createMcpDomainRuntime({
@@ -1174,6 +1318,68 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
     },
   });
   // END_BLOCK_BLOCK_VERIFY_ERROR_SHAPING
+});
+
+test("createMcpDomainRuntime keeps denied retention-touching paths structured", async () => {
+  // START_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_DENIALS
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async (request: McpAdapterApiRequest) => {
+        if (request.path === `/v1/media-items/${MEDIA_ID}` && request.method === "DELETE") {
+          throw new McpAdapterApiClientError(
+            `/v1/media-items/${MEDIA_ID}`,
+            404,
+            "media item not found for this owner scope",
+            "not_found",
+          );
+        }
+        if (request.path === `/v1/artifacts/${ARTIFACT_ID}/refresh` && request.method === "POST") {
+          throw new McpAdapterApiClientError(
+            `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+            404,
+            "artifact not found for this owner scope",
+            "not_found",
+          );
+        }
+        throw new Error(`unexpected request path ${request.path}`);
+      },
+    },
+  });
+
+  const removeResult = await runtime.callTool("remove_media", {
+    media_item_id: MEDIA_ID,
+  });
+  const refreshResult = await runtime.callTool("refresh_artifact", {
+    artifact_id: ARTIFACT_ID,
+  });
+
+  assert.deepEqual(removeResult.structuredContent, {
+    error: {
+      code: "not_found",
+      message: "media item not found for this owner scope",
+      category: "upstream_api",
+      retryable: false,
+      action: "check_resource_id_owner_scope",
+      details: {
+        path: `/v1/media-items/${MEDIA_ID}`,
+        status: 404,
+      },
+    },
+  });
+  assert.deepEqual(refreshResult.structuredContent, {
+    error: {
+      code: "not_found",
+      message: "artifact not found for this owner scope",
+      category: "upstream_api",
+      retryable: false,
+      action: "check_resource_id_owner_scope",
+      details: {
+        path: `/v1/artifacts/${ARTIFACT_ID}/refresh`,
+        status: 404,
+      },
+    },
+  });
+  // END_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_DENIALS
 });
 
 test("createMcpDomainRuntime returns actionable retry hints for preview failures", async () => {

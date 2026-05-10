@@ -10,6 +10,7 @@ import type {
   ArtifactSummary,
   Collection,
   Diagnostic,
+  MediaItem,
   MediaItemSummary,
   ObservabilitySnapshot,
   OwnerScope,
@@ -338,8 +339,13 @@ function MediaItemList({
             </div>
           </dl>
           {onRemove ? (
-            <button className="icon-button danger" onClick={() => onRemove(item.media_item_id)} type="button">
-              Remove
+            <button
+              aria-label={`Soft delete ${item.display_name}`}
+              className="icon-button danger"
+              onClick={() => onRemove(item.media_item_id)}
+              type="button"
+            >
+              Soft delete
             </button>
           ) : null}
         </article>
@@ -564,7 +570,7 @@ export function InboxRouteShell(): JSX.Element {
         next.delete(mediaItemId);
         return next;
       });
-      setActionMessage(`Removed ${removed.display_name}`);
+      setActionMessage(`Soft-deleted ${removed.display_name}`);
       await refresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Unable to remove media.");
@@ -1615,7 +1621,8 @@ export function ArtifactsRouteShell(): JSX.Element {
       const refreshed = await apiClient.refreshArtifact(DEFAULT_OWNER, artifactId);
       setArtifact(refreshed);
       setMessage("Artifact access refreshed");
-      await refresh();
+      const artifactsResponse = await apiClient.listArtifacts(DEFAULT_OWNER, { pageSize: 50 });
+      setArtifacts(artifactsResponse.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to refresh artifact access.");
     } finally {
@@ -1846,7 +1853,7 @@ export function DiagnosticsRouteShell(): JSX.Element {
 export function MediaItemDetailRouteShell(): JSX.Element {
   const { mediaItemId = "" } = useParams();
   const { apiClient } = useWebUiRuntime();
-  const [item, setItem] = useState<MediaItemSummary | null>(null);
+  const [item, setItem] = useState<MediaItem | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useMessage();
   const [removing, setRemoving] = useState(false);
@@ -1871,7 +1878,7 @@ export function MediaItemDetailRouteShell(): JSX.Element {
     try {
       const removed = await apiClient.removeMediaItem(DEFAULT_OWNER, mediaItemId);
       setItem(removed);
-      setMessage(`Removed ${removed.display_name}`);
+      setMessage(`Soft-deleted ${removed.display_name}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to remove media item.");
     } finally {
@@ -1887,8 +1894,14 @@ export function MediaItemDetailRouteShell(): JSX.Element {
             <button className="secondary-button" onClick={() => void refresh()} type="button">
               Refresh
             </button>
-            <button className="secondary-button danger" disabled={removing} onClick={() => void removeMediaItem()} type="button">
-              {removing ? "Removing..." : "Remove"}
+            <button
+              aria-label={item ? `Soft delete ${item.display_name}` : "Soft delete media item"}
+              className="secondary-button danger"
+              disabled={removing}
+              onClick={() => void removeMediaItem()}
+              type="button"
+            >
+              {removing ? "Soft-deleting..." : "Soft delete"}
             </button>
           </>
         }
@@ -1908,16 +1921,24 @@ export function MediaItemDetailRouteShell(): JSX.Element {
             <dd>{item.status}</dd>
           </div>
           <div>
+            <dt>Retention</dt>
+            <dd>{item.retention.state}</dd>
+          </div>
+          <div>
+            <dt>Deleted</dt>
+            <dd>{formatDate(item.retention.deleted_at ?? item.deleted_at)}</dd>
+          </div>
+          <div>
             <dt>Origin</dt>
             <dd>{item.source.origin_type}</dd>
           </div>
           <div>
-            <dt>Size</dt>
-            <dd>{formatBytes(item.source.size_bytes)}</dd>
-          </div>
-          <div>
             <dt>Created</dt>
             <dd>{formatDate(item.created_at)}</dd>
+          </div>
+          <div>
+            <dt>Size</dt>
+            <dd>{formatBytes(item.source.size_bytes)}</dd>
           </div>
           <div>
             <dt>Source</dt>

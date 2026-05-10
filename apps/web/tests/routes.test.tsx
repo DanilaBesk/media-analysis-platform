@@ -159,6 +159,7 @@ function analysisRun(overrides = {}) {
 }
 
 function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
+  const softDeletedAt = "2026-05-10T01:00:00Z";
   const apiClient: WebUiApiClient = {
     listMediaItems: vi.fn().mockResolvedValue({
       items: [mediaItem(), secondMediaItem()],
@@ -166,7 +167,13 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
     }),
     getMediaItem: vi.fn().mockResolvedValue(mediaItem()),
     addMediaItem: vi.fn().mockResolvedValue(mediaItem({ media_item_id: "media-2", display_name: "Fresh note" })),
-    removeMediaItem: vi.fn().mockResolvedValue(mediaItem({ status: "deleted" })),
+    removeMediaItem: vi.fn().mockResolvedValue(
+      mediaItem({
+        status: "deleted",
+        retention: { state: "soft_deleted", deleted_at: softDeletedAt },
+        deleted_at: softDeletedAt,
+      }),
+    ),
     getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
     listCollections: vi.fn().mockResolvedValue({
       items: [collection()],
@@ -286,6 +293,15 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
           message: "Preview generated",
           created_at: "2026-05-10T00:00:00Z",
         },
+        {
+          diagnostic_id: "diagnostic-retention",
+          owner,
+          subject: { subject_type: "retention", subject_id: "media-1" },
+          severity: "error",
+          code: "retention_hold_pending",
+          message: "Retention hold prevents final cleanup",
+          created_at: "2026-05-10T00:00:00Z",
+        },
       ];
       return {
         items: diagnostics.filter((diagnostic) => {
@@ -359,23 +375,26 @@ describe("createWebUiRoutes", () => {
     });
   });
 
-  it("exposes soft-delete from the inbox and detail surfaces", async () => {
+  it("exposes explicit soft-delete from the inbox surface", async () => {
     const runtime = renderRoute("/");
-    const inboxRemoveButtons = await within(runtime.container).findAllByRole("button", { name: "Remove" });
-    fireEvent.click(inboxRemoveButtons[0]);
+    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Soft delete Call note" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
     });
-    expect(await within(runtime.container).findByText("Removed Call note")).toBeVisible();
+    expect(await within(runtime.container).findByText("Soft-deleted Call note")).toBeVisible();
+  });
 
-    const detailRuntime = renderRoute("/inbox/media-1");
-    fireEvent.click(await within(detailRuntime.container).findByRole("button", { name: "Remove" }));
+  it("shows the retained soft-delete outcome on the media detail surface", async () => {
+    const runtime = renderRoute("/inbox/media-1");
+    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Soft delete Call note" }));
 
     await waitFor(() => {
-      expect(detailRuntime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
+      expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
     });
-    expect(await within(detailRuntime.container).findByText("Removed Call note")).toBeVisible();
+    expect(await within(runtime.container).findByText("Soft-deleted Call note")).toBeVisible();
+    expect(within(runtime.container).getByText("soft_deleted")).toBeVisible();
+    expect(within(runtime.container).getByText("10 May 2026, 04:00")).toBeVisible();
   });
 
   it("creates a collection from selected inbox items", async () => {
@@ -486,6 +505,12 @@ describe("createWebUiRoutes", () => {
     await waitFor(() => {
       expect(runtime.apiClient.refreshArtifact).toHaveBeenCalledWith(owner, "artifact-1");
     });
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "Open artifact" })).toHaveAttribute(
+        "href",
+        "https://minio.local/refreshed-artifact-1.txt",
+      );
+    });
   });
 
   it("opens json artifact previews and artifact diagnostics", async () => {
@@ -518,5 +543,21 @@ describe("createWebUiRoutes", () => {
       expect(runtime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(10);
     });
     expect(await screen.findByText("Reconciled 2 run tasks")).toBeVisible();
+  });
+
+  it("filters retention diagnostics through the existing admin contract", async () => {
+    const runtime = renderRoute("/diagnostics");
+
+    fireEvent.change(await screen.findByLabelText("Subject"), { target: { value: "retention" } });
+    fireEvent.change(screen.getByLabelText("Severity"), { target: { value: "error" } });
+
+    await waitFor(() => {
+      expect(runtime.apiClient.listDiagnostics).toHaveBeenLastCalledWith(owner, {
+        subjectType: "retention",
+        severity: "error",
+        pageSize: 50,
+      });
+    });
+    expect(await screen.findByText("retention_hold_pending")).toBeVisible();
   });
 });
