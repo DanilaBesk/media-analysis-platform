@@ -320,6 +320,70 @@ func TestApiHttpArtifactAccessIsOwnerScoped(t *testing.T) {
 	assertErrorCode(t, denied, http.StatusNotFound, "not_found")
 }
 
+func TestApiHttpAnalysisRunArtifactsRouteUsesPathRunIDAndPagination(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	public := &fakePublicService{
+		artifacts: []storage.ArtifactRecord{
+			{
+				ID:            "artifact-1",
+				Owner:         owner,
+				AnalysisRunID: "run-1",
+				Kind:          "transcript_plain",
+				Status:        storage.ArtifactStatusAvailable,
+				ContentType:   "text/plain",
+				SizeBytes:     10,
+				Visibility:    "owner",
+				Retention:     storage.RetentionMetadata{State: storage.RetentionStateActive},
+				CreatedAt:     time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				ID:            "artifact-2",
+				Owner:         owner,
+				AnalysisRunID: "run-1",
+				Kind:          "summary_markdown",
+				Status:        storage.ArtifactStatusAvailable,
+				ContentType:   "text/markdown",
+				SizeBytes:     20,
+				Visibility:    "owner",
+				Retention:     storage.RetentionMetadata{State: storage.RetentionStateActive},
+				CreatedAt:     time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC),
+			},
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1/artifacts?owner_type=web&owner_id=u-1&page_size=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("artifact list status = %d want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	if public.listArtifactsAnalysisRunID != "run-1" {
+		t.Fatalf("list artifacts analysis_run_id = %q, want run-1", public.listArtifactsAnalysisRunID)
+	}
+
+	var body struct {
+		Items []struct {
+			ID string `json:"artifact_id"`
+		} `json:"items"`
+		Page struct {
+			PageSize   int    `json:"page_size"`
+			HasMore    bool   `json:"has_more"`
+			NextCursor string `json:"next_cursor"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(artifact list) error = %v", err)
+	}
+	if len(body.Items) != 1 || body.Items[0].ID != "artifact-1" {
+		t.Fatalf("artifact page items = %#v", body.Items)
+	}
+	if body.Page.PageSize != 1 || !body.Page.HasMore || body.Page.NextCursor != "artifact-1" {
+		t.Fatalf("artifact page = %#v", body.Page)
+	}
+}
+
 func TestApiHttpAdminLifecycleRoutesCancelRetryRefreshAndReconcile(t *testing.T) {
 	t.Parallel()
 
@@ -888,30 +952,31 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, status int, c
 }
 
 type fakePublicService struct {
-	mediaItem              storage.MediaItemRecord
-	mediaItems             []storage.MediaItemRecord
-	collection             storage.CollectionRecord
-	selection              storage.SelectionRecord
-	run                    storage.AnalysisRunRecord
-	runs                   []storage.AnalysisRunRecord
-	artifact               storage.ArtifactRecord
-	artifacts              []storage.ArtifactRecord
-	err                    error
-	lastAddMedia           storage.AddMediaItemRequest
-	lastRun                storage.CreateAnalysisRunRequest
-	createAnalysisRunCalls int
-	pendingTasks           []storage.AnalysisRunTaskRecord
-	recordedArtifacts      []storage.ArtifactRecord
-	recordedDiagnostics    []storage.DiagnosticRecord
-	recordedProgressStage  string
-	recordedProgressMsg    string
-	finalizedStatus        string
-	canceledRunID          string
-	canceledMessage        string
-	retriedRunID           string
-	refreshedArtifactID    string
-	reconciled             int
-	observability          storage.ObservabilitySnapshot
+	mediaItem                  storage.MediaItemRecord
+	mediaItems                 []storage.MediaItemRecord
+	collection                 storage.CollectionRecord
+	selection                  storage.SelectionRecord
+	run                        storage.AnalysisRunRecord
+	runs                       []storage.AnalysisRunRecord
+	artifact                   storage.ArtifactRecord
+	artifacts                  []storage.ArtifactRecord
+	err                        error
+	lastAddMedia               storage.AddMediaItemRequest
+	lastRun                    storage.CreateAnalysisRunRequest
+	listArtifactsAnalysisRunID string
+	createAnalysisRunCalls     int
+	pendingTasks               []storage.AnalysisRunTaskRecord
+	recordedArtifacts          []storage.ArtifactRecord
+	recordedDiagnostics        []storage.DiagnosticRecord
+	recordedProgressStage      string
+	recordedProgressMsg        string
+	finalizedStatus            string
+	canceledRunID              string
+	canceledMessage            string
+	retriedRunID               string
+	refreshedArtifactID        string
+	reconciled                 int
+	observability              storage.ObservabilitySnapshot
 }
 
 func (f *fakePublicService) AddMediaItem(_ context.Context, req storage.AddMediaItemRequest) (storage.MediaItemRecord, error) {
@@ -1001,7 +1066,8 @@ func (f *fakePublicService) GetAnalysisRun(context.Context, storage.OwnerScope, 
 func (f *fakePublicService) ListAnalysisRunEvents(context.Context, storage.OwnerScope, string) ([]storage.RunEventRecord, error) {
 	return nil, f.err
 }
-func (f *fakePublicService) ListArtifacts(context.Context, storage.OwnerScope, string) ([]storage.ArtifactRecord, error) {
+func (f *fakePublicService) ListArtifacts(_ context.Context, _ storage.OwnerScope, analysisRunID string) ([]storage.ArtifactRecord, error) {
+	f.listArtifactsAnalysisRunID = analysisRunID
 	if f.artifacts != nil {
 		return f.artifacts, f.err
 	}

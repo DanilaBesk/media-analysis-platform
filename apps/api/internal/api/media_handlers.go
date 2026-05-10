@@ -468,7 +468,11 @@ func (s *Server) handleListAnalysisRunEvents(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
-	artifacts, err := s.deps.Public.ListArtifacts(r.Context(), ownerFromQuery(r), r.URL.Query().Get("analysis_run_id"))
+	analysisRunID := strings.TrimSpace(r.PathValue("analysis_run_id"))
+	if analysisRunID == "" {
+		analysisRunID = strings.TrimSpace(r.URL.Query().Get("analysis_run_id"))
+	}
+	artifacts, err := s.deps.Public.ListArtifacts(r.Context(), ownerFromQuery(r), analysisRunID)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return

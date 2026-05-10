@@ -121,6 +121,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/analysis-runs/{analysis_run_id}/cancel",
 		"/v1/analysis-runs/{analysis_run_id}/retry",
 		"/v1/analysis-runs/{analysis_run_id}/events",
+		"/v1/analysis-runs/{analysis_run_id}/artifacts",
 		"/v1/artifacts",
 		"/v1/artifacts/{artifact_id}",
 		"/v1/artifacts/{artifact_id}/refresh",
@@ -158,6 +159,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/analysis-runs/{analysis_run_id}/cancel", s.withCORS(s.handleCancelAnalysisRun))
 	mux.HandleFunc("POST /v1/analysis-runs/{analysis_run_id}/retry", s.withCORS(s.handleRetryAnalysisRun))
 	mux.HandleFunc("GET /v1/analysis-runs/{analysis_run_id}/events", s.withCORS(s.handleListAnalysisRunEvents))
+	mux.HandleFunc("GET /v1/analysis-runs/{analysis_run_id}/artifacts", s.withCORS(s.handleListArtifacts))
 	mux.HandleFunc("GET /v1/artifacts", s.withCORS(s.handleListArtifacts))
 	mux.HandleFunc("GET /v1/artifacts/{artifact_id}", s.withCORS(s.handleGetArtifact))
 	mux.HandleFunc("POST /v1/artifacts/{artifact_id}/refresh", s.withCORS(s.handleRefreshArtifactLink))
