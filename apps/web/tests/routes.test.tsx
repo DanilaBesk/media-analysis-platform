@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
@@ -445,6 +445,65 @@ describe("createWebUiRoutes", () => {
         ],
       });
     });
+  });
+
+  it("keeps run detail pinned to the sealed snapshot after collection mutation", async () => {
+    const runtime = makeRuntime();
+    let mutableCollection = collection();
+    runtime.apiClient.listCollections = vi.fn().mockImplementation(async () => ({
+      items: [mutableCollection],
+      page: { page_size: 50, has_more: false },
+    }));
+    runtime.apiClient.getCollection = vi.fn().mockImplementation(async () => mutableCollection);
+    runtime.apiClient.replaceCollectionItems = vi.fn().mockImplementation(async (_owner, _collectionId, draft) => {
+      mutableCollection = collection({
+        version: draft.expectedVersion + 1,
+        items: [
+          {
+            media_item_id: "media-1",
+            position: 0,
+            media_item: mediaItem(),
+            added_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            media_item_id: "media-2",
+            position: 1,
+            media_item: secondMediaItem(),
+            added_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+      });
+      return mutableCollection;
+    });
+    runtime.apiClient.getAnalysisRun = vi.fn().mockResolvedValue(analysisRun());
+
+    const router = createMemoryRouter(createWebUiRoutes(runtime), {
+      initialEntries: ["/collections"],
+    });
+    const collectionView = render(<RouterProvider router={router} />);
+
+    fireEvent.change(await screen.findByLabelText("Add inbox item"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
+        expectedVersion: 3,
+        items: [
+          { media_item_id: "media-1", position: 0 },
+          { media_item_id: "media-2", position: 1 },
+        ],
+      });
+    });
+
+    collectionView.unmount();
+    const detailRouter = createMemoryRouter(createWebUiRoutes(runtime), {
+      initialEntries: ["/runs/run-1"],
+    });
+    render(<RouterProvider router={detailRouter} />);
+
+    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
+    expect(screen.getByText("#1 Call note")).toBeVisible();
+    expect(screen.queryByText("Interview audio")).toBeNull();
   });
 
   it("creates a sealed selection before queuing a run", async () => {

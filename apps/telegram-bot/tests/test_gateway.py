@@ -321,12 +321,14 @@ def test_status_surface_supports_resource_callbacks_explicit_selection_and_run_a
         media_item_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
-    selection_callback = next(callback for callback in callbacks if callback.startswith("ib:sl:"))
+    updated_keyboard = build_status_keyboard(updated)
+    updated_callbacks = [button.callback_data for row in updated_keyboard.inline_keyboard for button in row]
+    selection_callback = next(callback for callback in updated_callbacks if callback.startswith("ib:sl:"))
     selection_action, selection_tokens = _parse_callback_payload(selection_callback)
     selection = gateway.create_selection(
         owner=owner(),
         collection_id=_decode_callback_token(selection_tokens[0]),
-        expected_version=_decode_callback_version(selection_tokens[1]) + 1,
+        expected_version=_decode_callback_version(selection_tokens[1]),
     )
     selection_keyboard = build_status_keyboard(updated, selection=selection)
     run_callback = next(
@@ -514,6 +516,9 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     selection_text = render_status_text(status, selection={"selection_id": "selection-1", "items": status.collection["items"]})
     assert "Selection ready:" in selection_text
     assert "Use Run selection to start analysis." in selection_text
+    assert "artifact-1: transcript [available, text/plain]" not in selection_text
+    assert "worker_note: Ready for review." not in selection_text
+    assert "Use the run buttons below for artifacts and diagnostics." in selection_text
 
 
 def test_stale_callback_copy_is_safe_and_actionable() -> None:
@@ -530,8 +535,7 @@ def test_long_running_run_is_restored_and_later_completion_is_visible_after_rest
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     gateway.add_text(owner=owner(), text="long transcript")
-    selection = gateway.create_selection(owner=owner(), collection_id="inbox-1", expected_version=1)
-    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+    _, run = create_selection_and_run(gateway)
 
     restarted_gateway = TelegramInboxGateway(api)
     restored = restarted_gateway.restore_status(owner=owner())
@@ -545,12 +549,11 @@ def test_long_running_run_is_restored_and_later_completion_is_visible_after_rest
     assert run_status["status"] == "succeeded"
 
 
-def test_long_running_run_does_not_false_fail_and_terminal_result_is_rendered_later() -> None:
+def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     gateway.add_text(owner=owner(), text="long transcript")
-    selection = gateway.create_selection(owner=owner(), collection_id="inbox-1", expected_version=1)
-    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+    _, run = create_selection_and_run(gateway)
 
     queued_text = render_status_text(gateway.restore_status(owner=owner()))
 
@@ -589,16 +592,19 @@ def test_long_running_run_does_not_false_fail_and_terminal_result_is_rendered_la
     assert "Completed runs:" in completed_text
     assert "run-1: succeeded" in completed_text
     assert "Use the run buttons below for artifacts and diagnostics." in completed_text
+    assert "artifact-1: transcript [available, text/plain]" not in completed_text
+    assert "worker_note: Result stored for later delivery." not in completed_text
     assert any(callback.startswith("ib:ar:") for callback in completed_callbacks)
     assert any(callback.startswith("ib:dg:") for callback in completed_callbacks)
+    assert restarted_gateway.list_run_artifacts(owner=owner(), analysis_run_id=run["analysis_run_id"], expected_version=1)[0]["artifact_id"] == "artifact-1"
+    assert restarted_gateway.list_run_diagnostics(owner=owner(), analysis_run_id=run["analysis_run_id"], expected_version=1)[0]["diagnostic_id"] == "diagnostic-1"
 
 
 def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     gateway.add_text(owner=owner(), text="restore after reconnect")
-    selection = gateway.create_selection(owner=owner(), collection_id="inbox-1", expected_version=1)
-    gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+    create_selection_and_run(gateway)
 
     app = TelegramInboxApp(
         SimpleNamespace(allowed_user_ids=set()),
