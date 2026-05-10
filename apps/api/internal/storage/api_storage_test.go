@@ -343,12 +343,122 @@ func TestApiStorageOwnerScopeAndDiagnosticsArePersisted(t *testing.T) {
 	if _, err := repo.GetMediaItem(context.Background(), other, "media-1"); !errors.Is(err, ErrOwnerMismatch) {
 		t.Fatalf("GetMediaItem(other owner) error = %v, want ErrOwnerMismatch", err)
 	}
-	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, "media_item", "media-1")
+	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, DiagnosticQuery{SubjectType: "media_item", SubjectID: "media-1"})
 	if err != nil {
 		t.Fatalf("ListDiagnostics() error = %v", err)
 	}
 	if len(diagnostics) != 1 || diagnostics[0].Code != "media_item_invalid" {
 		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+}
+
+func TestApiStorageListDiagnosticsAppliesEachFilter(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	owner := OwnerScope{OwnerType: "web", OwnerID: "owner-1"}
+	state.diagnostics = append(state.diagnostics,
+		DiagnosticRecord{
+			ID:            "diag-subject",
+			Owner:         owner,
+			SubjectType:   "media_item",
+			SubjectID:     "media-1",
+			Severity:      "warning",
+			Code:          "source_unavailable",
+			CorrelationID: "corr-1",
+			Message:       "kept by subject",
+			CreatedAt:     time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+		},
+		DiagnosticRecord{
+			ID:            "diag-severity",
+			Owner:         owner,
+			SubjectType:   "analysis_run",
+			SubjectID:     "run-1",
+			Severity:      "error",
+			Code:          "source_unavailable",
+			CorrelationID: "corr-1",
+			Message:       "kept by severity",
+			CreatedAt:     time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC),
+		},
+		DiagnosticRecord{
+			ID:            "diag-code",
+			Owner:         owner,
+			SubjectType:   "analysis_run",
+			SubjectID:     "run-2",
+			Severity:      "warning",
+			Code:          "retention_denied",
+			CorrelationID: "corr-1",
+			Message:       "kept by code",
+			CreatedAt:     time.Date(2026, 5, 10, 12, 2, 0, 0, time.UTC),
+		},
+		DiagnosticRecord{
+			ID:            "diag-correlation",
+			Owner:         owner,
+			SubjectType:   "analysis_run",
+			SubjectID:     "run-3",
+			Severity:      "warning",
+			Code:          "source_unavailable",
+			CorrelationID: "corr-2",
+			Message:       "kept by correlation",
+			CreatedAt:     time.Date(2026, 5, 10, 12, 3, 0, 0, time.UTC),
+		},
+		DiagnosticRecord{
+			ID:            "diag-other-owner",
+			Owner:         OwnerScope{OwnerType: "web", OwnerID: "owner-2"},
+			SubjectType:   "media_item",
+			SubjectID:     "media-1",
+			Severity:      "warning",
+			Code:          "source_unavailable",
+			CorrelationID: "corr-1",
+			Message:       "must stay hidden",
+			CreatedAt:     time.Date(2026, 5, 10, 12, 4, 0, 0, time.UTC),
+		},
+	)
+	repo, err := NewRepository(state, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	testCases := []struct {
+		name   string
+		query  DiagnosticQuery
+		wantID string
+	}{
+		{
+			name:   "subject",
+			query:  DiagnosticQuery{SubjectType: "media_item", SubjectID: "media-1"},
+			wantID: "diag-subject",
+		},
+		{
+			name:   "severity",
+			query:  DiagnosticQuery{Severity: "error"},
+			wantID: "diag-severity",
+		},
+		{
+			name:   "code",
+			query:  DiagnosticQuery{Code: "retention_denied"},
+			wantID: "diag-code",
+		},
+		{
+			name:   "correlation_id",
+			query:  DiagnosticQuery{CorrelationID: "corr-2"},
+			wantID: "diag-correlation",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			diagnostics, err := repo.ListDiagnostics(context.Background(), owner, tc.query)
+			if err != nil {
+				t.Fatalf("ListDiagnostics() error = %v", err)
+			}
+			if len(diagnostics) != 1 || diagnostics[0].ID != tc.wantID {
+				t.Fatalf("diagnostics = %#v, want only %q", diagnostics, tc.wantID)
+			}
+		})
 	}
 }
 
@@ -495,7 +605,7 @@ func TestApiStorageRecordsArtifactResolutionFailuresForObservability(t *testing.
 	if snapshot.ArtifactResolutionFailures != 1 {
 		t.Fatalf("observability = %#v, want one artifact resolution failure", snapshot)
 	}
-	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, "artifact", "66666666-6666-6666-6666-666666666666")
+	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, DiagnosticQuery{SubjectType: "artifact", SubjectID: "66666666-6666-6666-6666-666666666666"})
 	if err != nil {
 		t.Fatalf("ListDiagnostics() error = %v", err)
 	}
@@ -678,7 +788,7 @@ func TestApiStorageDetectsAndRecordsOrphanObjectCleanupWithoutDeleteSupport(t *t
 	if result.Detected != 2 || result.MetadataOnly != 2 || result.Deleted != 0 || result.DiagnosticsRecorded != 2 {
 		t.Fatalf("cleanup result = %#v, want metadata-only diagnostics", result)
 	}
-	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, "", "")
+	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, DiagnosticQuery{})
 	if err != nil {
 		t.Fatalf("ListDiagnostics() error = %v", err)
 	}
@@ -1179,10 +1289,15 @@ func (m *memoryStateStore) GetArtifactByID(_ context.Context, artifactID string)
 	return artifact, nil
 }
 
-func (m *memoryStateStore) ListDiagnostics(_ context.Context, owner OwnerScope, subjectType, subjectID string) ([]DiagnosticRecord, error) {
+func (m *memoryStateStore) ListDiagnostics(_ context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error) {
 	diagnostics := make([]DiagnosticRecord, 0, len(m.diagnostics))
 	for _, diagnostic := range m.diagnostics {
-		if !SameOwner(diagnostic.Owner, owner) || (subjectType != "" && diagnostic.SubjectType != subjectType) || (subjectID != "" && diagnostic.SubjectID != subjectID) {
+		if !SameOwner(diagnostic.Owner, owner) ||
+			(query.SubjectType != "" && diagnostic.SubjectType != query.SubjectType) ||
+			(query.SubjectID != "" && diagnostic.SubjectID != query.SubjectID) ||
+			(query.Severity != "" && diagnostic.Severity != query.Severity) ||
+			(query.Code != "" && diagnostic.Code != query.Code) ||
+			(query.CorrelationID != "" && diagnostic.CorrelationID != query.CorrelationID) {
 			continue
 		}
 		diagnostics = append(diagnostics, diagnostic)
@@ -1201,7 +1316,7 @@ func (m *memoryStateStore) RecordDiagnostics(_ context.Context, owner OwnerScope
 		run.Diagnostics = append(run.Diagnostics, diagnostic)
 		m.analysisRuns[analysisRunID] = run
 	}
-	return m.ListDiagnostics(context.Background(), owner, "", "")
+	return m.ListDiagnostics(context.Background(), owner, DiagnosticQuery{})
 }
 
 func (m *memoryStateStore) RecordAnalysisRunProgress(_ context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, recordedAt time.Time) (AnalysisRunRecord, error) {

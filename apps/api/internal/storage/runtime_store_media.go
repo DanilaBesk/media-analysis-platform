@@ -467,14 +467,17 @@ WHERE a.id=$1
 	return artifact, nil
 }
 
-func (s *SQLStateStore) ListDiagnostics(ctx context.Context, owner OwnerScope, subjectType, subjectID string) ([]DiagnosticRecord, error) {
+func (s *SQLStateStore) ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id, owner_type, owner_id, COALESCE(tenant_id,''), subject_type, subject_id, severity, code, message, context, safe_adapter_context, COALESCE(correlation_id,''), COALESCE(remediation_hint,''), created_at
 FROM diagnostics
 WHERE owner_type=$1 AND owner_id=$2 AND COALESCE(tenant_id,'')=COALESCE(NULLIF($3,''),'')
   AND ($4='' OR subject_type=$4)
   AND ($5='' OR subject_id::text=$5)
-ORDER BY created_at DESC`, owner.OwnerType, owner.OwnerID, owner.TenantID, subjectType, subjectID)
+  AND ($6='' OR severity=$6)
+  AND ($7='' OR code=$7)
+  AND ($8='' OR COALESCE(correlation_id,'')=$8)
+ORDER BY created_at DESC`, owner.OwnerType, owner.OwnerID, owner.TenantID, query.SubjectType, query.SubjectID, query.Severity, query.Code, query.CorrelationID)
 	if err != nil {
 		return nil, err
 	}
@@ -508,7 +511,7 @@ VALUES ($1,$2,$3,NULLIF($4,''),$5,$6::uuid,$7,$8,$9,$10,$11,NULLIF($12,''),NULLI
 	if err != nil {
 		return nil, err
 	}
-	return s.ListDiagnostics(ctx, owner, "", "")
+	return s.ListDiagnostics(ctx, owner, DiagnosticQuery{})
 }
 
 func (s *SQLStateStore) RecordAnalysisRunProgress(ctx context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, recordedAt time.Time) (AnalysisRunRecord, error) {

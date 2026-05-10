@@ -920,6 +920,90 @@ func TestApiRuntimeReconcilesPersistedRunAfterEnqueueFailure(t *testing.T) {
 	}
 }
 
+func TestApiHttpListDiagnosticsAppliesQueryFilters(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "owner-1"}
+	public := &fakePublicService{
+		diagnostics: []storage.DiagnosticRecord{
+			{
+				ID:            "diag-match",
+				Owner:         owner,
+				SubjectType:   "media_item",
+				SubjectID:     "11111111-1111-1111-1111-111111111111",
+				Severity:      "warning",
+				Code:          "source_unavailable",
+				CorrelationID: "corr-1",
+				Message:       "match",
+				CreatedAt:     time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+			},
+			{
+				ID:            "diag-severity-miss",
+				Owner:         owner,
+				SubjectType:   "media_item",
+				SubjectID:     "11111111-1111-1111-1111-111111111111",
+				Severity:      "error",
+				Code:          "source_unavailable",
+				CorrelationID: "corr-1",
+				Message:       "severity miss",
+				CreatedAt:     time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC),
+			},
+			{
+				ID:            "diag-code-miss",
+				Owner:         owner,
+				SubjectType:   "media_item",
+				SubjectID:     "11111111-1111-1111-1111-111111111111",
+				Severity:      "warning",
+				Code:          "retention_denied",
+				CorrelationID: "corr-1",
+				Message:       "code miss",
+				CreatedAt:     time.Date(2026, 5, 10, 12, 2, 0, 0, time.UTC),
+			},
+			{
+				ID:            "diag-correlation-miss",
+				Owner:         owner,
+				SubjectType:   "media_item",
+				SubjectID:     "11111111-1111-1111-1111-111111111111",
+				Severity:      "warning",
+				Code:          "source_unavailable",
+				CorrelationID: "corr-2",
+				Message:       "correlation miss",
+				CreatedAt:     time.Date(2026, 5, 10, 12, 3, 0, 0, time.UTC),
+			},
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/diagnostics?owner_type=web&owner_id=owner-1&subject_type=media_item&subject_id=11111111-1111-1111-1111-111111111111&severity=warning&code=source_unavailable&correlation_id=corr-1", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	if public.lastDiagnosticQuery != (storage.DiagnosticQuery{
+		SubjectType:   "media_item",
+		SubjectID:     "11111111-1111-1111-1111-111111111111",
+		Severity:      "warning",
+		Code:          "source_unavailable",
+		CorrelationID: "corr-1",
+	}) {
+		t.Fatalf("diagnostic query = %#v", public.lastDiagnosticQuery)
+	}
+
+	var body struct {
+		Items []struct {
+			ID string `json:"diagnostic_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(diagnostics) error = %v", err)
+	}
+	if len(body.Items) != 1 || body.Items[0].ID != "diag-match" {
+		t.Fatalf("items = %#v, want only diag-match", body.Items)
+	}
+}
+
 func newFinalMux(deps Dependencies) *http.ServeMux {
 	mux := http.NewServeMux()
 	NewServer(deps).RegisterRoutes(mux)
@@ -958,11 +1042,13 @@ type fakePublicService struct {
 	selection                  storage.SelectionRecord
 	run                        storage.AnalysisRunRecord
 	runs                       []storage.AnalysisRunRecord
+	diagnostics                []storage.DiagnosticRecord
 	artifact                   storage.ArtifactRecord
 	artifacts                  []storage.ArtifactRecord
 	err                        error
 	lastAddMedia               storage.AddMediaItemRequest
 	lastRun                    storage.CreateAnalysisRunRequest
+	lastDiagnosticQuery        storage.DiagnosticQuery
 	listArtifactsAnalysisRunID string
 	createAnalysisRunCalls     int
 	pendingTasks               []storage.AnalysisRunTaskRecord
@@ -1083,8 +1169,21 @@ func (f *fakePublicService) RefreshArtifactLink(_ context.Context, _ storage.Own
 	f.refreshedArtifactID = artifactID
 	return f.artifact, f.err
 }
-func (f *fakePublicService) ListDiagnostics(context.Context, storage.OwnerScope, string, string) ([]storage.DiagnosticRecord, error) {
-	return nil, f.err
+func (f *fakePublicService) ListDiagnostics(_ context.Context, owner storage.OwnerScope, query storage.DiagnosticQuery) ([]storage.DiagnosticRecord, error) {
+	f.lastDiagnosticQuery = query
+	diagnostics := make([]storage.DiagnosticRecord, 0, len(f.diagnostics))
+	for _, diagnostic := range f.diagnostics {
+		if !storage.SameOwner(diagnostic.Owner, owner) ||
+			(query.SubjectType != "" && diagnostic.SubjectType != query.SubjectType) ||
+			(query.SubjectID != "" && diagnostic.SubjectID != query.SubjectID) ||
+			(query.Severity != "" && diagnostic.Severity != query.Severity) ||
+			(query.Code != "" && diagnostic.Code != query.Code) ||
+			(query.CorrelationID != "" && diagnostic.CorrelationID != query.CorrelationID) {
+			continue
+		}
+		diagnostics = append(diagnostics, diagnostic)
+	}
+	return diagnostics, f.err
 }
 func (f *fakePublicService) RecordArtifacts(_ context.Context, _ storage.OwnerScope, _ string, artifacts []storage.ArtifactRecord) ([]storage.ArtifactRecord, error) {
 	f.recordedArtifacts = append([]storage.ArtifactRecord(nil), artifacts...)

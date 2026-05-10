@@ -31,7 +31,7 @@ type finalRuntimeStorageService interface {
 	GetArtifact(ctx context.Context, owner storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error)
 	GetInternalArtifactDownloadAccess(ctx context.Context, artifactID string) (storage.ArtifactRecord, error)
 	RefreshArtifactLink(ctx context.Context, owner storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error)
-	ListDiagnostics(ctx context.Context, owner storage.OwnerScope, subjectType, subjectID string) ([]storage.DiagnosticRecord, error)
+	ListDiagnostics(ctx context.Context, owner storage.OwnerScope, query storage.DiagnosticQuery) ([]storage.DiagnosticRecord, error)
 	GetObservabilitySnapshot(ctx context.Context) (storage.ObservabilitySnapshot, error)
 	RecordArtifacts(ctx context.Context, owner storage.OwnerScope, analysisRunID string, artifacts []storage.ArtifactRecord) ([]storage.ArtifactRecord, error)
 	RecordDiagnostics(ctx context.Context, owner storage.OwnerScope, analysisRunID string, diagnostics []storage.DiagnosticRecord) ([]storage.DiagnosticRecord, error)
@@ -287,12 +287,12 @@ func (s *publicRuntimeService) RefreshArtifactLink(ctx context.Context, owner st
 	return store.RefreshArtifactLink(ctx, owner, artifactID)
 }
 
-func (s *publicRuntimeService) ListDiagnostics(ctx context.Context, owner storage.OwnerScope, subjectType, subjectID string) ([]storage.DiagnosticRecord, error) {
+func (s *publicRuntimeService) ListDiagnostics(ctx context.Context, owner storage.OwnerScope, query storage.DiagnosticQuery) ([]storage.DiagnosticRecord, error) {
 	store, err := s.finalStore()
 	if err != nil {
 		return nil, err
 	}
-	return store.ListDiagnostics(ctx, owner, subjectType, subjectID)
+	return store.ListDiagnostics(ctx, owner, query)
 }
 
 func (s *publicRuntimeService) GetObservabilitySnapshot(ctx context.Context) (storage.ObservabilitySnapshot, error) {

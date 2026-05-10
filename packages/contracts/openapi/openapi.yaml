@@ -907,6 +907,23 @@
             }
           },
           {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/diagnosticCode"
+            }
+          },
+          {
+            "name": "correlation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
             "$ref": "#/components/parameters/PageCursor"
           },
           {

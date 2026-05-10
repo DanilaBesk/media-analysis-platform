@@ -505,7 +505,13 @@ func (s *Server) handleRefreshArtifactLink(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleListDiagnostics(w http.ResponseWriter, r *http.Request) {
-	diagnostics, err := s.deps.Public.ListDiagnostics(r.Context(), ownerFromQuery(r), r.URL.Query().Get("subject_type"), r.URL.Query().Get("subject_id"))
+	diagnostics, err := s.deps.Public.ListDiagnostics(r.Context(), ownerFromQuery(r), storage.DiagnosticQuery{
+		SubjectType:   r.URL.Query().Get("subject_type"),
+		SubjectID:     r.URL.Query().Get("subject_id"),
+		Severity:      r.URL.Query().Get("severity"),
+		Code:          r.URL.Query().Get("code"),
+		CorrelationID: r.URL.Query().Get("correlation_id"),
+	})
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return

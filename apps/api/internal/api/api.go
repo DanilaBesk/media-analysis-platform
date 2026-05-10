@@ -45,7 +45,7 @@ type PublicService interface {
 	ListArtifacts(ctx context.Context, owner storage.OwnerScope, analysisRunID string) ([]storage.ArtifactRecord, error)
 	GetArtifact(ctx context.Context, owner storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error)
 	RefreshArtifactLink(ctx context.Context, owner storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error)
-	ListDiagnostics(ctx context.Context, owner storage.OwnerScope, subjectType, subjectID string) ([]storage.DiagnosticRecord, error)
+	ListDiagnostics(ctx context.Context, owner storage.OwnerScope, query storage.DiagnosticQuery) ([]storage.DiagnosticRecord, error)
 	ReconcileAnalysisRunQueue(ctx context.Context, limit int) (int, error)
 	GetObservabilitySnapshot(ctx context.Context) (storage.ObservabilitySnapshot, error)
 }

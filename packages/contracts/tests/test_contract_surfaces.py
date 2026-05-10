@@ -145,6 +145,10 @@ def test_public_operations_use_inbox_first_vocabulary_and_idempotency_boundaries
     assert "#/components/parameters/ExpectedVersion" in _parameter_names(
         _path_item(spec, "/v1/collections/{collection_id}/items/{media_item_id}", "delete")
     )
+    diagnostics_parameters = _parameter_names(_path_item(spec, "/v1/diagnostics", "get"))
+    assert "severity" in diagnostics_parameters
+    assert "code" in diagnostics_parameters
+    assert "correlation_id" in diagnostics_parameters
 
 
 def test_owner_scoped_public_routes_document_owner_scope_query_contract() -> None:
@@ -192,6 +196,13 @@ def test_owner_scoped_public_routes_document_owner_scope_query_contract() -> Non
 
     for path, method in owner_scoped_operations:
         _assert_owner_scope_query_parameters(_path_item(spec, path, method))
+
+
+def test_diagnostics_route_documents_all_supported_filters() -> None:
+    spec = validate_contract_surface()["openapi"]
+    parameter_names = _parameter_names(_path_item(spec, "/v1/diagnostics", "get"))
+
+    assert {"subject_type", "subject_id", "severity", "code", "correlation_id"}.issubset(parameter_names)
 
 
 def test_media_inputs_are_first_class_and_not_hidden_in_execution_requests() -> None:

@@ -308,6 +308,14 @@ type DiagnosticRecord struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
+type DiagnosticQuery struct {
+	SubjectType   string
+	SubjectID     string
+	Severity      string
+	Code          string
+	CorrelationID string
+}
+
 type MediaStateStore interface {
 	AddMediaItem(ctx context.Context, item MediaItemRecord, inbox CollectionRecord, targetCollectionID string) (MediaItemRecord, CollectionRecord, error)
 	ListMediaItems(ctx context.Context, owner OwnerScope) ([]MediaItemRecord, error)
@@ -330,7 +338,7 @@ type MediaStateStore interface {
 	GetArtifact(ctx context.Context, owner OwnerScope, artifactID string) (ArtifactRecord, error)
 	GetArtifactByID(ctx context.Context, artifactID string) (ArtifactRecord, error)
 	RecordDiagnostics(ctx context.Context, owner OwnerScope, analysisRunID string, diagnostics []DiagnosticRecord, createdAt time.Time) ([]DiagnosticRecord, error)
-	ListDiagnostics(ctx context.Context, owner OwnerScope, subjectType, subjectID string) ([]DiagnosticRecord, error)
+	ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error)
 	RecordAnalysisRunProgress(ctx context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, recordedAt time.Time) (AnalysisRunRecord, error)
 	FinalizeAnalysisRunTask(ctx context.Context, owner OwnerScope, analysisRunID, status string, event RunEventRecord, finalizedAt time.Time) (AnalysisRunRecord, error)
 	ApplyRetentionPolicies(ctx context.Context, now time.Time) (RetentionSweepResult, error)
@@ -858,12 +866,18 @@ func (r *Repository) GetInternalArtifactDownloadAccess(ctx context.Context, arti
 	return artifact, nil
 }
 
-func (r *Repository) ListDiagnostics(ctx context.Context, owner OwnerScope, subjectType, subjectID string) ([]DiagnosticRecord, error) {
+func (r *Repository) ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error) {
 	store, err := r.mediaStore()
 	if err != nil {
 		return nil, err
 	}
-	return store.ListDiagnostics(ctx, owner.normalized(), strings.TrimSpace(subjectType), strings.TrimSpace(subjectID))
+	return store.ListDiagnostics(ctx, owner.normalized(), DiagnosticQuery{
+		SubjectType:   strings.TrimSpace(query.SubjectType),
+		SubjectID:     strings.TrimSpace(query.SubjectID),
+		Severity:      strings.TrimSpace(query.Severity),
+		Code:          strings.TrimSpace(query.Code),
+		CorrelationID: strings.TrimSpace(query.CorrelationID),
+	})
 }
 
 func (r *Repository) RefreshArtifactLink(ctx context.Context, owner OwnerScope, artifactID string) (ArtifactRecord, error) {
