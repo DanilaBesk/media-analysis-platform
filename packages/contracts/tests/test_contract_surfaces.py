@@ -68,6 +68,13 @@ def _parameter_names(operation: dict) -> list[str]:
     return names
 
 
+def _assert_owner_scope_query_parameters(operation: dict) -> None:
+    names = _parameter_names(operation)
+    assert "#/components/parameters/OwnerType" in names
+    assert "#/components/parameters/OwnerId" in names
+    assert "#/components/parameters/TenantId" in names
+
+
 def test_openapi_contains_final_inbox_first_public_paths() -> None:
     spec = validate_contract_surface()["openapi"]
 
@@ -136,6 +143,53 @@ def test_public_operations_use_inbox_first_vocabulary_and_idempotency_boundaries
     assert "#/components/parameters/ExpectedVersion" in _parameter_names(
         _path_item(spec, "/v1/collections/{collection_id}/items/{media_item_id}", "delete")
     )
+
+
+def test_owner_scoped_public_routes_document_owner_scope_query_contract() -> None:
+    spec = validate_contract_surface()["openapi"]
+    parameters = spec["components"]["parameters"]
+
+    assert parameters["OwnerType"] == {
+        "name": "owner_type",
+        "in": "query",
+        "required": True,
+        "schema": {"$ref": "../schemas/common/enums.schema.json#/$defs/ownerType"},
+    }
+    assert parameters["OwnerId"] == {
+        "name": "owner_id",
+        "in": "query",
+        "required": True,
+        "schema": {"type": "string", "minLength": 1},
+    }
+    assert parameters["TenantId"] == {
+        "name": "tenant_id",
+        "in": "query",
+        "required": False,
+        "schema": {"type": ["string", "null"], "minLength": 1},
+    }
+
+    owner_scoped_operations = (
+        ("/v1/media-items", "get"),
+        ("/v1/media-items/{media_item_id}", "get"),
+        ("/v1/media-items/{media_item_id}", "delete"),
+        ("/v1/collections/inbox", "get"),
+        ("/v1/collections", "get"),
+        ("/v1/collections/{collection_id}", "get"),
+        ("/v1/collections/{collection_id}/items/{media_item_id}", "delete"),
+        ("/v1/selections/{selection_id}", "get"),
+        ("/v1/analysis-runs", "get"),
+        ("/v1/analysis-runs/{analysis_run_id}", "get"),
+        ("/v1/analysis-runs/{analysis_run_id}/cancel", "post"),
+        ("/v1/analysis-runs/{analysis_run_id}/retry", "post"),
+        ("/v1/analysis-runs/{analysis_run_id}/events", "get"),
+        ("/v1/analysis-runs/{analysis_run_id}/artifacts", "get"),
+        ("/v1/artifacts/{artifact_id}", "get"),
+        ("/v1/artifacts/{artifact_id}/refresh", "post"),
+        ("/v1/diagnostics", "get"),
+    )
+
+    for path, method in owner_scoped_operations:
+        _assert_owner_scope_query_parameters(_path_item(spec, path, method))
 
 
 def test_media_inputs_are_first_class_and_not_hidden_in_execution_requests() -> None:

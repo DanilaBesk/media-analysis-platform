@@ -62,6 +62,15 @@
         "summary": "List owner-scoped media items with filters, diagnostics summary, and pagination.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/PageCursor"
           },
           {
@@ -113,6 +122,15 @@
         "summary": "Read one media item and safe source metadata for the caller.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/MediaItemId"
           }
         ],
@@ -136,6 +154,15 @@
         "operationId": "removeMediaItem",
         "summary": "Soft-delete a media item and hide it from default collection membership reads.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/MediaItemId"
           }
@@ -162,6 +189,15 @@
         "operationId": "getInboxCollection",
         "summary": "Read the caller's default inbox collection.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/PageCursor"
           },
@@ -226,6 +262,15 @@
         "summary": "List inbox and user collections for the owner.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/PageCursor"
           },
           {
@@ -251,6 +296,15 @@
         "operationId": "getCollection",
         "summary": "Read one collection and its current item page.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/CollectionId"
           },
@@ -354,6 +408,15 @@
         "summary": "Remove one media item membership from a collection.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/CollectionId"
           },
           {
@@ -422,6 +485,15 @@
         "summary": "Read an immutable selection snapshot.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/SelectionId"
           }
         ],
@@ -485,6 +557,15 @@
         "summary": "List owner-scoped analysis runs.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/PageCursor"
           },
           {
@@ -519,6 +600,15 @@
         "summary": "Read run status, diagnostics summary, and artifact summary.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/AnalysisRunId"
           }
         ],
@@ -544,6 +634,15 @@
         "operationId": "cancelAnalysisRun",
         "summary": "Request cooperative cancellation for an analysis run.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
           }
@@ -577,6 +676,15 @@
         "operationId": "retryAnalysisRun",
         "summary": "Create a new analysis run attempt from the same sealed selection as a previous run.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
           },
@@ -617,6 +725,15 @@
         "summary": "Poll append-only run status, artifact, and diagnostic events.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/AnalysisRunId"
           },
           {
@@ -645,6 +762,15 @@
         "operationId": "listAnalysisRunArtifacts",
         "summary": "List artifacts produced by one analysis run.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
           },
@@ -675,6 +801,15 @@
         "summary": "Resolve artifact metadata plus preview and download handles.",
         "parameters": [
           {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
+          {
             "$ref": "#/components/parameters/ArtifactId"
           }
         ],
@@ -700,6 +835,15 @@
         "operationId": "refreshArtifactLink",
         "summary": "Refresh owner-scoped artifact preview and download handles.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "$ref": "#/components/parameters/ArtifactId"
           }
@@ -729,6 +873,15 @@
         "operationId": "getDiagnostics",
         "summary": "Query owner-scoped diagnostics by subject, severity, code, and correlation id.",
         "parameters": [
+          {
+            "$ref": "#/components/parameters/OwnerType"
+          },
+          {
+            "$ref": "#/components/parameters/OwnerId"
+          },
+          {
+            "$ref": "#/components/parameters/TenantId"
+          },
           {
             "name": "subject_type",
             "in": "query",
@@ -1130,6 +1283,35 @@
         "required": false,
         "schema": {
           "$ref": "../schemas/common/enums.schema.json#/$defs/idempotencyKey"
+        }
+      },
+      "OwnerType": {
+        "name": "owner_type",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/ownerType"
+        }
+      },
+      "OwnerId": {
+        "name": "owner_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "TenantId": {
+        "name": "tenant_id",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
         }
       },
       "MediaItemId": {
