@@ -11,15 +11,18 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from io import BytesIO
 from typing import Any
+from uuid import UUID
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from telegram_adapter.api_client import TelegramApiClientError
 from telegram_adapter.errors import (
     TelegramUserError,
     TelegramUserErrorCode,
@@ -45,6 +48,10 @@ class _PageState:
     current_cursor: str | None = None
     previous_cursors: list[str | None] = field(default_factory=list)
     next_cursor: str | None = None
+    selection: JsonObject | None = None
+
+
+CALLBACK_NAMESPACE = "ib"
 
 
 class TelegramInboxApp:
@@ -75,7 +82,7 @@ class TelegramInboxApp:
         self.router.message.register(self._handle_any_message)
         self.router.callback_query.register(
             self._handle_status_callback,
-            lambda call: bool(call.data and call.data.startswith("inbox:")),
+            lambda call: bool(call.data and call.data.startswith(f"{CALLBACK_NAMESPACE}:")),
         )
 
     async def _handle_start(self, message: Message) -> None:
@@ -135,13 +142,21 @@ class TelegramInboxApp:
         key = self._state_key_from_callback(callback)
         page_state = self.page_states.get(key)
         try:
-            if data == "inbox:refresh":
+            action, tokens = _parse_callback_payload(data)
+            if action == "rf":
                 status = self.gateway.restore_status(owner=owner)
-                self._set_page_state(key, status, current_cursor=None, previous_cursors=[])
+                selection = page_state.selection if page_state else None
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=None,
+                    previous_cursors=[],
+                    selection=selection,
+                )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Refreshed")
                 return
-            if data == "inbox:page:next":
+            if action == "pn":
                 if page_state is None:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
@@ -155,11 +170,12 @@ class TelegramInboxApp:
                     status,
                     current_cursor=cursor,
                     previous_cursors=[*page_state.previous_cursors, page_state.current_cursor],
+                    selection=page_state.selection,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Page loaded")
                 return
-            if data == "inbox:page:prev":
+            if action == "pp":
                 if page_state is None:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
@@ -173,35 +189,43 @@ class TelegramInboxApp:
                     status,
                     current_cursor=cursor,
                     previous_cursors=page_state.previous_cursors[:-1],
+                    selection=page_state.selection,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Page loaded")
                 return
-            if data.startswith("inbox:remove:"):
-                if page_state is None:
-                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
-                    return
-                try:
-                    slot = int(data.removeprefix("inbox:remove:"))
-                except ValueError as exc:
-                    raise TelegramUserError(TelegramUserErrorCode.STALE_ACTION) from exc
-                status = self.gateway.remove_visible_slot(owner=owner, slot=slot, cursor=page_state.current_cursor)
+            if action == "rm":
+                collection_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                media_item_id = _decode_callback_token(tokens[2])
+                status = self.gateway.remove_collection_item(
+                    owner=owner,
+                    collection_id=collection_id,
+                    media_item_id=media_item_id,
+                    expected_version=expected_version,
+                    cursor=page_state.current_cursor if page_state else None,
+                )
                 self._set_page_state(
                     key,
                     status,
-                    current_cursor=page_state.current_cursor,
-                    previous_cursors=page_state.previous_cursors,
+                    current_cursor=page_state.current_cursor if page_state else None,
+                    previous_cursors=page_state.previous_cursors if page_state else [],
+                    selection=page_state.selection if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Removed")
                 return
-            if data == "inbox:clear":
-                if page_state is None:
-                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
-                    return
-                status = self.gateway.clear_visible_items(owner=owner, cursor=page_state.current_cursor)
-                current_cursor = page_state.current_cursor
-                previous_cursors = page_state.previous_cursors
+            if action == "cl":
+                collection_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                current_cursor = _decode_optional_callback_token(tokens[2])
+                status = self.gateway.clear_visible_items(
+                    owner=owner,
+                    collection_id=collection_id,
+                    expected_version=expected_version,
+                    cursor=current_cursor,
+                )
+                previous_cursors = page_state.previous_cursors if page_state else []
                 if not status.items and current_cursor is not None and previous_cursors:
                     current_cursor = previous_cursors[-1]
                     previous_cursors = previous_cursors[:-1]
@@ -211,26 +235,107 @@ class TelegramInboxApp:
                     status,
                     current_cursor=current_cursor,
                     previous_cursors=previous_cursors,
+                    selection=page_state.selection if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Cleared")
                 return
-            if data == "inbox:start":
-                result = self.gateway.start_analysis(owner=owner)
-                status = self.gateway.restore_status(owner=owner)
-                self._set_page_state(key, status, current_cursor=None, previous_cursors=[])
+            if action == "sl":
+                collection_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                selection = self.gateway.create_selection(
+                    owner=owner,
+                    collection_id=collection_id,
+                    expected_version=expected_version,
+                )
+                status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor if page_state else None)
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=page_state.current_cursor if page_state else None,
+                    previous_cursors=page_state.previous_cursors if page_state else [],
+                    selection=selection,
+                )
                 await self._edit_callback_status(
                     callback,
                     status,
                     prefix=(
-                        f"Run queued: {_short_id(result.analysis_run['analysis_run_id'])}\n"
+                        f"Selection ready: {_short_id(str(selection['selection_id']))} "
+                        f"({len(selection.get('items', []))} items)\n"
+                        "Use Run selection when you're ready.\n\n"
+                    ),
+                )
+                await callback.answer("Selection created")
+                return
+            if action == "rn":
+                selection_id = _decode_callback_token(tokens[0])
+                run = self.gateway.start_analysis(owner=owner, selection_id=selection_id)
+                status = self.gateway.restore_status(owner=owner)
+                self._set_page_state(key, status, current_cursor=None, previous_cursors=[], selection=None)
+                await self._edit_callback_status(
+                    callback,
+                    status,
+                    prefix=(
+                        f"Run queued: {_short_id(run['analysis_run_id'])}\n"
                         "Result will be available later; refresh /inbox any time.\n\n"
                     ),
                 )
                 await callback.answer("Run queued")
                 return
+            if action == "ar":
+                analysis_run_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                artifacts = self.gateway.list_run_artifacts(
+                    owner=owner,
+                    analysis_run_id=analysis_run_id,
+                    expected_version=expected_version,
+                )
+                status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor if page_state else None)
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=page_state.current_cursor if page_state else None,
+                    previous_cursors=page_state.previous_cursors if page_state else [],
+                    selection=page_state.selection if page_state else None,
+                )
+                await self._edit_callback_status(
+                    callback,
+                    status,
+                    prefix=_detail_prefix(
+                        title=f"Artifacts for {_short_id(analysis_run_id)}",
+                        lines=[f"- {_artifact_label(artifact)}" for artifact in artifacts] or ["- No artifacts yet."],
+                    ),
+                )
+                await callback.answer("Artifacts loaded")
+                return
+            if action == "dg":
+                analysis_run_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                diagnostics = self.gateway.list_run_diagnostics(
+                    owner=owner,
+                    analysis_run_id=analysis_run_id,
+                    expected_version=expected_version,
+                )
+                status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor if page_state else None)
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=page_state.current_cursor if page_state else None,
+                    previous_cursors=page_state.previous_cursors if page_state else [],
+                    selection=page_state.selection if page_state else None,
+                )
+                await self._edit_callback_status(
+                    callback,
+                    status,
+                    prefix=_detail_prefix(
+                        title=f"Diagnostics for {_short_id(analysis_run_id)}",
+                        lines=[f"- {_diagnostic_label(diagnostic)}" for diagnostic in diagnostics] or ["- No diagnostics yet."],
+                    ),
+                )
+                await callback.answer("Diagnostics loaded")
+                return
         except Exception as exc:
-            await self._answer_callback_error(callback, exc)
+            await self._answer_callback_error(callback, _normalize_callback_error(exc))
             return
         await self._answer_callback_error(callback, TelegramUserErrorCode.UNKNOWN_ACTION)
 
@@ -247,9 +352,11 @@ class TelegramInboxApp:
             await self._answer_message_error(message, exc)
             return False
         key = self._scope_from_message(message).state_key
-        text = render_status_text(status)
-        self._set_page_state(key, status, current_cursor=None, previous_cursors=[])
-        markup = build_status_keyboard(status, can_go_back=False)
+        existing_state = self.page_states.get(key)
+        selection = existing_state.selection if existing_state else None
+        text = render_status_text(status, selection=selection)
+        self._set_page_state(key, status, current_cursor=None, previous_cursors=[], selection=selection)
+        markup = build_status_keyboard(status, can_go_back=False, current_cursor=None, selection=selection)
         previous_message_id = self.status_message_ids.get(key)
         if previous_message_id is not None:
             try:
@@ -276,9 +383,15 @@ class TelegramInboxApp:
         if callback.message is None:
             return
         key = self._state_key_from_callback(callback)
+        state = self.page_states.get(key, _PageState())
         await callback.message.edit_text(
-            prefix + render_status_text(status),
-            reply_markup=build_status_keyboard(status, can_go_back=bool(self.page_states.get(key, _PageState()).previous_cursors)),
+            prefix + render_status_text(status, selection=state.selection),
+            reply_markup=build_status_keyboard(
+                status,
+                can_go_back=bool(state.previous_cursors),
+                current_cursor=state.current_cursor,
+                selection=state.selection,
+            ),
         )
         self.status_message_ids[key] = callback.message.message_id
 
@@ -292,11 +405,13 @@ class TelegramInboxApp:
         *,
         current_cursor: str | None,
         previous_cursors: list[str | None],
+        selection: JsonObject | None,
     ) -> None:
         self.page_states[key] = _PageState(
             current_cursor=current_cursor,
             previous_cursors=list(previous_cursors),
             next_cursor=status.page.get("next_cursor") or None,
+            selection=selection,
         )
 
     def _owner_from_message(self, message: Message) -> JsonObject:
@@ -353,7 +468,7 @@ class TelegramInboxApp:
         await callback.answer(**safe_callback_answer(error))
 
 
-def render_status_text(status: InboxStatus) -> str:
+def render_status_text(status: InboxStatus, *, selection: JsonObject | None = None) -> str:
     lines = ["Inbox"]
     if status.collection:
         lines.append(f"Items: {len(status.collection.get('items', []))} | version {status.collection.get('version', 0)}")
@@ -370,6 +485,14 @@ def render_status_text(status: InboxStatus) -> str:
 
     for record in status.rejected:
         lines.append(f"Rejected: {record.label} ({rejected_reason_text(record.reason)})")
+
+    if selection:
+        lines.append("")
+        lines.append(
+            f"Selection ready: {_short_id(str(selection.get('selection_id') or 'selection'))} "
+            f"({len(selection.get('items', []))} items)"
+        )
+        lines.append("Use Run selection to start analysis.")
 
     if status.active_runs:
         lines.append("")
@@ -391,10 +514,7 @@ def render_status_text(status: InboxStatus) -> str:
         for run in completed_runs[:3]:
             run_id = str(run["analysis_run_id"])
             lines.append(f"- {_short_id(run_id)}: {run.get('status', 'unknown')}")
-            for artifact in status.artifacts_by_run.get(run_id, [])[:3]:
-                lines.append(f"  Artifact {_artifact_label(artifact)}")
-            for diagnostic in status.diagnostics_by_run.get(run_id, [])[:3]:
-                lines.append(f"  Diagnostic {_diagnostic_label(diagnostic)}")
+        lines.append("Use the run buttons below for artifacts and diagnostics.")
 
     if status.page.get("has_more"):
         lines.append("")
@@ -402,32 +522,183 @@ def render_status_text(status: InboxStatus) -> str:
     return "\n".join(lines)
 
 
-def build_status_keyboard(status: InboxStatus, *, can_go_back: bool = False) -> InlineKeyboardMarkup:
+def build_status_keyboard(
+    status: InboxStatus,
+    *,
+    can_go_back: bool = False,
+    current_cursor: str | None = None,
+    selection: JsonObject | None = None,
+) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="Refresh", callback_data="inbox:refresh")],
+        [InlineKeyboardButton(text="Refresh", callback_data=_callback_payload("rf"))],
     ]
+    collection_id = str(status.collection.get("collection_id") or "") if status.collection else ""
+    collection_version = int(status.collection.get("version") or 0) if status.collection else 0
     remove_buttons = [
         InlineKeyboardButton(
             text=f"Remove {index}",
-            callback_data=f"inbox:remove:{index}",
+            callback_data=_callback_payload(
+                "rm",
+                _encode_callback_token(collection_id),
+                _encode_callback_version(collection_version),
+                _encode_callback_token(str(item["media_item_id"])),
+            ),
         )
         for index, item in enumerate(status.items, start=1)
-        if item.get("media_item_id")
+        if item.get("media_item_id") and collection_id
     ]
     rows.extend([button] for button in remove_buttons)
     nav_row: list[InlineKeyboardButton] = []
     if can_go_back:
-        nav_row.append(InlineKeyboardButton(text="Previous page", callback_data="inbox:page:prev"))
+        nav_row.append(InlineKeyboardButton(text="Previous page", callback_data=_callback_payload("pp")))
     next_cursor = status.page.get("next_cursor")
     if next_cursor:
-        nav_row.append(InlineKeyboardButton(text="Next page", callback_data="inbox:page:next"))
+        nav_row.append(InlineKeyboardButton(text="Next page", callback_data=_callback_payload("pn")))
     if nav_row:
         rows.append(nav_row)
-    if status.items:
-        rows.append([InlineKeyboardButton(text="Clear visible", callback_data="inbox:clear")])
-    if status.collection and status.collection.get("items"):
-        rows.append([InlineKeyboardButton(text="Start analysis", callback_data="inbox:start")])
+    if status.items and collection_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Clear visible",
+                    callback_data=_callback_payload(
+                        "cl",
+                        _encode_callback_token(collection_id),
+                        _encode_callback_version(collection_version),
+                        _encode_optional_callback_token(current_cursor),
+                    ),
+                )
+            ]
+        )
+    if status.collection and status.collection.get("items") and collection_id:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Create selection",
+                    callback_data=_callback_payload(
+                        "sl",
+                        _encode_callback_token(collection_id),
+                        _encode_callback_version(collection_version),
+                    ),
+                )
+            ]
+        )
+    if selection and selection.get("selection_id"):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Run selection",
+                    callback_data=_callback_payload(
+                        "rn",
+                        _encode_callback_token(str(selection["selection_id"])),
+                    ),
+                )
+            ]
+        )
+    for run in status.recent_runs:
+        if run.get("status") not in TERMINAL_RUN_STATUSES or not run.get("analysis_run_id"):
+            continue
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Artifacts {_short_id(str(run['analysis_run_id']))}",
+                    callback_data=_callback_payload(
+                        "ar",
+                        _encode_callback_token(str(run["analysis_run_id"])),
+                        _encode_callback_version(int(run.get("version") or 0)),
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text=f"Diagnostics {_short_id(str(run['analysis_run_id']))}",
+                    callback_data=_callback_payload(
+                        "dg",
+                        _encode_callback_token(str(run["analysis_run_id"])),
+                        _encode_callback_version(int(run.get("version") or 0)),
+                    ),
+                ),
+            ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _callback_payload(action: str, *tokens: str) -> str:
+    return ":".join((CALLBACK_NAMESPACE, action, *tokens))
+
+
+def _parse_callback_payload(data: str) -> tuple[str, list[str]]:
+    parts = data.split(":")
+    if len(parts) < 2 or parts[0] != CALLBACK_NAMESPACE:
+        raise TelegramUserError(TelegramUserErrorCode.STALE_ACTION)
+    return parts[1], parts[2:]
+
+
+def _encode_callback_token(value: str) -> str:
+    try:
+        return "u" + _urlsafe_b64encode(UUID(value).bytes)
+    except (ValueError, AttributeError):
+        return "b" + _urlsafe_b64encode(value.encode("utf-8"))
+
+
+def _decode_callback_token(token: str) -> str:
+    if token.startswith("u"):
+        return str(UUID(bytes=_urlsafe_b64decode(token[1:])))
+    if token.startswith("b"):
+        return _urlsafe_b64decode(token[1:]).decode("utf-8")
+    raise TelegramUserError(TelegramUserErrorCode.STALE_ACTION)
+
+
+def _encode_optional_callback_token(value: str | None) -> str:
+    if value is None:
+        return "_"
+    return _encode_callback_token(value)
+
+
+def _decode_optional_callback_token(token: str) -> str | None:
+    if token == "_":
+        return None
+    return _decode_callback_token(token)
+
+
+def _encode_callback_version(value: int) -> str:
+    if value < 0:
+        raise TelegramUserError(TelegramUserErrorCode.STALE_ACTION)
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    if value == 0:
+        return "0"
+    encoded = ""
+    remaining = value
+    while remaining:
+        remaining, index = divmod(remaining, 36)
+        encoded = digits[index] + encoded
+    return encoded
+
+
+def _decode_callback_version(token: str) -> int:
+    try:
+        return int(token, 36)
+    except ValueError as exc:
+        raise TelegramUserError(TelegramUserErrorCode.STALE_ACTION) from exc
+
+
+def _urlsafe_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def _detail_prefix(*, title: str, lines: list[str]) -> str:
+    return "\n".join([title, *lines, ""]) + "\n"
+
+
+def _normalize_callback_error(error: Exception) -> BaseException | TelegramUserErrorCode:
+    if isinstance(error, TelegramApiClientError) and error.status in {404, 409}:
+        return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=error.code)
+    if isinstance(error, (IndexError, KeyError, ValueError)):
+        return TelegramUserError(TelegramUserErrorCode.STALE_ACTION)
+    return error
 
 
 def _message_text(message: Message) -> str | None:
@@ -572,5 +843,5 @@ def _start_text() -> str:
 def _help_text() -> str:
     return (
         "/inbox - restore the current inbox status\n"
-        "Use the inline buttons to refresh, page, remove items, and start analysis."
+        "Use the inline buttons to refresh, page, remove items, create a selection, and run it."
     )

@@ -63,12 +63,6 @@ class InboxStatus:
     rejected: list[IngressRecord]
 
 
-@dataclass(frozen=True, slots=True)
-class AnalysisStartResult:
-    selection: JsonObject
-    analysis_run: JsonObject
-
-
 class TelegramInboxGateway:
     def __init__(
         self,
@@ -246,14 +240,22 @@ class TelegramInboxGateway:
             rejected=list(rejected or []),
         )
 
-    def remove_visible_slot(self, *, owner: JsonObject, slot: int, cursor: str | None = None) -> InboxStatus:
-        status = self.restore_status(owner=owner, cursor=cursor)
-        if slot < 1 or slot > len(status.items):
-            raise RuntimeError("slot_not_visible")
-        media_item_id = status.items[slot - 1].get("media_item_id")
-        if not media_item_id:
+    def remove_collection_item(
+        self,
+        *,
+        owner: JsonObject,
+        collection_id: str,
+        media_item_id: str,
+        expected_version: int,
+        cursor: str | None = None,
+    ) -> InboxStatus:
+        collection = self._get_verified_inbox_collection(
+            owner=owner,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        if not media_item_id.strip():
             raise RuntimeError("slot_missing_media_item_id")
-        collection = status.collection or self.api_client.get_inbox_collection(owner=owner)
         self.api_client.remove_collection_item(
             owner=owner,
             collection_id=collection["collection_id"],
@@ -262,11 +264,22 @@ class TelegramInboxGateway:
         )
         return self.restore_status(owner=owner, cursor=cursor)
 
-    def clear_visible_items(self, *, owner: JsonObject, cursor: str | None = None) -> InboxStatus:
+    def clear_visible_items(
+        self,
+        *,
+        owner: JsonObject,
+        collection_id: str,
+        expected_version: int,
+        cursor: str | None = None,
+    ) -> InboxStatus:
+        collection = self._get_verified_inbox_collection(
+            owner=owner,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
         status = self.restore_status(owner=owner, cursor=cursor)
         if not status.items:
             return status
-        collection = status.collection or self.api_client.get_inbox_collection(owner=owner)
         version = int(collection["version"])
         for item in status.items:
             media_item_id = item.get("media_item_id")
@@ -281,22 +294,26 @@ class TelegramInboxGateway:
             version = int(collection["version"])
         return self.restore_status(owner=owner, cursor=cursor)
 
-    def start_analysis(
+    def create_selection(
         self,
         *,
         owner: JsonObject,
-        media_item_ids: list[str] | None = None,
-        run_type: str = "transcription",
-    ) -> AnalysisStartResult:
-        collection = self.api_client.get_inbox_collection(owner=owner)
-        item_ids = media_item_ids or [
+        collection_id: str,
+        expected_version: int,
+    ) -> JsonObject:
+        collection = self._get_verified_inbox_collection(
+            owner=owner,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        item_ids = [
             item["media_item_id"]
             for item in collection.get("items", [])
             if item.get("media_item_id")
         ]
         if not item_ids:
             raise RuntimeError("inbox_empty")
-        selection = self.api_client.create_selection(
+        return self.api_client.create_selection(
             owner=owner,
             source_collection_id=collection["collection_id"],
             items=[
@@ -306,16 +323,85 @@ class TelegramInboxGateway:
             option_snapshot={"adapter": "telegram", "source": "inbox"},
             created_by="telegram",
         )
-        run = self.api_client.create_analysis_run(
+
+    def start_analysis(
+        self,
+        *,
+        owner: JsonObject,
+        selection_id: str,
+        run_type: str = "transcription",
+    ) -> JsonObject:
+        if not selection_id.strip():
+            raise RuntimeError("slot_not_visible")
+        return self.api_client.create_analysis_run(
             owner=owner,
-            selection_id=selection["selection_id"],
+            selection_id=selection_id,
             run_type=run_type,
             delivery={"strategy": "polling"},
         )
-        return AnalysisStartResult(selection=selection, analysis_run=run)
 
     def get_run_status(self, *, owner: JsonObject, analysis_run_id: str) -> JsonObject:
         return self.api_client.get_analysis_run(owner=owner, analysis_run_id=analysis_run_id)
+
+    def list_run_artifacts(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        expected_version: int,
+        page_size: int = 10,
+    ) -> list[JsonObject]:
+        self._get_verified_run(owner=owner, analysis_run_id=analysis_run_id, expected_version=expected_version)
+        return list(
+            self.api_client.list_artifacts(owner=owner, analysis_run_id=analysis_run_id, page_size=page_size).get(
+                "items",
+                [],
+            )
+        )
+
+    def list_run_diagnostics(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        expected_version: int,
+        page_size: int = 10,
+    ) -> list[JsonObject]:
+        self._get_verified_run(owner=owner, analysis_run_id=analysis_run_id, expected_version=expected_version)
+        return list(
+            self.api_client.list_diagnostics(
+                owner=owner,
+                subject_type="analysis_run",
+                subject_id=analysis_run_id,
+                page_size=page_size,
+            ).get("items", [])
+        )
+
+    def _get_verified_inbox_collection(
+        self,
+        *,
+        owner: JsonObject,
+        collection_id: str,
+        expected_version: int,
+    ) -> JsonObject:
+        collection = self.api_client.get_inbox_collection(owner=owner)
+        if str(collection.get("collection_id") or "") != collection_id:
+            raise RuntimeError("slot_not_visible")
+        if int(collection.get("version") or 0) != expected_version:
+            raise RuntimeError("slot_not_visible")
+        return collection
+
+    def _get_verified_run(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        expected_version: int,
+    ) -> JsonObject:
+        run = self.api_client.get_analysis_run(owner=owner, analysis_run_id=analysis_run_id)
+        if int(run.get("version") or 0) != expected_version:
+            raise RuntimeError("slot_not_visible")
+        return run
 
 
 def extract_links(text: str) -> tuple[str, ...]:
