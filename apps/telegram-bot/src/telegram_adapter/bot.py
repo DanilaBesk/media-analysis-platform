@@ -12,7 +12,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from io import BytesIO
 from typing import Any
 
 from aiogram import Bot, Dispatcher, Router
@@ -99,16 +100,29 @@ class TelegramInboxApp:
             return
         owner = self._owner_from_message(message)
         try:
+            files = await self._download_message_files(message)
             records = self.gateway.add_message_inputs(
                 owner=owner,
                 text=_message_text(message),
-                files=list(_message_files(message)),
+                files=files,
                 message_id=message.message_id,
             )
         except Exception as exc:
             await self._answer_message_error(message, exc)
             return
         await self._send_or_edit_status(message, rejected=[record for record in records if record.status == "rejected"])
+
+    async def _download_message_files(self, message: Message) -> list[TelegramFileInput]:
+        hydrated: list[TelegramFileInput] = []
+        for file_input in _message_files(message):
+            telegram_file = await self.bot.get_file(file_input.file_id)
+            buffer = BytesIO()
+            await self.bot.download_file(telegram_file.file_path, destination=buffer)
+            content = buffer.getvalue()
+            if not content:
+                raise RuntimeError("telegram_file_download_failed")
+            hydrated.append(replace(file_input, content=content))
+        return hydrated
 
     async def _handle_status_callback(self, callback: CallbackQuery) -> None:
         if not await self._ensure_callback_allowed(callback):

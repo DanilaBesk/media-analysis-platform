@@ -2,8 +2,11 @@ package storage
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"path"
 	"strings"
 	"time"
 
@@ -116,6 +119,7 @@ type AddMediaSource struct {
 	ContentType      string
 	SizeBytes        int64
 	Checksum         string
+	UploadBody       []byte
 }
 
 type AddMediaItemRequest struct {
@@ -383,14 +387,42 @@ func (r *Repository) AddMediaItem(ctx context.Context, req AddMediaItemRequest) 
 			displayName = sourceMeta.ExternalURI
 		}
 	case "object":
-		if strings.TrimSpace(source.ObjectRef) == "" {
-			return MediaItemRecord{}, fmt.Errorf("%w: object_ref is required", ErrContractViolation)
+		objectRef := strings.TrimSpace(source.ObjectRef)
+		contentType := strings.TrimSpace(source.ContentType)
+		if objectRef != "" && len(source.UploadBody) > 0 {
+			return MediaItemRecord{}, fmt.Errorf("%w: object sources must provide object_ref or upload_body, not both", ErrContractViolation)
 		}
-		sourceMeta.ObjectKey = strings.TrimSpace(source.ObjectRef)
-		sourceMeta.MIMEType = strings.TrimSpace(source.ContentType)
-		if source.SizeBytes > 0 {
-			size := source.SizeBytes
+		if objectRef == "" && len(source.UploadBody) == 0 {
+			return MediaItemRecord{}, fmt.Errorf("%w: object_ref or upload_body is required", ErrContractViolation)
+		}
+		if strings.HasPrefix(objectRef, "telegram://file/") {
+			return MediaItemRecord{}, fmt.Errorf("%w: telegram file references must be uploaded before persistence", ErrContractViolation)
+		}
+		if objectRef != "" {
+			sourceMeta.ObjectKey = objectRef
+			sourceMeta.MIMEType = contentType
+			if source.SizeBytes > 0 {
+				size := source.SizeBytes
+				sourceMeta.SizeBytes = &size
+			}
+		} else {
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+			size := int64(len(source.UploadBody))
+			if source.SizeBytes > 0 && source.SizeBytes != size {
+				return MediaItemRecord{}, fmt.Errorf("%w: size_bytes does not match uploaded body", ErrContractViolation)
+			}
+			objectKey := buildSourceObjectKey(sourceID, source.OriginalFilename, contentType)
+			if err := r.objects.PutObject(ctx, SourcesBucket, objectKey, contentType, source.UploadBody); err != nil {
+				return MediaItemRecord{}, fmt.Errorf("%w: persist source object: %v", ErrStorageUnavailable, err)
+			}
+			sourceMeta.ObjectKey = objectKey
+			sourceMeta.MIMEType = contentType
 			sourceMeta.SizeBytes = &size
+			if sourceMeta.Checksum == "" {
+				sourceMeta.Checksum = checksumBytes(source.UploadBody)
+			}
 		}
 		if displayName == "" {
 			displayName = strings.TrimSpace(source.OriginalFilename)
@@ -426,6 +458,31 @@ func (r *Repository) AddMediaItem(ctx context.Context, req AddMediaItemRequest) 
 	}
 	created, _, err := store.AddMediaItem(ctx, item, inbox, strings.TrimSpace(req.CollectionID))
 	return created, err
+}
+
+func buildSourceObjectKey(sourceID, originalFilename, contentType string) string {
+	filename := sanitizeSourceFilename(originalFilename, contentType)
+	return "sources/" + sourceID + "/" + filename
+}
+
+func sanitizeSourceFilename(originalFilename, contentType string) string {
+	filename := strings.TrimSpace(originalFilename)
+	if filename != "" {
+		filename = path.Base(strings.ReplaceAll(filename, "\\", "/"))
+		filename = strings.TrimSpace(strings.NewReplacer("/", "-", "\\", "-", "\x00", "").Replace(filename))
+	}
+	if filename != "" && filename != "." {
+		return filename
+	}
+	if extensions, _ := mime.ExtensionsByType(contentType); len(extensions) > 0 {
+		return "source" + extensions[0]
+	}
+	return "source.bin"
+}
+
+func checksumBytes(body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func (r *Repository) ListMediaItems(ctx context.Context, owner OwnerScope) ([]MediaItemRecord, error) {

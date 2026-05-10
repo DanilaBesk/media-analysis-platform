@@ -67,6 +67,37 @@ def test_add_media_item_posts_final_media_item_payload() -> None:
     assert payload["metadata"] == {"message_id": 42}
 
 
+def test_upload_media_item_posts_multipart_payload() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(json.dumps({"media_item": {"media_item_id": "media-2"}}).encode("utf-8"))
+
+    client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
+    item = client.upload_media_item(
+        owner=OWNER,
+        kind="voice",
+        content=b"voice-bytes",
+        file_name="voice.ogg",
+        content_type="audio/ogg",
+        display_name="voice.ogg",
+        metadata={"message_id": 42, "file_unique_id": "voice-u"},
+    )
+
+    request = captured["request"]
+    content_type = request.headers["Content-type"]
+    body = request.data
+    assert item == {"media_item_id": "media-2"}
+    assert request.full_url == "http://localhost:8080/v1/media-items"
+    assert content_type.startswith("multipart/form-data; boundary=")
+    assert b'"owner_type": "telegram"' in body
+    assert b'"kind": "voice"' in body
+    assert b'"display_name": "voice.ogg"' in body
+    assert b'"message_id": 42' in body
+    assert b"voice-bytes" in body
+
+
 def test_remove_collection_item_uses_owner_query_and_expected_version() -> None:
     captured = {}
 

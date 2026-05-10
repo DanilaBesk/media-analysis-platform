@@ -35,6 +35,7 @@ class TelegramFileInput:
     file_unique_id: str | None = None
     file_name: str | None = None
     content_type: str | None = None
+    content: bytes | None = None
     size_bytes: int | None = None
     caption: str | None = None
     media_group_id: str | None = None
@@ -142,21 +143,19 @@ class TelegramInboxGateway:
     def add_file(self, *, owner: JsonObject, file_input: TelegramFileInput) -> IngressRecord:
         if not file_input.file_id.strip():
             return IngressRecord(status="rejected", label=file_input.file_name or file_input.kind, reason="missing_file_id")
+        if file_input.content is None:
+            return IngressRecord(
+                status="rejected",
+                label=file_input.file_name or file_input.kind,
+                reason="missing_file_content",
+            )
         display_name = file_input.file_name or _kind_label(file_input.kind)
-        object_ref = f"telegram://file/{file_input.file_id}"
-        source: JsonObject = {
-            "origin_type": "object",
-            "object_ref": object_ref,
-            "original_filename": display_name,
-        }
-        if file_input.content_type:
-            source["content_type"] = file_input.content_type
-        if file_input.size_bytes:
-            source["size_bytes"] = file_input.size_bytes
-        item = self.api_client.add_media_item(
+        item = self.api_client.upload_media_item(
             owner=owner,
             kind=file_input.kind,
-            source=source,
+            content=file_input.content,
+            file_name=file_input.file_name or _default_upload_filename(file_input.kind, file_input.content_type),
+            content_type=file_input.content_type,
             display_name=display_name,
             metadata=_telegram_metadata(
                 message_id=file_input.message_id,
@@ -339,6 +338,30 @@ def _kind_label(kind: str) -> str:
         "file": "Telegram file",
     }
     return labels.get(kind, "Telegram media")
+
+
+def _default_upload_filename(kind: str, content_type: str | None) -> str:
+    by_content_type = {
+        "audio/ogg": ".ogg",
+        "audio/opus": ".opus",
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "video/mp4": ".mp4",
+        "application/pdf": ".pdf",
+    }
+    by_kind = {
+        "photo": ".jpg",
+        "image": ".png",
+        "video": ".mp4",
+        "document": ".bin",
+        "audio": ".bin",
+        "voice": ".ogg",
+        "file": ".bin",
+    }
+    extension = by_content_type.get((content_type or "").lower()) or by_kind.get(kind, ".bin")
+    return f"telegram-{kind}{extension}"
 
 
 def _telegram_metadata(

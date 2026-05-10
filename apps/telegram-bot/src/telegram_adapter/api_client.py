@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
@@ -58,6 +59,51 @@ class TelegramApiClient:
         if metadata:
             payload["metadata"] = metadata
         return self._extract(self._request_json("/v1/media-items", method="POST", json_body=payload), "media_item")
+
+    def upload_media_item(
+        self,
+        *,
+        owner: JsonObject,
+        kind: str,
+        content: bytes,
+        file_name: str,
+        content_type: str | None = None,
+        display_name: str | None = None,
+        collection_id: str | None = None,
+        adapter_origin: str = "telegram",
+        metadata: JsonObject | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {
+            "owner": _owner_body(owner),
+            "kind": kind,
+            "adapter_origin": adapter_origin,
+        }
+        if display_name:
+            payload["display_name"] = display_name
+        if collection_id:
+            payload["collection_id"] = collection_id
+        if metadata:
+            payload["metadata"] = metadata
+        boundary = f"codex-{uuid.uuid4().hex}"
+        body = _encode_multipart_form(
+            boundary=boundary,
+            metadata_json=json.dumps(payload),
+            file_name=file_name,
+            file_content=content,
+            file_content_type=content_type or "application/octet-stream",
+        )
+        return self._extract(
+            self._request(
+                "/v1/media-items",
+                method="POST",
+                body=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": f"multipart/form-data; boundary={boundary}",
+                },
+            ),
+            "media_item",
+        )
 
     def list_media_items(
         self,
@@ -216,10 +262,20 @@ class TelegramApiClient:
         headers = {"Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
+        return self._request(path, method=method, body=body, headers=headers)
+
+    def _request(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> JsonObject:
         request = Request(
             urljoin(f"{self.base_url}/", path.lstrip("/")),
             data=body,
-            headers=headers,
+            headers=headers or {},
             method=method,
         )
         try:
@@ -276,3 +332,30 @@ def _owner_query(owner: JsonObject) -> dict[str, str]:
     if owner.get("tenant_id"):
         params["tenant_id"] = str(owner["tenant_id"])
     return params
+
+
+def _encode_multipart_form(
+    *,
+    boundary: str,
+    metadata_json: str,
+    file_name: str,
+    file_content: bytes,
+    file_content_type: str,
+) -> bytes:
+    return b"".join(
+        [
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="metadata"\r\n'
+                "Content-Type: application/json\r\n\r\n"
+                f"{metadata_json}\r\n"
+            ).encode("utf-8"),
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="file"; filename="{file_name}"\r\n'
+                f"Content-Type: {file_content_type}\r\n\r\n"
+            ).encode("utf-8"),
+            file_content,
+            f"\r\n--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )

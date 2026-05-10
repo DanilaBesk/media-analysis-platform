@@ -45,6 +45,7 @@ REJECTION_COPY: dict[str, str] = {
     "unsupported_url_scheme": "unsupported input: send http or https links.",
     "invalid_url": "unsupported input: send a complete link.",
     "missing_file_id": "unsupported input: Telegram did not provide a file id.",
+    "missing_file_content": "unsupported input: Telegram file content could not be downloaded.",
     "unsupported_message": "unsupported input: send text, links, photos, videos, documents, audio, or voice.",
 }
 

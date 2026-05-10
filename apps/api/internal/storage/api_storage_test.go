@@ -178,6 +178,72 @@ func TestApiStorageSelectionSnapshotIsImmutableAndRunCreatesExecutionGraph(t *te
 	}
 }
 
+func TestApiStorageUploadedBodyPersistsSourceObjectBeforeSelectionSnapshot(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	objectStore := newFakeObjectStore()
+	repo, err := NewRepository(state, objectStore, WithIDGenerator(sequenceIDs(
+		"source-upload",
+		"media-upload",
+		"inbox-upload",
+		"collection-upload",
+		"selection-upload",
+	)))
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+	owner := OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"}
+	item, err := repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: owner,
+		Kind:  "voice",
+		Source: AddMediaSource{
+			OriginType:       "object",
+			OriginalFilename: "voice.ogg",
+			ContentType:      "audio/ogg",
+			SizeBytes:        int64(len([]byte("voice-body"))),
+			UploadBody:       []byte("voice-body"),
+		},
+		DisplayName: "voice.ogg",
+	})
+	if err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+
+	if len(objectStore.puts) != 1 {
+		t.Fatalf("object store puts = %d, want 1", len(objectStore.puts))
+	}
+	if objectStore.puts[0].bucket != SourcesBucket {
+		t.Fatalf("bucket = %q, want %q", objectStore.puts[0].bucket, SourcesBucket)
+	}
+	if item.Source.ObjectKey == "" || item.Source.ObjectKey == "telegram://file/voice-file" {
+		t.Fatalf("source object_key = %q, want canonical stored key", item.Source.ObjectKey)
+	}
+	if objectStore.puts[0].objectKey != item.Source.ObjectKey {
+		t.Fatalf("stored key = %q, want %q", objectStore.puts[0].objectKey, item.Source.ObjectKey)
+	}
+
+	collection, err := repo.CreateCollection(context.Background(), CreateCollectionRequest{
+		Owner: owner,
+		Name:  "Run input",
+		Items: []string{item.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection() error = %v", err)
+	}
+	selection, err := repo.CreateSelection(context.Background(), CreateSelectionRequest{
+		Owner:              owner,
+		SourceCollectionID: collection.ID,
+		Items:              []CollectionItemRecord{{MediaItemID: item.ID, Position: 0}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSelection() error = %v", err)
+	}
+	if selection.Items[0].SourceSnapshot.ObjectKey != item.Source.ObjectKey {
+		t.Fatalf("selection source object_key = %q, want %q", selection.Items[0].SourceSnapshot.ObjectKey, item.Source.ObjectKey)
+	}
+}
+
 func TestApiStorageSoftDeleteRemovesMutableMembershipsButPreservesRunLineage(t *testing.T) {
 	t.Parallel()
 
@@ -1468,13 +1534,28 @@ func due(expiresAt *time.Time, now time.Time) bool {
 	return expiresAt != nil && !expiresAt.After(now)
 }
 
-type fakeObjectStore struct{}
+type fakeObjectStore struct {
+	puts []objectPutRecord
+}
+
+type objectPutRecord struct {
+	bucket      string
+	objectKey   string
+	contentType string
+	body        []byte
+}
 
 func newFakeObjectStore() *fakeObjectStore {
 	return &fakeObjectStore{}
 }
 
-func (f *fakeObjectStore) PutObject(context.Context, string, string, string, []byte) error {
+func (f *fakeObjectStore) PutObject(_ context.Context, bucket, objectKey, contentType string, body []byte) error {
+	f.puts = append(f.puts, objectPutRecord{
+		bucket:      bucket,
+		objectKey:   objectKey,
+		contentType: contentType,
+		body:        append([]byte(nil), body...),
+	})
 	return nil
 }
 

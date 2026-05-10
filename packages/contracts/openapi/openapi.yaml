@@ -28,9 +28,6 @@
                 "$ref": "../schemas/http/media-item.schema.json#/$defs/addMediaItemMultipartRequest"
               },
               "encoding": {
-                "owner": {
-                  "contentType": "application/json"
-                },
                 "metadata": {
                   "contentType": "application/json"
                 },

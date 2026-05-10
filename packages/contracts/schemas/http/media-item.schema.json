@@ -209,6 +209,12 @@
         "adapter_origin": {
           "type": "string",
           "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "retention": {
+          "$ref": "../common/pagination.schema.json#/$defs/retentionMetadata"
         }
       },
       "additionalProperties": false
@@ -220,13 +226,6 @@
         "file"
       ],
       "properties": {
-        "owner": {
-          "type": "string",
-          "contentMediaType": "application/json",
-          "contentSchema": {
-            "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
-          }
-        },
         "metadata": {
           "type": "string",
           "contentMediaType": "application/json",

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -60,6 +61,75 @@ func TestApiHttpFinalRoutesAddMediaWithoutStartingAnalysis(t *testing.T) {
 	}
 	if body["media_item"].ID != public.mediaItem.ID {
 		t.Fatalf("media_item_id = %q, want %q", body["media_item"].ID, public.mediaItem.ID)
+	}
+}
+
+func TestApiHttpFinalRoutesAddUploadedMediaItemWithoutPseudoObjectRef(t *testing.T) {
+	t.Parallel()
+
+	createdAt := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	public := &fakePublicService{
+		mediaItem: storage.MediaItemRecord{
+			ID:          "11111111-1111-1111-1111-111111111111",
+			Owner:       storage.OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"},
+			Kind:        "voice",
+			Status:      storage.MediaStatusReady,
+			DisplayName: "voice.ogg",
+			Source: storage.MediaSourceMetadata{
+				SourceID:   "22222222-2222-2222-2222-222222222222",
+				OriginType: "object",
+				ObjectKey:  "sources/telegram/chat-1/voice.ogg",
+				MIMEType:   "audio/ogg",
+			},
+			Retention: storage.RetentionMetadata{State: storage.RetentionStateActive},
+			CreatedAt: createdAt,
+			UpdatedAt: createdAt,
+		},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	metadataWriter, err := writer.CreateFormField("metadata")
+	if err != nil {
+		t.Fatalf("CreateFormField(metadata) error = %v", err)
+	}
+	if _, err := metadataWriter.Write([]byte(`{"owner":{"owner_type":"telegram","owner_id":"chat-1"},"kind":"voice","display_name":"voice.ogg","adapter_origin":"telegram"}`)); err != nil {
+		t.Fatalf("Write(metadata) error = %v", err)
+	}
+	fileWriter, err := writer.CreateFormFile("file", "voice.ogg")
+	if err != nil {
+		t.Fatalf("CreateFormFile(file) error = %v", err)
+	}
+	if _, err := fileWriter.Write([]byte("voice-bytes")); err != nil {
+		t.Fatalf("Write(file) error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/media-items", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if public.lastAddMedia.Source.OriginType != "object" {
+		t.Fatalf("source origin_type = %q, want object", public.lastAddMedia.Source.OriginType)
+	}
+	if public.lastAddMedia.Source.ObjectRef != "" {
+		t.Fatalf("multipart ingest must not forward client object_ref, got %q", public.lastAddMedia.Source.ObjectRef)
+	}
+	if !bytes.Equal(public.lastAddMedia.Source.UploadBody, []byte("voice-bytes")) {
+		t.Fatalf("upload body = %q, want voice-bytes", string(public.lastAddMedia.Source.UploadBody))
+	}
+	if public.lastAddMedia.Source.OriginalFilename != "voice.ogg" {
+		t.Fatalf("original filename = %q, want voice.ogg", public.lastAddMedia.Source.OriginalFilename)
+	}
+	if public.lastAddMedia.Source.ContentType != "application/octet-stream" {
+		t.Fatalf("content type = %q, want application/octet-stream", public.lastAddMedia.Source.ContentType)
 	}
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,16 @@ type addMediaItemHTTP struct {
 	Owner         storage.OwnerScope        `json:"owner"`
 	Kind          string                    `json:"kind"`
 	Source        mediaSourceHTTP           `json:"source"`
+	CollectionID  string                    `json:"collection_id,omitempty"`
+	DisplayName   string                    `json:"display_name,omitempty"`
+	AdapterOrigin string                    `json:"adapter_origin,omitempty"`
+	Metadata      json.RawMessage           `json:"metadata,omitempty"`
+	Retention     storage.RetentionMetadata `json:"retention,omitempty"`
+}
+
+type addMediaItemMultipartMetadataHTTP struct {
+	Owner         storage.OwnerScope        `json:"owner"`
+	Kind          string                    `json:"kind"`
 	CollectionID  string                    `json:"collection_id,omitempty"`
 	DisplayName   string                    `json:"display_name,omitempty"`
 	AdapterOrigin string                    `json:"adapter_origin,omitempty"`
@@ -80,20 +91,89 @@ func (s *Server) handleAddMediaItem(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, dependencyUnavailableError("public service is not configured"))
 		return
 	}
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type"))), "multipart/form-data") {
+		s.handleAddMediaItemMultipart(w, r)
+		return
+	}
 	var body addMediaItemHTTP
 	if err := decodeJSONBody(r, &body); err != nil {
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "media item request must be valid JSON", details: err.Error()})
 		return
 	}
 	item, err := s.deps.Public.AddMediaItem(r.Context(), storage.AddMediaItemRequest{
-		Owner:         body.Owner,
-		Kind:          body.Kind,
-		Source:        storage.AddMediaSource(body.Source),
+		Owner: body.Owner,
+		Kind:  body.Kind,
+		Source: storage.AddMediaSource{
+			OriginType:       body.Source.OriginType,
+			Text:             body.Source.Text,
+			URL:              body.Source.URL,
+			ObjectRef:        body.Source.ObjectRef,
+			OriginalFilename: body.Source.OriginalFilename,
+			ContentType:      body.Source.ContentType,
+			SizeBytes:        body.Source.SizeBytes,
+			Checksum:         body.Source.Checksum,
+		},
 		CollectionID:  body.CollectionID,
 		DisplayName:   body.DisplayName,
 		AdapterOrigin: body.AdapterOrigin,
 		MetadataJSON:  body.Metadata,
 		Retention:     body.Retention,
+	})
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"media_item": item})
+}
+
+func (s *Server) handleAddMediaItemMultipart(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
+	if err := r.ParseMultipartForm(s.maxRequestBytes); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart media item request must be valid form data", details: err.Error()})
+		return
+	}
+	metadataValue := strings.TrimSpace(r.FormValue("metadata"))
+	if metadataValue == "" {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart media item request must include metadata"})
+		return
+	}
+	var metadata addMediaItemMultipartMetadataHTTP
+	decoder := json.NewDecoder(strings.NewReader(metadataValue))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&metadata); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart metadata must be valid JSON", details: err.Error()})
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart media item request must include a file", details: err.Error()})
+		return
+	}
+	defer file.Close()
+	body, err := io.ReadAll(file)
+	if err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart upload body could not be read", details: err.Error()})
+		return
+	}
+	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	item, err := s.deps.Public.AddMediaItem(r.Context(), storage.AddMediaItemRequest{
+		Owner: metadata.Owner,
+		Kind:  metadata.Kind,
+		Source: storage.AddMediaSource{
+			OriginType:       "object",
+			OriginalFilename: header.Filename,
+			ContentType:      contentType,
+			SizeBytes:        int64(len(body)),
+			UploadBody:       body,
+		},
+		CollectionID:  metadata.CollectionID,
+		DisplayName:   metadata.DisplayName,
+		AdapterOrigin: metadata.AdapterOrigin,
+		MetadataJSON:  metadata.Metadata,
+		Retention:     metadata.Retention,
 	})
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))

@@ -35,6 +35,7 @@ class FakeFinalApiClient:
         self.artifacts: list[dict[str, Any]] = []
         self.diagnostics: list[dict[str, Any]] = []
         self.add_requests: list[dict[str, Any]] = []
+        self.upload_requests: list[dict[str, Any]] = []
         self.remove_requests: list[dict[str, Any]] = []
 
     def add_media_item(self, **kwargs) -> dict[str, Any]:
@@ -47,6 +48,25 @@ class FakeFinalApiClient:
             "metadata": kwargs.get("metadata") or {},
         }
         self.add_requests.append(kwargs)
+        self.items.append(media_item)
+        self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
+        return media_item
+
+    def upload_media_item(self, **kwargs) -> dict[str, Any]:
+        media_item = {
+            "media_item_id": f"media-{len(self.items) + 1}",
+            "kind": kwargs["kind"],
+            "status": "ready",
+            "display_name": kwargs.get("display_name") or kwargs.get("file_name") or kwargs["kind"],
+            "source": {
+                "origin_type": "object",
+                "object_key": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
+                "mime_type": kwargs.get("content_type"),
+                "size_bytes": len(kwargs["content"]),
+            },
+            "metadata": kwargs.get("metadata") or {},
+        }
+        self.upload_requests.append(kwargs)
         self.items.append(media_item)
         self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
         return media_item
@@ -179,12 +199,13 @@ def test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files() -> No
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     files = [
-        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", size_bytes=10, message_id=43),
+        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", content=b"photo-body", size_bytes=10, message_id=43),
         TelegramFileInput(
             kind="document",
             file_id="doc-file",
             file_name="generic.bin",
             content_type="application/octet-stream",
+            content=b"doc-body",
             size_bytes=20,
             message_id=43,
         ),
@@ -200,37 +221,39 @@ def test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files() -> No
     assert [record.status for record in records] == ["accepted", "rejected", "accepted", "accepted", "accepted"]
     assert records[1].label == "ftp://bad.example/file"
     assert records[1].reason == "unsupported_url_scheme"
-    assert [request["kind"] for request in api.add_requests] == ["url", "text", "photo", "document"]
+    assert [request["kind"] for request in api.add_requests] == ["url", "text"]
+    assert [request["kind"] for request in api.upload_requests] == ["photo", "document"]
     assert api.add_requests[1]["source"] == {"origin_type": "text", "text": "Keep this"}
-    assert api.add_requests[3]["source"]["content_type"] == "application/octet-stream"
+    assert api.upload_requests[1]["content_type"] == "application/octet-stream"
 
 
 def test_photo_video_document_and_media_group_inputs_keep_telegram_metadata() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     files = [
-        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", size_bytes=10, media_group_id="grp", message_id=1),
-        TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", size_bytes=20, media_group_id="grp", message_id=2),
-        TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", size_bytes=30, media_group_id="grp", message_id=3),
+        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", content=b"photo-body", size_bytes=10, media_group_id="grp", message_id=1),
+        TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", content=b"video-body", size_bytes=20, media_group_id="grp", message_id=2),
+        TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", content=b"pdf-body", size_bytes=30, media_group_id="grp", message_id=3),
     ]
 
     records = gateway.add_message_inputs(owner=owner(), files=files)
 
     assert [record.status for record in records] == ["accepted", "accepted", "accepted"]
-    assert [request["kind"] for request in api.add_requests] == ["photo", "video", "document"]
-    assert api.add_requests[0]["source"]["object_ref"] == "telegram://file/photo-file"
-    assert api.add_requests[1]["source"]["original_filename"] == "clip.mp4"
-    assert api.add_requests[2]["source"]["content_type"] == "application/pdf"
-    assert all(request["metadata"]["media_group_id"] == "grp" for request in api.add_requests)
+    assert api.add_requests == []
+    assert [request["kind"] for request in api.upload_requests] == ["photo", "video", "document"]
+    assert api.upload_requests[0]["content"] == b"photo-body"
+    assert api.upload_requests[1]["file_name"] == "clip.mp4"
+    assert api.upload_requests[2]["content_type"] == "application/pdf"
+    assert all(request["metadata"]["media_group_id"] == "grp" for request in api.upload_requests)
 
 
 def test_album_status_preview_groups_visible_media_together() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     files = [
-        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", size_bytes=10, media_group_id="grp", message_id=1),
-        TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", size_bytes=20, media_group_id="grp", message_id=2),
-        TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", size_bytes=30, media_group_id="grp", message_id=3),
+        TelegramFileInput(kind="photo", file_id="photo-file", file_unique_id="photo-u", content=b"photo-body", size_bytes=10, media_group_id="grp", message_id=1),
+        TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", content=b"video-body", size_bytes=20, media_group_id="grp", message_id=2),
+        TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", content=b"pdf-body", size_bytes=30, media_group_id="grp", message_id=3),
     ]
     gateway.add_message_inputs(owner=owner(), files=files)
 
