@@ -326,8 +326,8 @@ function renderRoute(path: string, overrides?: Partial<WebUiApiClient>) {
   const router = createMemoryRouter(createWebUiRoutes(runtime), {
     initialEntries: [path],
   });
-  render(<RouterProvider router={router} />);
-  return runtime;
+  const renderResult = render(<RouterProvider router={router} />);
+  return { ...runtime, ...renderResult };
 }
 
 describe("createWebUiRoutes", () => {
@@ -357,6 +357,25 @@ describe("createWebUiRoutes", () => {
         }),
       );
     });
+  });
+
+  it("exposes soft-delete from the inbox and detail surfaces", async () => {
+    const runtime = renderRoute("/");
+    const inboxRemoveButtons = await within(runtime.container).findAllByRole("button", { name: "Remove" });
+    fireEvent.click(inboxRemoveButtons[0]);
+
+    await waitFor(() => {
+      expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
+    });
+    expect(await within(runtime.container).findByText("Removed Call note")).toBeVisible();
+
+    const detailRuntime = renderRoute("/inbox/media-1");
+    fireEvent.click(await within(detailRuntime.container).findByRole("button", { name: "Remove" }));
+
+    await waitFor(() => {
+      expect(detailRuntime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
+    });
+    expect(await within(detailRuntime.container).findByText("Removed Call note")).toBeVisible();
   });
 
   it("creates a collection from selected inbox items", async () => {

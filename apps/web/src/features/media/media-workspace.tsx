@@ -553,6 +553,26 @@ export function InboxRouteShell(): JSX.Element {
     }
   };
 
+  const removeMediaItem = async (mediaItemId: string) => {
+    setActionPending(true);
+    setActionError("");
+    setActionMessage("");
+    try {
+      const removed = await apiClient.removeMediaItem(DEFAULT_OWNER, mediaItemId);
+      setSelected((current) => {
+        const next = new Set(current);
+        next.delete(mediaItemId);
+        return next;
+      });
+      setActionMessage(`Removed ${removed.display_name}`);
+      await refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Unable to remove media.");
+    } finally {
+      setActionPending(false);
+    }
+  };
+
   return (
     <div className="page-grid page-grid--inbox">
       <section className="surface surface--main">
@@ -590,6 +610,7 @@ export function InboxRouteShell(): JSX.Element {
         <MediaItemList
           items={mediaItems}
           onClearSelection={clearSelection}
+          onRemove={(mediaItemId) => void removeMediaItem(mediaItemId)}
           onSelectAll={selectAll}
           onToggle={toggle}
           selected={selected}
@@ -1827,6 +1848,8 @@ export function MediaItemDetailRouteShell(): JSX.Element {
   const { apiClient } = useWebUiRuntime();
   const [item, setItem] = useState<MediaItemSummary | null>(null);
   const [error, setError] = useState("");
+  const [message, setMessage] = useMessage();
+  const [removing, setRemoving] = useState(false);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -1841,18 +1864,39 @@ export function MediaItemDetailRouteShell(): JSX.Element {
     void refresh();
   }, [refresh]);
 
+  const removeMediaItem = async () => {
+    setError("");
+    setMessage("");
+    setRemoving(true);
+    try {
+      const removed = await apiClient.removeMediaItem(DEFAULT_OWNER, mediaItemId);
+      setItem(removed);
+      setMessage(`Removed ${removed.display_name}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to remove media item.");
+    } finally {
+      setRemoving(false);
+    }
+  };
+
   return (
     <section className="surface surface--main">
       <SectionHeader
         action={
-          <button className="secondary-button" onClick={() => void refresh()} type="button">
-            Refresh
-          </button>
+          <>
+            <button className="secondary-button" onClick={() => void refresh()} type="button">
+              Refresh
+            </button>
+            <button className="secondary-button danger" disabled={removing} onClick={() => void removeMediaItem()} type="button">
+              {removing ? "Removing..." : "Remove"}
+            </button>
+          </>
         }
         eyebrow="Media item"
         title={item?.display_name ?? compactId(mediaItemId)}
       />
       {error ? <p className="error-text">{error}</p> : null}
+      {message ? <p className="success-text">{message}</p> : null}
       {item ? (
         <dl className="detail-grid">
           <div>
