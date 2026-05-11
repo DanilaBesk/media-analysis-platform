@@ -275,6 +275,74 @@ func TestSQLStateStoreAddMediaItemAndSoftDeleteErrorMappings(t *testing.T) {
 		}
 	})
 
+	t.Run("add media item propagates early insert failures and ignores collection refresh errors", func(t *testing.T) {
+		t.Parallel()
+
+		stepErr := errors.New("early insert or refresh failed")
+
+		storeSourceInsertErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "INSERT INTO sources",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(source insert) error = %v", err)
+		}
+		if _, _, err := storeSourceInsertErr.AddMediaItem(context.Background(), item, inbox, ""); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(source insert) error = %v, want stepErr", err)
+		}
+
+		storeMediaInsertErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(media insert) error = %v", err)
+		}
+		if _, _, err := storeMediaInsertErr.AddMediaItem(context.Background(), item, inbox, ""); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(media insert) error = %v, want stepErr", err)
+		}
+
+		storeRefreshErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+					rows: [][]driver.Value{{
+						"inbox-1", "telegram", "chat-1", "", CollectionKindInbox, "Inbox", CollectionStatusActive, int64(1), now, now, nil, nil,
+					}},
+				},
+				{
+					match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+					columns: collectionColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+				{match: "INSERT INTO collection_items", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(refresh err) error = %v", err)
+		}
+
+		created, collection, err := storeRefreshErr.AddMediaItem(context.Background(), item, inbox, "")
+		if err != nil {
+			t.Fatalf("AddMediaItem(refresh ignored) error = %v", err)
+		}
+		if created.ID != item.ID {
+			t.Fatalf("created = %#v, want original item", created)
+		}
+		if collection.ID != "" {
+			t.Fatalf("collection = %#v, want zero-value collection when refresh lookup fails", collection)
+		}
+	})
+
 	t.Run("soft delete maps not found and collection update failures", func(t *testing.T) {
 		t.Parallel()
 
@@ -2677,6 +2745,30 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 			t.Fatalf("run.Selection = %#v, want zero selection on refresh error", run.Selection)
 		}
 	})
+
+	t.Run("claim analysis run task propagates claimed-row scan failures", func(t *testing.T) {
+		t.Parallel()
+
+		invalidRunRow := []driver.Value{
+			"run-1", "web", "user-1", "", "selection-1", "transcription", AnalysisRunStatusQueued, "bad-version",
+			[]byte(`{"language":"ru"}`), []byte(`{"strategy":"polling"}`), "not_required", now, nil, nil, nil, expiresAt,
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+				columns: analysisRunColumns(),
+				rows:    [][]driver.Value{invalidRunRow},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); err == nil {
+			t.Fatalf("ClaimAnalysisRunTask(scan) error = nil, want scan failure")
+		}
+	})
 }
 
 func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
@@ -3114,6 +3206,54 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 		}, true, "deleted from storage", now)
 		if !errors.Is(err, stepErr) {
 			t.Fatalf("RecordOrphanObjectCleanup(source expires_at) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("record orphan cleanup propagates primary source and artifact update errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeSourceErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE media_items\nSET retention_state=$1",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(source update) error = %v", err)
+		}
+
+		err = storeSourceErr.RecordOrphanObjectCleanup(context.Background(), OrphanObjectRecord{
+			SubjectType: "source",
+			SubjectID:   "source-1",
+			Owner:       OwnerScope{OwnerType: "web", OwnerID: "user-1"},
+			Bucket:      "sources",
+			ObjectKey:   "sources/source-1/source.txt",
+			Reason:      "expired_media_source",
+		}, false, "metadata only", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordOrphanObjectCleanup(source update) error = %v, want stepErr", err)
+		}
+
+		storeArtifactErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE artifacts\nSET status=CASE WHEN $1 THEN 'deleted' ELSE status END",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(artifact update) error = %v", err)
+		}
+
+		err = storeArtifactErr.RecordOrphanObjectCleanup(context.Background(), OrphanObjectRecord{
+			SubjectType: "artifact",
+			SubjectID:   "artifact-1",
+			Owner:       OwnerScope{OwnerType: "web", OwnerID: "user-1"},
+			Bucket:      "artifacts",
+			ObjectKey:   "artifacts/run-1/report.md",
+			Reason:      "deleted_artifact",
+		}, true, "delete failed at provider", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordOrphanObjectCleanup(artifact update) error = %v, want stepErr", err)
 		}
 	})
 }
