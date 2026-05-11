@@ -1441,4 +1441,207 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add item" }));
     expect(await screen.findByText("Collection add exploded")).toBeVisible();
   });
+
+  it("covers concrete Error object branches for inbox and collection actions", async () => {
+    const inboxLoaderRuntime = renderRoute("/", {
+      listMediaItems: vi.fn().mockRejectedValue(new Error("Workspace exploded")),
+      getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
+      listCollections: vi.fn().mockResolvedValue({
+        items: [collection()],
+        page: { page_size: 50, has_more: false },
+      }),
+      listAnalysisRuns: vi.fn().mockResolvedValue({
+        items: [analysisRun()],
+        page: { page_size: 25, has_more: false },
+      }),
+    });
+
+    expect(await within(inboxLoaderRuntime.container).findByText("Workspace exploded")).toBeVisible();
+    inboxLoaderRuntime.unmount();
+
+    const inboxRuntime = renderRoute("/", {
+      createCollection: vi.fn().mockRejectedValue(new Error("Inbox collection create exploded")),
+      replaceCollectionItems: vi.fn().mockRejectedValue(new Error("Inbox collection update exploded")),
+      removeMediaItem: vi.fn().mockRejectedValue(new Error("Inbox removal exploded")),
+    });
+
+    fireEvent.click(await screen.findByLabelText("Select Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Create collection" }));
+    expect(await screen.findByText("Inbox collection create exploded")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Existing collection"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+    expect(await screen.findByText("Inbox collection update exploded")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Soft delete Call note" }));
+    expect(await screen.findByText("Inbox removal exploded")).toBeVisible();
+    inboxRuntime.unmount();
+
+    const collectionsLoaderRuntime = renderRoute("/collections", {
+      listCollections: vi.fn().mockRejectedValue(new Error("Collections loader exploded")),
+    });
+
+    expect(await within(collectionsLoaderRuntime.container).findByText("Collections loader exploded")).toBeVisible();
+    collectionsLoaderRuntime.unmount();
+
+    const collectionsRuntime = renderRoute("/collections", {
+      updateCollection: vi.fn().mockRejectedValue(new Error("Archive update exploded")),
+    });
+
+    expect(await screen.findByLabelText("Rename Research set")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(await screen.findByText("Archive update exploded")).toBeVisible();
+  });
+
+  it("covers run and artifact concrete Error branches plus manifest and event fallbacks", async () => {
+    const runsLoaderRuntime = renderRoute("/runs", {
+      listAnalysisRuns: vi.fn().mockRejectedValue(new Error("Runs loader exploded")),
+    });
+
+    expect(await within(runsLoaderRuntime.container).findByText("Runs loader exploded")).toBeVisible();
+    runsLoaderRuntime.unmount();
+
+    const manifestFallbackRuntime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          artifacts: [
+            {
+              artifact_id: "artifact-manifest-array",
+              analysis_run_id: "run-1",
+              kind: "run_manifest",
+              status: "available",
+              content_type: "application/json",
+              size_bytes: 32,
+              preview: {
+                available: true,
+                kind: "text",
+                format: "json",
+                text_excerpt: "[]",
+              },
+              created_at: "2026-05-10T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+      listAnalysisRunEvents: vi.fn().mockResolvedValue({
+        items: [
+          {
+            event_id: "event-non-string-progress",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 2,
+            emitted_at: "2026-05-10T00:00:00Z",
+            payload: {
+              stage: 7,
+              message: false,
+            },
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await within(manifestFallbackRuntime.container).findByText("Selected as")).toBeVisible();
+    const progressEvent = await within(manifestFallbackRuntime.container).findByText("analysis_run.progress");
+    const progressEntry = progressEvent.closest(".timeline-entry") as HTMLElement;
+    expect(progressEntry).toBeVisible();
+    expect(progressEntry).not.toHaveTextContent("false");
+    manifestFallbackRuntime.unmount();
+
+    const runDetailErrorRuntime = renderRoute("/runs/run-1", {
+      cancelAnalysisRun: vi.fn().mockRejectedValue(new Error("Run cancel exploded")),
+      retryAnalysisRun: vi.fn().mockRejectedValue(new Error("Run retry exploded")),
+      listDiagnostics: vi.fn().mockRejectedValue(new Error("Run diagnostics exploded")),
+    });
+
+    expect(await within(runDetailErrorRuntime.container).findByText("Run diagnostics exploded")).toBeVisible();
+    runDetailErrorRuntime.unmount();
+
+    const runActionRuntime = renderRoute("/runs/run-1", {
+      cancelAnalysisRun: vi.fn().mockRejectedValue(new Error("Run cancel exploded")),
+      retryAnalysisRun: vi.fn().mockRejectedValue(new Error("Run retry exploded")),
+    });
+
+    fireEvent.click(await within(runActionRuntime.container).findByRole("button", { name: "Cancel" }));
+    expect(await within(runActionRuntime.container).findByText("Run cancel exploded")).toBeVisible();
+    fireEvent.click(within(runActionRuntime.container).getByRole("button", { name: "Retry" }));
+    expect(await within(runActionRuntime.container).findByText("Run retry exploded")).toBeVisible();
+    runActionRuntime.unmount();
+
+    const artifactLoaderRuntime = renderRoute("/artifacts/artifact-1", {
+      listArtifacts: vi.fn().mockRejectedValue(new Error("Artifact loader exploded")),
+    });
+
+    expect(await within(artifactLoaderRuntime.container).findByText("Artifact loader exploded")).toBeVisible();
+    artifactLoaderRuntime.unmount();
+
+    const artifactRefreshRuntime = renderRoute("/artifacts/artifact-1", {
+      getArtifact: vi.fn().mockResolvedValue({
+        ...analysisRun().artifacts[0],
+        owner,
+        visibility: "owner",
+        diagnostics: undefined,
+      }),
+      refreshArtifact: vi.fn().mockRejectedValue(new Error("Artifact refresh exploded")),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await within(artifactRefreshRuntime.container).findByText("No diagnostics.")).toBeVisible();
+    fireEvent.click(within(artifactRefreshRuntime.container).getByRole("button", { name: "Refresh access" }));
+    expect(await within(artifactRefreshRuntime.container).findByText("Artifact refresh exploded")).toBeVisible();
+  });
+
+  it("covers file-reset, diagnostics, and media-detail concrete Error branches", async () => {
+    const inboxRuntime = renderRoute("/");
+
+    fireEvent.click(await screen.findByRole("button", { name: "File/media" }));
+    fireEvent.change(screen.getByLabelText("File"), {
+      target: {
+        files: [],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    expect(await screen.findByText("Choose a file first.")).toBeVisible();
+    inboxRuntime.unmount();
+
+    const diagnosticsLoaderRuntime = renderRoute("/diagnostics", {
+      listDiagnostics: vi.fn().mockRejectedValue(new Error("Diagnostics loader exploded")),
+    });
+
+    expect(await within(diagnosticsLoaderRuntime.container).findByText("Diagnostics loader exploded")).toBeVisible();
+    diagnosticsLoaderRuntime.unmount();
+
+    const diagnosticsRuntime = renderRoute("/diagnostics", {
+      reconcileAnalysisRunQueue: vi.fn().mockRejectedValue(new Error("Queue reconcile exploded")),
+    });
+
+    fireEvent.click(await within(diagnosticsRuntime.container).findByRole("button", { name: "Reconcile queue" }));
+    expect(await within(diagnosticsRuntime.container).findByText("Queue reconcile exploded")).toBeVisible();
+    diagnosticsRuntime.unmount();
+
+    const mediaLoaderRuntime = renderRoute("/inbox/media-1", {
+      getMediaItem: vi.fn().mockRejectedValue(new Error("Media detail exploded")),
+    });
+
+    expect(await within(mediaLoaderRuntime.container).findByText("Media detail exploded")).toBeVisible();
+    mediaLoaderRuntime.unmount();
+
+    const mediaRuntime = renderRoute("/inbox/media-1", {
+      removeMediaItem: vi.fn().mockRejectedValue(new Error("Media removal exploded")),
+    });
+
+    fireEvent.click(await within(mediaRuntime.container).findByRole("button", { name: "Soft delete Call note" }));
+    expect(await within(mediaRuntime.container).findByText("Media removal exploded")).toBeVisible();
+  });
 });
