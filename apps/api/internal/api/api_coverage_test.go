@@ -804,6 +804,14 @@ func TestApiRuntimeRemainingDirectBranches(t *testing.T) {
 		if _, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
 			t.Fatalf("ReconcileAnalysisRunQueue(mark error) = %v, want ErrAnalysisRunNotFound", err)
 		}
+
+		createErrStore := &fakePublicService{err: storage.ErrContractViolation}
+		if _, err := (&publicRuntimeService{store: createErrStore, queue: publisher}).CreateAnalysisRun(context.Background(), storage.CreateAnalysisRunRequest{Owner: storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}}); !errors.Is(err, storage.ErrContractViolation) {
+			t.Fatalf("CreateAnalysisRun(store error) = %v, want ErrContractViolation", err)
+		}
+		if _, err := (&publicRuntimeService{store: createErrStore, queue: publisher}).RetryAnalysisRun(context.Background(), storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}, "run-1", "retry"); !errors.Is(err, storage.ErrContractViolation) {
+			t.Fatalf("RetryAnalysisRun(store error) = %v, want ErrContractViolation", err)
+		}
 	})
 
 	t.Run("write api error fills zero-value defaults", func(t *testing.T) {
@@ -966,6 +974,30 @@ func TestApiHttpFinalRouteRemainingBranches(t *testing.T) {
 		mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/admin/reconcile-queue", map[string]any{"limit": 0}))
 		if rec.Code != http.StatusAccepted {
 			t.Fatalf("status = %d want 202 body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("remaining handler error branches map service failures", func(t *testing.T) {
+		errMux := newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrContractViolation}})
+
+		cases := []struct {
+			method string
+			path   string
+			body   string
+		}{
+			{method: http.MethodGet, path: "/v1/media-items?owner_type=web&owner_id=u-1"},
+			{method: http.MethodPost, path: "/v1/collections/collection-1/items", body: `{"owner":{"owner_type":"web","owner_id":"u-1"},"expected_version":1,"items":[{"media_item_id":"media-1","position":0}]}`},
+			{method: http.MethodPost, path: "/v1/analysis-runs", body: `{"owner":{"owner_type":"web","owner_id":"u-1"},"selection_id":"selection-1","run_type":"report"}`},
+			{method: http.MethodGet, path: "/v1/diagnostics?owner_type=web&owner_id=u-1"},
+		}
+		for _, tc := range cases {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			rec := httptest.NewRecorder()
+			errMux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
 		}
 	})
 }
