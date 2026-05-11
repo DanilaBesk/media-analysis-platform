@@ -314,6 +314,14 @@ func TestApiPublicRuntimeServiceForwarders(t *testing.T) {
 		t.Fatalf("GetInboxCollection(store error) = %v, want propagated store error", err)
 	}
 	store.err = nil
+
+	noQueueCreate := &publicRuntimeService{store: store}
+	if run, err := noQueueCreate.CreateAnalysisRun(context.Background(), storage.CreateAnalysisRunRequest{Owner: owner, SelectionID: "selection-1", RunType: "report"}); err != nil || run.ID != "run-1" {
+		t.Fatalf("CreateAnalysisRun(no queue) run=%#v err=%v", run, err)
+	}
+	if run, err := noQueueCreate.RetryAnalysisRun(context.Background(), owner, "run-1", "retry-key-3"); err != nil || run.ID != "run-1" {
+		t.Fatalf("RetryAnalysisRun(no queue) run=%#v err=%v", run, err)
+	}
 }
 
 func TestApiWorkerRuntimeServiceDirectBranches(t *testing.T) {
@@ -569,6 +577,24 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		if respZeroTime.ClaimedAt.Before(before) || respZeroTime.ClaimedAt.After(after) {
 			t.Fatalf("ClaimedAt = %v, want between %v and %v", respZeroTime.ClaimedAt, before, after)
 		}
+
+		createdOnlyStore := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:        "run-3",
+				Owner:     owner,
+				RunType:   "report",
+				Selection: storage.SelectionRecord{ID: "selection-3"},
+				CreatedAt: now,
+			},
+		}
+		createdOnlyService := &workerRuntimeService{store: createdOnlyStore}
+		respCreatedOnly, err := createdOnlyService.ClaimExecution(context.Background(), "run-3", ExecutionClaimRequest{WorkerKind: "analysis_runner", TaskType: "selection.analysis"})
+		if err != nil {
+			t.Fatalf("ClaimExecution(created only) error = %v", err)
+		}
+		if !respCreatedOnly.ClaimedAt.Equal(now.UTC()) {
+			t.Fatalf("ClaimedAt(created only) = %v, want %v", respCreatedOnly.ClaimedAt, now.UTC())
+		}
 	})
 
 	t.Run("selection label and source helpers cover fallback branches", func(t *testing.T) {
@@ -692,6 +718,22 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 			t.Fatalf("CheckCancel(canceled) = %#v", cancelResp)
 		}
 
+		runningStore := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:     "run-4",
+				Owner:  owner,
+				Status: storage.AnalysisRunStatusRunning,
+			},
+		}
+		runningService := &workerRuntimeService{store: runningStore}
+		runningResp, err := runningService.CheckCancel(context.Background(), "run-4", "exec-4")
+		if err != nil {
+			t.Fatalf("CheckCancel(running) error = %v", err)
+		}
+		if runningResp.CancelRequested || runningResp.CancelRequestedAt != nil {
+			t.Fatalf("CheckCancel(running) = %#v, want non-cancelled response", runningResp)
+		}
+
 		diagStore := &fakePublicService{
 			run: storage.AnalysisRunRecord{
 				ID:      "run-3",
@@ -719,6 +761,57 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		if _, exists := contextPayload["execution_id"]; exists {
 			t.Fatalf("diagnostic context unexpectedly contains execution_id: %#v", contextPayload)
 		}
+	})
+}
+
+func TestApiRuntimeRemainingDirectBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)
+
+	t.Run("reconcile queue propagates list and mark errors", func(t *testing.T) {
+		t.Parallel()
+
+		errStore := &fakePublicService{err: storage.ErrAnalysisRunNotFound}
+		errClient := &flakyQueueClient{}
+		errPublisher, err := queue.NewPublisher(errClient)
+		if err != nil {
+			t.Fatalf("NewPublisher(err path) error = %v", err)
+		}
+		service := &publicRuntimeService{store: errStore, queue: errPublisher}
+		if _, err := service.ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ReconcileAnalysisRunQueue(list error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+
+		client := &flakyQueueClient{}
+		publisher, err := queue.NewPublisher(client)
+		if err != nil {
+			t.Fatalf("NewPublisher() error = %v", err)
+		}
+		markErrStore := &fakePublicService{
+			run: storage.AnalysisRunRecord{ID: "run-1", RunType: "report", Version: 1, CreatedAt: now},
+			pendingTasks: []storage.AnalysisRunTaskRecord{{
+				ID:            "task-1",
+				AnalysisRunID: "run-1",
+				WorkerKind:    "analysis",
+				TaskType:      "selection.analysis",
+				Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
+				AttemptNo:     1,
+				CreatedAt:     now,
+			}},
+			err: storage.ErrAnalysisRunNotFound,
+		}
+		if _, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ReconcileAnalysisRunQueue(mark error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+
+	t.Run("write api error fills zero-value defaults", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		NewServer(Dependencies{}).writeAPIError(rec, apiError{})
+		assertErrorCode(t, rec, http.StatusInternalServerError, "internal_error")
 	})
 }
 
