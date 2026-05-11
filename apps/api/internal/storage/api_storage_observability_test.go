@@ -152,6 +152,72 @@ func TestApiStorageCleanOrphanObjectsDeletesWhenObjectStoreSupportsIt(t *testing
 	}
 }
 
+func TestApiStorageCleanOrphanObjectsRecordsDeleteFailures(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 12, 11, 30, 0, 0, time.UTC)
+	expiredAt := now.Add(-time.Hour)
+	state := newMemoryStateStore()
+	objectStore := newDeletableObjectStore()
+	objectStore.deleteErr = errors.New("delete failed")
+	repo, err := NewRepository(state, objectStore,
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(sequenceIDs(
+			"source-1", "media-1", "inbox-1",
+			"selection-1",
+			"run-1", "task-1", "event-1",
+			"artifact-1",
+		)),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+	owner := OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	if _, err := repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: owner,
+		Kind:  "file",
+		Source: AddMediaSource{
+			OriginType:  "object",
+			ObjectRef:   "sources/orphan.bin",
+			ContentType: "application/octet-stream",
+			SizeBytes:   10,
+		},
+		Retention: RetentionMetadata{State: RetentionStateActive, ExpiresAt: &expiredAt},
+	}); err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+	selection, err := repo.CreateSelection(context.Background(), CreateSelectionRequest{Owner: owner, Items: []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}}})
+	if err != nil {
+		t.Fatalf("CreateSelection() error = %v", err)
+	}
+	run, err := repo.CreateAnalysisRun(context.Background(), CreateAnalysisRunRequest{Owner: owner, SelectionID: selection.ID, RunType: "transcription"})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun() error = %v", err)
+	}
+	if _, err := repo.RecordArtifacts(context.Background(), owner, run.ID, []ArtifactRecord{{
+		ID:          "artifact-1",
+		Kind:        "transcript",
+		Status:      ArtifactStatusAvailable,
+		ObjectKey:   "artifacts/orphan.txt",
+		ContentType: "text/plain",
+		Visibility:  "owner",
+		ExpiresAt:   &expiredAt,
+	}}); err != nil {
+		t.Fatalf("RecordArtifacts() error = %v", err)
+	}
+	if _, err := repo.ApplyRetentionPolicies(context.Background()); err != nil {
+		t.Fatalf("ApplyRetentionPolicies() error = %v", err)
+	}
+
+	result, err := repo.CleanOrphanObjects(context.Background())
+	if err != nil {
+		t.Fatalf("CleanOrphanObjects() error = %v", err)
+	}
+	if result.Detected != 2 || result.Deleted != 0 || result.MetadataOnly != 2 || result.DeleteFailures != 2 {
+		t.Fatalf("cleanup result = %#v, want delete failures recorded", result)
+	}
+}
+
 func TestApiStorageObservabilityIgnoresFutureQueueRecords(t *testing.T) {
 	t.Parallel()
 
