@@ -866,4 +866,209 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Soft delete media item" }));
     expect(await screen.findByText("Unable to remove media item.")).toBeVisible();
   });
+
+  it("covers inbox helper fallbacks, selection toggles, and source labels", async () => {
+    const runtime = renderRoute("/", {
+      listMediaItems: vi.fn().mockResolvedValue({
+        items: [
+          mediaItem({
+            media_item_id: "media-url",
+            display_name: "URL source",
+            source: { source_id: "source-url", origin_type: "url", external_uri: "https://example.test/file" },
+          }),
+          mediaItem({
+            media_item_id: "media-raw",
+            display_name: "Raw source",
+            source: { source_id: "source-raw", origin_type: "binary" },
+          }),
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      getInboxCollection: vi.fn().mockResolvedValue(null),
+      listCollections: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listAnalysisRuns: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 25, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("URL source")).toBeVisible();
+    expect(screen.getByText("https://example.test/file")).toBeVisible();
+    expect(screen.getByText("binary")).toBeVisible();
+    expect(screen.queryByText("in inbox")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
+    expect(screen.getByRole("button", { name: "Clear selection" })).toBeEnabled();
+    fireEvent.click(screen.getByLabelText("Select URL source"));
+    expect(screen.getByRole("button", { name: "Create collection" })).toHaveTextContent("Create collection");
+    fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+    expect(screen.getByRole("button", { name: "Clear selection" })).toBeDisabled();
+
+    runtime.unmount();
+
+    renderRoute("/", {
+      listMediaItems: vi.fn().mockRejectedValue("boom"),
+      getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
+      listCollections: vi.fn().mockResolvedValue({ items: [], page: { page_size: 50, has_more: false } }),
+      listAnalysisRuns: vi.fn().mockResolvedValue({ items: [], page: { page_size: 25, has_more: false } }),
+    });
+
+    expect(await screen.findByText("Unable to load the workspace.")).toBeVisible();
+  });
+
+  it("covers manifest, legacy diagnostics, and non-progress event branches", async () => {
+    renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          artifacts: [
+            {
+              artifact_id: "artifact-manifest",
+              analysis_run_id: "run-1",
+              kind: "run_manifest",
+              status: "available",
+              content_type: "application/json",
+              size_bytes: 256,
+              preview: {
+                available: true,
+                kind: "text",
+                format: "json",
+                text_excerpt: JSON.stringify({
+                  items: [
+                    {
+                      media_item_id: "media-1",
+                      position: 0,
+                      outcome: "failed",
+                      selection_item_id: "selection-item-1",
+                    },
+                  ],
+                }),
+              },
+              created_at: "2026-05-10T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [
+          {
+            artifact_id: "artifact-manifest",
+            analysis_run_id: "run-1",
+            kind: "run_manifest",
+            status: "available",
+            content_type: "application/json",
+            size_bytes: 256,
+            preview: {
+              available: true,
+              kind: "text",
+              format: "json",
+              text_excerpt: "{not-json",
+            },
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      listAnalysisRunEvents: vi.fn().mockResolvedValue({
+        items: [
+          {
+            event_id: "event-plain",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.note",
+            version: 3,
+            emitted_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [
+          {
+            diagnostic_id: "legacy-source",
+            owner,
+            subject_type: "source",
+            subject_id: "source-1",
+            severity: "warning",
+            code: "legacy_source_warning",
+            message: "Legacy payload kept readable.",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText(/selection .*item-1/)).toBeVisible();
+    expect(screen.getByText("failed")).toBeVisible();
+    expect(screen.getByText("None")).toBeVisible();
+    expect(screen.getAllByText("legacy_source_warning")).toHaveLength(2);
+    expect(screen.queryByText(/analysis_run.progress/)).toBeNull();
+  });
+
+  it("covers artifact grouping labels and preview fallbacks", async () => {
+    renderRoute("/artifacts/artifact-json-invalid", {
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [
+          {
+            artifact_id: "artifact-structured",
+            analysis_run_id: "run-1",
+            kind: "structured_data",
+            status: "available",
+            content_type: "application/json",
+            size_bytes: 128,
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            artifact_id: "artifact-log",
+            analysis_run_id: "run-1",
+            kind: "execution_log",
+            status: "available",
+            content_type: "text/plain",
+            size_bytes: 128,
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            artifact_id: "artifact-custom",
+            analysis_run_id: "run-2",
+            kind: "custom_blob",
+            status: "available",
+            content_type: "application/octet-stream",
+            size_bytes: 2_500_000,
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      getArtifact: vi.fn().mockResolvedValue({
+        artifact_id: "artifact-json-invalid",
+        analysis_run_id: "run-1",
+        kind: "structured_data",
+        status: "available",
+        content_type: "application/octet-stream",
+        size_bytes: 2_500_000,
+        preview: {
+          available: true,
+          kind: "text",
+          format: "json",
+          text_excerpt: "{invalid-json",
+        },
+        created_at: "2026-05-10T00:00:00Z",
+        diagnostics: [],
+        download: { available: false, url: "" },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("Structured data")).toBeVisible();
+    expect(screen.getByText("Execution logs")).toBeVisible();
+    expect(screen.getByText("custom blob")).toBeVisible();
+    expect(screen.getByText("{invalid-json")).toBeVisible();
+    expect(screen.getAllByText("2.4 MB")).toHaveLength(2);
+    expect(screen.queryByRole("link", { name: "Open artifact" })).toBeNull();
+  });
 });
