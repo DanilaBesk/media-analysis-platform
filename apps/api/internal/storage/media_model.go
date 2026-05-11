@@ -351,15 +351,7 @@ type MediaStateStore interface {
 	ClaimAnalysisRunTask(ctx context.Context, analysisRunID, workerKind, taskType, leaseOwner string, claimedAt time.Time) (AnalysisRunRecord, bool, error)
 }
 
-func (r *Repository) mediaStore() (MediaStateStore, error) {
-	return r.state, nil
-}
-
 func (r *Repository) AddMediaItem(ctx context.Context, req AddMediaItemRequest) (MediaItemRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return MediaItemRecord{}, err
-	}
 	now := r.now()
 	if req.Owner.Empty() {
 		return MediaItemRecord{}, fmt.Errorf("%w: owner is required", ErrContractViolation)
@@ -464,7 +456,7 @@ func (r *Repository) AddMediaItem(ctx context.Context, req AddMediaItemRequest) 
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	created, _, err := store.AddMediaItem(ctx, item, inbox, strings.TrimSpace(req.CollectionID))
+	created, _, err := r.state.AddMediaItem(ctx, item, inbox, strings.TrimSpace(req.CollectionID))
 	return created, err
 }
 
@@ -498,27 +490,15 @@ func artifactObjectStoreKey(objectKey string) string {
 }
 
 func (r *Repository) ListMediaItems(ctx context.Context, owner OwnerScope) ([]MediaItemRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListMediaItems(ctx, owner.normalized())
+	return r.state.ListMediaItems(ctx, owner.normalized())
 }
 
 func (r *Repository) GetMediaItem(ctx context.Context, owner OwnerScope, mediaItemID string) (MediaItemRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return MediaItemRecord{}, err
-	}
-	return store.GetMediaItem(ctx, owner.normalized(), strings.TrimSpace(mediaItemID))
+	return r.state.GetMediaItem(ctx, owner.normalized(), strings.TrimSpace(mediaItemID))
 }
 
 func (r *Repository) RemoveMediaItem(ctx context.Context, owner OwnerScope, mediaItemID string) (MediaItemRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return MediaItemRecord{}, err
-	}
-	return store.SoftDeleteMediaItem(ctx, owner.normalized(), strings.TrimSpace(mediaItemID), r.now())
+	return r.state.SoftDeleteMediaItem(ctx, owner.normalized(), strings.TrimSpace(mediaItemID), r.now())
 }
 
 func (r *Repository) CancelAnalysisRun(ctx context.Context, owner OwnerScope, analysisRunID, message string) (AnalysisRunRecord, error) {
@@ -544,10 +524,6 @@ func (r *Repository) RetryAnalysisRun(ctx context.Context, owner OwnerScope, ana
 }
 
 func (r *Repository) CreateCollection(ctx context.Context, req CreateCollectionRequest) (CollectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return CollectionRecord{}, err
-	}
 	if req.Owner.Empty() || strings.TrimSpace(req.Name) == "" {
 		return CollectionRecord{}, fmt.Errorf("%w: owner and name are required", ErrContractViolation)
 	}
@@ -562,48 +538,28 @@ func (r *Repository) CreateCollection(ctx context.Context, req CreateCollectionR
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	return store.CreateCollection(ctx, collection, req.Items)
+	return r.state.CreateCollection(ctx, collection, req.Items)
 }
 
 func (r *Repository) ListCollections(ctx context.Context, owner OwnerScope) ([]CollectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListCollections(ctx, owner.normalized())
+	return r.state.ListCollections(ctx, owner.normalized())
 }
 
 func (r *Repository) GetCollection(ctx context.Context, owner OwnerScope, collectionID string) (CollectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return CollectionRecord{}, err
-	}
-	return store.GetCollection(ctx, owner.normalized(), strings.TrimSpace(collectionID))
+	return r.state.GetCollection(ctx, owner.normalized(), strings.TrimSpace(collectionID))
 }
 
 func (r *Repository) UpdateCollection(ctx context.Context, req UpdateCollectionRequest) (CollectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return CollectionRecord{}, err
-	}
 	req.Owner = req.Owner.normalized()
-	return store.UpdateCollection(ctx, req, r.now())
+	return r.state.UpdateCollection(ctx, req, r.now())
 }
 
 func (r *Repository) UpdateCollectionItems(ctx context.Context, req UpdateCollectionItemsRequest) (CollectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return CollectionRecord{}, err
-	}
 	req.Owner = req.Owner.normalized()
-	return store.UpdateCollectionItems(ctx, req, r.now())
+	return r.state.UpdateCollectionItems(ctx, req, r.now())
 }
 
 func (r *Repository) CreateSelection(ctx context.Context, req CreateSelectionRequest) (SelectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return SelectionRecord{}, err
-	}
 	if req.Owner.Empty() || len(req.Items) == 0 {
 		return SelectionRecord{}, fmt.Errorf("%w: owner and items are required", ErrContractViolation)
 	}
@@ -621,26 +577,18 @@ func (r *Repository) CreateSelection(ctx context.Context, req CreateSelectionReq
 	if selection.CreatedBy == "" {
 		selection.CreatedBy = selection.Owner.OwnerID
 	}
-	return store.CreateSelection(ctx, selection, req.Items)
+	return r.state.CreateSelection(ctx, selection, req.Items)
 }
 
 func (r *Repository) GetSelection(ctx context.Context, owner OwnerScope, selectionID string) (SelectionRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return SelectionRecord{}, err
-	}
-	return store.GetSelection(ctx, owner.normalized(), strings.TrimSpace(selectionID))
+	return r.state.GetSelection(ctx, owner.normalized(), strings.TrimSpace(selectionID))
 }
 
 func (r *Repository) CreateAnalysisRun(ctx context.Context, req CreateAnalysisRunRequest) (AnalysisRunRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return AnalysisRunRecord{}, err
-	}
 	if req.Owner.Empty() || strings.TrimSpace(req.SelectionID) == "" || strings.TrimSpace(req.RunType) == "" {
 		return AnalysisRunRecord{}, fmt.Errorf("%w: owner, selection_id, and run_type are required", ErrContractViolation)
 	}
-	selection, err := store.GetSelection(ctx, req.Owner.normalized(), strings.TrimSpace(req.SelectionID))
+	selection, err := r.state.GetSelection(ctx, req.Owner.normalized(), strings.TrimSpace(req.SelectionID))
 	if err != nil {
 		return AnalysisRunRecord{}, err
 	}
@@ -681,31 +629,19 @@ func (r *Repository) CreateAnalysisRun(ctx context.Context, req CreateAnalysisRu
 		Status:        AnalysisRunStatusQueued,
 		CreatedAt:     now,
 	}
-	return store.CreateAnalysisRun(ctx, run, task, event)
+	return r.state.CreateAnalysisRun(ctx, run, task, event)
 }
 
 func (r *Repository) MarkAnalysisRunTaskQueued(ctx context.Context, analysisRunID, taskType string) error {
-	store, err := r.mediaStore()
-	if err != nil {
-		return err
-	}
-	return store.MarkAnalysisRunTaskQueued(ctx, strings.TrimSpace(analysisRunID), strings.TrimSpace(taskType), r.now())
+	return r.state.MarkAnalysisRunTaskQueued(ctx, strings.TrimSpace(analysisRunID), strings.TrimSpace(taskType), r.now())
 }
 
 func (r *Repository) ListPendingEnqueueTasks(ctx context.Context, limit int) ([]AnalysisRunTaskRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListPendingEnqueueTasks(ctx, limit)
+	return r.state.ListPendingEnqueueTasks(ctx, limit)
 }
 
 func (r *Repository) ListAnalysisRunQueue(ctx context.Context, status, runType, taskType string, limit int) ([]AnalysisRunQueueRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListAnalysisRunQueue(
+	return r.state.ListAnalysisRunQueue(
 		ctx,
 		strings.TrimSpace(status),
 		strings.TrimSpace(runType),
@@ -715,50 +651,26 @@ func (r *Repository) ListAnalysisRunQueue(ctx context.Context, status, runType, 
 }
 
 func (r *Repository) ClaimAnalysisRunTask(ctx context.Context, analysisRunID, workerKind, taskType, leaseOwner string) (AnalysisRunRecord, bool, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return AnalysisRunRecord{}, false, err
-	}
-	return store.ClaimAnalysisRunTask(ctx, strings.TrimSpace(analysisRunID), strings.TrimSpace(workerKind), strings.TrimSpace(taskType), strings.TrimSpace(leaseOwner), r.now())
+	return r.state.ClaimAnalysisRunTask(ctx, strings.TrimSpace(analysisRunID), strings.TrimSpace(workerKind), strings.TrimSpace(taskType), strings.TrimSpace(leaseOwner), r.now())
 }
 
 func (r *Repository) GetAnalysisRunByID(ctx context.Context, analysisRunID string) (AnalysisRunRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return AnalysisRunRecord{}, err
-	}
-	return store.GetAnalysisRunByID(ctx, strings.TrimSpace(analysisRunID))
+	return r.state.GetAnalysisRunByID(ctx, strings.TrimSpace(analysisRunID))
 }
 
 func (r *Repository) GetAnalysisRun(ctx context.Context, owner OwnerScope, analysisRunID string) (AnalysisRunRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return AnalysisRunRecord{}, err
-	}
-	return store.GetAnalysisRun(ctx, owner.normalized(), strings.TrimSpace(analysisRunID))
+	return r.state.GetAnalysisRun(ctx, owner.normalized(), strings.TrimSpace(analysisRunID))
 }
 
 func (r *Repository) ListAnalysisRuns(ctx context.Context, owner OwnerScope) ([]AnalysisRunRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListAnalysisRuns(ctx, owner.normalized())
+	return r.state.ListAnalysisRuns(ctx, owner.normalized())
 }
 
 func (r *Repository) ListAnalysisRunEvents(ctx context.Context, owner OwnerScope, analysisRunID string) ([]RunEventRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListRunEvents(ctx, owner.normalized(), strings.TrimSpace(analysisRunID))
+	return r.state.ListRunEvents(ctx, owner.normalized(), strings.TrimSpace(analysisRunID))
 }
 
 func (r *Repository) RecordArtifacts(ctx context.Context, owner OwnerScope, analysisRunID string, artifacts []ArtifactRecord) ([]ArtifactRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
 	owner = owner.normalized()
 	analysisRunID = strings.TrimSpace(analysisRunID)
 	if owner.Empty() || analysisRunID == "" {
@@ -797,23 +709,15 @@ func (r *Repository) RecordArtifacts(ctx context.Context, owner OwnerScope, anal
 		}
 		normalized = append(normalized, artifact)
 	}
-	return store.RecordArtifacts(ctx, owner, analysisRunID, normalized, now)
+	return r.state.RecordArtifacts(ctx, owner, analysisRunID, normalized, now)
 }
 
 func (r *Repository) ListArtifacts(ctx context.Context, owner OwnerScope, analysisRunID string) ([]ArtifactRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListArtifacts(ctx, owner.normalized(), strings.TrimSpace(analysisRunID))
+	return r.state.ListArtifacts(ctx, owner.normalized(), strings.TrimSpace(analysisRunID))
 }
 
 func (r *Repository) GetArtifact(ctx context.Context, owner OwnerScope, artifactID string) (ArtifactRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return ArtifactRecord{}, err
-	}
-	artifact, err := store.GetArtifact(ctx, owner.normalized(), strings.TrimSpace(artifactID))
+	artifact, err := r.state.GetArtifact(ctx, owner.normalized(), strings.TrimSpace(artifactID))
 	if err != nil {
 		return ArtifactRecord{}, err
 	}
@@ -840,11 +744,7 @@ func (r *Repository) GetArtifact(ctx context.Context, owner OwnerScope, artifact
 }
 
 func (r *Repository) GetInternalArtifactDownloadAccess(ctx context.Context, artifactID string) (ArtifactRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return ArtifactRecord{}, err
-	}
-	artifact, err := store.GetArtifactByID(ctx, strings.TrimSpace(artifactID))
+	artifact, err := r.state.GetArtifactByID(ctx, strings.TrimSpace(artifactID))
 	if err != nil {
 		return ArtifactRecord{}, err
 	}
@@ -871,11 +771,7 @@ func (r *Repository) GetInternalArtifactDownloadAccess(ctx context.Context, arti
 }
 
 func (r *Repository) ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListDiagnostics(ctx, owner.normalized(), DiagnosticQuery{
+	return r.state.ListDiagnostics(ctx, owner.normalized(), DiagnosticQuery{
 		SubjectType:   strings.TrimSpace(query.SubjectType),
 		SubjectID:     strings.TrimSpace(query.SubjectID),
 		Severity:      strings.TrimSpace(query.Severity),
@@ -889,10 +785,6 @@ func (r *Repository) RefreshArtifactLink(ctx context.Context, owner OwnerScope, 
 }
 
 func (r *Repository) RecordDiagnostics(ctx context.Context, owner OwnerScope, analysisRunID string, diagnostics []DiagnosticRecord) ([]DiagnosticRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
 	owner = owner.normalized()
 	analysisRunID = strings.TrimSpace(analysisRunID)
 	if owner.Empty() || analysisRunID == "" {
@@ -948,14 +840,10 @@ func (r *Repository) RecordDiagnostics(ctx context.Context, owner OwnerScope, an
 		}
 		normalized = append(normalized, diagnostic)
 	}
-	return store.RecordDiagnostics(ctx, owner, analysisRunID, normalized, now)
+	return r.state.RecordDiagnostics(ctx, owner, analysisRunID, normalized, now)
 }
 
 func (r *Repository) RecordAnalysisRunProgress(ctx context.Context, owner OwnerScope, analysisRunID, stage, message string, payload json.RawMessage) (AnalysisRunRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return AnalysisRunRecord{}, err
-	}
 	owner = owner.normalized()
 	analysisRunID = strings.TrimSpace(analysisRunID)
 	stage = strings.TrimSpace(stage)
@@ -982,14 +870,10 @@ func (r *Repository) RecordAnalysisRunProgress(ctx context.Context, owner OwnerS
 		Status:        AnalysisRunStatusRunning,
 		CreatedAt:     now,
 	}
-	return store.RecordAnalysisRunProgress(ctx, owner, analysisRunID, event, now)
+	return r.state.RecordAnalysisRunProgress(ctx, owner, analysisRunID, event, now)
 }
 
 func (r *Repository) FinalizeAnalysisRunTask(ctx context.Context, owner OwnerScope, analysisRunID, status, message string) (AnalysisRunRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return AnalysisRunRecord{}, err
-	}
 	owner = owner.normalized()
 	analysisRunID = strings.TrimSpace(analysisRunID)
 	status = strings.TrimSpace(status)
@@ -1010,31 +894,19 @@ func (r *Repository) FinalizeAnalysisRunTask(ctx context.Context, owner OwnerSco
 		Status:        status,
 		CreatedAt:     now,
 	}
-	return store.FinalizeAnalysisRunTask(ctx, owner, analysisRunID, status, event, now)
+	return r.state.FinalizeAnalysisRunTask(ctx, owner, analysisRunID, status, event, now)
 }
 
 func (r *Repository) ApplyRetentionPolicies(ctx context.Context) (RetentionSweepResult, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return RetentionSweepResult{}, err
-	}
-	return store.ApplyRetentionPolicies(ctx, r.now())
+	return r.state.ApplyRetentionPolicies(ctx, r.now())
 }
 
 func (r *Repository) DetectOrphanObjects(ctx context.Context) ([]OrphanObjectRecord, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.DetectOrphanObjects(ctx)
+	return r.state.DetectOrphanObjects(ctx)
 }
 
 func (r *Repository) CleanOrphanObjects(ctx context.Context) (OrphanCleanupResult, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return OrphanCleanupResult{}, err
-	}
-	orphans, err := store.DetectOrphanObjects(ctx)
+	orphans, err := r.state.DetectOrphanObjects(ctx)
 	if err != nil {
 		return OrphanCleanupResult{}, err
 	}
@@ -1052,7 +924,7 @@ func (r *Repository) CleanOrphanObjects(ctx context.Context) (OrphanCleanupResul
 				message = "object deleted from object store"
 			}
 		}
-		if err := store.RecordOrphanObjectCleanup(ctx, orphan, deleted, message, r.now()); err != nil {
+		if err := r.state.RecordOrphanObjectCleanup(ctx, orphan, deleted, message, r.now()); err != nil {
 			return result, err
 		}
 		result.DiagnosticsRecorded++
@@ -1066,12 +938,8 @@ func (r *Repository) CleanOrphanObjects(ctx context.Context) (OrphanCleanupResul
 }
 
 func (r *Repository) GetObservabilitySnapshot(ctx context.Context) (ObservabilitySnapshot, error) {
-	store, err := r.mediaStore()
-	if err != nil {
-		return ObservabilitySnapshot{}, err
-	}
 	now := r.now()
-	queueRecords, err := store.ListAnalysisRunQueue(ctx, "", "", "", 1000)
+	queueRecords, err := r.state.ListAnalysisRunQueue(ctx, "", "", "", 1000)
 	if err != nil {
 		return ObservabilitySnapshot{}, err
 	}
@@ -1088,7 +956,7 @@ func (r *Repository) GetObservabilitySnapshot(ctx context.Context) (Observabilit
 			snapshot.QueueLagSeconds = lag
 		}
 	}
-	diagnostics, err := store.ListOperationalDiagnostics(ctx, []string{"orphan_object_cleanup_failed", "artifact_resolution_failed"})
+	diagnostics, err := r.state.ListOperationalDiagnostics(ctx, []string{"orphan_object_cleanup_failed", "artifact_resolution_failed"})
 	if err != nil {
 		return ObservabilitySnapshot{}, err
 	}
