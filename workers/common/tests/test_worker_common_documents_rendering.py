@@ -60,7 +60,7 @@ def test_write_report_docx_strips_boilerplate_and_inline_markdown(tmp_path: Path
             "Вот исследовательский отчёт на основе транскрипта:\n\n---\n\n"
             "# Исследовательский отчёт\n\n## Ключевые вопросы\n\n"
             "1. **Является ли эволюция предсказуемой?**\n\n"
-            "- **Тема A**\n"
+            "- Вводка **Тема A**\n"
         ),
     )
 
@@ -70,6 +70,7 @@ def test_write_report_docx_strips_boilerplate_and_inline_markdown(tmp_path: Path
     assert "---" not in text
     assert "**" not in text
     assert "Является ли эволюция предсказуемой?" in text
+    assert "Вводка Тема A" in text
     assert "Тема A" in text
 
 

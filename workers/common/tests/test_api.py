@@ -26,10 +26,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Mapping
 
 import pytest
 
+import transcriber_workers_common.api as api_module
 from transcriber_workers_common.api import (
     ClaimedAnalysisRunExecution,
     InternalApiConfig,
@@ -302,6 +304,11 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         progress_message="running whisper",
     )
     client.register_artifacts("job-1", execution_id="exec-1", artifacts=[artifact])
+    client.register_diagnostics(
+        "job-1",
+        execution_id="exec-1",
+        diagnostics=[{"code": "warn_partial_source", "severity": "warning"}],
+    )
     client.finalize_analysis_run(
         "job-1",
         execution_id="exec-1",
@@ -337,6 +344,14 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
                         "size_bytes": 42,
                     }
                 ],
+            },
+        },
+        {
+            "method": "POST",
+            "url": "http://internal.local/internal/v1/analysis-runs/job-1/diagnostics",
+            "payload": {
+                "execution_id": "exec-1",
+                "diagnostics": [{"code": "warn_partial_source", "severity": "warning"}],
             },
         },
         {
@@ -495,3 +510,150 @@ def test_claim_analysis_run_rejects_empty_selection_items() -> None:
             params={},
             claimed_at="2026-05-10T12:01:00Z",
         )
+
+
+def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
+    source_snapshot = api_module.MediaSourceSnapshot(
+        source_id=SOURCE_ID,
+        origin_type="object",
+        object_key="media/run-1/source.wav",
+        mime_type="audio/wav",
+        size_bytes=42,
+    )
+    item = api_module.SelectionItemSnapshot(
+        position=2,
+        media_item_id=MEDIA_ID,
+        kind="audio",
+        source_snapshot=source_snapshot,
+        display_name="  Demo source.wav  ",
+        status_at_selection="ready",
+        metadata_snapshot={
+            "source_label": "  interview_a  ",
+            "original_filename": "   ",
+            "filename": " fallback.wav ",
+        },
+        retention_snapshot={"state": "active"},
+        selection_item_id=None,
+        media_kind=None,
+        mime_type=None,
+        labels=None,
+    )
+
+    assert item.selection_item_id == "selection-item-2"
+    assert item.media_kind == "audio"
+    assert item.mime_type == "audio/wav"
+    assert item.labels is not None
+    assert item.labels.original_filename == "fallback.wav"
+    assert item.labels.source_display_label() == "interview_a"
+    assert api_module._metadata_original_filename(item) == "fallback.wav"
+    assert api_module._metadata_source_label(item) == "interview_a"
+
+    direct_filename_item = api_module.SelectionItemSnapshot(
+        selection_item_id="selection-item-4",
+        position=4,
+        media_item_id=MEDIA_ID,
+        kind="audio",
+        media_kind="audio",
+        source_snapshot=source_snapshot,
+        display_name="Source.wav",
+        status_at_selection="ready",
+        metadata_snapshot={"original_filename": "  source.wav  "},
+        retention_snapshot={"state": "active"},
+        labels=api_module.SelectionItemLabels(display_label="Source.wav"),
+    )
+    no_filename_item = api_module.SelectionItemSnapshot(
+        selection_item_id="selection-item-5",
+        position=5,
+        media_item_id=MEDIA_ID,
+        kind="audio",
+        media_kind="audio",
+        source_snapshot=source_snapshot,
+        display_name="Source.wav",
+        status_at_selection="ready",
+        metadata_snapshot={"original_filename": "   ", "filename": "   ", "source_label": "   "},
+        retention_snapshot={"state": "active"},
+        labels=api_module.SelectionItemLabels(display_label="Source.wav"),
+    )
+
+    assert api_module._metadata_original_filename(direct_filename_item) == "source.wav"
+    assert api_module._metadata_original_filename(no_filename_item) is None
+    assert api_module._metadata_source_label(no_filename_item) is None
+
+
+def test_selection_item_materialization_marks_missing_object_key_as_unsupported() -> None:
+    source_snapshot = api_module.MediaSourceSnapshot(
+        source_id=SOURCE_ID,
+        origin_type="object",
+        object_key=None,
+        mime_type="audio/wav",
+    )
+    item = api_module.SelectionItemSnapshot(
+        selection_item_id="selection-item-3",
+        position=3,
+        media_item_id=MEDIA_ID,
+        kind="audio",
+        media_kind="audio",
+        source_snapshot=source_snapshot,
+        display_name="Source.wav",
+        status_at_selection="ready",
+        metadata_snapshot={},
+        retention_snapshot={"state": "active"},
+        labels=api_module.SelectionItemLabels(display_label="Source.wav", source_label="   "),
+    )
+
+    descriptor = SelectionItemMaterialization.from_selection_item(item)
+
+    assert descriptor.materialization_kind == "unsupported"
+    assert descriptor.unsupported_reason == "object-backed media source is missing object_key"
+    assert descriptor.is_object_backed is False
+
+
+def test_ordered_input_request_access_and_helper_branches_cover_edge_paths() -> None:
+    ordered_input = api_module.OrderedWorkerInput.from_payload(
+        {
+            "position": 1,
+            "source_id": SOURCE_ID,
+            "source_kind": "object",
+            "source_label": " interview_a ",
+            "display_name": "Source.wav",
+            "original_filename": "source.wav",
+            "object_key": "media/run-1/source.wav",
+            "source_url": "https://example.test/source",
+            "sha256": "sha256:demo",
+            "size_bytes": 42,
+        }
+    )
+    request_access = api_module.AgentRunRequestAccessResult(
+        provider="minio_presigned_url",
+        url="https://minio.local/private/request.json",
+        expires_at="2026-04-25T12:00:00Z",
+        request_ref="agentreq_digest",
+        request_digest_sha256="digest",
+        request_bytes=321,
+    )
+
+    assert ordered_input.object_key == "media/run-1/source.wav"
+    assert request_access.to_payload()["request_bytes"] == 321
+    assert api_module._derive_selection_role({}, metadata_snapshot={}, option_snapshot={"item_roles": {"other": "context"}}) == "primary"
+    assert api_module._extension_for_mime(None) == ".bin"
+    assert api_module._extension_for_mime("   ") == ".bin"
+
+
+def test_selection_item_labels_and_materialization_helpers_trim_source_labels() -> None:
+    labels = api_module.SelectionItemLabels(display_label="Display", source_label="  ", original_filename="file.wav")
+
+    assert labels.source_display_label() == "Display"
+    assert api_module.SelectionItemMaterialization(
+        selection_item_id="selection-item-9",
+        position=9,
+        media_item_id=MEDIA_ID,
+        media_kind="audio",
+        role="primary",
+        labels=labels,
+        source_id=SOURCE_ID,
+        origin_type="object",
+        materialization_kind="object",
+        mime_type="audio/wav",
+        object_key="media/run-1/source.wav",
+        deterministic_filename=str(Path("item-0009-source.wav")),
+    ).is_object_backed is True

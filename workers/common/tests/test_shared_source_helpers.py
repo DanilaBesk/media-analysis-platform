@@ -30,6 +30,7 @@ def test_shared_youtube_id_parser_supports_expected_url_shapes() -> None:
     assert extract_youtube_video_id("https://www.youtube.com/watch?v=abc123") == "abc123"
     assert extract_youtube_video_id("https://www.youtube.com/shorts/short123") == "short123"
     assert extract_youtube_video_id("https://www.youtube.com/embed/embed123") == "embed123"
+    assert extract_youtube_video_id("https://www.youtube.com/channel/demo") is None
     assert extract_youtube_video_id("https://example.com/watch?v=abc123") is None
 
 
@@ -54,3 +55,22 @@ def test_source_label_helpers_stay_shared_for_artifacts_and_adapter() -> None:
     assert humanize_source_label("Audio: AgAB12345-Qwert.ogg") == "Аудиофайл из Telegram"
     assert humanize_source_label("Video: readable-name.mp4") == "readable-name.mp4"
     assert looks_like_machine_file_name("AgAB12345-Qwert.ogg") is True
+    assert looks_like_machine_file_name("ABCDEFGHIJKL!") is False
+
+
+def test_extract_sources_labels_telegram_video_attachments() -> None:
+    result = extract_sources(
+        "",
+        [
+            MediaAttachment(
+                telegram_file_id="file-2",
+                kind="telegram_video",
+                file_name="clip.mp4",
+                mime_type="video/mp4",
+                file_unique_id="unique-2",
+            )
+        ],
+    )
+
+    assert result.rejected_urls == []
+    assert [candidate.display_name for candidate in result.candidates] == ["Video: clip.mp4"]
