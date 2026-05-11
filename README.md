@@ -106,7 +106,7 @@ Measured baselines from the current tree:
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%` line coverage.
 - Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%` line coverage.
 - Python `apps/telegram-bot/src/telegram_adapter`: `66%` aggregate line coverage.
-- Node `apps/mcp-server/src`: `95.67%` line coverage from `node --test --experimental-test-coverage`.
+- Node `apps/mcp-server/src`: `100%` line coverage from `node --test --experimental-test-coverage`.
 - Web `apps/web/src`: `84.39%` line coverage, `73.2%` branch coverage, `65.78%` function coverage.
 
 Current gap:
@@ -149,7 +149,7 @@ Current baseline snapshot from `2026-05-11`:
 | `workers/common/src/transcriber_workers_common` | line coverage | `95%` | measured |
 | `workers/transcription/src` | line coverage | `91%` | measured |
 | `workers/agent-runner/src` | line coverage | `86%` | measured |
-| `apps/mcp-server/src` | line / branch / function coverage | `95.67% / 67.36% / 96.15%` | measured |
+| `apps/mcp-server/src` | line / branch / function coverage | `100% / 79.91% / 100%` | measured |
 | `apps/web/src` | line / branch / function coverage | `84.39% / 73.2% / 65.78%` | measured gap |
 
 This means the repo can currently prove focused coverage for several Python, Go, and MCP surfaces, but it cannot truthfully claim full closure across the whole stack yet.

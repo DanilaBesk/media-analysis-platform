@@ -79,7 +79,7 @@ Current measurable baselines from the active tree:
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
 - Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
 - Python `apps/telegram-bot/src/telegram_adapter`: `66%`
-- Node `apps/mcp-server/src`: `95.67%`
+- Node `apps/mcp-server/src`: `100%`
 - Web `apps/web/src`: `84.39%` lines, `73.2%` branches, `65.78%` functions
 
 Known remaining gap:

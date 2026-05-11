@@ -158,7 +158,7 @@ Latest measured baselines from the active tree:
 - Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
 - Python `apps/telegram-bot/src/telegram_adapter`: `66%`
-- Node `apps/mcp-server/src`: `95.67%` lines, `67.36%` branches, `96.15%` functions
+- Node `apps/mcp-server/src`: `100%` lines, `79.91%` branches, `100%` functions
 - Web `apps/web/src`: `84.39%` lines, `73.2%` branches, `65.78%` functions
 
 ## Remaining Closure Truth
