@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,8 +36,6 @@ func TestNewSQLStateStoreRequiresDB(t *testing.T) {
 }
 
 func TestOpenPostgresDBValidatesInputsAndPingFailures(t *testing.T) {
-	t.Parallel()
-
 	if _, err := OpenPostgresDB(context.Background(), "   "); !errors.Is(err, ErrContractViolation) {
 		t.Fatalf("OpenPostgresDB(blank) error = %v, want ErrContractViolation", err)
 	}
@@ -51,11 +50,30 @@ func TestOpenPostgresDBValidatesInputsAndPingFailures(t *testing.T) {
 	if !errors.Is(err, ErrStorageUnavailable) {
 		t.Fatalf("OpenPostgresDB(unreachable) error = %v, want ErrStorageUnavailable", err)
 	}
+
+	originalOpen := sqlOpenPostgres
+	t.Cleanup(func() { sqlOpenPostgres = originalOpen })
+
+	sqlOpenPostgres = func(driverName, dsn string) (*sql.DB, error) {
+		if dsn == "open-error" {
+			return nil, fmt.Errorf("boom")
+		}
+		return openRuntimeStoreTestDB(t, &runtimeStoreTestDriverConfig{}), nil
+	}
+
+	if _, err := OpenPostgresDB(context.Background(), "open-error"); !errors.Is(err, ErrStorageUnavailable) {
+		t.Fatalf("OpenPostgresDB(open error) error = %v, want ErrStorageUnavailable", err)
+	}
+	okDB, err := OpenPostgresDB(context.Background(), "ok")
+	if err != nil {
+		t.Fatalf("OpenPostgresDB(success) error = %v", err)
+	}
+	if okDB == nil {
+		t.Fatalf("OpenPostgresDB(success) db = nil, want non-nil")
+	}
 }
 
 func TestNewMinioClientValidatesAndNormalizesEndpoints(t *testing.T) {
-	t.Parallel()
-
 	if _, err := NewMinioClient("://bad", "key", "secret"); !errors.Is(err, ErrContractViolation) {
 		t.Fatalf("NewMinioClient(parse error) = %v, want ErrContractViolation", err)
 	}
@@ -73,6 +91,15 @@ func TestNewMinioClientValidatesAndNormalizesEndpoints(t *testing.T) {
 	if got := secure.EndpointURL(); got == nil || got.Host != "localhost:9443" || got.Scheme != "https" {
 		t.Fatalf("https endpoint = %#v, want https://localhost:9443", got)
 	}
+
+	originalNewMinio := newMinioSDK
+	t.Cleanup(func() { newMinioSDK = originalNewMinio })
+	newMinioSDK = func(endpoint string, opts *minio.Options) (*minio.Client, error) {
+		return nil, fmt.Errorf("boom")
+	}
+	if _, err := NewMinioClient("http://localhost:9000", "key", "secret"); !errors.Is(err, ErrStorageUnavailable) {
+		t.Fatalf("NewMinioClient(create error) = %v, want ErrStorageUnavailable", err)
+	}
 }
 
 func TestNewMinioObjectStoreRequiresClients(t *testing.T) {
@@ -87,8 +114,6 @@ func TestNewMinioObjectStoreRequiresClients(t *testing.T) {
 }
 
 func TestMinioObjectStorePresignHostsAndObjectMethodErrors(t *testing.T) {
-	t.Parallel()
-
 	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))

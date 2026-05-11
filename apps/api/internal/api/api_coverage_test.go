@@ -14,6 +14,21 @@ import (
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
+type markQueuedErrorStore struct {
+	*fakePublicService
+	markErr error
+}
+
+func (s *markQueuedErrorStore) MarkAnalysisRunTaskQueued(_ context.Context, analysisRunID, taskType string) error {
+	for i, task := range s.pendingTasks {
+		if task.AnalysisRunID == analysisRunID && task.TaskType == taskType {
+			s.pendingTasks = append(s.pendingTasks[:i], s.pendingTasks[i+1:]...)
+			return s.markErr
+		}
+	}
+	return storage.ErrExecutionNotFound
+}
+
 func TestApiServerOptionAndErrorBranches(t *testing.T) {
 	t.Parallel()
 
@@ -807,22 +822,21 @@ func TestApiRuntimeRemainingDirectBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewPublisher() error = %v", err)
 		}
-		markErrStore := &fakePublicService{
-			run: storage.AnalysisRunRecord{ID: "run-1", RunType: "report", Version: 1, CreatedAt: now},
-			pendingTasks: []storage.AnalysisRunTaskRecord{{
-				ID:            "task-1",
+			markErrStore := &markQueuedErrorStore{fakePublicService: &fakePublicService{
+				run: storage.AnalysisRunRecord{ID: "run-1", RunType: "report", Version: 1, CreatedAt: now},
+				pendingTasks: []storage.AnalysisRunTaskRecord{{
+					ID:            "task-1",
 				AnalysisRunID: "run-1",
 				WorkerKind:    "analysis",
 				TaskType:      "selection.analysis",
-				Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
-				AttemptNo:     1,
-				CreatedAt:     now,
-			}},
-			err: storage.ErrAnalysisRunNotFound,
-		}
-		if _, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
-			t.Fatalf("ReconcileAnalysisRunQueue(mark error) = %v, want ErrAnalysisRunNotFound", err)
-		}
+					Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
+					AttemptNo:     1,
+					CreatedAt:     now,
+				}},
+			}, markErr: storage.ErrAnalysisRunNotFound}
+			if _, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+				t.Fatalf("ReconcileAnalysisRunQueue(mark error) = %v, want ErrAnalysisRunNotFound", err)
+			}
 
 		createErrStore := &fakePublicService{err: storage.ErrContractViolation}
 		if _, err := (&publicRuntimeService{store: createErrStore, queue: publisher}).CreateAnalysisRun(context.Background(), storage.CreateAnalysisRunRequest{Owner: storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}}); !errors.Is(err, storage.ErrContractViolation) {

@@ -150,9 +150,8 @@ func (s *Server) handleAddMediaItemMultipart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-	body, err := io.ReadAll(file)
-	if err != nil {
-		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart upload body could not be read", details: err.Error()})
+	body, ok := s.readMultipartUploadBody(w, file)
+	if !ok {
 		return
 	}
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
@@ -180,6 +179,23 @@ func (s *Server) handleAddMediaItemMultipart(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"media_item": item})
+}
+
+func readMultipartUploadBody(reader io.Reader) ([]byte, error) {
+	return io.ReadAll(reader)
+}
+
+func (s *Server) readMultipartUploadBody(w http.ResponseWriter, reader io.Reader) ([]byte, bool) {
+	readBody := readMultipartUploadBody
+	if s.readUploadBody != nil {
+		readBody = s.readUploadBody
+	}
+	body, err := readBody(reader)
+	if err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart upload body could not be read", details: err.Error()})
+		return nil, false
+	}
+	return body, true
 }
 
 func (s *Server) handleListMediaItems(w http.ResponseWriter, r *http.Request) {

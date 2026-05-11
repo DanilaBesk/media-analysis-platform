@@ -2746,8 +2746,8 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 		}
 	})
 
-	t.Run("claim analysis run task propagates claimed-row scan failures", func(t *testing.T) {
-		t.Parallel()
+		t.Run("claim analysis run task propagates claimed-row scan failures", func(t *testing.T) {
+			t.Parallel()
 
 		invalidRunRow := []driver.Value{
 			"run-1", "web", "user-1", "", "selection-1", "transcription", AnalysisRunStatusQueued, "bad-version",
@@ -2765,11 +2765,36 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 			t.Fatalf("NewSQLStateStore() error = %v", err)
 		}
 
-		if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); err == nil {
-			t.Fatalf("ClaimAnalysisRunTask(scan) error = nil, want scan failure")
-		}
-	})
-}
+			if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); err == nil {
+				t.Fatalf("ClaimAnalysisRunTask(scan) error = nil, want scan failure")
+			}
+		})
+
+		t.Run("claim analysis run task propagates refreshed-run lookup errors after no claimed row", func(t *testing.T) {
+			t.Parallel()
+
+			store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+				queryResponses: []scriptedQueryResponse{
+					{
+						match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+						columns: analysisRunColumns(),
+					},
+					{
+						match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+						columns: analysisRunColumns(),
+						err:     stepErr,
+					},
+				},
+			}))
+			if err != nil {
+				t.Fatalf("NewSQLStateStore() error = %v", err)
+			}
+
+			if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); !errors.Is(err, stepErr) {
+				t.Fatalf("ClaimAnalysisRunTask(no claimed row lookup) error = %v, want stepErr", err)
+			}
+		})
+	}
 
 func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
 	t.Parallel()

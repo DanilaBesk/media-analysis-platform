@@ -14,6 +14,11 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+var (
+	sqlOpenPostgres = sql.Open
+	newMinioSDK     = minio.New
+)
+
 type SQLStateStore struct {
 	db *sql.DB
 }
@@ -34,7 +39,7 @@ func OpenPostgresDB(ctx context.Context, dsn string) (*sql.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, fmt.Errorf("%w: postgres dsn is required", ErrContractViolation)
 	}
-	db, err := sql.Open("pgx", dsn)
+	db, err := sqlOpenPostgres("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("%w: open postgres: %v", ErrStorageUnavailable, err)
 	}
@@ -58,7 +63,7 @@ func NewMinioClient(endpoint, accessKey, secretKey string) (*minio.Client, error
 	if strings.TrimSpace(host) == "" || strings.TrimSpace(accessKey) == "" || strings.TrimSpace(secretKey) == "" {
 		return nil, fmt.Errorf("%w: minio endpoint and credentials are required", ErrContractViolation)
 	}
-	client, err := minio.New(host, &minio.Options{
+	client, err := newMinioSDK(host, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: secure,
 	})

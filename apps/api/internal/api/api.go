@@ -76,6 +76,7 @@ type Server struct {
 	deps            Dependencies
 	logger          Logger
 	maxRequestBytes int64
+	readUploadBody  func(io.Reader) ([]byte, error)
 }
 
 type Option func(*Server)

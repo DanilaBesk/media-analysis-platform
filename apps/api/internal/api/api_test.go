@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,22 @@ import (
 	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
+
+type failingMultipartUploadReader struct{}
+
+func (failingMultipartUploadReader) Read(_ []byte) (int, error) {
+	return 0, io.ErrUnexpectedEOF
+}
+
+type updateCollectionItemsErrorStore struct {
+	*fakePublicService
+	updateErr error
+}
+
+func (s *updateCollectionItemsErrorStore) UpdateCollectionItems(_ context.Context, req storage.UpdateCollectionItemsRequest) (storage.CollectionRecord, error) {
+	s.lastUpdateCollectionItems = req
+	return storage.CollectionRecord{}, s.updateErr
+}
 
 func TestApiHttpFinalRoutesAddMediaWithoutStartingAnalysis(t *testing.T) {
 	t.Parallel()
@@ -255,6 +272,61 @@ func TestApiHttpMultipartValidationAndErrorBranches(t *testing.T) {
 			t.Fatalf("content type = %q, want audio/ogg", public.lastAddMedia.Source.ContentType)
 		}
 	})
+}
+
+func TestReadMultipartUploadBodyPropagatesReaderErrors(t *testing.T) {
+	t.Parallel()
+
+	if _, err := readMultipartUploadBody(failingMultipartUploadReader{}); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("readMultipartUploadBody() error = %v, want ErrUnexpectedEOF", err)
+	}
+}
+
+func TestServerReadMultipartUploadBodyMapsReaderErrors(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	body, ok := (&Server{readUploadBody: func(io.Reader) ([]byte, error) {
+		return nil, io.ErrUnexpectedEOF
+	}}).readMultipartUploadBody(rec, strings.NewReader("ignored"))
+	if ok || body != nil {
+		t.Fatalf("readMultipartUploadBody(ok=%v, body=%v), want !ok nil", ok, body)
+	}
+	assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_item")
+}
+
+func TestHandleAddMediaItemMultipartMapsUnreadableUploadBodies(t *testing.T) {
+	t.Parallel()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("metadata", `{"owner":{"owner_type":"telegram","owner_id":"chat-1"},"kind":"voice","display_name":"voice.ogg","adapter_origin":"telegram"}`); err != nil {
+		t.Fatalf("WriteField(metadata) error = %v", err)
+	}
+	fileWriter, err := writer.CreateFormFile("file", "voice.ogg")
+	if err != nil {
+		t.Fatalf("CreateFormFile(file) error = %v", err)
+	}
+	if _, err := fileWriter.Write([]byte("voice-bytes")); err != nil {
+		t.Fatalf("Write(file) error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/media-items", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	server := &Server{
+		deps: Dependencies{Public: &fakePublicService{}},
+		readUploadBody: func(io.Reader) ([]byte, error) {
+			return nil, io.ErrUnexpectedEOF
+		},
+		maxRequestBytes: defaultMaxRequestBody,
+	}
+	server.handleAddMediaItemMultipart(rec, req)
+	assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_item")
 }
 
 func TestApiHttpFinalRoutesPropagateCollectionVersionConflict(t *testing.T) {
@@ -660,8 +732,8 @@ func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
 		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
 	})
 
-	t.Run("update collection maps contract violation", func(t *testing.T) {
-		t.Parallel()
+		t.Run("update collection maps contract violation", func(t *testing.T) {
+			t.Parallel()
 
 		rec := httptest.NewRecorder()
 		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrContractViolation}}).ServeHTTP(rec, jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{
@@ -669,11 +741,23 @@ func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
 			"expected_version": float64(3),
 			"name":             "Review set v2",
 		}))
-		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
-	})
+			assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
+		})
 
-	t.Run("create selection maps owner mismatch", func(t *testing.T) {
-		t.Parallel()
+		t.Run("update collection items maps owner mismatch", func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{
+				"owner":            owner,
+				"expected_version": float64(3),
+				"items":            []map[string]any{{"media_item_id": "media-1", "position": float64(0)}},
+			}))
+			assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+		})
+
+		t.Run("create selection maps owner mismatch", func(t *testing.T) {
+			t.Parallel()
 
 		rec := httptest.NewRecorder()
 		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/selections", map[string]any{
@@ -1216,6 +1300,86 @@ func TestApiHttpListDiagnosticsAppliesQueryFilters(t *testing.T) {
 	if len(body.Items) != 1 || body.Items[0].ID != "diag-match" {
 		t.Fatalf("items = %#v, want only diag-match", body.Items)
 	}
+}
+
+func TestApiHttpListDiagnosticsPaginatesAndMapsServiceErrors(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "owner-1"}
+	mux := newFinalMux(Dependencies{Public: &fakePublicService{
+		diagnostics: []storage.DiagnosticRecord{
+			{ID: "diag-1", Owner: owner, Message: "first", CreatedAt: time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)},
+			{ID: "diag-2", Owner: owner, Message: "second", CreatedAt: time.Date(2026, 5, 10, 12, 1, 0, 0, time.UTC)},
+		},
+	}})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/diagnostics?owner_type=web&owner_id=owner-1&page_size=1", nil)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("paginated diagnostics status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	var pagedBody struct {
+		Items []struct {
+			ID string `json:"diagnostic_id"`
+		} `json:"items"`
+		Page struct {
+			HasMore    bool   `json:"has_more"`
+			NextCursor string `json:"next_cursor"`
+		} `json:"page"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pagedBody); err != nil {
+		t.Fatalf("Unmarshal(paginated diagnostics) error = %v", err)
+	}
+	if len(pagedBody.Items) != 1 || pagedBody.Items[0].ID != "diag-1" || !pagedBody.Page.HasMore || pagedBody.Page.NextCursor != "diag-1" {
+		t.Fatalf("paged diagnostics = %#v", pagedBody)
+	}
+
+	errRec := httptest.NewRecorder()
+	errMux := newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}})
+	errMux.ServeHTTP(errRec, httptest.NewRequest(http.MethodGet, "/v1/diagnostics?owner_type=web&owner_id=owner-1", nil))
+	assertErrorCode(t, errRec, http.StatusNotFound, "not_found")
+}
+
+func TestHandleUpdateCollectionItemsMapsServiceErrors(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	req := jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{
+		"owner":            map[string]any{"owner_type": "web", "owner_id": "u-1"},
+		"expected_version": float64(3),
+		"items":            []map[string]any{{"media_item_id": "media-1", "position": float64(0)}},
+	})
+	req.SetPathValue("collection_id", "collection-1")
+
+	(&Server{deps: Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}}).handleUpdateCollectionItems(rec, req)
+	assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+}
+
+func TestHandleRemoveCollectionItemMapsUpdateErrors(t *testing.T) {
+	t.Parallel()
+
+	store := &updateCollectionItemsErrorStore{
+		fakePublicService: &fakePublicService{
+			collection: storage.CollectionRecord{
+				ID: "collection-1",
+				Owner: storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"},
+				Items: []storage.CollectionItemRecord{
+					{MediaItemID: "media-1", Position: 0},
+					{MediaItemID: "media-2", Position: 1},
+				},
+			},
+		},
+		updateErr: storage.ErrOwnerMismatch,
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/media-2?owner_type=web&owner_id=u-1&expected_version=3", nil)
+	req.SetPathValue("collection_id", "collection-1")
+	req.SetPathValue("media_item_id", "media-2")
+
+	(&Server{deps: Dependencies{Public: store}}).handleRemoveCollectionItem(rec, req)
+	assertErrorCode(t, rec, http.StatusNotFound, "not_found")
 }
 
 func TestApiHttpFinalRoutesCoverRemainingReadAndMutationEndpoints(t *testing.T) {
