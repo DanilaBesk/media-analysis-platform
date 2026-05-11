@@ -2432,3 +2432,51 @@ test("createMcpDomainRuntime falls back to requested artifact id when preview me
     },
   });
 });
+
+test("createDomainMcpTools applies preview defaults when direct execution omits optional preview args", async () => {
+  const artifactID = "00000000-0000-4000-8000-000000000010";
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      assert.equal(request.path, withOwnerQuery(`/v1/artifacts/${artifactID}`));
+      return {
+        status: 200,
+        data: {
+          artifact: {
+            artifact_id: artifactID,
+            analysis_run_id: RUN_ID,
+            kind: "report",
+            content_type: "text/plain",
+            preview: {
+              available: true,
+              text_excerpt: "default preview text",
+            },
+          },
+        } as TPayload,
+      };
+    },
+  };
+  const tools = createDomainMcpTools(apiClient);
+  const previewTool = tools.find((tool) => tool.name === "get_artifact_preview");
+
+  assert.ok(previewTool);
+
+  const result = await previewTool.execute({
+    owner: OWNER,
+    artifact_id: artifactID,
+  } as any);
+
+  assert.deepEqual(result.structuredContent, {
+    artifact_preview: {
+      artifact_id: artifactID,
+      analysis_run_id: RUN_ID,
+      artifact_kind: "report",
+      content_type: "text/plain",
+      available: true,
+      format: "text",
+      max_chars: 4000,
+      source: "artifact.preview.text_excerpt",
+      text: "default preview text",
+      truncated: false,
+    },
+  });
+});
