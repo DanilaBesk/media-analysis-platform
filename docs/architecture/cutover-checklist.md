@@ -29,6 +29,12 @@ pnpm --filter web test
 pnpm --filter mcp-server test
 ```
 
+For the authoritative final order, exact `PYTHONPATH` values, runtime gate, and coverage truth, use:
+
+```bash
+docs/architecture/final-closure-matrix.md
+```
+
 ## Coverage Inventory Gate
 
 Use the executable inventory before calling the repo "fully covered":

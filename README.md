@@ -113,6 +113,14 @@ Current gap:
 - `apps/web` has passing route/client suites, but no configured line-coverage provider yet.
 - Because Web line coverage is not instrumented and several backends are well below `100%`, the repository does not currently satisfy a literal `100% coverage` claim.
 
+## Final Verification
+
+The canonical ordered closure runbook lives here:
+
+```bash
+docs/architecture/final-closure-matrix.md
+```
+
 ## Executable coverage inventory
 
 The repo does not have one honest global `100%` gate today. Coverage is measured per surface, with the metric defined by the tool that can actually emit it:

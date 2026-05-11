@@ -5,6 +5,7 @@
     <owner-scope>Every verification must include same-owner success and cross-owner denial where the surface reads or mutates durable state.</owner-scope>
     <diagnostics-policy>Rejected and partially processed records must produce stable diagnostics instead of disappearing.</diagnostics-policy>
     <retention-policy>Retention checks must prove metadata, source bodies, artifacts, diagnostics, and selection snapshots follow their separate lifecycle rules.</retention-policy>
+    <coverage-policy>Coverage closure is reported per surface with the metric each tool can actually emit; missing metrics remain explicit gaps and do not collapse into a fake repo-wide 100% claim.</coverage-policy>
     <redaction>Never assert on raw secrets, raw bot tokens, private object URLs, or full prompt payloads.</redaction>
   </GlobalPolicy>
 
@@ -104,6 +105,10 @@
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
       <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state.</required-evidence>
+    </Gate>
+    <Gate id="EV-COVERAGE-INVENTORY">
+      <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
+      <required-evidence>`bash infra/scripts/coverage-inventory.sh` records statement, line, branch, or function coverage where supported, records pass/fail-only surfaces separately, and returns non-zero while any declared surface still has an unwired metric or failing probe.</required-evidence>
     </Gate>
     <Gate id="EV-RUNTIME">
       <description>Runtime smoke proves end-to-end behavior.</description>
