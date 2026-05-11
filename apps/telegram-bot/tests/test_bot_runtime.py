@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from pathlib import Path
 import runpy
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from telegram_adapter.bot import (
     _message_files,
     _message_text,
     _normalize_callback_error,
+    _normalize_message_error,
     _parse_callback_payload,
     _start_text,
     build_status_keyboard,
@@ -419,7 +421,7 @@ async def test_start_help_and_inbox_handlers_answer_and_refresh_status() -> None
 
 
 @pytest.mark.asyncio
-async def test_handle_any_message_reports_rejections_and_handler_errors() -> None:
+async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: pytest.LogCaptureFixture) -> None:
     _, gateway, app = make_app()
     accepted_message = FakeMessage(text="Keep text ftp://bad.example/file", message_id=42)
 
@@ -432,14 +434,17 @@ async def test_handle_any_message_reports_rejections_and_handler_errors() -> Non
     failing_message = FakeMessage(text="hello")
 
     async def fake_download_message_files(message: FakeMessage) -> list[Any]:
-        raise RuntimeError("download exploded")
+        raise RuntimeError("telegram_file_download_failed")
 
     app._download_message_files = fake_download_message_files  # type: ignore[method-assign]
-    await app._handle_any_message(failing_message)
+    with caplog.at_level(logging.ERROR):
+        await app._handle_any_message(failing_message)
 
     assert failing_message.answers[-1]["text"] == (
-        "Service is temporarily unavailable. Try again in a minute; your inbox is stored on the server."
+        "unsupported input: Telegram file content could not be downloaded."
     )
+    assert "scope=message_ingest" in caplog.text
+    assert "normalized_code=unsupported_input" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -781,11 +786,14 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
     assert _help_text().startswith("/inbox")
 
     normalized_404 = _normalize_callback_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))
+    normalized_message_404 = _normalize_message_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))
     normalized_key_error = _normalize_callback_error(KeyError("selection_id"))
     passthrough = _normalize_callback_error(RuntimeError("boom"))
 
     assert isinstance(normalized_404, TelegramUserError)
     assert normalized_404.code == TelegramUserErrorCode.STALE_ACTION
+    assert isinstance(normalized_message_404, TelegramUserError)
+    assert normalized_message_404.code == TelegramUserErrorCode.STALE_ACTION
     assert isinstance(normalized_key_error, TelegramUserError)
     assert isinstance(passthrough, RuntimeError)
 

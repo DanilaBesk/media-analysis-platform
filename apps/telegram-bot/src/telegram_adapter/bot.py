@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from io import BytesIO
@@ -41,6 +42,8 @@ from telegram_adapter.i18n import DEFAULT_LOCALE, TelegramLocaleService, Telegra
 from telegram_adapter.policy import TelegramChatScope
 
 JsonObject = dict[str, Any]
+_LOGGER = logging.getLogger(__name__)
+_LOG_MARKER_TELEGRAM_HANDLER_ERROR = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]"
 
 
 @dataclass(slots=True)
@@ -115,7 +118,9 @@ class TelegramInboxApp:
                 message_id=message.message_id,
             )
         except Exception as exc:
-            await self._answer_message_error(message, exc)
+            normalized = _normalize_message_error(exc)
+            _log_handler_exception("message_ingest", exc, normalized=normalized, message=message)
+            await self._answer_message_error(message, normalized)
             return
         await self._send_or_edit_status(message, rejected=[record for record in records if record.status == "rejected"])
 
@@ -335,7 +340,9 @@ class TelegramInboxApp:
                 await callback.answer("Diagnostics loaded")
                 return
         except Exception as exc:
-            await self._answer_callback_error(callback, _normalize_callback_error(exc))
+            normalized = _normalize_callback_error(exc)
+            _log_handler_exception("callback_action", exc, normalized=normalized, callback=callback)
+            await self._answer_callback_error(callback, normalized)
             return
         await self._answer_callback_error(callback, TelegramUserErrorCode.UNKNOWN_ACTION)
 
@@ -349,7 +356,9 @@ class TelegramInboxApp:
         try:
             status = self.gateway.restore_status(owner=owner, rejected=rejected)
         except Exception as exc:
-            await self._answer_message_error(message, exc)
+            normalized = _normalize_message_error(exc)
+            _log_handler_exception("status_refresh", exc, normalized=normalized, message=message)
+            await self._answer_message_error(message, normalized)
             return False
         key = self._scope_from_message(message).state_key
         existing_state = self.page_states.get(key)
@@ -699,6 +708,48 @@ def _normalize_callback_error(error: Exception) -> BaseException | TelegramUserE
     if isinstance(error, (IndexError, KeyError, ValueError)):
         return TelegramUserError(TelegramUserErrorCode.STALE_ACTION)
     return error
+
+
+def _normalize_message_error(error: Exception) -> BaseException | TelegramUserErrorCode:
+    if isinstance(error, TelegramApiClientError) and error.status in {404, 409}:
+        return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=error.code)
+    if isinstance(error, RuntimeError) and str(error) == "telegram_file_download_failed":
+        return TelegramUserError(TelegramUserErrorCode.UNSUPPORTED_INPUT, detail="missing_file_content")
+    if isinstance(error, RuntimeError) and str(error) in {"slot_not_visible", "slot_missing_media_item_id", "inbox_empty"}:
+        return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=str(error))
+    return error
+
+
+def _log_handler_exception(
+    scope: str,
+    error: Exception,
+    *,
+    normalized: BaseException | TelegramUserErrorCode,
+    message: Message | None = None,
+    callback: CallbackQuery | None = None,
+) -> None:
+    normalized_error = normalized if isinstance(normalized, BaseException) else TelegramUserError(normalized)
+    user_error = normalized_error if isinstance(normalized_error, TelegramUserError) else None
+    api_error = error if isinstance(error, TelegramApiClientError) else None
+    callback_data = callback.data[:80] if callback and callback.data else None
+    _LOGGER.exception(
+        "%s scope=%s normalized_code=%s detail=%s error_type=%s api_status=%s api_code=%s chat_id=%s user_id=%s message_id=%s callback_id=%s callback_data=%s",
+        _LOG_MARKER_TELEGRAM_HANDLER_ERROR,
+        scope,
+        user_error.code if user_error else None,
+        user_error.detail if user_error else None,
+        type(error).__name__,
+        api_error.status if api_error else None,
+        api_error.code if api_error else None,
+        getattr(getattr(message, "chat", None), "id", None)
+        or getattr(getattr(getattr(callback, "message", None), "chat", None), "id", None),
+        getattr(getattr(message, "from_user", None), "id", None)
+        or getattr(getattr(callback, "from_user", None), "id", None),
+        getattr(message, "message_id", None)
+        or getattr(getattr(callback, "message", None), "message_id", None),
+        getattr(callback, "id", None),
+        callback_data,
+    )
 
 
 def _message_text(message: Message) -> str | None:

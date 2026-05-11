@@ -57,7 +57,12 @@ STALE_RUNTIME_REASONS = {
 
 
 def user_error_text(error: BaseException | TelegramUserErrorCode) -> str:
-    code = error if isinstance(error, TelegramUserErrorCode) else classify_user_error(error).code
+    if isinstance(error, TelegramUserErrorCode):
+        return USER_ERROR_COPY[error]
+    classified = classify_user_error(error)
+    if classified.code == TelegramUserErrorCode.UNSUPPORTED_INPUT and classified.detail in REJECTION_COPY:
+        return REJECTION_COPY[classified.detail]
+    code = classified.code
     return USER_ERROR_COPY[code]
 
 
@@ -68,6 +73,10 @@ def classify_user_error(error: BaseException) -> TelegramUserError:
         return TelegramUserError(TelegramUserErrorCode.BACKEND_UNAVAILABLE, detail=error.code)
     if isinstance(error, RuntimeError) and str(error) in STALE_RUNTIME_REASONS:
         return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=str(error))
+    if isinstance(error, RuntimeError) and str(error) == "telegram_file_download_failed":
+        return TelegramUserError(TelegramUserErrorCode.UNSUPPORTED_INPUT, detail="missing_file_content")
+    if isinstance(error, RuntimeError) and str(error) in REJECTION_COPY:
+        return TelegramUserError(TelegramUserErrorCode.UNSUPPORTED_INPUT, detail=str(error))
     return TelegramUserError(TelegramUserErrorCode.BACKEND_UNAVAILABLE, detail=type(error).__name__)
 
 

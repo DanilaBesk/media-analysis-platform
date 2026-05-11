@@ -213,6 +213,14 @@ def test_backend_connection_failure_is_categorized_without_raw_exception_copy() 
     assert "Try again" in copy
 
 
+def test_runtime_download_failures_map_to_specific_unsupported_input_copy() -> None:
+    user_error = classify_user_error(RuntimeError("telegram_file_download_failed"))
+    copy = user_error_text(RuntimeError("telegram_file_download_failed"))
+
+    assert user_error.code == TelegramUserErrorCode.UNSUPPORTED_INPUT
+    assert copy == "unsupported input: Telegram file content could not be downloaded."
+
+
 def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surface() -> None:
     captured_urls: list[str] = []
     captured_requests = []
