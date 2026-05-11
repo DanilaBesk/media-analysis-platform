@@ -919,6 +919,69 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findByText("Unable to load the workspace.")).toBeVisible();
   });
 
+  it("covers inbox add-to-collection success and file-kind fanout", async () => {
+    const runtime = renderRoute("/");
+
+    fireEvent.click(await screen.findByLabelText("Select Interview audio"));
+    fireEvent.change(screen.getByLabelText("Existing collection"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
+        expectedVersion: 3,
+        items: [
+          { media_item_id: "media-1", position: 0 },
+          { media_item_id: "media-2", position: 1 },
+        ],
+      });
+    });
+    expect(await screen.findByText("Updated Research set")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "File/media" }));
+    fireEvent.change(screen.getByLabelText("File"), {
+      target: { files: [new File(["video"], "clip.mp4", { type: "video/mp4" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
+        1,
+        owner,
+        expect.objectContaining({ kind: "video", displayName: "clip.mp4" }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add to inbox" })).toBeEnabled();
+    });
+
+    fireEvent.change(screen.getByLabelText("File"), {
+      target: { files: [new File(["image"], "cover.png", { type: "image/png" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
+        2,
+        owner,
+        expect.objectContaining({ kind: "image", displayName: "cover.png" }),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Add to inbox" })).toBeEnabled();
+    });
+
+    fireEvent.change(screen.getByLabelText("File"), {
+      target: { files: [new File(["data"], "blob.bin", { type: "" })] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
+        3,
+        owner,
+        expect.objectContaining({ kind: "file", displayName: "blob.bin" }),
+      );
+    });
+  });
+
   it("covers manifest, legacy diagnostics, and non-progress event branches", async () => {
     renderRoute("/runs/run-1", {
       getAnalysisRun: vi.fn().mockResolvedValue(
@@ -1070,5 +1133,91 @@ describe("createWebUiRoutes", () => {
     expect(screen.getByText("{invalid-json")).toBeVisible();
     expect(screen.getAllByText("2.4 MB")).toHaveLength(2);
     expect(screen.queryByRole("link", { name: "Open artifact" })).toBeNull();
+  });
+
+  it("covers collection, runs, artifact, admin, and media refresh callbacks", async () => {
+    const collectionsRuntime = renderRoute("/collections", {
+      listCollections: vi.fn().mockResolvedValue({
+        items: [
+          collection({
+            items: [{ media_item_id: "media-opaque", position: 0, added_at: "2026-05-10T00:00:00Z" }],
+          }),
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      getCollection: vi.fn().mockResolvedValue(
+        collection({
+          items: [{ media_item_id: "media-opaque", position: 0, added_at: "2026-05-10T00:00:00Z" }],
+        }),
+      ),
+    });
+
+    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Curated set" } });
+    fireEvent.change(screen.getByLabelText("First item"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(collectionsRuntime.apiClient.createCollection).toHaveBeenCalledWith(owner, {
+        name: "Curated set",
+        items: ["media-2"],
+      });
+    });
+    expect(screen.getByText("media-opaque")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(collectionsRuntime.apiClient.listCollections.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+    collectionsRuntime.unmount();
+
+    const runsRuntime = renderRoute("/runs");
+    fireEvent.change(await screen.findByLabelText("Collection"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByLabelText("Select Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(runsRuntime.apiClient.listAnalysisRuns).toHaveBeenCalledTimes(2);
+    });
+    runsRuntime.unmount();
+
+    const artifactRuntime = renderRoute("/artifacts/artifact-1", {
+      getArtifact: vi.fn().mockResolvedValue({
+        artifact_id: "artifact-1",
+        analysis_run_id: "run-1",
+        kind: "execution_log",
+        status: "available",
+        content_type: "application/octet-stream",
+        size_bytes: 42,
+        preview: { available: false, kind: "binary" },
+        created_at: "2026-05-10T00:00:00Z",
+        diagnostics: [],
+        download: { available: true, url: "https://minio.local/artifact-1.bin" },
+      }),
+      refreshArtifact: vi.fn().mockRejectedValue("boom"),
+    });
+
+    expect(await screen.findByText("No inline preview is available for this artifact.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(artifactRuntime.apiClient.listArtifacts).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh access" }));
+    expect(await screen.findByText("Unable to refresh artifact access.")).toBeVisible();
+    artifactRuntime.unmount();
+
+    const diagnosticsRuntime = renderRoute("/diagnostics");
+    fireEvent.change(await screen.findByLabelText("Limit"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(diagnosticsRuntime.apiClient.listDiagnostics).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Reconcile queue" }));
+    await waitFor(() => {
+      expect(diagnosticsRuntime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(1);
+    });
+    diagnosticsRuntime.unmount();
+
+    const mediaRuntime = renderRoute("/inbox/media-1");
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(mediaRuntime.apiClient.getMediaItem).toHaveBeenCalledTimes(2);
+    });
   });
 });
