@@ -262,3 +262,103 @@ test("createMcpAdapterApiClient falls back when the error payload is not an enve
   );
   // END_BLOCK_BLOCK_VERIFY_FALLBACK_ERROR_ENVELOPE
 });
+
+test("createMcpAdapterApiClient preserves BodyInit variants and ignores malformed error-envelope fields", async () => {
+  const calls: Array<{
+    url: string;
+    init: RequestInit | undefined;
+  }> = [];
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test/base/",
+    fetchImpl: async (input, init) => {
+      calls.push({
+        url: input instanceof URL ? input.toString() : String(input),
+        init,
+      });
+      if (calls.length === 3) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 409,
+              message: { detail: "wrong type" },
+              correlation_id: ["corr"],
+              details: ["invalid"],
+              diagnostics: {
+                severity: "error",
+              },
+              conflict: {
+                expected_version: 3,
+              },
+            },
+          }),
+          {
+            status: 409,
+            headers: {
+              "content-type": "application/json",
+            },
+          },
+        );
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      });
+    },
+  });
+
+  const searchParams = new URLSearchParams({
+    cursor: "c1",
+  });
+  const binaryBody = new Uint8Array([1, 2, 3]);
+
+  await client.request({
+    path: "v1/media-items",
+    method: "POST",
+    body: searchParams,
+  });
+  await client.request({
+    path: "/v1/media-items/binary",
+    method: "PUT",
+    body: binaryBody,
+    headers: {
+      "content-type": "application/octet-stream",
+    },
+  });
+
+  assert.equal(calls[0]?.url, "https://api.example.test/base/v1/media-items");
+  assert.equal(calls[0]?.init?.body, searchParams);
+  assert.equal(
+    Object.hasOwn((calls[0]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
+    false,
+  );
+  assert.equal(calls[1]?.url, "https://api.example.test/base/v1/media-items/binary");
+  assert.equal(calls[1]?.init?.body, binaryBody);
+  assert.equal(
+    (calls[1]?.init?.headers as Record<string, string>)["content-type"],
+    "application/octet-stream",
+  );
+
+  await assert.rejects(
+    () =>
+      client.request({
+        path: "/v1/media-items/error",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof McpAdapterApiClientError);
+      const apiError = error as McpAdapterApiClientError;
+      assert.equal(apiError.status, 409);
+      assert.equal(apiError.code, undefined);
+      assert.equal(apiError.message, "API request failed with status 409");
+      assert.equal((apiError as any).correlationId, undefined);
+      assert.equal((apiError as any).details, undefined);
+      assert.equal((apiError as any).diagnostics, undefined);
+      assert.deepEqual((apiError as any).conflict, {
+        expected_version: 3,
+      });
+      return true;
+    },
+  );
+});

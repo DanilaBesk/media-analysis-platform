@@ -158,3 +158,22 @@ test("bootstrapMcpServerRuntime reads API_BASE_URL from process env when options
   }
   // END_BLOCK_BLOCK_VERIFY_PROCESS_ENV_BOOTSTRAP
 });
+
+test("bootstrapMcpServerRuntime falls back to packet defaults when process is missing", () => {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  };
+  const originalProcess = runtimeGlobal.process;
+
+  runtimeGlobal.process = undefined;
+
+  try {
+    const runtime = bootstrapMcpServerRuntime();
+
+    assert.equal(runtime.env.apiBaseUrl, "http://localhost:8080");
+    assert.equal(typeof runtime.apiClient.request, "function");
+    assert.equal(listMcpTools(runtime).length, 24);
+  } finally {
+    runtimeGlobal.process = originalProcess;
+  }
+});

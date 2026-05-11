@@ -1799,3 +1799,148 @@ test("createMcpDomainRuntime shapes missing and invalid artifact preview text br
   });
   // END_BLOCK_BLOCK_VERIFY_ARTIFACT_PREVIEW_EDGE_BRANCHES
 });
+
+test("createMcpDomainRuntime omits optional contract fields on minimal calls and preserves tenant-scoped queries", async () => {
+  const tenantOwner = {
+    ...OWNER,
+    tenant_id: "tenant-1",
+  };
+  const requests: McpAdapterApiRequest[] = [];
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      requests.push(request);
+      return {
+        status: request.method === "POST" || request.method === "PATCH" ? 202 : 200,
+        data: {
+          ok: true,
+          path: request.path,
+          method: request.method ?? "GET",
+        } as TPayload,
+      };
+    },
+  };
+  const runtime = createMcpDomainRuntime({
+    apiClient,
+  });
+
+  const addFileResult = await runtime.callTool("add_media", {
+    owner: OWNER,
+    kind: "document",
+    file: {
+      filename: "brief.txt",
+      content_type: "text/plain",
+      content_base64: Buffer.from("brief").toString("base64"),
+    },
+  });
+  await runtime.callTool("list_media", {
+    owner: tenantOwner,
+  });
+  await runtime.callTool("get_inbox", {
+    owner: OWNER,
+  });
+  await runtime.callTool("create_collection", {
+    owner: OWNER,
+    name: "Minimal collection",
+  });
+  await runtime.callTool("update_collection", {
+    owner: OWNER,
+    collection_id: COLLECTION_ID,
+    expected_version: 2,
+    status: "archived",
+  });
+  await runtime.callTool("create_selection", {
+    owner: OWNER,
+    items: [
+      {
+        media_item_id: MEDIA_ID,
+        position: 0,
+      },
+    ],
+  });
+  await runtime.callTool("run_analysis", {
+    owner: OWNER,
+    selection_id: SELECTION_ID,
+    run_type: "summary",
+  });
+  await runtime.callTool("cancel_run", {
+    owner: OWNER,
+    analysis_run_id: RUN_ID,
+  });
+  await runtime.callTool("list_artifacts", {
+    owner: OWNER,
+    analysis_run_id: RUN_ID,
+  });
+  await runtime.callTool("get_diagnostics", {
+    owner: OWNER,
+  });
+
+  assert.deepEqual(addFileResult.structuredContent, {
+    ok: true,
+    path: "/v1/media-items",
+    method: "POST",
+  });
+  assert.equal(requests.length, 10);
+  assert.equal(requests[0]?.path, "/v1/media-items");
+  assert.equal(requests[0]?.method, "POST");
+  assert.equal(requests[0]?.headers, undefined);
+  assert.ok(requests[0]?.body instanceof FormData);
+  const metadataPayload = JSON.parse(String((requests[0]?.body as FormData).get("metadata")));
+  assert.deepEqual(metadataPayload, {
+    owner: OWNER,
+    kind: "document",
+  });
+  assert.equal(
+    requests[1]?.path,
+    "/v1/media-items?owner_type=mcp&owner_id=assistant&tenant_id=tenant-1",
+  );
+  assert.equal(requests[2]?.path, withOwnerQuery("/v1/collections/inbox"));
+  assert.deepEqual(requests[3], {
+    path: "/v1/collections",
+    method: "POST",
+    headers: undefined,
+    body: {
+      owner: OWNER,
+      name: "Minimal collection",
+    },
+  });
+  assert.deepEqual(requests[4], {
+    path: `/v1/collections/${COLLECTION_ID}`,
+    method: "PATCH",
+    body: {
+      owner: OWNER,
+      expected_version: 2,
+      status: "archived",
+    },
+  });
+  assert.deepEqual(requests[5], {
+    path: "/v1/selections",
+    method: "POST",
+    headers: undefined,
+    body: {
+      owner: OWNER,
+      items: [
+        {
+          media_item_id: MEDIA_ID,
+          position: 0,
+        },
+      ],
+    },
+  });
+  assert.deepEqual(requests[6], {
+    path: "/v1/analysis-runs",
+    method: "POST",
+    headers: undefined,
+    body: {
+      owner: OWNER,
+      selection_id: SELECTION_ID,
+      run_type: "summary",
+    },
+  });
+  assert.deepEqual(requests[7], {
+    path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+    method: "POST",
+    body: {},
+  });
+  assert.equal(requests[8]?.path, withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts`));
+  assert.equal(requests[9]?.path, withOwnerQuery("/v1/diagnostics"));
+});
