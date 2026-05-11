@@ -15,6 +15,7 @@ from telegram_adapter.api_client import TelegramApiClientError
 from telegram_adapter.bot import (
     TelegramInboxApp,
     _artifact_label,
+    _classify_polling_log_message,
     _chat_type,
     _decode_callback_token,
     _decode_callback_version,
@@ -30,6 +31,7 @@ from telegram_adapter.bot import (
     _normalize_callback_error,
     _normalize_message_error,
     _parse_callback_payload,
+    _TelegramPollingMonitor,
     _start_text,
     build_status_keyboard,
 )
@@ -397,6 +399,51 @@ async def test_run_registers_localized_commands_and_starts_polling() -> None:
 
     assert [language_code for _, language_code in app.bot.set_commands_calls] == ["ru", "en"]
     assert started["bot"] is app.bot
+
+
+def test_polling_monitor_classifies_upstream_failures_and_recovery(caplog: pytest.LogCaptureFixture) -> None:
+    monitor = _TelegramPollingMonitor()
+    aiogram_logger = logging.getLogger("aiogram.dispatcher")
+    record_failure = logging.LogRecord(
+        name="aiogram.dispatcher",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg="Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error",
+        args=(),
+        exc_info=None,
+    )
+    record_recovered = logging.LogRecord(
+        name="aiogram.dispatcher",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="Connection established (tryings = 1, bot id = 1)",
+        args=(),
+        exc_info=None,
+    )
+    record_unrelated = logging.LogRecord(
+        name="aiogram.dispatcher",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="Run polling for bot",
+        args=(),
+        exc_info=None,
+    )
+
+    with caplog.at_level(logging.INFO):
+        aiogram_logger.addHandler(monitor)
+        try:
+            monitor.emit(record_failure)
+            monitor.emit(record_recovered)
+            monitor.emit(record_unrelated)
+        finally:
+            aiogram_logger.removeHandler(monitor)
+
+    assert "classification=telegram_upstream_failure" in caplog.text
+    assert "classification=telegram_upstream_recovered" in caplog.text
+    assert "Run polling for bot" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -835,6 +882,9 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
     assert normalized_message_404.code == TelegramUserErrorCode.STALE_ACTION
     assert isinstance(normalized_key_error, TelegramUserError)
     assert isinstance(passthrough, RuntimeError)
+    assert _classify_polling_log_message("Failed to fetch updates - TelegramNetworkError: timeout") == "telegram_upstream_failure"
+    assert _classify_polling_log_message("Connection established (tryings = 1)") == "telegram_upstream_recovered"
+    assert _classify_polling_log_message("Run polling for bot") is None
 
     with pytest.raises(TelegramUserError):
         _parse_callback_payload("bad")

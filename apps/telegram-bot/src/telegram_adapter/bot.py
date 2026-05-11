@@ -45,6 +45,7 @@ from telegram_adapter.policy import TelegramChatScope
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_TELEGRAM_HANDLER_ERROR = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]"
+_LOG_MARKER_TELEGRAM_POLLING_STATE = "[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE]"
 
 
 @dataclass(slots=True)
@@ -75,12 +76,18 @@ class TelegramInboxApp:
         self.dispatcher.include_router(self.router)
 
     async def run(self) -> None:
+        polling_monitor = _TelegramPollingMonitor()
+        dispatcher_logger = logging.getLogger("aiogram.dispatcher")
+        dispatcher_logger.addHandler(polling_monitor)
         for locale in ("ru", "en"):
             await self.bot.set_my_commands(
                 list(build_localized_commands(locale, locale_service=self.locale_service)),
                 language_code=locale,
             )
-        await self.dispatcher.start_polling(self.bot)
+        try:
+            await self.dispatcher.start_polling(self.bot)
+        finally:
+            dispatcher_logger.removeHandler(polling_monitor)
 
     def _register_handlers(self) -> None:
         self.router.message.register(self._handle_start, Command("start"))
@@ -772,6 +779,33 @@ def _log_handler_exception(
         getattr(callback, "id", None),
         callback_data,
     )
+
+
+class _TelegramPollingMonitor(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.name != "aiogram.dispatcher":
+            return
+        message = record.getMessage()
+        classification = _classify_polling_log_message(message)
+        if classification is None:
+            return
+        level = logging.WARNING if classification == "telegram_upstream_failure" else logging.INFO
+        _LOGGER.log(
+            level,
+            "%s classification=%s aiogram_level=%s message=%s",
+            _LOG_MARKER_TELEGRAM_POLLING_STATE,
+            classification,
+            record.levelname,
+            message,
+        )
+
+
+def _classify_polling_log_message(message: str) -> str | None:
+    if "Failed to fetch updates -" in message and "TelegramNetworkError" in message:
+        return "telegram_upstream_failure"
+    if "Connection established" in message:
+        return "telegram_upstream_recovered"
+    return None
 
 
 def _message_text(message: Message) -> str | None:

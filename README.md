@@ -154,3 +154,11 @@ Current baseline snapshot from `2026-05-11`:
 | `apps/web/src` | line / branch / function coverage | `100% / 100% / 100%` | measured |
 
 The repo can now truthfully claim full measured coverage closure for all declared percentage-emitting surfaces, while still treating contracts, XML integrity, and runtime-final e2e as separate acceptance gates.
+
+## Telegram Ops
+
+When diagnosing Telegram adapter incidents, distinguish external polling degradation from internal product failures:
+
+- External Telegram upstream flaps are logged with `[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE] classification=telegram_upstream_failure` and later `classification=telegram_upstream_recovered`.
+- Internal message/callback/status handler failures are logged with `[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]` plus normalized error metadata.
+- Generic user-facing outage copy must not be treated as proof of a platform outage by itself; check the structured log marker first.
