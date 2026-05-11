@@ -1220,4 +1220,117 @@ describe("createWebUiRoutes", () => {
       expect(mediaRuntime.apiClient.getMediaItem).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("covers inbox refresh, archived collection activation, and successful rename refresh", async () => {
+    const inboxRuntime = renderRoute("/");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(inboxRuntime.apiClient.listMediaItems).toHaveBeenCalledTimes(2);
+      expect(inboxRuntime.apiClient.getInboxCollection).toHaveBeenCalledTimes(2);
+      expect(inboxRuntime.apiClient.listCollections).toHaveBeenCalledTimes(2);
+      expect(inboxRuntime.apiClient.listAnalysisRuns).toHaveBeenCalledTimes(2);
+    });
+    inboxRuntime.unmount();
+
+    const archivedRuntime = renderRoute("/collections", {
+      listCollections: vi.fn().mockResolvedValue({
+        items: [
+          collection({
+            collection_id: "collection-archived",
+            name: "Archived set",
+            status: "archived",
+          }),
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      updateCollection: vi.fn().mockResolvedValue(
+        collection({
+          collection_id: "collection-archived",
+          name: "Reactivated set",
+          status: "active",
+          version: 4,
+        }),
+      ),
+    });
+
+    const archivedRename = await screen.findByLabelText("Rename Archived set");
+    fireEvent.blur(archivedRename, { target: { value: "Reactivated set" } });
+    await waitFor(() => {
+      expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-archived", {
+        expectedVersion: 3,
+        name: "Reactivated set",
+      });
+    });
+    await waitFor(() => {
+      expect(archivedRuntime.apiClient.listCollections).toHaveBeenCalledTimes(2);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Activate" }));
+    await waitFor(() => {
+      expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-archived", {
+        expectedVersion: 3,
+        status: "active",
+      });
+    });
+  });
+
+  it("covers run-detail refresh and successful cancel lifecycle", async () => {
+    const runtime = renderRoute("/runs/run-1", {
+      cancelAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ status: "cancel_requested" })),
+    });
+
+    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.getAnalysisRun).toHaveBeenCalledTimes(2);
+    });
+
+    fireEvent.click(within(runtime.container).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.cancelAnalysisRun).toHaveBeenCalledWith(owner, "run-1");
+    });
+    expect(await within(runtime.container).findByText("Cancel requested")).toBeVisible();
+    expect(within(runtime.container).getByText("cancel_requested")).toBeVisible();
+  });
+
+  it("covers text preview fallback, kilobyte sizing, and nullable download availability", async () => {
+    renderRoute("/artifacts/artifact-text-preview", {
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [
+          {
+            artifact_id: "artifact-kb",
+            analysis_run_id: "run-1",
+            kind: "execution_log",
+            status: "available",
+            content_type: "text/plain",
+            size_bytes: 2048,
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      getArtifact: vi.fn().mockResolvedValue({
+        artifact_id: "artifact-text-preview",
+        analysis_run_id: "run-1",
+        kind: "execution_log",
+        status: "available",
+        content_type: "text/plain",
+        size_bytes: 2048,
+        created_at: "2026-05-10T00:00:00Z",
+        diagnostics: [],
+        download: { url: "https://minio.local/artifact-text-preview.log" },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("2.0 KB")).toBeVisible();
+    expect(screen.getByText("No inline preview is available for this artifact.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open artifact" })).toHaveAttribute(
+      "href",
+      "https://minio.local/artifact-text-preview.log",
+    );
+  });
 });
