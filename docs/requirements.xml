@@ -139,13 +139,17 @@
   </EvidenceGates>
 
   <BeadsTrace>
-    <bead id="media-36a" status="current">Rewrite GRACE docs to define only the final inbox-first architecture.</bead>
-    <bead id="media-49h" status="next">Implement public contracts for media_item, collection, selection, analysis_run, diagnostics, and artifacts.</bead>
-    <bead id="media-5cj" status="later">Implement server storage and orchestration bottom-up.</bead>
-    <bead id="media-7al" status="later">Adapt Telegram over the canonical API state.</bead>
-    <bead id="media-7wo" status="later">Adapt Web over the canonical API state.</bead>
-    <bead id="media-uhi" status="later">Adapt MCP over the canonical API state.</bead>
-    <bead id="media-sfx" status="later">Adapt worker execution behind analysis_run.</bead>
+    <bead id="media-36a" status="completed">GRACE source-of-truth rewrite is complete.</bead>
+    <bead id="media-49h" status="completed">Public contracts and schemas now expose the canonical inbox-first vocabulary.</bead>
+    <bead id="media-5cj" status="completed">Server storage/API orchestration is implemented for the canonical media_item to artifact chain.</bead>
+    <bead id="media-sfx" status="completed">Worker execution now runs behind analysis_run with sealed selection consumption.</bead>
+    <bead id="media-7al" status="completed">Telegram now operates over explicit selection/run semantics on the API-owned inbox.</bead>
+    <bead id="media-7wo" status="completed">Web management UI now covers inbox, collections, run detail, artifact use, and sealed-selection regressions.</bead>
+    <bead id="media-uhi" status="completed">MCP tools now match the owner-scoped canonical API surface.</bead>
+    <bead id="media-nvx" status="completed">Runtime-final compose proof exists for end-to-end inbox, selection, run, artifact, diagnostics, owner denial, and retention behavior.</bead>
+    <bead id="media-omt" status="completed">Executable coverage inventory is documented and runnable, with remaining measurement gaps explicit.</bead>
+    <bead id="media-gna" status="current">Refresh GRACE packet truth so only real remaining closure gates stay open.</bead>
+    <bead id="media-i7m" status="next">Publish the final ordered closure matrix that combines contracts, runtime, coverage, and documentation gates.</bead>
   </BeadsTrace>
 
   <NonGoals>

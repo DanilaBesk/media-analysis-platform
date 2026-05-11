@@ -1,4 +1,16 @@
 <OperationalPackets VERSION="1.0.0">
+  <CurrentState>
+    <completed-packet>media-36a-grace-inbox-first</completed-packet>
+    <completed-packet>media-49h-contracts</completed-packet>
+    <completed-packet>media-5cj-server-storage-orchestration</completed-packet>
+    <completed-packet>media-sfx-workers</completed-packet>
+    <completed-packet>media-7al-telegram-adapter</completed-packet>
+    <completed-packet>media-7wo-web-adapter</completed-packet>
+    <completed-packet>media-uhi-mcp-adapter</completed-packet>
+    <completed-packet>runtime-final-inbox-first</completed-packet>
+    <remaining-closure-gate bead="media-gna">Refresh GRACE packet truth so only real remaining closure tasks stay open.</remaining-closure-gate>
+    <remaining-closure-gate bead="media-i7m">Publish the final ordered closure verification matrix for contracts, runtime, coverage, and docs.</remaining-closure-gate>
+  </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
       <module-id>M-EXAMPLE</module-id>
