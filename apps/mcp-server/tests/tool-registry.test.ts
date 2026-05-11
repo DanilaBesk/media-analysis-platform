@@ -1397,6 +1397,68 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
   // END_BLOCK_BLOCK_VERIFY_ERROR_SHAPING
 });
 
+test("createMcpDomainRuntime preserves upstream API details diagnostics and conflict metadata", async () => {
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async () => {
+        throw new McpAdapterApiClientError(
+          withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+          409,
+          "upstream rejected cancellation",
+          "run_cancel_not_allowed",
+          {
+            correlationId: "corr-9000",
+            details: {
+              run_state: "running",
+            },
+            diagnostics: [
+              {
+                code: "cancel_denied",
+                severity: "warning",
+              },
+            ],
+            conflict: {
+              expected_version: 4,
+            },
+          },
+        );
+      },
+    },
+  });
+
+  const upstreamResult = await runtime.callTool("cancel_run", {
+    owner: OWNER,
+    analysis_run_id: RUN_ID,
+  });
+
+  assert.deepEqual(upstreamResult.structuredContent, {
+    error: {
+      code: "run_cancel_not_allowed",
+      message: "upstream rejected cancellation",
+      category: "upstream_api",
+      retryable: false,
+      action: "inspect_run_state_before_retry",
+      correlation_id: "corr-9000",
+      details: {
+        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+        status: 409,
+        upstream_details: {
+          run_state: "running",
+        },
+      },
+      diagnostics: [
+        {
+          code: "cancel_denied",
+          severity: "warning",
+        },
+      ],
+      conflict: {
+        expected_version: 4,
+      },
+    },
+  });
+});
+
 test("createMcpDomainRuntime keeps denied retention-touching paths structured", async () => {
   // START_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_DENIALS
   const runtime = createMcpDomainRuntime({

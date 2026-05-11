@@ -362,3 +362,64 @@ test("createMcpAdapterApiClient preserves BodyInit variants and ignores malforme
     },
   );
 });
+
+test("createMcpAdapterApiClient preserves direct string blob and ArrayBuffer bodies", async () => {
+  const calls: Array<{
+    url: string;
+    init: RequestInit | undefined;
+  }> = [];
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test/root",
+    fetchImpl: async (input, init) => {
+      calls.push({
+        url: input instanceof URL ? input.toString() : String(input),
+        init,
+      });
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      });
+    },
+  });
+
+  const blobBody = new Blob(["clip-bytes"], { type: "application/octet-stream" });
+  const bufferBody = new ArrayBuffer(4);
+  new Uint8Array(bufferBody).set([9, 8, 7, 6]);
+
+  await client.request({
+    path: "/v1/media-items/raw-text",
+    method: "POST",
+    body: "raw body",
+  });
+  await client.request({
+    path: "/v1/media-items/blob",
+    method: "PUT",
+    body: blobBody,
+  });
+  await client.request({
+    path: "/v1/media-items/bytes",
+    method: "PATCH",
+    body: bufferBody,
+  });
+
+  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-items/raw-text");
+  assert.equal(calls[0]?.init?.body, "raw body");
+  assert.equal(
+    Object.hasOwn((calls[0]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
+    false,
+  );
+  assert.equal(calls[1]?.url, "https://api.example.test/root/v1/media-items/blob");
+  assert.equal(calls[1]?.init?.body, blobBody);
+  assert.equal(
+    Object.hasOwn((calls[1]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
+    false,
+  );
+  assert.equal(calls[2]?.url, "https://api.example.test/root/v1/media-items/bytes");
+  assert.equal(calls[2]?.init?.body, bufferBody);
+  assert.equal(
+    Object.hasOwn((calls[2]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
+    false,
+  );
+});
