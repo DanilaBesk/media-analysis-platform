@@ -159,7 +159,7 @@ Latest measured baselines from the active tree:
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
 - Python `apps/telegram-bot/src/telegram_adapter`: `66%`
 - Node `apps/mcp-server/src`: `95.67%` lines, `67.36%` branches, `96.15%` functions
-- Web `apps/web`: test suite passes, but line coverage is still uninstrumented
+- Web `apps/web/src`: `84.39%` lines, `73.2%` branches, `65.78%` functions
 
 ## Remaining Closure Truth
 
@@ -167,6 +167,6 @@ The repo does **not** currently satisfy a literal `100% coverage` claim.
 
 Remaining explicit gap:
 
-- `apps/web` still lacks a configured line-coverage provider, so repo-wide coverage closure remains incomplete even though runtime, contract, and adapter gates are now executable.
+- Several measured surfaces still remain below a literal `100%` bar, especially Go API/storage, Telegram adapter, and agent-runner/transcription runtime code.
 
 Any future claim of full closure must cite this runbook and the actual command outputs, not proxy signals.

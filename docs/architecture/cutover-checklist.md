@@ -78,12 +78,13 @@ Current measurable baselines from the active tree:
 - Python `workers/common/src/transcriber_workers_common`: `95%`
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
 - Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
-- Python `apps/telegram-bot/src/telegram_adapter`: `81%`
+- Python `apps/telegram-bot/src/telegram_adapter`: `66%`
 - Node `apps/mcp-server/src`: `95.67%`
+- Web `apps/web/src`: `84.39%` lines, `73.2%` branches, `65.78%` functions
 
-Known unmeasured gap:
+Known remaining gap:
 
-- `apps/web` has passing suites but no configured line-coverage provider, so a repo-wide `100% coverage` statement remains unproven.
+- A repo-wide `100% coverage` statement remains unproven because multiple measured surfaces still sit well below that threshold.
 
 ## Legacy Removal Gate
 

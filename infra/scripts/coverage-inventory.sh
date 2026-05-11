@@ -47,5 +47,4 @@ echo "[CoverageInventory] Node MCP adapter"
 
 echo
 echo "[CoverageInventory] Web UI"
-echo "No line-coverage provider is configured for apps/web yet."
-echo "Run: cd apps/web && pnpm test -- --run tests/routes.test.tsx"
+pnpm --dir apps/web coverage
