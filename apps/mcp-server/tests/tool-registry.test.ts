@@ -37,6 +37,7 @@ import {
   createMcpDomainRuntime,
 } from "../src/tools/registry.ts";
 import { createDomainMcpTools } from "../src/tools/mapped-tools.ts";
+import { McpAdapterToolError } from "../src/tools/protocol.ts";
 
 const OWNER = {
   owner_type: "mcp",
@@ -2478,5 +2479,89 @@ test("createDomainMcpTools applies preview defaults when direct execution omits 
       text: "default preview text",
       truncated: false,
     },
+  });
+});
+
+test("createDomainMcpTools preserves multipart adapter_origin metadata and null content-type preview errors", async () => {
+  const artifactID = "00000000-0000-4000-8000-000000000011";
+  const requests: McpAdapterApiRequest[] = [];
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      requests.push(request);
+      if (request.path === "/v1/media-items") {
+        return {
+          status: 201,
+          data: {
+            media_item: {
+              media_item_id: MEDIA_ID,
+              status: "ready",
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === withOwnerQuery(`/v1/artifacts/${artifactID}`)) {
+        return {
+          status: 200,
+          data: {
+            artifact: {
+              artifact_id: artifactID,
+              preview: {
+                available: true,
+                text_excerpt: "{not-json}",
+              },
+            },
+          } as TPayload,
+        };
+      }
+      throw new Error(`unexpected request path ${request.path}`);
+    },
+  };
+  const tools = createDomainMcpTools(apiClient);
+  const addMedia = tools.find((tool) => tool.name === "add_media");
+  const previewTool = tools.find((tool) => tool.name === "get_artifact_preview");
+
+  assert.ok(addMedia);
+  assert.ok(previewTool);
+
+  await addMedia.execute({
+    owner: OWNER,
+    kind: "document",
+    file: {
+      filename: "brief.txt",
+      content_type: "text/plain",
+      content_base64: Buffer.from("brief").toString("base64"),
+    },
+    adapter_origin: "telegram-import",
+  });
+  await assert.rejects(
+    () =>
+      previewTool.execute({
+        owner: OWNER,
+        artifact_id: artifactID,
+        format: "json",
+        max_chars: 4000,
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof McpAdapterToolError);
+      assert.equal(error.code, "artifact_preview_json_invalid");
+      assert.equal(error.message, "Artifact preview is not valid JSON.");
+      assert.equal(error.category, "resource_state");
+      assert.equal(error.retryable, false);
+      assert.equal(error.action, "request_text_preview_or_refresh_artifact");
+      assert.deepEqual(error.details, {
+        artifact_id: artifactID,
+        content_type: null,
+      });
+      return true;
+    },
+  );
+
+  assert.equal(requests[0]?.path, "/v1/media-items");
+  assert.ok(requests[0]?.body instanceof FormData);
+  const metadataPayload = JSON.parse(String((requests[0]?.body as FormData).get("metadata")));
+  assert.deepEqual(metadataPayload, {
+    owner: OWNER,
+    kind: "document",
+    adapter_origin: "telegram-import",
   });
 });

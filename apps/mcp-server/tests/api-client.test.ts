@@ -229,6 +229,44 @@ test("createMcpAdapterApiClient handles 204 and text payload variants", async ()
   // END_BLOCK_BLOCK_VERIFY_TEXT_AND_EMPTY_PAYLOADS
 });
 
+test("createMcpAdapterApiClient treats missing content-type headers as plain text payloads", async () => {
+  // START_BLOCK_BLOCK_VERIFY_MISSING_CONTENT_TYPE_FALLBACK
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test",
+    fetchImpl: async (input) => {
+      const url = input instanceof URL ? input.toString() : String(input);
+      if (url.endsWith("/empty-no-header")) {
+        return new Response("", {
+          status: 200,
+        });
+      }
+      return new Response("accepted-without-header", {
+        status: 202,
+      });
+    },
+  });
+
+  assert.deepEqual(
+    await client.request({
+      path: "/empty-no-header",
+    }),
+    {
+      status: 200,
+      data: null,
+    },
+  );
+  assert.deepEqual(
+    await client.request({
+      path: "/plain-no-header",
+    }),
+    {
+      status: 202,
+      data: "accepted-without-header",
+    },
+  );
+  // END_BLOCK_BLOCK_VERIFY_MISSING_CONTENT_TYPE_FALLBACK
+});
+
 test("createMcpAdapterApiClient falls back when the error payload is not an envelope object", async () => {
   // START_BLOCK_BLOCK_VERIFY_FALLBACK_ERROR_ENVELOPE
   const client = createMcpAdapterApiClient({
