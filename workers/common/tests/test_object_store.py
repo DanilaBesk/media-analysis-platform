@@ -26,8 +26,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
+from urllib import error
 
-from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
+import pytest
+
+from transcriber_workers_common.object_store import (
+    ObjectStoreRequestFailed,
+    WorkerObjectStore,
+    WorkerObjectStoreConfig,
+    _UrllibObjectTransport,
+)
 
 
 class RecordingObjectTransport:
@@ -102,6 +110,70 @@ def test_put_bytes_uses_artifact_bucket_and_content_headers() -> None:
     assert call["body"] == b"transcript"
     assert call["headers"]["Content-Type"] == "text/plain"
     assert call["headers"]["X-Amz-Content-Sha256"] == "54e6289e14c7b0e7ad9acc2dfc4c1e3d027d0eef7f5c4c3fe7c292761d0e06a6"
+
+
+def test_urllib_transport_reads_response_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = b"downloaded"
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return payload
+
+    monkeypatch.setattr("transcriber_workers_common.object_store.request.urlopen", lambda *_args, **_kwargs: _Response())
+
+    transport = _UrllibObjectTransport()
+
+    assert (
+        transport.request(
+            method="GET",
+            url="http://minio:9000/sources/object.txt",
+            headers={"Accept": "application/octet-stream"},
+        )
+        == payload
+    )
+
+
+def test_urllib_transport_wraps_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_http_error(*_args, **_kwargs):
+        raise error.HTTPError(
+            url="http://minio:9000/sources/object.txt",
+            code=503,
+            msg="service unavailable",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("transcriber_workers_common.object_store.request.urlopen", _raise_http_error)
+
+    transport = _UrllibObjectTransport()
+
+    with pytest.raises(ObjectStoreRequestFailed, match="HTTP 503: service unavailable"):
+        transport.request(method="GET", url="http://minio:9000/sources/object.txt", headers={})
+
+
+def test_urllib_transport_wraps_url_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_url_error(*_args, **_kwargs):
+        raise error.URLError("dns failure")
+
+    monkeypatch.setattr("transcriber_workers_common.object_store.request.urlopen", _raise_url_error)
+
+    transport = _UrllibObjectTransport()
+
+    with pytest.raises(ObjectStoreRequestFailed, match="dns failure"):
+        transport.request(method="GET", url="http://minio:9000/sources/object.txt", headers={})
+
+
+def test_fetch_file_rejects_blank_object_key(tmp_path: Path) -> None:
+    store = WorkerObjectStore(_config(), transport=RecordingObjectTransport(), now=_fixed_now)
+
+    with pytest.raises(ValueError, match="object_key must not be empty"):
+        store.fetch_file(object_key="   ", destination=tmp_path / "ignored.bin")
 
 
 def _config() -> WorkerObjectStoreConfig:
