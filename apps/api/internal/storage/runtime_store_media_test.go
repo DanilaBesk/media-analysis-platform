@@ -2370,6 +2370,228 @@ func TestRuntimeStoreSelectionAndRunReadErrorBranches(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreExecutionRefreshAndStepBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 20, 30, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	size := int64(42)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("execution-refresh branch failed")
+
+	t.Run("create selection propagates refresh failure after successful inserts", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM media_items mi",
+					columns: mediaItemColumns(),
+					rows: [][]driver.Value{mediaItemDriverRow(mediaItemDriverRowInput{
+						id:             "media-1",
+						ownerType:      "web",
+						ownerID:        "user-1",
+						sourceID:       "source-1",
+						originType:     "object",
+						objectKey:      "sources/source-1/source.txt",
+						checksum:       "sha256:111",
+						sizeBytes:      &size,
+						mimeType:       "text/plain",
+						kind:           "text",
+						status:         MediaStatusReady,
+						displayName:    "source.txt",
+						metadataJSON:   []byte(`{"tag":"one"}`),
+						retentionState: RetentionStateActive,
+						createdAt:      now,
+						updatedAt:      now,
+					})},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO selections", affected: 1},
+				{match: "INSERT INTO selection_items", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.CreateSelection(context.Background(), SelectionRecord{
+			ID:                 "selection-1",
+			Owner:              owner,
+			Status:             SelectionStatusSealed,
+			SourceCollectionID: "collection-1",
+			OptionSnapshotJSON: []byte(`{"duplicate_policy":"keep_all"}`),
+			CreatedBy:          "tester",
+			CreatedAt:          now,
+			SealedAt:           now,
+		}, []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("CreateSelection() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("create analysis run propagates run and task insert failures", func(t *testing.T) {
+		t.Parallel()
+
+		baseQueries := []scriptedQueryResponse{
+			{
+				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+				columns: selectionColumns(),
+				rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+			},
+			{
+				match:   "FROM selection_items WHERE selection_id=$1",
+				columns: selectionItemColumns(),
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
+			},
+		}
+
+		storeRunInsert, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: append([]scriptedQueryResponse(nil), baseQueries...),
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO analysis_runs", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(run insert) error = %v", err)
+		}
+		_, err = storeRunInsert.CreateAnalysisRun(context.Background(), AnalysisRunRecord{
+			ID:          "run-1",
+			Owner:       owner,
+			SelectionID: "selection-1",
+			RunType:     "transcription",
+			Status:      AnalysisRunStatusQueued,
+			Version:     1,
+			CreatedAt:   now,
+			ExpiresAt:   &expiresAt,
+		}, AnalysisRunTaskRecord{
+			ID:            "task-1",
+			AnalysisRunID: "run-1",
+			WorkerKind:    "transcription",
+			TaskType:      "selection.transcription",
+			Status:        AnalysisRunTaskStatusQueued,
+			AttemptNo:     1,
+			CreatedAt:     now,
+		}, RunEventRecord{
+			ID:            "event-1",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.created",
+			Version:       1,
+			Status:        AnalysisRunStatusQueued,
+			CreatedAt:     now,
+		})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("CreateAnalysisRun(run insert) error = %v, want stepErr", err)
+		}
+
+		storeTaskInsert, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: append([]scriptedQueryResponse(nil), baseQueries...),
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO analysis_runs", affected: 1},
+				{match: "INSERT INTO analysis_run_tasks", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(task insert) error = %v", err)
+		}
+		_, err = storeTaskInsert.CreateAnalysisRun(context.Background(), AnalysisRunRecord{
+			ID:          "run-1",
+			Owner:       owner,
+			SelectionID: "selection-1",
+			RunType:     "transcription",
+			Status:      AnalysisRunStatusQueued,
+			Version:     1,
+			CreatedAt:   now,
+			ExpiresAt:   &expiresAt,
+		}, AnalysisRunTaskRecord{
+			ID:            "task-1",
+			AnalysisRunID: "run-1",
+			WorkerKind:    "transcription",
+			TaskType:      "selection.transcription",
+			Status:        AnalysisRunTaskStatusQueued,
+			AttemptNo:     1,
+			CreatedAt:     now,
+		}, RunEventRecord{
+			ID:            "event-1",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.created",
+			Version:       1,
+			Status:        AnalysisRunStatusQueued,
+			CreatedAt:     now,
+		})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("CreateAnalysisRun(task insert) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("record analysis run progress propagates heartbeat and refresh failures", func(t *testing.T) {
+		t.Parallel()
+
+		storeHeartbeatErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "RETURNING version",
+				columns: []string{"version"},
+				rows:    [][]driver.Value{{int64(3)}},
+			}},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO analysis_run_events", affected: 1},
+				{match: "UPDATE analysis_run_tasks\nSET heartbeat_at=$2", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(heartbeat) error = %v", err)
+		}
+		_, err = storeHeartbeatErr.RecordAnalysisRunProgress(context.Background(), owner, "run-1", RunEventRecord{
+			ID:            "event-2",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.progress",
+			Status:        AnalysisRunStatusRunning,
+			CreatedAt:     now,
+		}, now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordAnalysisRunProgress(heartbeat) error = %v, want stepErr", err)
+		}
+
+		storeRefreshErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "RETURNING version",
+					columns: []string{"version"},
+					rows:    [][]driver.Value{{int64(3)}},
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO analysis_run_events", affected: 1},
+				{match: "UPDATE analysis_run_tasks\nSET heartbeat_at=$2", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(refresh) error = %v", err)
+		}
+		_, err = storeRefreshErr.RecordAnalysisRunProgress(context.Background(), owner, "run-1", RunEventRecord{
+			ID:            "event-2",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.progress",
+			Status:        AnalysisRunStatusRunning,
+			CreatedAt:     now,
+		}, now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordAnalysisRunProgress(refresh) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 	t.Parallel()
 
