@@ -11,8 +11,9 @@
 
 from __future__ import annotations
 
+import io
 import json
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -180,6 +181,20 @@ def test_restore_reads_inbox_media_and_runs_with_owner_query() -> None:
     ]
 
 
+def test_get_analysis_run_uses_owner_query_and_extracts_wrapped_object() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["url"] = request.full_url
+        return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1", "status": "queued"}}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    run = client.get_analysis_run(owner=OWNER, analysis_run_id="run-1")
+
+    assert run == {"analysis_run_id": "run-1", "status": "queued"}
+    assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7"
+
+
 def test_backend_connection_failure_is_categorized_without_raw_exception_copy() -> None:
     def fake_urlopen(request):
         raise URLError("Connection refused at 127.0.0.1:8080")
@@ -196,3 +211,144 @@ def test_backend_connection_failure_is_categorized_without_raw_exception_copy() 
     assert "Connection refused" not in copy
     assert "127.0.0.1" not in copy
     assert "Try again" in copy
+
+
+def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surface() -> None:
+    captured_urls: list[str] = []
+    captured_requests = []
+    owner_with_tenant = {**OWNER, "tenant_id": "tenant-1"}
+
+    def fake_urlopen(request):
+        captured_requests.append(request)
+        captured_urls.append(request.full_url)
+        if request.full_url.endswith("/v1/media-items"):
+            return FakeHttpResponse(json.dumps({"media_item": {"media_item_id": "media-9"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/analysis-runs"):
+            return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-9"}}).encode("utf-8"))
+        if "/v1/artifacts/" in request.full_url:
+            return FakeHttpResponse(json.dumps({"artifact": {"artifact_id": "artifact-9"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"items": [], "page": {"page_size": 3, "has_more": False}}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    media_item = client.add_media_item(
+        owner=owner_with_tenant,
+        kind="text",
+        source={"origin_type": "text", "text": "hello"},
+        collection_id="inbox-9",
+    )
+    uploaded_item = client.upload_media_item(
+        owner=owner_with_tenant,
+        kind="audio",
+        content=b"audio-body",
+        file_name="note.bin",
+        collection_id="inbox-9",
+    )
+    run = client.create_analysis_run(
+        owner=owner_with_tenant,
+        selection_id="selection-9",
+        params={"mode": "deep"},
+    )
+    list_media = client.list_media_items(
+        owner=owner_with_tenant,
+        cursor="media-cursor",
+        page_size=7,
+        status="ready",
+        kind="text",
+    )
+    list_runs = client.list_analysis_runs(
+        owner=owner_with_tenant,
+        cursor="run-cursor",
+        page_size=4,
+        status="queued",
+        run_type="research",
+    )
+    list_artifacts = client.list_artifacts(
+        owner=owner_with_tenant,
+        analysis_run_id="run-9",
+        cursor="artifact-cursor",
+        page_size=3,
+    )
+    artifact = client.get_artifact(owner=owner_with_tenant, artifact_id="artifact-9")
+    diagnostics = client.list_diagnostics(
+        owner=owner_with_tenant,
+        subject_type="analysis_run",
+        subject_id="run-9",
+        cursor="diagnostic-cursor",
+        page_size=2,
+    )
+
+    add_payload = json.loads(captured_requests[0].data.decode("utf-8"))
+    upload_request = captured_requests[1]
+    run_payload = json.loads(captured_requests[2].data.decode("utf-8"))
+
+    assert media_item == {"media_item_id": "media-9"}
+    assert uploaded_item == {"media_item_id": "media-9"}
+    assert run == {"analysis_run_id": "run-9"}
+    assert list_media["page"]["page_size"] == 3
+    assert list_runs["page"]["page_size"] == 3
+    assert list_artifacts["page"]["page_size"] == 3
+    assert artifact == {"artifact_id": "artifact-9"}
+    assert diagnostics["page"]["page_size"] == 3
+    assert add_payload["collection_id"] == "inbox-9"
+    assert add_payload["owner"]["tenant_id"] == "tenant-1"
+    assert b'"collection_id": "inbox-9"' in upload_request.data
+    assert b"Content-Type: application/octet-stream" in upload_request.data
+    assert run_payload["params"] == {"mode": "deep"}
+    assert "tenant_id=tenant-1" in captured_urls[3]
+    assert "cursor=media-cursor" in captured_urls[3]
+    assert "status=ready" in captured_urls[3]
+    assert "kind=text" in captured_urls[3]
+    assert "cursor=run-cursor" in captured_urls[4]
+    assert "run_type=research" in captured_urls[4]
+    assert "analysis_run_id=run-9" in captured_urls[5]
+    assert "cursor=artifact-cursor" in captured_urls[5]
+    assert "artifact-9" in captured_urls[6]
+    assert "subject_type=analysis_run" in captured_urls[7]
+    assert "subject_id=run-9" in captured_urls[7]
+    assert "cursor=diagnostic-cursor" in captured_urls[7]
+
+
+def test_request_handles_empty_payload_http_errors_and_missing_wrapped_objects() -> None:
+    empty_client = TelegramApiClient(
+        "http://api:8080",
+        urlopen_impl=lambda request: FakeHttpResponse(b""),
+    )
+
+    assert empty_client._request("/v1/health") == {}
+
+    def fake_http_error(request):
+        raise HTTPError(
+            request.full_url,
+            409,
+            "Conflict",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"stale","code":"conflict"}}'),
+        )
+
+    conflict_client = TelegramApiClient("http://api:8080", urlopen_impl=fake_http_error)
+    with pytest.raises(TelegramApiClientError) as conflict_error:
+        conflict_client.list_media_items(owner=OWNER)
+
+    assert conflict_error.value.status == 409
+    assert conflict_error.value.code == "conflict"
+    assert str(conflict_error.value) == "stale"
+
+    def fake_non_json_error(request):
+        raise HTTPError(
+            request.full_url,
+            500,
+            "Boom",
+            hdrs=None,
+            fp=io.BytesIO(b"not-json"),
+        )
+
+    non_json_client = TelegramApiClient("http://api:8080", urlopen_impl=fake_non_json_error)
+    with pytest.raises(TelegramApiClientError) as non_json_error:
+        non_json_client.list_analysis_runs(owner=OWNER)
+
+    assert non_json_error.value.status == 500
+    assert non_json_error.value.code is None
+    assert str(non_json_error.value) == "API request failed with status 500"
+
+    with pytest.raises(RuntimeError, match="media_item"):
+        empty_client._extract({}, "media_item")

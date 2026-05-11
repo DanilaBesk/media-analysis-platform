@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from pathlib import Path
+import runpy
 from types import SimpleNamespace
 from typing import Any
 
@@ -15,6 +16,8 @@ from telegram_adapter.bot import (
     _artifact_label,
     _chat_type,
     _decode_callback_token,
+    _decode_callback_version,
+    _decode_optional_callback_token,
     _detail_prefix,
     _diagnostic_label,
     _encode_callback_token,
@@ -29,7 +32,7 @@ from telegram_adapter.bot import (
     build_status_keyboard,
 )
 from telegram_adapter.config import TelegramAdapterSettings, load_settings
-from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode
+from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode, rejected_reason_text
 from telegram_adapter.gateway import InboxStatus, IngressRecord, TelegramInboxGateway
 from telegram_adapter.i18n import DEFAULT_LOCALE, TelegramTextKey
 
@@ -654,6 +657,10 @@ async def test_callback_error_paths_cover_stale_unknown_and_normalized_failures(
     await app._handle_status_callback(stale_page_callback)
     assert stale_page_callback.answers[-1]["show_alert"] is True
 
+    stale_previous_callback = FakeCallback(data="ib:pp", message=message)
+    await app._handle_status_callback(stale_previous_callback)
+    assert stale_previous_callback.answers[-1]["show_alert"] is True
+
     unknown_callback = FakeCallback(data="ib:zz", message=message)
     await app._handle_status_callback(unknown_callback)
     assert unknown_callback.answers[-1]["show_alert"] is True
@@ -662,6 +669,84 @@ async def test_callback_error_paths_cover_stale_unknown_and_normalized_failures(
     broken_remove = FakeCallback(data="ib:rm", message=message)
     await app._handle_status_callback(broken_remove)
     assert broken_remove.answers[-1]["show_alert"] is True
+
+    no_next_state = status_for(gateway)
+    app._set_page_state((10, 7), no_next_state, current_cursor=None, previous_cursors=[], selection=None)
+    no_next_callback = FakeCallback(data="ib:pn", message=message)
+    await app._handle_status_callback(no_next_callback)
+    assert no_next_callback.answers[-1]["show_alert"] is True
+
+    no_previous_callback = FakeCallback(data="ib:pp", message=message)
+    await app._handle_status_callback(no_previous_callback)
+    assert no_previous_callback.answers[-1]["show_alert"] is True
+
+    blocked_callback = FakeCallback(data="ib:rf", message=message)
+
+    async def deny_callback(_callback: FakeCallback) -> bool:
+        return False
+
+    app._ensure_callback_allowed = deny_callback  # type: ignore[method-assign]
+    await app._handle_status_callback(blocked_callback)
+    assert blocked_callback.answers == []
+
+
+@pytest.mark.asyncio
+async def test_handlers_return_early_and_error_helpers_cover_remaining_branches() -> None:
+    _, _, app = make_app()
+    message = FakeMessage(text="hello")
+
+    async def deny_message(_message: FakeMessage) -> bool:
+        return False
+
+    app._ensure_message_allowed = deny_message  # type: ignore[method-assign]
+
+    await app._handle_start(message)
+    await app._handle_help(message)
+    await app._handle_inbox(message)
+    await app._handle_any_message(message)
+
+    assert message.answers == []
+
+    app.gateway.restore_status = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("restore exploded"))  # type: ignore[method-assign]
+    assert await app._send_or_edit_status(FakeMessage()) is False
+
+    await app._edit_callback_status(FakeCallback(data="ib:rf", message=None), status_for(TelegramInboxGateway(FakeFinalApiClient())))
+
+    scope_app = make_app()[2]
+
+    def raise_scope_error(*args: Any, **kwargs: Any) -> Any:
+        raise TelegramUserError(TelegramUserErrorCode.GROUP_NOT_SUPPORTED)
+
+    scope_app.gateway.scope_for = raise_scope_error  # type: ignore[method-assign]
+    scope_callback = FakeCallback(data="ib:rf", message=FakeMessage())
+    assert await scope_app._ensure_callback_allowed(scope_callback) is False
+    assert "private-chat only" in scope_callback.answers[0]["text"]
+
+
+def test_helper_functions_cover_remaining_callback_token_and_error_branches() -> None:
+    uuid_value = "11111111-1111-1111-1111-111111111111"
+    uuid_token = _encode_callback_token(uuid_value)
+
+    assert _decode_callback_token(uuid_token) == uuid_value
+    assert _decode_optional_callback_token("_") is None
+    assert _encode_callback_version(0) == "0"
+    assert str(TelegramUserError(TelegramUserErrorCode.STALE_ACTION)) == "stale_action"
+    assert rejected_reason_text(None).startswith("unsupported input:")
+
+    with pytest.raises(TelegramUserError):
+        _decode_callback_version("not-base36")
+
+
+def test_run_module_executes_script_exit_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_asyncio_run(coro: Any) -> None:
+        coro.close()
+
+    monkeypatch.setattr(asyncio, "run", fake_asyncio_run)
+
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_module("telegram_adapter.__main__", run_name="__main__")
+
+    assert exit_info.value.code == 0
 
 
 def test_helper_functions_cover_callback_error_normalization_and_message_shapes() -> None:

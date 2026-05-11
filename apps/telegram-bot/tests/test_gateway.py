@@ -518,7 +518,126 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     assert "Use Run selection to start analysis." in selection_text
     assert "artifact-1: transcript [available, text/plain]" not in selection_text
     assert "worker_note: Ready for review." not in selection_text
-    assert "Use the run buttons below for artifacts and diagnostics." in selection_text
+
+
+def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+
+    assert gateway.owner_for(chat_id=10, user_id=7) == {
+        **owner(),
+        "adapter_identity": {
+            "telegram_chat_id": "10",
+            "telegram_user_id": "7",
+            "telegram_chat_type": "private",
+        },
+    }
+
+    empty_text = gateway.add_text(owner=owner(), text="   ")
+    invalid_link = gateway.add_link(owner=owner(), url="https:///missing-host")
+    missing_content = gateway.add_file(owner=owner(), file_input=TelegramFileInput(kind="voice", file_id="voice-1"))
+    plain_text_records = gateway.add_message_inputs(owner=owner(), text="plain text only")
+
+    assert empty_text.reason == "empty_text"
+    assert invalid_link.reason == "invalid_url"
+    assert missing_content.reason == "missing_file_content"
+    assert plain_text_records[0].status == "accepted"
+    assert api.add_requests[-1]["source"] == {"origin_type": "text", "text": "plain text only"}
+
+    caption_record = gateway.add_file(
+        owner=owner(),
+        file_input=TelegramFileInput(
+            kind="document",
+            file_id="doc-1",
+            file_name="notes.txt",
+            content=b"body",
+            caption="human caption",
+        ),
+    )
+    assert caption_record.media_item is not None
+    assert api.upload_requests[-1]["metadata"]["caption"] == "human caption"
+
+    api.items.append({"media_item_id": "", "display_name": "orphan", "kind": "text", "status": "ready", "metadata": {}})
+    cleared = gateway.clear_visible_items(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+    assert all(item.get("media_item_id") != "" for item in cleared.collection["items"])
+
+    api.items.clear()
+    api.collection["items"].clear()
+    empty_cleared = gateway.clear_visible_items(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+    assert empty_cleared.items == []
+
+    with pytest.raises(RuntimeError, match="slot_missing_media_item_id"):
+        gateway.remove_collection_item(
+            owner=owner(),
+            collection_id="inbox-1",
+            media_item_id="   ",
+            expected_version=api.collection["version"],
+        )
+
+    with pytest.raises(RuntimeError, match="inbox_empty"):
+        gateway.create_selection(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+
+    with pytest.raises(RuntimeError, match="slot_not_visible"):
+        gateway.start_analysis(owner=owner(), selection_id="   ")
+
+    with pytest.raises(RuntimeError, match="slot_not_visible"):
+        gateway._get_verified_inbox_collection(owner=owner(), collection_id="different", expected_version=api.collection["version"])
+
+    with pytest.raises(RuntimeError, match="slot_not_visible"):
+        gateway._get_verified_inbox_collection(owner=owner(), collection_id="inbox-1", expected_version=999)
+
+    api.runs.append({"analysis_run_id": "run-1", "version": 1})
+    with pytest.raises(RuntimeError, match="slot_not_visible"):
+        gateway._get_verified_run(owner=owner(), analysis_run_id="run-1", expected_version=2)
+
+
+def test_restore_status_tolerates_missing_collection_and_renders_without_collection_count() -> None:
+    api = FakeFinalApiClient()
+    api.runs.extend(
+        [
+            {"analysis_run_id": "run-active", "status": "queued", "version": 1},
+            {"analysis_run_id": "run-done", "status": "succeeded", "version": 2},
+        ]
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-done",
+            "kind": "report",
+            "status": "available",
+            "content_type": "text/plain",
+        }
+    )
+    api.diagnostics.append(
+        {
+            "diagnostic_id": "diagnostic-1",
+            "subject_type": "analysis_run",
+            "subject_id": "run-done",
+            "severity": "warning",
+            "message": "Watch this.",
+        }
+    )
+
+    class CollectionErrorApiClient(FakeFinalApiClient):
+        def get_inbox_collection(self, **kwargs) -> dict[str, Any]:
+            raise RuntimeError("temporary collection failure")
+
+    failing_api = CollectionErrorApiClient()
+    failing_api.runs = api.runs
+    failing_api.artifacts = api.artifacts
+    failing_api.diagnostics = api.diagnostics
+    failing_api.items = [{"media_item_id": "media-1", "display_name": "item", "kind": "text", "status": "ready", "metadata": {}}]
+    gateway = TelegramInboxGateway(failing_api)
+
+    status = gateway.restore_status(owner=owner())
+    text = render_status_text(status)
+
+    assert status.collection is None
+    assert [run["analysis_run_id"] for run in status.active_runs] == ["run-active"]
+    assert status.artifacts_by_run["run-done"][0]["artifact_id"] == "artifact-1"
+    assert status.diagnostics_by_run["run-done"][0]["diagnostic_id"] == "diagnostic-1"
+    assert "Items: 0" in text
+    assert "Use the run buttons below for artifacts and diagnostics." in text
 
 
 def test_stale_callback_copy_is_safe_and_actionable() -> None:

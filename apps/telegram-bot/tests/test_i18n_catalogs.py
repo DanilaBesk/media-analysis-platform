@@ -36,3 +36,27 @@ def test_validate_translation_catalogs_rejects_placeholder_mismatch() -> None:
 
     with pytest.raises(CatalogValidationError, match="INBOX_SUMMARY_ADDED"):
         validate_translation_catalogs(broken_catalogs, default_locale=DEFAULT_LOCALE)
+
+
+def test_validate_translation_catalogs_rejects_missing_default_empty_catalog_keyset_and_blank_values() -> None:
+    with pytest.raises(CatalogValidationError, match="missing from translation catalogs"):
+        validate_translation_catalogs({"en": dict(TRANSLATION_CATALOGS["en"])}, default_locale="ru")
+
+    with pytest.raises(CatalogValidationError, match="must not be empty"):
+        validate_translation_catalogs({"ru": {}, "en": {}}, default_locale="ru")
+
+    missing_key_catalogs = {
+        "ru": dict(TRANSLATION_CATALOGS["ru"]),
+        "en": dict(TRANSLATION_CATALOGS["en"]),
+    }
+    missing_key_catalogs["en"].pop(TelegramTextKey.START_PROMPT)
+    with pytest.raises(CatalogValidationError, match="keyset mismatch"):
+        validate_translation_catalogs(missing_key_catalogs, default_locale=DEFAULT_LOCALE)
+
+    blank_value_catalogs = {
+        "ru": dict(TRANSLATION_CATALOGS["ru"]),
+        "en": dict(TRANSLATION_CATALOGS["en"]),
+    }
+    blank_value_catalogs["en"][TelegramTextKey.START_PROMPT] = "   "
+    with pytest.raises(CatalogValidationError, match="empty translation"):
+        validate_translation_catalogs(blank_value_catalogs, default_locale=DEFAULT_LOCALE)

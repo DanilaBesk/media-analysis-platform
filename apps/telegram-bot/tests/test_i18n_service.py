@@ -66,3 +66,11 @@ def test_build_localized_commands_returns_stable_registry_with_localized_descrip
         "How to manage inbox",
         "Show current inbox",
     ]
+
+
+def test_catalog_returns_locale_specific_mapping() -> None:
+    service = TelegramLocaleService()
+
+    catalog = service.catalog("en-US")
+
+    assert catalog[TelegramTextKey.START_PROMPT].startswith("Send text, links")
