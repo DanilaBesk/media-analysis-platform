@@ -1000,6 +1000,20 @@ func TestApiHttpFinalRouteRemainingBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("update collection items success encodes collection body", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{
+			"owner":            map[string]any{"owner_type": "web", "owner_id": "u-1"},
+			"expected_version": 1,
+			"items": []map[string]any{
+				{"media_item_id": "media-1", "position": 0},
+			},
+		}))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d want 200 body=%s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("reconcile queue defaults non-positive limit", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/admin/reconcile-queue", map[string]any{"limit": 0}))
@@ -1040,6 +1054,74 @@ func TestApiHttpFinalRouteRemainingBranches(t *testing.T) {
 		}
 		if len(public.lastUpdateCollectionItems.Items) != 0 {
 			t.Fatalf("remove absent item request = %#v", public.lastUpdateCollectionItems)
+		}
+	})
+
+	t.Run("remove collection item maps update failures", func(t *testing.T) {
+		errMux := newFinalMux(Dependencies{Public: &fakePublicService{
+			collection: storage.CollectionRecord{
+				ID:      "collection-1",
+				Owner:   owner,
+				Kind:    storage.CollectionKindUser,
+				Name:    "Review",
+				Status:  storage.CollectionStatusActive,
+				Version: 3,
+				Items: []storage.CollectionItemRecord{{
+					MediaItemID: "media-1",
+					Position:    0,
+				}},
+			},
+			err: storage.ErrContractViolation,
+		}})
+		rec := httptest.NewRecorder()
+		errMux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/media-1?owner_type=web&owner_id=u-1&expected_version=3", nil))
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
+	})
+}
+
+func TestApiPublicRuntimeQueueEdgeBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 15, 0, 0, 0, time.UTC)
+	store := &fakePublicService{
+		run: storage.AnalysisRunRecord{ID: "run-1", RunType: "report", Version: 1, CreatedAt: now},
+		pendingTasks: []storage.AnalysisRunTaskRecord{{
+			ID:            "task-1",
+			AnalysisRunID: "run-1",
+			WorkerKind:    "analysis",
+			TaskType:      "selection.analysis",
+			Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
+			AttemptNo:     1,
+			CreatedAt:     now,
+		}},
+	}
+
+	t.Run("enqueue failure returns recovered count", func(t *testing.T) {
+		client := &flakyQueueClient{err: errors.New("queue down")}
+		publisher, err := queue.NewPublisher(client)
+		if err != nil {
+			t.Fatalf("NewPublisher() error = %v", err)
+		}
+		recovered, err := (&publicRuntimeService{store: store, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10)
+		if err == nil || recovered != 0 {
+			t.Fatalf("recovered=%d err=%v, want queue error with zero recovered", recovered, err)
+		}
+	})
+
+	t.Run("mark queued failure returns after successful enqueue", func(t *testing.T) {
+		client := &flakyQueueClient{}
+		publisher, err := queue.NewPublisher(client)
+		if err != nil {
+			t.Fatalf("NewPublisher() error = %v", err)
+		}
+		markErrStore := &fakePublicService{
+			run: store.run,
+			pendingTasks: append([]storage.AnalysisRunTaskRecord(nil), store.pendingTasks...),
+			err: storage.ErrAnalysisRunNotFound,
+		}
+		recovered, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10)
+		if !errors.Is(err, storage.ErrAnalysisRunNotFound) || recovered != 0 {
+			t.Fatalf("recovered=%d err=%v, want mark error with zero recovered", recovered, err)
 		}
 	})
 }

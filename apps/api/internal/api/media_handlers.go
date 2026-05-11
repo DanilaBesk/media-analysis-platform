@@ -691,9 +691,6 @@ func cursorPage[T any](items []T, cursor string, pageSize int, cursorOf func(T) 
 			}
 		}
 	}
-	if start > len(items) {
-		start = len(items)
-	}
 	end := start + pageSize
 	hasMore := false
 	if end < len(items) {
