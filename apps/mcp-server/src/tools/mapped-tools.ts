@@ -316,7 +316,7 @@ function defaultExamplesForTool(name: string): readonly DomainMcpToolExample[] {
   return [
     {
       description: `Example arguments for ${name}.`,
-      arguments: argsByTool[name] ?? {},
+      arguments: Object.assign({}, argsByTool[name]),
     },
   ];
 }
@@ -459,7 +459,7 @@ function queryPath(path: string, params: Record<string, unknown>): string {
     }
   }
   const query = search.toString();
-  return query ? `${path}?${query}` : path;
+  return [path, query].filter(Boolean).join("?");
 }
 
 function ownerQueryPath(path: string, owner: JsonObject, params: Record<string, unknown> = {}): string {
