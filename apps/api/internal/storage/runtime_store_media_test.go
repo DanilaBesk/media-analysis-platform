@@ -2234,6 +2234,142 @@ func TestRuntimeStoreArtifactAndOpsDiagnosticErrorBranches(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreSelectionAndRunReadErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 20, 15, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("selection-run-read branch failed")
+
+	t.Run("get selection propagates item query and scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeQueryErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(query) error = %v", err)
+		}
+
+		_, err = storeQueryErr.GetSelection(context.Background(), owner, "selection-1")
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("GetSelection(query) error = %v, want stepErr", err)
+		}
+
+		storeScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows: [][]driver.Value{{
+						"selection-item-1", "bad-position", "media-1", "text", []byte(`{}`), "source.txt", MediaStatusReady, []byte(`{}`), []byte(`{}`), []byte(`[]`),
+					}},
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(scan) error = %v", err)
+		}
+
+		_, err = storeScanErr.GetSelection(context.Background(), owner, "selection-1")
+		if err == nil {
+			t.Fatalf("GetSelection(scan) error = nil, want scan failure")
+		}
+	})
+
+	t.Run("list analysis runs propagates query and scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeQueryErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: analysisRunColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(query) error = %v", err)
+		}
+
+		_, err = storeQueryErr.ListAnalysisRuns(context.Background(), owner)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListAnalysisRuns(query) error = %v, want stepErr", err)
+		}
+
+		storeScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: analysisRunColumns(),
+				rows: [][]driver.Value{{
+					"run-1", "web", "user-1", "", "selection-1", "transcription", AnalysisRunStatusRunning, "bad-version", []byte(`{"language":"ru"}`), []byte(`{"strategy":"polling"}`), "not_required", now, nil, nil, nil, expiresAt,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(scan) error = %v", err)
+		}
+
+		_, err = storeScanErr.ListAnalysisRuns(context.Background(), owner)
+		if err == nil {
+			t.Fatalf("ListAnalysisRuns(scan) error = nil, want scan failure")
+		}
+	})
+
+	t.Run("list run events propagates event query errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, nil, nil, nil)},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+				{
+					match:   "SELECT id, analysis_run_id, event_type, version, payload, COALESCE(status,''), created_at FROM analysis_run_events",
+					columns: runEventColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListRunEvents(context.Background(), owner, "run-1")
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListRunEvents(query) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 	t.Parallel()
 
