@@ -495,6 +495,30 @@ async def test_send_or_edit_status_prefers_edit_then_falls_back_to_new_message()
 
 
 @pytest.mark.asyncio
+async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_active() -> None:
+    api, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="queued run")
+    status = gateway.restore_status(owner=owner())
+    selection = gateway.create_selection(
+        owner=owner(),
+        collection_id=status.collection["collection_id"],
+        expected_version=int(status.collection["version"]),
+    )
+    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    app._sleep = no_sleep  # type: ignore[assignment]
+    status, prefix, answer_text = await app._resolve_run_start_status(owner=owner(), run=run)
+
+    assert api.runs[0]["status"] == "queued"
+    assert answer_text == "Run queued"
+    assert prefix.startswith("Run queued:")
+    assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
+
+
+@pytest.mark.asyncio
 async def test_access_checks_cover_allowlist_and_scope_errors() -> None:
     _, _, app = make_app()
     app.settings = TelegramAdapterSettings(telegram_bot_token="token", allowed_user_ids=(100,))
@@ -604,9 +628,24 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     )
     app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=selection)
     run_callback = FakeCallback(data=run_callback_data, message=base_message)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    original_get_run_status = gateway.get_run_status
+
+    def fast_fail_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = "failed"
+        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+
+    app._sleep = no_sleep  # type: ignore[assignment]
+    gateway.get_run_status = fast_fail_run_status  # type: ignore[method-assign]
     await app._handle_status_callback(run_callback)
-    assert run_callback.answers[-1]["text"] == "Run queued"
+    assert run_callback.answers[-1]["text"] == "Run failed"
     assert app.page_states[(10, 7)].selection is None
+    assert "Run failed:" in base_message.edits[-1]["text"]
+    assert "Completed runs:" in base_message.edits[-1]["text"]
+    assert "run-1: failed" in base_message.edits[-1]["text"]
 
     api.runs[0]["status"] = "succeeded"
     api.artifacts.append(

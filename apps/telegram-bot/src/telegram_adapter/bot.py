@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from collections.abc import Iterable
@@ -67,6 +68,9 @@ class TelegramInboxApp:
         self.locale_service = TelegramLocaleService()
         self.status_message_ids: dict[tuple[int, int | None], int] = {}
         self.page_states: dict[tuple[int, int | None], _PageState] = {}
+        self.run_status_poll_attempts = 3
+        self.run_status_poll_delay_seconds = 0.2
+        self._sleep = asyncio.sleep
         self._register_handlers()
         self.dispatcher.include_router(self.router)
 
@@ -275,17 +279,14 @@ class TelegramInboxApp:
             if action == "rn":
                 selection_id = _decode_callback_token(tokens[0])
                 run = self.gateway.start_analysis(owner=owner, selection_id=selection_id)
-                status = self.gateway.restore_status(owner=owner)
+                status, prefix, answer_text = await self._resolve_run_start_status(owner=owner, run=run)
                 self._set_page_state(key, status, current_cursor=None, previous_cursors=[], selection=None)
                 await self._edit_callback_status(
                     callback,
                     status,
-                    prefix=(
-                        f"Run queued: {_short_id(run['analysis_run_id'])}\n"
-                        "Result will be available later; refresh /inbox any time.\n\n"
-                    ),
+                    prefix=prefix,
                 )
-                await callback.answer("Run queued")
+                await callback.answer(answer_text)
                 return
             if action == "ar":
                 analysis_run_id = _decode_callback_token(tokens[0])
@@ -381,6 +382,27 @@ class TelegramInboxApp:
         sent = await message.answer(text, reply_markup=markup)
         self.status_message_ids[key] = sent.message_id
         return True
+
+    async def _resolve_run_start_status(self, *, owner: JsonObject, run: JsonObject) -> tuple[InboxStatus, str, str]:
+        run_id = str(run.get("analysis_run_id") or "")
+        for attempt in range(self.run_status_poll_attempts):
+            latest = self.gateway.get_run_status(owner=owner, analysis_run_id=run_id)
+            status_name = str(latest.get("status") or "")
+            if status_name in TERMINAL_RUN_STATUSES:
+                status = self.gateway.restore_status(owner=owner)
+                return (
+                    status,
+                    f"Run {status_name}: {_short_id(run_id)}\nOpen artifacts or diagnostics below, or refresh /inbox.\n\n",
+                    f"Run {status_name}",
+                )
+            if attempt + 1 < self.run_status_poll_attempts:
+                await self._sleep(self.run_status_poll_delay_seconds)
+        status = self.gateway.restore_status(owner=owner)
+        return (
+            status,
+            f"Run queued: {_short_id(run_id)}\nResult will be available later; refresh /inbox any time.\n\n",
+            "Run queued",
+        )
 
     async def _edit_callback_status(
         self,
