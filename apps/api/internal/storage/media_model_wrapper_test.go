@@ -150,6 +150,37 @@ func (s *erroringWrapperStateStore) ClaimAnalysisRunTask(_ context.Context, anal
 	return AnalysisRunRecord{}, false, s.err
 }
 
+type observabilityDiagnosticsErrorStateStore struct {
+	*memoryStateStore
+	err error
+}
+
+func (s *observabilityDiagnosticsErrorStateStore) ListOperationalDiagnostics(context.Context, []string) ([]DiagnosticRecord, error) {
+	return nil, s.err
+}
+
+type orphanCleanupRecordErrorStateStore struct {
+	*memoryStateStore
+	err          error
+	cleanupCalls int
+}
+
+func (s *orphanCleanupRecordErrorStateStore) DetectOrphanObjects(context.Context) ([]OrphanObjectRecord, error) {
+	return []OrphanObjectRecord{{
+		SubjectType: "source",
+		SubjectID:   "source-1",
+		Owner:       OwnerScope{OwnerType: "web", OwnerID: "owner-1"},
+		Bucket:      SourcesBucket,
+		ObjectKey:   "sources/source-1/source.bin",
+		Reason:      "expired_media_source",
+	}}, nil
+}
+
+func (s *orphanCleanupRecordErrorStateStore) RecordOrphanObjectCleanup(context.Context, OrphanObjectRecord, bool, string, time.Time) error {
+	s.cleanupCalls++
+	return s.err
+}
+
 func TestRepositoryWrapperErrorPropagationAndNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -267,5 +298,83 @@ func TestRepositoryWrapperErrorPropagationAndNormalization(t *testing.T) {
 	}
 	if state.lastAnalysisRun != "run-6" || state.lastRunType != "analysis_runner" || state.lastTaskType != "selection.analysis" || state.lastLeaseOwner != "worker-1" || state.lastQueuedAt != now {
 		t.Fatalf("claim inputs = run=%q worker=%q task=%q lease=%q claimedAt=%v", state.lastAnalysisRun, state.lastRunType, state.lastTaskType, state.lastLeaseOwner, state.lastQueuedAt)
+	}
+}
+
+func TestRepositoryWrapperValidationAndLateErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 12, 11, 0, 0, 0, time.UTC)
+	expectedErr := errors.New("wrapper failure")
+	owner := OwnerScope{OwnerType: " web ", OwnerID: " owner-1 "}
+	ctx := context.Background()
+
+	state := newErroringWrapperStateStore(expectedErr)
+	repo, err := NewRepository(state, newFakeObjectStore(), WithClock(func() time.Time { return now }))
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	if _, err := repo.CreateAnalysisRun(ctx, CreateAnalysisRunRequest{
+		Owner:       owner,
+		SelectionID: " selection-1 ",
+		RunType:     " transcription ",
+	}); !errors.Is(err, expectedErr) {
+		t.Fatalf("CreateAnalysisRun() error = %v, want expectedErr", err)
+	}
+	if state.lastSelectionID != "selection-1" || state.lastOwner.OwnerType != "web" || state.lastOwner.OwnerID != "owner-1" {
+		t.Fatalf("selection lookup inputs = selection=%q owner=%#v", state.lastSelectionID, state.lastOwner)
+	}
+
+	if _, err := repo.RecordArtifacts(ctx, OwnerScope{}, "run-1", nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("RecordArtifacts(contract violation) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := repo.RecordDiagnostics(ctx, owner, "not-a-uuid", nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("RecordDiagnostics(contract violation) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := repo.RecordAnalysisRunProgress(ctx, owner, " run-1 ", " ", "", nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunProgress(contract violation) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := repo.FinalizeAnalysisRunTask(ctx, owner, " run-1 ", AnalysisRunStatusExpired, ""); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("FinalizeAnalysisRunTask(contract violation) error = %v, want ErrContractViolation", err)
+	}
+}
+
+func TestRepositoryCleanupAndObservabilityLateErrors(t *testing.T) {
+	t.Parallel()
+
+	cleanupErr := errors.New("cleanup failed")
+	cleanupState := &orphanCleanupRecordErrorStateStore{
+		memoryStateStore: newMemoryStateStore(),
+		err:              cleanupErr,
+	}
+	cleanupRepo, err := NewRepository(cleanupState, newFakeObjectStore())
+	if err != nil {
+		t.Fatalf("NewRepository(cleanupRepo) error = %v", err)
+	}
+
+	if _, err := cleanupRepo.CleanOrphanObjects(context.Background()); !errors.Is(err, cleanupErr) {
+		t.Fatalf("CleanOrphanObjects(cleanup error) error = %v, want cleanupErr", err)
+	}
+	if cleanupState.cleanupCalls != 1 {
+		t.Fatalf("cleanup calls = %d, want 1", cleanupState.cleanupCalls)
+	}
+
+	observabilityErr := errors.New("observability diagnostics failed")
+	observabilityState := &observabilityDiagnosticsErrorStateStore{
+		memoryStateStore: newMemoryStateStore(),
+		err:              observabilityErr,
+	}
+	observabilityRepo, err := NewRepository(
+		observabilityState,
+		newFakeObjectStore(),
+		WithClock(func() time.Time { return time.Date(2026, 5, 12, 11, 30, 0, 0, time.UTC) }),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository(observabilityRepo) error = %v", err)
+	}
+
+	if _, err := observabilityRepo.GetObservabilitySnapshot(context.Background()); !errors.Is(err, observabilityErr) {
+		t.Fatalf("GetObservabilitySnapshot(diagnostics error) error = %v, want observabilityErr", err)
 	}
 }

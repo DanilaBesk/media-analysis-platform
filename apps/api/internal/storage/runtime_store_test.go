@@ -142,6 +142,23 @@ func TestMinioObjectStorePresignHostsAndObjectMethodErrors(t *testing.T) {
 	}
 }
 
+func TestMinioObjectStorePresignErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	client := newRuntimeStoreMinioClient(t, "http://localhost:9000")
+	store, err := NewMinioObjectStore(client)
+	if err != nil {
+		t.Fatalf("NewMinioObjectStore() error = %v", err)
+	}
+
+	if _, _, err := store.PresignGetObject(context.Background(), "artifacts", "", time.Minute); err == nil {
+		t.Fatalf("PresignGetObject(empty object) error = nil, want validation failure")
+	}
+	if _, _, err := store.PresignInternalGetObject(context.Background(), "artifacts", "", time.Minute); err == nil {
+		t.Fatalf("PresignInternalGetObject(empty object) error = nil, want validation failure")
+	}
+}
+
 func TestWithTxHandlesBeginRollbackCommitAndSuccess(t *testing.T) {
 	t.Parallel()
 

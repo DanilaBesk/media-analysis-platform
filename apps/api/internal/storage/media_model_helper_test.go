@@ -81,6 +81,14 @@ func TestNormalizeJSONAndDeliveryFallbacks(t *testing.T) {
 	}
 }
 
+func TestMergeJSONObjectMarshalFailureReturnsEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	if got := string(mergeJSONObject(nil, map[string]any{"bad": func() {}})); got != "{}" {
+		t.Fatalf("mergeJSONObject(marshal failure) = %q, want {}", got)
+	}
+}
+
 func TestWorkerAndTaskKindsDefaultToAnalysis(t *testing.T) {
 	t.Parallel()
 
@@ -202,5 +210,52 @@ func TestAddMediaItemValidationRejectsInvalidInputs(t *testing.T) {
 				t.Fatalf("AddMediaItem(%s) error = %v, want ErrContractViolation", tc.name, err)
 			}
 		})
+	}
+}
+
+func TestAddMediaItemUploadDefaultsObjectMetadata(t *testing.T) {
+	t.Parallel()
+
+	state := newMemoryStateStore()
+	objectStore := newFakeObjectStore()
+	repo, err := NewRepository(
+		state,
+		objectStore,
+		WithIDGenerator(sequenceIDs("source-1", "media-1", "inbox-1")),
+		WithClock(func() time.Time { return time.Date(2026, 5, 11, 11, 0, 0, 0, time.UTC) }),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	item, err := repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"},
+		Kind:  "voice",
+		Source: AddMediaSource{
+			OriginType: "object",
+			UploadBody: []byte("voice-body"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("AddMediaItem(upload defaults) error = %v", err)
+	}
+
+	if item.DisplayName != "voice" {
+		t.Fatalf("display name = %q, want kind fallback", item.DisplayName)
+	}
+	if item.Source.MIMEType != "application/octet-stream" {
+		t.Fatalf("mime type = %q, want application/octet-stream", item.Source.MIMEType)
+	}
+	if item.Source.Checksum == "" {
+		t.Fatalf("checksum = %q, want generated checksum", item.Source.Checksum)
+	}
+	if item.Source.SizeBytes == nil || *item.Source.SizeBytes != int64(len("voice-body")) {
+		t.Fatalf("size bytes = %#v, want %d", item.Source.SizeBytes, len("voice-body"))
+	}
+	if len(objectStore.puts) != 1 {
+		t.Fatalf("object puts = %d, want 1", len(objectStore.puts))
+	}
+	if objectStore.puts[0].contentType != "application/octet-stream" {
+		t.Fatalf("stored content type = %q, want application/octet-stream", objectStore.puts[0].contentType)
 	}
 }

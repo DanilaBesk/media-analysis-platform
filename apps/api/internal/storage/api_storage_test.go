@@ -1317,6 +1317,124 @@ func TestApiStorageRepositoryValidationAndOptions(t *testing.T) {
 	}
 }
 
+func TestApiStorageRepositoryDefaultingAndValidationTails(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 14, 0, 0, 0, time.UTC)
+	state := newMemoryStateStore()
+	repo, err := NewRepository(
+		state,
+		newFakeObjectStore(),
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(sequenceIDs(
+			"source-1", "media-1", "inbox-1",
+			"00000000-0000-0000-0000-000000000010",
+			"00000000-0000-0000-0000-000000000011", "task-1", "event-1",
+			"artifact-generated-1",
+		)),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	owner := OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	if _, err := repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner:  owner,
+		Kind:   "text",
+		Source: AddMediaSource{OriginType: "text", Text: "hello"},
+	}); err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+	selection, err := repo.CreateSelection(context.Background(), CreateSelectionRequest{
+		Owner: owner,
+		Items: []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSelection() error = %v", err)
+	}
+	run, err := repo.CreateAnalysisRun(context.Background(), CreateAnalysisRunRequest{
+		Owner:       owner,
+		SelectionID: selection.ID,
+		RunType:     "transcription",
+	})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun() error = %v", err)
+	}
+
+	artifacts, err := repo.RecordArtifacts(context.Background(), owner, run.ID, []ArtifactRecord{{
+		Kind:      "transcript",
+		ObjectKey: "artifacts/" + run.ID + "/transcript.txt",
+	}})
+	if err != nil {
+		t.Fatalf("RecordArtifacts() error = %v", err)
+	}
+	if len(artifacts) != 1 {
+		t.Fatalf("artifacts = %#v, want one artifact", artifacts)
+	}
+	if artifacts[0].ContentType != "application/octet-stream" || artifacts[0].Status != ArtifactStatusAvailable || artifacts[0].Visibility != "owner" {
+		t.Fatalf("artifact defaults = %#v", artifacts[0])
+	}
+	if string(artifacts[0].PreviewJSON) != `{"available":false}` {
+		t.Fatalf("preview json = %s, want unavailable fallback", artifacts[0].PreviewJSON)
+	}
+	if artifacts[0].Retention.State != RetentionStateActive || !artifacts[0].CreatedAt.Equal(now) {
+		t.Fatalf("artifact retention/created_at = %#v", artifacts[0])
+	}
+
+	diagnosticCreatedAt := now.Add(5 * time.Minute)
+	diagnostics, err := repo.RecordDiagnostics(context.Background(), owner, run.ID, []DiagnosticRecord{{
+		ID:          "00000000-0000-0000-0000-000000000012",
+		SubjectType: "analysis_run",
+		SubjectID:   run.ID,
+		ContextJSON: []byte(`{"existing":"value"}`),
+		CreatedAt:   diagnosticCreatedAt,
+	}})
+	if err != nil {
+		t.Fatalf("RecordDiagnostics() error = %v", err)
+	}
+	var recorded DiagnosticRecord
+	found := false
+	for _, diagnostic := range diagnostics {
+		if diagnostic.ID == "00000000-0000-0000-0000-000000000012" {
+			recorded = diagnostic
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("diagnostics = %#v, want preserved worker diagnostic id", diagnostics)
+	}
+	if recorded.Severity != "warning" || recorded.Code != "worker_diagnostic" || recorded.Message != "worker_diagnostic" {
+		t.Fatalf("diagnostic defaults = %#v", recorded)
+	}
+	if recorded.SubjectType != "analysis_run" || recorded.SubjectID != run.ID {
+		t.Fatalf("diagnostic subject = %#v, want preserved valid subject", recorded)
+	}
+	if !recorded.CreatedAt.Equal(diagnosticCreatedAt) || string(recorded.SafeAdapterJSON) != "{}" {
+		t.Fatalf("diagnostic timestamps/json = %#v", recorded)
+	}
+	var contextPayload map[string]any
+	if err := json.Unmarshal(recorded.ContextJSON, &contextPayload); err != nil {
+		t.Fatalf("json.Unmarshal(recorded.ContextJSON) error = %v", err)
+	}
+	if contextPayload["analysis_run_id"] != run.ID || contextPayload["existing"] != "value" {
+		t.Fatalf("context payload = %#v", contextPayload)
+	}
+	if _, hasOriginalSubject := contextPayload["original_subject_id"]; hasOriginalSubject {
+		t.Fatalf("context payload = %#v, want no original subject fallback fields", contextPayload)
+	}
+
+	if _, err := repo.RecordArtifacts(context.Background(), OwnerScope{}, run.ID, nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("RecordArtifacts(contract violation) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := repo.RecordAnalysisRunProgress(context.Background(), owner, run.ID, " ", "", nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunProgress(contract violation) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := repo.FinalizeAnalysisRunTask(context.Background(), owner, run.ID, AnalysisRunStatusExpired, ""); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("FinalizeAnalysisRunTask(contract violation) error = %v, want ErrContractViolation", err)
+	}
+}
+
 type memoryStateStore struct {
 	mediaItems   map[string]MediaItemRecord
 	collections  map[string]CollectionRecord
