@@ -1868,6 +1868,111 @@ func TestRuntimeStoreQueryAndQueueEdgeBranches(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 19, 15, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	stepErr := errors.New("task queue branch failed")
+
+	t.Run("list pending enqueue tasks propagates query errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+				columns: analysisRunTaskColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListPendingEnqueueTasks(context.Background(), 10)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListPendingEnqueueTasks() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("list pending enqueue tasks propagates scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+				columns: analysisRunTaskColumns(),
+				rows: [][]driver.Value{{
+					"task-1", "run-1", "analysis_runner", "selection.analysis", AnalysisRunTaskStatusPendingEnqueue, "bad-attempt", "", nil, nil, nil, now,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListPendingEnqueueTasks(context.Background(), 10)
+		if err == nil {
+			t.Fatalf("ListPendingEnqueueTasks() error = nil, want scan failure")
+		}
+	})
+
+	t.Run("claim analysis run task propagates run-status update errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+				columns: analysisRunColumns(),
+				rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusQueued, 1, nil, nil, nil)},
+			}},
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE analysis_runs\nSET status='running'",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, _, err = store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ClaimAnalysisRunTask() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("claim analysis run task propagates refreshed-run lookup errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusQueued, 1, nil, nil, nil)},
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{{
+				match:    "UPDATE analysis_runs\nSET status='running'",
+				affected: 1,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, _, err = store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ClaimAnalysisRunTask() error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 	t.Parallel()
 
