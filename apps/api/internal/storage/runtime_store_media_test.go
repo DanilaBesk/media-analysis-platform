@@ -239,6 +239,42 @@ func TestSQLStateStoreAddMediaItemAndSoftDeleteErrorMappings(t *testing.T) {
 		}
 	})
 
+	t.Run("add media item propagates target collection lookup query errors", func(t *testing.T) {
+		t.Parallel()
+
+		stepErr := errors.New("target collection lookup failed")
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+					rows: [][]driver.Value{{
+						"inbox-1", "telegram", "chat-1", "", CollectionKindInbox, "Inbox", CollectionStatusActive, int64(1), now, now, nil, nil,
+					}},
+				},
+				{
+					match:   "SELECT id FROM collections",
+					columns: []string{"id"},
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+				{match: "INSERT INTO collection_items", affected: 1},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, _, err := store.AddMediaItem(context.Background(), item, inbox, "target-collection"); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(target lookup query) error = %v, want stepErr", err)
+		}
+	})
+
 	t.Run("soft delete maps not found and collection update failures", func(t *testing.T) {
 		t.Parallel()
 
@@ -266,6 +302,18 @@ func TestSQLStateStoreAddMediaItemAndSoftDeleteErrorMappings(t *testing.T) {
 		}
 		if _, err := failStore.SoftDeleteMediaItem(context.Background(), owner, "media-1", now); !errors.Is(err, stepErr) {
 			t.Fatalf("SoftDeleteMediaItem(collection update) error = %v, want stepErr", err)
+		}
+
+		updateErrStore, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update err store) error = %v", err)
+		}
+		if _, err := updateErrStore.SoftDeleteMediaItem(context.Background(), owner, "media-1", now); !errors.Is(err, stepErr) {
+			t.Fatalf("SoftDeleteMediaItem(media update) error = %v, want stepErr", err)
 		}
 	})
 }
@@ -2441,6 +2489,26 @@ func TestRuntimeStoreQueryAndQueueEdgeBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("list analysis run queue propagates query errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+				columns: analysisRunQueueColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListAnalysisRunQueue(context.Background(), AnalysisRunTaskStatusQueued, "summary", "selection.analysis", 5)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListAnalysisRunQueue(query) error = %v, want stepErr", err)
+		}
+	})
+
 	t.Run("mark analysis run task queued propagates exec errors", func(t *testing.T) {
 		t.Parallel()
 
@@ -2562,6 +2630,51 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 		_, _, err = store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now)
 		if !errors.Is(err, stepErr) {
 			t.Fatalf("ClaimAnalysisRunTask() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("claim analysis run task ignores selection refresh errors after a successful claim", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusQueued, 1, nil, nil, nil)},
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, &now, nil, nil)},
+				},
+				{
+					match:   "FROM selections s",
+					columns: selectionColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{{
+				match:    "UPDATE analysis_runs\nSET status='running'",
+				affected: 1,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		run, claimed, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now)
+		if err != nil {
+			t.Fatalf("ClaimAnalysisRunTask(selection refresh ignored) error = %v", err)
+		}
+		if !claimed {
+			t.Fatalf("claimed = false, want true")
+		}
+		if run.ID != "run-1" || run.Status != AnalysisRunStatusRunning {
+			t.Fatalf("run = %#v, want claimed running run", run)
+		}
+		if run.Selection.ID != "" {
+			t.Fatalf("run.Selection = %#v, want zero selection on refresh error", run.Selection)
 		}
 	})
 }
@@ -2975,6 +3088,32 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 		}, false, "metadata only", now)
 		if !errors.Is(err, stepErr) {
 			t.Fatalf("RecordOrphanObjectCleanup(artifact) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("record orphan cleanup propagates deleted source expiry update errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items\nSET retention_state=$1", affected: 1},
+				{match: "UPDATE sources SET expires_at=$1", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		err = store.RecordOrphanObjectCleanup(context.Background(), OrphanObjectRecord{
+			SubjectType: "source",
+			SubjectID:   "source-1",
+			Owner:       OwnerScope{OwnerType: "web", OwnerID: "user-1"},
+			Bucket:      "sources",
+			ObjectKey:   "sources/source-1/source.txt",
+			Reason:      "expired_media_source",
+		}, true, "deleted from storage", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordOrphanObjectCleanup(source expires_at) error = %v, want stepErr", err)
 		}
 	})
 }
