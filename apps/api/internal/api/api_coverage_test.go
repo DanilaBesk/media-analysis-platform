@@ -532,6 +532,25 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		if _, err := errService.ListAnalysisRunQueue(context.Background(), AnalysisRunQueueRequest{PageSize: 10}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
 			t.Fatalf("ListAnalysisRunQueue(error) = %v, want ErrAnalysisRunNotFound", err)
 		}
+
+		zeroTimeStore := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:        "run-2",
+				Owner:     owner,
+				RunType:   "report",
+				Selection: storage.SelectionRecord{ID: "selection-2"},
+			},
+		}
+		zeroTimeService := &workerRuntimeService{store: zeroTimeStore}
+		before := time.Now().UTC()
+		respZeroTime, err := zeroTimeService.ClaimExecution(context.Background(), "run-2", ExecutionClaimRequest{WorkerKind: "analysis_runner", TaskType: "selection.analysis"})
+		after := time.Now().UTC()
+		if err != nil {
+			t.Fatalf("ClaimExecution(zero time) error = %v", err)
+		}
+		if respZeroTime.ClaimedAt.Before(before) || respZeroTime.ClaimedAt.After(after) {
+			t.Fatalf("ClaimedAt = %v, want between %v and %v", respZeroTime.ClaimedAt, before, after)
+		}
 	})
 
 	t.Run("selection label and source helpers cover fallback branches", func(t *testing.T) {
@@ -562,6 +581,19 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		}
 		if label := sourceLabelFromSnapshot(storage.MediaSourceMetadata{SourceID: "source-1"}); label == nil || *label != "source-1" {
 			t.Fatalf("sourceLabelFromSnapshot(source id) = %#v", label)
+		}
+		if label := sourceLabelFromSnapshot(storage.MediaSourceMetadata{}); label != nil {
+			t.Fatalf("sourceLabelFromSnapshot(empty) = %#v, want nil", label)
+		}
+		if role := selectionItemRole(storage.SelectionItemSnapshot{ID: "selection-item-1"}, map[string]any{"role": "secondary"}, map[string]any{}); role != "secondary" {
+			t.Fatalf("selectionItemRole(metadata) = %q, want secondary", role)
+		}
+		if role := selectionItemRole(
+			storage.SelectionItemSnapshot{ID: "selection-item-2", MediaItemID: "media-2", Position: 3},
+			map[string]any{},
+			map[string]any{"item_roles": map[string]any{"3": "supporting"}},
+		); role != "supporting" {
+			t.Fatalf("selectionItemRole(position option snapshot) = %q, want supporting", role)
 		}
 		if got := firstString(nil, nil); got != nil {
 			t.Fatalf("firstString(nil, nil) = %#v, want nil", got)
@@ -622,6 +654,52 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		}
 		if _, err := service.FinalizeExecution(context.Background(), "run-1", ExecutionFinalizeRequest{Outcome: "failed"}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
 			t.Fatalf("FinalizeExecution(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+
+		canceledAt := now.Add(15 * time.Minute)
+		cancelStore := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:         "run-2",
+				Owner:      owner,
+				Status:     storage.AnalysisRunStatusCanceled,
+				CanceledAt: &canceledAt,
+			},
+		}
+		cancelService := &workerRuntimeService{store: cancelStore}
+		cancelResp, err := cancelService.CheckCancel(context.Background(), "run-2", "exec-2")
+		if err != nil {
+			t.Fatalf("CheckCancel(canceled) error = %v", err)
+		}
+		if !cancelResp.CancelRequested || cancelResp.CancelRequestedAt == nil || !cancelResp.CancelRequestedAt.Equal(canceledAt) {
+			t.Fatalf("CheckCancel(canceled) = %#v", cancelResp)
+		}
+
+		diagStore := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:      "run-3",
+				Owner:   owner,
+				RunType: "report",
+			},
+		}
+		diagService := &workerRuntimeService{store: diagStore}
+		if err := diagService.RecordExecutionDiagnostics(context.Background(), "run-3", ExecutionDiagnosticsRequest{
+			Diagnostics: []workerDiagnosticDescriptor{{
+				DiagnosticID: "diag-2",
+				SubjectType:  "analysis_run",
+				SubjectID:    "run-3",
+				Severity:     "info",
+				Code:         "worker_note",
+				Message:      "note",
+			}},
+		}); err != nil {
+			t.Fatalf("RecordExecutionDiagnostics(no execution id) error = %v", err)
+		}
+		var contextPayload map[string]any
+		if err := json.Unmarshal(diagStore.recordedDiagnostics[0].ContextJSON, &contextPayload); err != nil {
+			t.Fatalf("Unmarshal(context JSON without execution id) error = %v", err)
+		}
+		if _, exists := contextPayload["execution_id"]; exists {
+			t.Fatalf("diagnostic context unexpectedly contains execution_id: %#v", contextPayload)
 		}
 	})
 }
