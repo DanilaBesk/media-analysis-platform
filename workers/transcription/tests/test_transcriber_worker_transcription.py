@@ -804,6 +804,22 @@ def test_materialize_local_source_keeps_workspace_file_in_place(tmp_path: Path) 
     assert existing.read_bytes() == b"audio"
 
 
+def test_materialize_local_source_returns_source_without_local_path(tmp_path: Path) -> None:
+    source = SourceCandidate(
+        source_id="source-3",
+        kind="text",
+        display_name="Inline note",
+        url=None,
+        telegram_file_id=None,
+        mime_type="text/plain; charset=utf-8",
+        file_name=None,
+        file_unique_id=None,
+        local_path=None,
+    )
+
+    assert materialize_local_source(source, tmp_path / "job-3") is source
+
+
 def test_run_transcription_classifies_source_materialization_failures(tmp_path: Path) -> None:
     execution = _build_execution(
         OrderedWorkerInput(
@@ -935,6 +951,33 @@ def test_materialize_unsupported_object_descriptor_returns_none_for_non_object(t
     assert worker_module._materialize_unsupported_object_descriptor(descriptor, tmp_path, FakeSourceStore({})) is None
 
 
+def test_materialize_single_selection_item_downloads_object_backed_source(tmp_path: Path) -> None:
+    descriptor = worker_module.SelectionItemMaterialization(
+        selection_item_id="sel-item-audio",
+        position=2,
+        media_item_id="media-audio",
+        media_kind="audio",
+        role="primary",
+        labels=SelectionItemLabels(display_label="Voice message"),
+        source_id="source-audio",
+        origin_type="object",
+        materialization_kind="object",
+        mime_type="audio/ogg",
+        object_key="objects/audio-source",
+        deterministic_filename="voice.ogg",
+    )
+
+    candidate = worker_module._materialize_single_selection_item(
+        descriptor,
+        tmp_path,
+        FakeSourceStore({"objects/audio-source": b"voice-bytes"}),
+    )
+
+    assert candidate.local_path == tmp_path / "inputs" / "02-source-audio" / "voice.ogg"
+    assert candidate.local_path.read_bytes() == b"voice-bytes"
+    assert candidate.file_name == "voice.ogg"
+
+
 def test_download_materialization_descriptor_requires_deterministic_filename(tmp_path: Path) -> None:
     descriptor = worker_module.SelectionItemMaterialization(
         selection_item_id="sel-item-audio",
@@ -953,6 +996,39 @@ def test_download_materialization_descriptor_requires_deterministic_filename(tmp
 
     with pytest.raises(worker_module.SourceMaterializationError, match="missing deterministic filename"):
         worker_module._download_materialization_descriptor(descriptor, tmp_path, FakeSourceStore({}))
+
+
+def test_download_materialization_descriptor_requires_object_key_and_invalid_origin_is_rejected(tmp_path: Path) -> None:
+    descriptor = worker_module.SelectionItemMaterialization(
+        selection_item_id="sel-item-audio",
+        position=0,
+        media_item_id="media-audio",
+        media_kind="audio",
+        role="primary",
+        labels=SelectionItemLabels(display_label="Voice message"),
+        source_id="source-audio",
+        origin_type="object",
+        materialization_kind="object",
+        mime_type="audio/ogg",
+        object_key=None,
+        deterministic_filename="voice.ogg",
+    )
+
+    with pytest.raises(worker_module.SourceMaterializationError, match="object_key"):
+        worker_module._download_materialization_descriptor(descriptor, tmp_path, FakeSourceStore({}))
+
+    with pytest.raises(ValueError, match="invalid materialization origin_type"):
+        worker_module.SelectionItemMaterialization(
+            selection_item_id="sel-item-invalid",
+            position=0,
+            media_item_id="media-invalid",
+            media_kind="audio",
+            role="primary",
+            labels=SelectionItemLabels(display_label="Invalid"),
+            source_id="source-invalid",
+            origin_type="invalid",
+            materialization_kind="unsupported",
+        )
 
 
 def test_concatenate_media_inputs_validates_input_count_and_ffmpeg_result(tmp_path: Path, monkeypatch) -> None:

@@ -351,10 +351,8 @@ def _unsupported_selection_item_diagnostic(
         message = "URL media is not transcribed directly by the worker; provide object-backed media"
     elif materialization.unsupported_reason:
         message = materialization.unsupported_reason
-    elif origin_type == "object":
-        message = f"Object-backed {materialization.media_kind} media is not suitable for transcription"
     else:
-        message = f"Media source origin {origin_type!r} is not supported by the transcription worker"
+        message = f"Object-backed {materialization.media_kind} media is not suitable for transcription"
     context: dict[str, object] = {
         "analysis_run_id": execution.analysis_run_id,
         "selection_id": execution.selection.selection_id,
