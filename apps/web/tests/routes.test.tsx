@@ -619,4 +619,251 @@ describe("createWebUiRoutes", () => {
     });
     expect(await screen.findByText("retention_hold_pending")).toBeVisible();
   });
+
+  it("covers inbox validation and alternate ingest modes", async () => {
+    const runtime = renderRoute("/");
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add to inbox" }));
+    expect(await screen.findByText("Text is required.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "URL" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    expect(await screen.findByText("URL is required.")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://example.test/source" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          kind: "url",
+          displayName: "https://example.test/source",
+          source: { origin_type: "url", url: "https://example.test/source" },
+        }),
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "File/media" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    expect(await screen.findByText("Choose a file first.")).toBeVisible();
+
+    const fileInput = screen.getByLabelText("File");
+    fireEvent.change(fileInput, {
+      target: {
+        files: [new File(["voice"], "sample.wav", { type: "audio/wav", lastModified: 1700000000000 })],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          kind: "audio",
+          displayName: "sample.wav",
+          source: expect.objectContaining({
+            origin_type: "object",
+            original_filename: "sample.wav",
+            content_type: "audio/wav",
+            size_bytes: 5,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("covers collection management no-op and archive branches", async () => {
+    const runtime = renderRoute("/collections");
+
+    const renameInput = await screen.findByLabelText("Rename Research set");
+    fireEvent.blur(renameInput, { target: { value: "Research set" } });
+    fireEvent.blur(renameInput, { target: { value: "   " } });
+    expect(runtime.apiClient.updateCollection).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-1", {
+        expectedVersion: 3,
+        status: "archived",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.removeCollectionItem).toHaveBeenCalledWith(owner, "collection-1", "media-1", 3);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          name: "Collection 2",
+          items: [],
+        }),
+      );
+    });
+  });
+
+  it("covers run-builder validation and run-detail lifecycle branches", async () => {
+    const runtime = renderRoute("/runs");
+
+    fireEvent.click(await screen.findByLabelText("Select Call note"));
+    fireEvent.change(screen.getByLabelText("Params"), { target: { value: "{not-json" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+    expect(await screen.findByText(/Expected property name/)).toBeVisible();
+
+    const detailRuntime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          status: "succeeded",
+          completed_at: "2026-05-10T00:05:00Z",
+          artifacts: [],
+        }),
+      ),
+      listAnalysisRunEvents: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    const cancelButton = await within(detailRuntime.container).findByRole("button", { name: "Cancel" });
+    expect(cancelButton).toBeDisabled();
+
+    expect(await within(detailRuntime.container).findByText("No events recorded.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("No artifacts available.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("No diagnostics.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("No source-level diagnostics.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("Selected as")).toBeVisible();
+
+    fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(detailRuntime.apiClient.retryAnalysisRun).toHaveBeenCalledWith(owner, "run-1");
+    });
+    expect(await within(detailRuntime.container).findByText(/Retry queued/)).toBeVisible();
+  });
+
+  it("covers artifact and diagnostics fallback surfaces", async () => {
+    const runtime = renderRoute("/artifacts", {
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      getObservabilitySnapshot: vi.fn().mockResolvedValue(null),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("No artifacts available.")).toBeVisible();
+    expect(screen.getByText("Choose an artifact from the list.")).toBeVisible();
+
+    runtime.unmount();
+
+    renderRoute("/diagnostics", {
+      getObservabilitySnapshot: vi.fn().mockResolvedValue(null),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("Observability snapshot is not loaded.")).toBeVisible();
+    expect(screen.getByText("No diagnostics.")).toBeVisible();
+  });
+
+  it("covers inbox action fallback errors", async () => {
+    const runtime = renderRoute("/", {
+      addMediaItem: vi.fn().mockRejectedValue("boom"),
+      createCollection: vi.fn().mockRejectedValue("boom"),
+    });
+
+    fireEvent.change(await screen.findByLabelText("Text"), { target: { value: "error case" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    expect(await screen.findByText("Unable to add media.")).toBeVisible();
+
+    fireEvent.click(screen.getByLabelText("Select Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Create collection" }));
+    expect(await screen.findByText("Unable to create collection.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+    expect(await screen.findByText("Choose a target collection.")).toBeVisible();
+  });
+
+  it("covers collection management fallback errors", async () => {
+    const runtime = renderRoute("/collections", {
+      createCollection: vi.fn().mockRejectedValue("boom"),
+      updateCollection: vi.fn().mockRejectedValue("boom"),
+      removeCollectionItem: vi.fn().mockRejectedValue("boom"),
+      replaceCollectionItems: vi.fn().mockRejectedValue("boom"),
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    expect(await screen.findByText("Unable to create collection.")).toBeVisible();
+
+    fireEvent.blur(screen.getByLabelText("Rename Research set"), { target: { value: "Renamed" } });
+    expect(await screen.findByText("Unable to rename collection.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Unable to remove item.")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Add inbox item"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+    expect(await screen.findByText("Unable to add item.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(await screen.findByText("Unable to update collection.")).toBeVisible();
+  });
+
+  it("covers run, artifact, diagnostics, and media-detail fallback errors", async () => {
+    renderRoute("/runs", {
+      createSelection: vi.fn().mockRejectedValue("boom"),
+    });
+    fireEvent.click(await screen.findByLabelText("Select Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+    expect(await screen.findByText("Unable to create run.")).toBeVisible();
+
+    const detailRuntime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(analysisRun()),
+      cancelAnalysisRun: vi.fn().mockRejectedValue("boom"),
+      retryAnalysisRun: vi.fn().mockRejectedValue("boom"),
+    });
+    fireEvent.click(await within(detailRuntime.container).findByRole("button", { name: "Cancel" }));
+    expect(await within(detailRuntime.container).findByText("Unable to cancel run.")).toBeVisible();
+    fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Retry" }));
+    expect(await within(detailRuntime.container).findByText("Unable to retry run.")).toBeVisible();
+    detailRuntime.unmount();
+
+    renderRoute("/artifacts/artifact-1", {
+      listArtifacts: vi.fn().mockRejectedValue("boom"),
+      getArtifact: vi.fn().mockRejectedValue("boom"),
+    });
+    expect(await screen.findByText("Unable to load artifacts.")).toBeVisible();
+
+    const diagnosticsRuntime = renderRoute("/diagnostics", {
+      listDiagnostics: vi.fn().mockRejectedValue("boom"),
+      getObservabilitySnapshot: vi.fn().mockRejectedValue("boom"),
+      reconcileAnalysisRunQueue: vi.fn().mockRejectedValue("boom"),
+    });
+    expect(await within(diagnosticsRuntime.container).findByText("Unable to load diagnostics.")).toBeVisible();
+    fireEvent.click(within(diagnosticsRuntime.container).getByRole("button", { name: "Reconcile queue" }));
+    expect(await within(diagnosticsRuntime.container).findByText("Unable to reconcile queue.")).toBeVisible();
+    diagnosticsRuntime.unmount();
+
+    renderRoute("/inbox/media-1", {
+      getMediaItem: vi.fn().mockRejectedValue("boom"),
+      removeMediaItem: vi.fn().mockRejectedValue("boom"),
+    });
+    expect(await screen.findByText("Unable to load media item.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Soft delete media item" }));
+    expect(await screen.findByText("Unable to remove media item.")).toBeVisible();
+  });
 });
