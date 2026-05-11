@@ -498,6 +498,134 @@ func TestApiWorkerRuntimeServiceDirectBranches(t *testing.T) {
 	}
 }
 
+func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+
+	t.Run("claim execution prefers started_at and queue errors propagate", func(t *testing.T) {
+		t.Parallel()
+
+		startedAt := now.Add(5 * time.Minute)
+		store := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:        "run-1",
+				Owner:     owner,
+				RunType:   "report",
+				Selection: storage.SelectionRecord{ID: "selection-1"},
+				StartedAt: &startedAt,
+				CreatedAt: now,
+			},
+		}
+		service := &workerRuntimeService{store: store}
+
+		resp, err := service.ClaimExecution(context.Background(), "run-1", ExecutionClaimRequest{WorkerKind: "analysis_runner", TaskType: "selection.analysis"})
+		if err != nil {
+			t.Fatalf("ClaimExecution() error = %v", err)
+		}
+		if !resp.ClaimedAt.Equal(startedAt.UTC()) {
+			t.Fatalf("ClaimedAt = %v, want %v", resp.ClaimedAt, startedAt.UTC())
+		}
+
+		errService := &workerRuntimeService{store: &fakePublicService{err: storage.ErrAnalysisRunNotFound}}
+		if _, err := errService.ListAnalysisRunQueue(context.Background(), AnalysisRunQueueRequest{PageSize: 10}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ListAnalysisRunQueue(error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+
+	t.Run("selection label and source helpers cover fallback branches", func(t *testing.T) {
+		t.Parallel()
+
+		item := storage.SelectionItemSnapshot{
+			MediaItemID: "media-1",
+			SourceSnapshot: storage.MediaSourceMetadata{
+				ExternalURI: "https://example.test/source",
+			},
+		}
+		labels := selectionLabels(item, map[string]any{})
+		if labels.DisplayLabel != "media-1" {
+			t.Fatalf("DisplayLabel = %q, want media-1", labels.DisplayLabel)
+		}
+		if labels.SourceLabel == nil || *labels.SourceLabel != "https://example.test/source" {
+			t.Fatalf("SourceLabel = %#v, want external URI", labels.SourceLabel)
+		}
+		if labels.OriginalFilename != nil {
+			t.Fatalf("OriginalFilename = %#v, want nil", labels.OriginalFilename)
+		}
+
+		if label := sourceLabelFromSnapshot(storage.MediaSourceMetadata{ObjectKey: "sources/a.wav"}); label == nil || *label != "sources/a.wav" {
+			t.Fatalf("sourceLabelFromSnapshot(object) = %#v", label)
+		}
+		if label := sourceLabelFromSnapshot(storage.MediaSourceMetadata{TextRef: "inline:1"}); label == nil || *label != "inline:1" {
+			t.Fatalf("sourceLabelFromSnapshot(text) = %#v", label)
+		}
+		if label := sourceLabelFromSnapshot(storage.MediaSourceMetadata{SourceID: "source-1"}); label == nil || *label != "source-1" {
+			t.Fatalf("sourceLabelFromSnapshot(source id) = %#v", label)
+		}
+		if got := firstString(nil, nil); got != nil {
+			t.Fatalf("firstString(nil, nil) = %#v, want nil", got)
+		}
+	})
+
+	t.Run("runtime helper status and serialization fallbacks", func(t *testing.T) {
+		t.Parallel()
+
+		if got := accessInt64(map[string]any{"n": int64(9)}, "n"); got != 9 {
+			t.Fatalf("accessInt64(int64) = %d, want 9", got)
+		}
+		if got := firstNonEmpty("", "  "); got != "" {
+			t.Fatalf("firstNonEmpty(empty) = %q, want empty", got)
+		}
+		if status := workerOutcomeStatus("partially_succeeded"); status != storage.AnalysisRunStatusPartiallySucceeded {
+			t.Fatalf("workerOutcomeStatus(partially_succeeded) = %q", status)
+		}
+		if status := workerOutcomeStatus("failed"); status != storage.AnalysisRunStatusFailed {
+			t.Fatalf("workerOutcomeStatus(failed) = %q", status)
+		}
+		if status := workerOutcomeStatus("canceled"); status != storage.AnalysisRunStatusCanceled {
+			t.Fatalf("workerOutcomeStatus(canceled) = %q", status)
+		}
+		if got := string(jsonObjectBytes(map[string]any{"bad": make(chan int)})); got != "{}" {
+			t.Fatalf("jsonObjectBytes(marshal error) = %s, want {}", got)
+		}
+		if got := string(mergeRuntimeContext([]byte(`{`), map[string]any{"bad": make(chan int)})); got != "{}" {
+			t.Fatalf("mergeRuntimeContext(invalid+marshal error) = %s, want {}", got)
+		}
+	})
+
+	t.Run("runtime services propagate remaining direct errors", func(t *testing.T) {
+		t.Parallel()
+
+		store := &fakePublicService{
+			run: storage.AnalysisRunRecord{
+				ID:      "run-1",
+				Owner:   owner,
+				RunType: "report",
+			},
+			artifact: storage.ArtifactRecord{
+				ID:          "artifact-1",
+				ContentType: "text/plain",
+				SizeBytes:   5,
+				CreatedAt:   now,
+				Download:    &storage.DownloadDescriptor{Provider: "object_store", URL: "https://example.test/file.txt", ExpiresAt: now.Add(time.Hour)},
+			},
+			err: storage.ErrAnalysisRunNotFound,
+		}
+		service := &workerRuntimeService{store: store}
+
+		if _, err := service.ResolveArtifactDownloadAccess(context.Background(), "artifact-1"); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ResolveArtifactDownloadAccess(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+		if err := service.RecordExecutionProgress(context.Background(), "run-1", ExecutionProgressRequest{ProgressStage: "uploading"}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("RecordExecutionProgress(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+		if _, err := service.FinalizeExecution(context.Background(), "run-1", ExecutionFinalizeRequest{Outcome: "failed"}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("FinalizeExecution(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+}
+
 func TestApiHandlerErrorBranches(t *testing.T) {
 	t.Parallel()
 

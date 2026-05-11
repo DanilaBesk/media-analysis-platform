@@ -614,6 +614,96 @@ func TestApiHttpObservabilitySurfacesOperationalFailuresAndQueueLag(t *testing.T
 	}
 }
 
+func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
+	t.Parallel()
+
+	owner := map[string]any{"owner_type": "web", "owner_id": "u-1"}
+
+	t.Run("media item dependency unavailable", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/media-items", map[string]any{
+			"owner": owner,
+			"kind":  "text",
+			"source": map[string]any{
+				"origin_type": "text",
+				"text":        "hello",
+			},
+		}))
+		assertErrorCode(t, rec, http.StatusServiceUnavailable, "dependency_unavailable")
+	})
+
+	t.Run("json media add maps owner mismatch", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/media-items", map[string]any{
+			"owner": owner,
+			"kind":  "text",
+			"source": map[string]any{
+				"origin_type": "text",
+				"text":        "hello",
+			},
+		}))
+		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+	})
+
+	t.Run("create collection maps owner mismatch", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/collections", map[string]any{
+			"owner": owner,
+			"name":  "Review set",
+		}))
+		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+	})
+
+	t.Run("update collection maps contract violation", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrContractViolation}}).ServeHTTP(rec, jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{
+			"owner":            owner,
+			"expected_version": float64(3),
+			"name":             "Review set v2",
+		}))
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
+	})
+
+	t.Run("create selection maps owner mismatch", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/selections", map[string]any{
+			"owner": owner,
+			"items": []map[string]any{{"media_item_id": "media-1", "position": float64(0)}},
+		}))
+		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+	})
+
+	t.Run("cancel run maps owner mismatch", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/cancel?owner_type=web&owner_id=u-1", map[string]any{
+			"message": "stop",
+		}))
+		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+	})
+
+	t.Run("retry run maps terminal conflict", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrRetryRequiresTerminalRun}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/retry?owner_type=web&owner_id=u-1", map[string]any{
+			"owner": owner,
+		}))
+		assertErrorCode(t, rec, http.StatusConflict, "retry_requires_terminal_run")
+	})
+}
+
 func TestApiHttpRegistersFinalInternalExecutionRoutes(t *testing.T) {
 	t.Parallel()
 
