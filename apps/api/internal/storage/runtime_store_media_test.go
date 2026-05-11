@@ -525,6 +525,219 @@ func TestSQLStateStoreGetterNotFoundMappings(t *testing.T) {
 	config.assertExhausted(t)
 }
 
+func TestSQLStateStoreMutationNoRowMappings(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 13, 15, 0, 0, time.UTC)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+
+	t.Run("create collection returns media item not found", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT id FROM media_items",
+					columns: []string{"id"},
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO collections", affected: 1},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, err := store.CreateCollection(context.Background(), CollectionRecord{
+			ID:        "collection-missing-item",
+			Owner:     owner,
+			Kind:      CollectionKindUser,
+			Name:      "Needs existing media",
+			Status:    CollectionStatusActive,
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, []string{"missing-media"}); !errors.Is(err, ErrMediaItemNotFound) {
+			t.Fatalf("CreateCollection(missing media) error = %v, want ErrMediaItemNotFound", err)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("update collection returns version conflict on no rows", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE collections", affected: 0},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, err := store.UpdateCollection(context.Background(), UpdateCollectionRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 7,
+			Name:            "stale",
+		}, now); !errors.Is(err, ErrCollectionVersionConflict) {
+			t.Fatalf("UpdateCollection(stale) error = %v, want ErrCollectionVersionConflict", err)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("update collection items returns version conflict on no rows", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE collections SET version=version+1", affected: 0},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, err := store.UpdateCollectionItems(context.Background(), UpdateCollectionItemsRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 4,
+			Items:           []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+		}, now); !errors.Is(err, ErrCollectionVersionConflict) {
+			t.Fatalf("UpdateCollectionItems(stale) error = %v, want ErrCollectionVersionConflict", err)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("update collection items returns media item not found", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT id FROM media_items",
+					columns: []string{"id"},
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE collections SET version=version+1", affected: 1},
+				{match: "UPDATE collection_items SET removed_at=$1", affected: 1},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, err := store.UpdateCollectionItems(context.Background(), UpdateCollectionItemsRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 4,
+			Items:           []CollectionItemRecord{{MediaItemID: "missing-media", Position: 0}},
+			AddedBy:         "tester",
+		}, now); !errors.Is(err, ErrMediaItemNotFound) {
+			t.Fatalf("UpdateCollectionItems(missing media) error = %v, want ErrMediaItemNotFound", err)
+		}
+
+		config.assertExhausted(t)
+	})
+}
+
+func TestRuntimeStoreSelectionHelpersNoRowMappings(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+
+	t.Run("selectMediaItemHeader returns media item not found", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT id FROM media_items",
+					columns: []string{"id"},
+				},
+			},
+		}
+
+		db := openScriptedRuntimeStoreDB(t, config)
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BeginTx() error = %v", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := selectMediaItemHeader(context.Background(), tx, owner, "missing-media"); !errors.Is(err, ErrMediaItemNotFound) {
+			t.Fatalf("selectMediaItemHeader(missing) error = %v, want ErrMediaItemNotFound", err)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("selectCollectionHeader returns collection not found", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT id FROM collections",
+					columns: []string{"id"},
+				},
+			},
+		}
+
+		db := openScriptedRuntimeStoreDB(t, config)
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BeginTx() error = %v", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := selectCollectionHeader(context.Background(), tx, owner, "missing-collection"); !errors.Is(err, ErrCollectionNotFound) {
+			t.Fatalf("selectCollectionHeader(missing) error = %v, want ErrCollectionNotFound", err)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("selectInboxCollection returns collection not found", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+				},
+			},
+		}
+
+		db := openScriptedRuntimeStoreDB(t, config)
+		tx, err := db.BeginTx(context.Background(), nil)
+		if err != nil {
+			t.Fatalf("BeginTx() error = %v", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := selectInboxCollection(context.Background(), tx, owner); !errors.Is(err, ErrCollectionNotFound) {
+			t.Fatalf("selectInboxCollection(missing) error = %v, want ErrCollectionNotFound", err)
+		}
+
+		config.assertExhausted(t)
+	})
+}
+
 func TestSQLStateStoreRunTransitionIdempotentBranches(t *testing.T) {
 	t.Parallel()
 
