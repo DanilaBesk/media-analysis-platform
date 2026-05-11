@@ -938,6 +938,40 @@ func TestRuntimeStoreMediaAndCollectionErrorBranches(t *testing.T) {
 	t.Run("create and read collections cover refresh and item-query branches", func(t *testing.T) {
 		t.Parallel()
 
+		storeListCollectionsQueryErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(list collections query) error = %v", err)
+		}
+		if _, err := storeListCollectionsQueryErr.ListCollections(context.Background(), owner); !errors.Is(err, stepErr) {
+			t.Fatalf("ListCollections(query) error = %v, want stepErr", err)
+		}
+
+		storeListCollectionsScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+					rows: [][]driver.Value{{
+						"collection-1", "web", "user-1", "", CollectionKindUser, "Review", CollectionStatusActive, "bad-version", now, now, nil, nil,
+					}},
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(list collections scan) error = %v", err)
+		}
+		if _, err := storeListCollectionsScanErr.ListCollections(context.Background(), owner); err == nil {
+			t.Fatalf("ListCollections(scan) error = nil, want scan failure")
+		}
+
 		storeCreateInsertErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			execResponses: []scriptedExecResponse{{
 				match: "INSERT INTO collections",
@@ -1114,6 +1148,25 @@ func TestRuntimeStoreMediaAndCollectionErrorBranches(t *testing.T) {
 			Name:            "Renamed",
 		}, now); !errors.Is(err, stepErr) {
 			t.Fatalf("UpdateCollection(refresh) error = %v, want stepErr", err)
+		}
+
+		storeUpdateItemsVersionExecErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE collections SET version=version+1",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update items version exec) error = %v", err)
+		}
+		if _, err := storeUpdateItemsVersionExecErr.UpdateCollectionItems(context.Background(), UpdateCollectionItemsRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 4,
+			Items:           []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+			AddedBy:         "tester",
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("UpdateCollectionItems(version exec) error = %v, want stepErr", err)
 		}
 
 		storeUpdateItemsRemoveErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
@@ -2513,6 +2566,226 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 19, 30, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("run-lookup-finalize branch failed")
+
+	t.Run("analysis run lookups propagate non-not-found scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		invalidRunRow := []driver.Value{
+			"run-1", "web", "user-1", "", "selection-1", "transcription", AnalysisRunStatusRunning, "bad-version",
+			[]byte(`{"language":"ru"}`), []byte(`{"strategy":"polling"}`), "not_required", now, nil, nil, nil, expiresAt,
+		}
+
+		storeByID, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+				columns: analysisRunColumns(),
+				rows:    [][]driver.Value{invalidRunRow},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(by id) error = %v", err)
+		}
+		if _, err := storeByID.GetAnalysisRunByID(context.Background(), "run-1"); err == nil {
+			t.Fatalf("GetAnalysisRunByID(scan) error = nil, want scan failure")
+		}
+
+		storeByOwner, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+				columns: analysisRunColumns(),
+				rows:    [][]driver.Value{invalidRunRow},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(by owner) error = %v", err)
+		}
+		if _, err := storeByOwner.GetAnalysisRun(context.Background(), owner, "run-1"); err == nil {
+			t.Fatalf("GetAnalysisRun(scan) error = nil, want scan failure")
+		}
+	})
+
+	t.Run("run-gated list helpers propagate lookup failures", func(t *testing.T) {
+		t.Parallel()
+
+		storeEvents, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+				columns: analysisRunColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(events) error = %v", err)
+		}
+		if _, err := storeEvents.ListRunEvents(context.Background(), owner, "run-1"); !errors.Is(err, stepErr) {
+			t.Fatalf("ListRunEvents(lookup) error = %v, want stepErr", err)
+		}
+
+		storeArtifacts, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+				columns: analysisRunColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(artifacts) error = %v", err)
+		}
+		if _, err := storeArtifacts.ListArtifacts(context.Background(), owner, "run-1"); !errors.Is(err, stepErr) {
+			t.Fatalf("ListArtifacts(lookup) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("list diagnostics propagates scan failures", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM diagnostics\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: diagnosticColumns(),
+				rows: [][]driver.Value{{
+					"diag-1", "web", "user-1", "", "analysis_run", "run-1", "warning", "worker_partial", "partial success", []byte(`{"step":1}`), []byte(`{"safe":true}`), "corr-1", "retry", "bad-time",
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(diagnostics) error = %v", err)
+		}
+		if _, err := store.ListDiagnostics(context.Background(), owner, DiagnosticQuery{}); err == nil {
+			t.Fatalf("ListDiagnostics(scan) error = nil, want scan failure")
+		}
+	})
+
+	t.Run("record progress propagates version scan failures", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "RETURNING version",
+				columns: []string{"version"},
+				rows:    [][]driver.Value{{"bad-version"}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(progress) error = %v", err)
+		}
+		if _, err := store.RecordAnalysisRunProgress(context.Background(), owner, "run-1", RunEventRecord{
+			ID:            "event-progress",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.progress",
+			Status:        AnalysisRunStatusRunning,
+			CreatedAt:     now,
+		}, now); err == nil {
+			t.Fatalf("RecordAnalysisRunProgress(scan) error = nil, want scan failure")
+		}
+	})
+
+	t.Run("finalize propagates lookup, scan, task-update, and event-insert failures", func(t *testing.T) {
+		t.Parallel()
+
+		storeLookupErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_runs\nSET status=$5",
+					columns: []string{"version"},
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(finalize lookup) error = %v", err)
+		}
+		if _, err := storeLookupErr.FinalizeAnalysisRunTask(context.Background(), owner, "run-1", AnalysisRunStatusSucceeded, RunEventRecord{
+			ID:            "event-lookup",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.finalized",
+			Status:        AnalysisRunStatusSucceeded,
+			CreatedAt:     now,
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("FinalizeAnalysisRunTask(lookup) error = %v, want stepErr", err)
+		}
+
+		storeScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "UPDATE analysis_runs\nSET status=$5",
+				columns: []string{"version"},
+				rows:    [][]driver.Value{{"bad-version"}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(finalize scan) error = %v", err)
+		}
+		if _, err := storeScanErr.FinalizeAnalysisRunTask(context.Background(), owner, "run-1", AnalysisRunStatusSucceeded, RunEventRecord{
+			ID:            "event-scan",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.finalized",
+			Status:        AnalysisRunStatusSucceeded,
+			CreatedAt:     now,
+		}, now); err == nil {
+			t.Fatalf("FinalizeAnalysisRunTask(scan) error = nil, want scan failure")
+		}
+
+		storeTaskErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "UPDATE analysis_runs\nSET status=$5",
+				columns: []string{"version"},
+				rows:    [][]driver.Value{{int64(3)}},
+			}},
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE analysis_run_tasks\nSET status=$2, finalized_at=$3, heartbeat_at=$3",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(finalize task) error = %v", err)
+		}
+		if _, err := storeTaskErr.FinalizeAnalysisRunTask(context.Background(), owner, "run-1", AnalysisRunStatusSucceeded, RunEventRecord{
+			ID:            "event-task",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.finalized",
+			Status:        AnalysisRunStatusSucceeded,
+			CreatedAt:     now,
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("FinalizeAnalysisRunTask(task update) error = %v, want stepErr", err)
+		}
+
+		storeEventErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "UPDATE analysis_runs\nSET status=$5",
+				columns: []string{"version"},
+				rows:    [][]driver.Value{{int64(3)}},
+			}},
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE analysis_run_tasks\nSET status=$2, finalized_at=$3, heartbeat_at=$3", affected: 1},
+				{match: "INSERT INTO analysis_run_events", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(finalize event) error = %v", err)
+		}
+		if _, err := storeEventErr.FinalizeAnalysisRunTask(context.Background(), owner, "run-1", AnalysisRunStatusSucceeded, RunEventRecord{
+			ID:            "event-insert",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.finalized",
+			Status:        AnalysisRunStatusSucceeded,
+			CreatedAt:     now,
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("FinalizeAnalysisRunTask(event insert) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 	t.Parallel()
 
@@ -2537,6 +2810,76 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 		_, err = store.ApplyRetentionPolicies(context.Background(), now)
 		if !errors.Is(err, stepErr) {
 			t.Fatalf("ApplyRetentionPolicies() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("apply retention policies propagates each remaining step error", func(t *testing.T) {
+		t.Parallel()
+
+		testCases := []struct {
+			name  string
+			execs []scriptedExecResponse
+		}{
+			{
+				name: "media-items step",
+				execs: []scriptedExecResponse{
+					{match: "UPDATE media_items mi", err: stepErr},
+				},
+			},
+			{
+				name: "collection-items step",
+				execs: []scriptedExecResponse{
+					{match: "UPDATE media_items mi", affected: 1},
+					{match: "UPDATE collection_items ci", err: stepErr},
+				},
+			},
+			{
+				name: "collections step",
+				execs: []scriptedExecResponse{
+					{match: "UPDATE media_items mi", affected: 1},
+					{match: "UPDATE collection_items ci", affected: 1},
+					{match: "UPDATE collections c", err: stepErr},
+				},
+			},
+			{
+				name: "analysis-runs step",
+				execs: []scriptedExecResponse{
+					{match: "UPDATE media_items mi", affected: 1},
+					{match: "UPDATE collection_items ci", affected: 1},
+					{match: "UPDATE collections c", affected: 1},
+					{match: "UPDATE selections s", affected: 1},
+					{match: "UPDATE analysis_runs\nSET status='expired'", err: stepErr},
+				},
+			},
+			{
+				name: "artifacts step",
+				execs: []scriptedExecResponse{
+					{match: "UPDATE media_items mi", affected: 1},
+					{match: "UPDATE collection_items ci", affected: 1},
+					{match: "UPDATE collections c", affected: 1},
+					{match: "UPDATE selections s", affected: 1},
+					{match: "UPDATE analysis_runs\nSET status='expired'", affected: 1},
+					{match: "UPDATE artifacts\nSET status='expired'", err: stepErr},
+				},
+			},
+		}
+
+		for _, tc := range testCases {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+					execResponses: tc.execs,
+				}))
+				if err != nil {
+					t.Fatalf("NewSQLStateStore() error = %v", err)
+				}
+
+				if _, err := store.ApplyRetentionPolicies(context.Background(), now); !errors.Is(err, stepErr) {
+					t.Fatalf("ApplyRetentionPolicies() error = %v, want stepErr", err)
+				}
+			})
 		}
 	})
 
@@ -3190,6 +3533,33 @@ func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 		}, []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}})
 		if !errors.Is(err, stepErr) {
 			t.Fatalf("CreateSelection() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("create selection propagates selection insert error", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO selections", err: stepErr},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.CreateSelection(context.Background(), SelectionRecord{
+			ID:        "selection-1",
+			Owner:     owner,
+			Status:    SelectionStatusSealed,
+			CreatedBy: "tester",
+			CreatedAt: now,
+			SealedAt:  now,
+		}, []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("CreateSelection(insert) error = %v, want stepErr", err)
 		}
 	})
 
