@@ -89,3 +89,62 @@ PYTHONPATH=workers/common/src:workers/agent-runner/src uv run pytest workers/age
 - selection creation and analysis run launch;
 - worker-local source materialization and transcript artifact generation;
 - thin adapter callbacks, paging, removal, and artifact/diagnostic display.
+
+## Coverage Snapshot
+
+Current executable coverage inventory is collected by:
+
+```bash
+bash infra/scripts/coverage-inventory.sh
+```
+
+Measured baselines from the current tree:
+
+- Go `apps/api/internal/api`: `49.5%` statement coverage.
+- Go `apps/api/internal/storage`: `31.7%` statement coverage.
+- Python `workers/common/src/transcriber_workers_common`: `95%` line coverage.
+- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%` line coverage.
+- Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%` line coverage.
+- Python `apps/telegram-bot/src/telegram_adapter`: `81%` aggregate line coverage.
+- Node `apps/mcp-server/src`: `95.67%` line coverage from `node --test --experimental-test-coverage`.
+
+Current gap:
+
+- `apps/web` has passing route/client suites, but no configured line-coverage provider yet.
+- Because Web line coverage is not instrumented and several backends are well below `100%`, the repository does not currently satisfy a literal `100% coverage` claim.
+
+## Executable coverage inventory
+
+The repo does not have one honest global `100%` gate today. Coverage is measured per surface, with the metric defined by the tool that can actually emit it:
+
+- Go API packages: statement coverage from focused `go test -cover` commands.
+- Python adapter and worker packages: line coverage from isolated `pytest-cov` runs.
+- MCP server: line, branch, and function coverage from Node's built-in test coverage.
+- Web UI: Vitest suite currently has a pass/fail gate, but no executable coverage metric because `@vitest/coverage-v8` is not installed.
+- Compose/runtime smoke and XML validation remain acceptance gates, not percentage coverage gates.
+
+Run the inventory with:
+
+```bash
+bash infra/scripts/coverage-inventory.sh
+```
+
+The command is intentionally a gate, not a vanity report: it exits non-zero while any declared surface still lacks a real metric or has a failing probe.
+
+Current baseline snapshot from `2026-05-11`:
+
+| Surface | Metric | Current baseline | Status |
+| --- | --- | --- | --- |
+| `apps/api/internal/storage` | statement coverage | `28.6%` | measured |
+| `apps/api/internal/api` | statement coverage | `37.6%` | measured |
+| `apps/api/internal/queue` | statement coverage | `56.5%` | measured |
+| `apps/api/internal/ws` | statement coverage | `0.0%` | measured gap |
+| `apps/telegram-bot/src/telegram_adapter` | line coverage | `66%` | measured gap |
+| `workers/common/src/transcriber_workers_common` | line coverage | `95%` | measured |
+| `workers/transcription/src` | line coverage | `88%` | measured |
+| `workers/agent-runner/src` | line coverage | `86%` | measured |
+| `apps/mcp-server/src` | line / branch / function coverage | `95.67% / 67.36% / 96.15%` | measured |
+| `apps/web` | suite pass/fail | `25 tests passed` | measured |
+| `apps/web` | line coverage | `missing @vitest/coverage-v8` | tooling gap |
+
+This means the repo can currently prove focused coverage for several Python, Go, and MCP surfaces, but it cannot truthfully claim full closure across the whole stack yet.

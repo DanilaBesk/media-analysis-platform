@@ -29,6 +29,21 @@ pnpm --filter web test
 pnpm --filter mcp-server test
 ```
 
+## Coverage Inventory Gate
+
+Use the executable inventory before calling the repo "fully covered":
+
+```bash
+bash infra/scripts/coverage-inventory.sh
+```
+
+Interpretation rules:
+
+- A numeric coverage percentage only counts when the underlying tool can emit it for that surface.
+- Pass/fail-only suites are still useful, but they do not satisfy a "100% coverage" claim by themselves.
+- A missing coverage provider or unwired command is a gate gap, not a silent exclusion.
+- Runtime smoke, compose boot, and GRACE/XML validation stay as separate acceptance gates and must not be rolled into a fake global coverage percentage.
+
 ## Live Acceptance
 
 Container-native live smoke is accepted only after all of the following pass through the public API and shared adapter state:
@@ -41,6 +56,28 @@ Container-native live smoke is accepted only after all of the following pass thr
 - cancellation is cooperative and visible through analysis_run state and diagnostics;
 - artifacts can be previewed or resolved through owner-scoped artifact routes;
 - Telegram, Web, and MCP operate as thin clients over the same API-owned state.
+
+## Coverage Inventory
+
+Use one executable inventory command before making any claim about test closure:
+
+```bash
+bash infra/scripts/coverage-inventory.sh
+```
+
+Current measurable baselines from the active tree:
+
+- Go `apps/api/internal/api`: `49.5%`
+- Go `apps/api/internal/storage`: `31.7%`
+- Python `workers/common/src/transcriber_workers_common`: `95%`
+- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
+- Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
+- Python `apps/telegram-bot/src/telegram_adapter`: `81%`
+- Node `apps/mcp-server/src`: `95.67%`
+
+Known unmeasured gap:
+
+- `apps/web` has passing suites but no configured line-coverage provider, so a repo-wide `100% coverage` statement remains unproven.
 
 ## Legacy Removal Gate
 
