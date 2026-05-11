@@ -128,8 +128,7 @@ export class WebUiApiClientError extends Error {
 
 function toRequestUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
-  return new URL(normalizedPath, normalizedBaseUrl);
+  return new URL(path.replace(/^\/+/, ""), normalizedBaseUrl);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -147,10 +146,14 @@ function extractError(payload: unknown): { code?: string; message?: string } {
   if (!isRecord(payload) || !isRecord(payload.error)) {
     return {};
   }
-  return {
-    code: typeof payload.error.code === "string" ? payload.error.code : undefined,
-    message: typeof payload.error.message === "string" ? payload.error.message : undefined,
-  };
+  const error: { code?: string; message?: string } = {};
+  if (typeof payload.error.code === "string") {
+    error.code = payload.error.code;
+  }
+  if (typeof payload.error.message === "string") {
+    error.message = payload.error.message;
+  }
+  return error;
 }
 
 function appendOwner(search: URLSearchParams, owner: OwnerScope): void {
@@ -244,15 +247,15 @@ export function createWebUiApiClient({
   const sendJson = <TResponse>(
     method: "POST" | "PATCH",
     path: string,
-    payload?: unknown,
+    payload: unknown,
   ): Promise<TResponse> =>
     requestJson<TResponse>(path, {
       method,
-      headers: payload ? { "Content-Type": "application/json" } : undefined,
-      body: payload ? JSON.stringify(payload) : undefined,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     });
 
-  const postJson = <TResponse>(path: string, payload?: unknown): Promise<TResponse> =>
+  const postJson = <TResponse>(path: string, payload: unknown): Promise<TResponse> =>
     sendJson<TResponse>("POST", path, payload);
 
   const patchJson = <TResponse>(path: string, payload: unknown): Promise<TResponse> =>

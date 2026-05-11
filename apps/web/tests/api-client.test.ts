@@ -634,6 +634,171 @@ describe("createWebUiApiClient", () => {
     });
   });
 
+  it("normalizes blank optional payload fields and supports media deletion", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ media_item: { media_item_id: "media-1", display_name: "Inbox note" } }, 201))
+      .mockResolvedValueOnce(jsonResponse({ collection: { collection_id: "collection-1", name: "Inbox" } }))
+      .mockResolvedValueOnce(jsonResponse({ selection: { selection_id: "selection-1", status: "sealed", items: [] } }, 201))
+      .mockResolvedValueOnce(jsonResponse({ media_item: { media_item_id: "media-1", status: "deleted" } }));
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+
+    await client.addMediaItem(owner, {
+      kind: "text",
+      displayName: "   ",
+      adapterOrigin: "   ",
+      source: { origin_type: "text", text: "Meeting note" },
+    });
+    await client.updateCollection(owner, "collection-1", {
+      expectedVersion: 4,
+      name: "   ",
+    });
+    await client.createSelection(owner, {
+      items: [{ media_item_id: "media-1", position: 0 }],
+      sourceCollectionId: "",
+      duplicatePolicy: "allow",
+      createdBy: "   ",
+    });
+    await client.removeMediaItem(owner, "media-1");
+
+    expect(fetchImpl.mock.calls.map((call) => [String(call[0]), call[1]])).toEqual([
+      [
+        "http://localhost:8080/v1/media-items",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            owner,
+            kind: "text",
+            source: { origin_type: "text", text: "Meeting note" },
+            collection_id: undefined,
+            display_name: undefined,
+            adapter_origin: "web",
+          }),
+        }),
+      ],
+      [
+        "http://localhost:8080/v1/collections/collection-1",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({
+            owner,
+            expected_version: 4,
+            name: undefined,
+            status: undefined,
+          }),
+        }),
+      ],
+      [
+        "http://localhost:8080/v1/selections",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            owner,
+            source_collection_id: undefined,
+            items: [{ media_item_id: "media-1", position: 0 }],
+            duplicate_policy: "allow",
+            created_by: "web",
+          }),
+        }),
+      ],
+      [
+        "http://localhost:8080/v1/media-items/media-1?owner_type=web&owner_id=web-console",
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      ],
+    ]);
+  });
+
+  it("falls back for missing content type, non-string API errors, and 204 responses", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: {
+              code: 404,
+              message: false,
+            },
+          },
+          400,
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response("upstream unavailable", {
+          status: 400,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 204,
+        }),
+      );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+
+    await expect(client.listMediaItems(owner)).rejects.toMatchObject({
+      name: "WebUiApiClientError",
+      status: 400,
+      path: "/v1/media-items?owner_type=web&owner_id=web-console",
+      code: undefined,
+      message: "API request failed for /v1/media-items?owner_type=web&owner_id=web-console",
+    });
+    await expect(client.listCollections(owner)).rejects.toMatchObject({
+      name: "WebUiApiClientError",
+      status: 400,
+      path: "/v1/collections?owner_type=web&owner_id=web-console",
+      code: undefined,
+      message: "API request failed for /v1/collections?owner_type=web&owner_id=web-console",
+    });
+    await expect(client.reconcileAnalysisRunQueue()).resolves.toBeUndefined();
+  });
+
+  it("uses slash-normalized base URLs and the default websocket transport", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({ items: [], page: { page_size: 25, has_more: false } }),
+    );
+    const socket = {
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      close: vi.fn(),
+    };
+    const webSocketSpy = vi.fn(() => socket);
+    const originalWebSocket = globalThis.WebSocket;
+    vi.stubGlobal("WebSocket", webSocketSpy as unknown as typeof WebSocket);
+
+    try {
+      const client = createWebUiApiClient({
+        baseUrl: "http://localhost:8080/root/",
+        wsUrl: "ws://localhost:8080/v1/ws",
+        fetchImpl,
+      });
+
+      await client.listCollections(owner);
+      const subscription = client.subscribeToRunEvents({ onMessage: vi.fn() });
+      subscription.close();
+
+      expect(fetchImpl).toHaveBeenCalledWith(
+        new URL("v1/collections?owner_type=web&owner_id=web-console", "http://localhost:8080/root/"),
+        expect.any(Object),
+      );
+      expect(webSocketSpy).toHaveBeenCalledWith("ws://localhost:8080/v1/ws");
+      expect(socket.close).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+      globalThis.WebSocket = originalWebSocket;
+    }
+  });
+
   it("wires websocket open, error, invalid payload, close, and manual shutdown paths", () => {
     const socket: {
       onopen: ((event: Event) => void) | null;
