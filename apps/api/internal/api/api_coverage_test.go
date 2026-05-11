@@ -296,6 +296,24 @@ func TestApiPublicRuntimeServiceForwarders(t *testing.T) {
 	if recovered, err := noQueue.ReconcileAnalysisRunQueue(context.Background(), 5); err != nil || recovered != 0 {
 		t.Fatalf("ReconcileAnalysisRunQueue(no queue) recovered=%d err=%v", recovered, err)
 	}
+
+	queueErrClient := &flakyQueueClient{err: errors.New("queue down")}
+	queueErrPublisher, err := queue.NewPublisher(queueErrClient)
+	if err != nil {
+		t.Fatalf("NewPublisher(queue error) error = %v", err)
+	}
+	queueErrService := &publicRuntimeService{store: store, queue: queueErrPublisher}
+	if _, err := queueErrService.CreateAnalysisRun(context.Background(), storage.CreateAnalysisRunRequest{Owner: owner, SelectionID: "selection-1", RunType: "report"}); !errors.Is(err, queue.ErrQueueUnavailable) {
+		t.Fatalf("CreateAnalysisRun(queue error) = %v, want ErrQueueUnavailable", err)
+	}
+	if _, err := queueErrService.RetryAnalysisRun(context.Background(), owner, "run-1", "retry-key-2"); !errors.Is(err, queue.ErrQueueUnavailable) {
+		t.Fatalf("RetryAnalysisRun(queue error) = %v, want ErrQueueUnavailable", err)
+	}
+	store.err = storage.ErrAnalysisRunNotFound
+	if _, err := (&publicRuntimeService{store: store, queue: publisher}).GetInboxCollection(context.Background(), owner); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+		t.Fatalf("GetInboxCollection(store error) = %v, want propagated store error", err)
+	}
+	store.err = nil
 }
 
 func TestApiWorkerRuntimeServiceDirectBranches(t *testing.T) {
@@ -700,6 +718,161 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		}
 		if _, exists := contextPayload["execution_id"]; exists {
 			t.Fatalf("diagnostic context unexpectedly contains execution_id: %#v", contextPayload)
+		}
+	})
+}
+
+func TestApiHttpFinalRouteRemainingBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 13, 0, 0, 0, time.UTC)
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	public := &fakePublicService{
+		mediaItems: []storage.MediaItemRecord{
+			{
+				ID:          "media-1",
+				Owner:       owner,
+				Kind:        "text",
+				Status:      storage.MediaStatusReady,
+				DisplayName: "first",
+				Source:      storage.MediaSourceMetadata{SourceID: "source-1", OriginType: "text", TextRef: "inline:1"},
+				Retention:   storage.RetentionMetadata{State: storage.RetentionStateActive},
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
+			{
+				ID:          "media-2",
+				Owner:       owner,
+				Kind:        "text",
+				Status:      storage.MediaStatusReady,
+				DisplayName: "second",
+				Source:      storage.MediaSourceMetadata{SourceID: "source-2", OriginType: "text", TextRef: "inline:2"},
+				Retention:   storage.RetentionMetadata{State: storage.RetentionStateActive},
+				CreatedAt:   now.Add(time.Minute),
+				UpdatedAt:   now.Add(time.Minute),
+			},
+		},
+		run: storage.AnalysisRunRecord{
+			ID:                "run-1",
+			Owner:             owner,
+			SelectionID:       "selection-1",
+			RunType:           "report",
+			Status:            storage.AnalysisRunStatusQueued,
+			Version:           2,
+			EvidenceGateState: "not_required",
+			CreatedAt:         now,
+		},
+		runs: []storage.AnalysisRunRecord{{
+			ID:                "run-1",
+			Owner:             owner,
+			SelectionID:       "selection-1",
+			RunType:           "report",
+			Status:            storage.AnalysisRunStatusQueued,
+			Version:           2,
+			EvidenceGateState: "not_required",
+			CreatedAt:         now,
+		}},
+		events: []storage.RunEventRecord{
+			{ID: "event-1", AnalysisRunID: "run-1", EventType: "analysis_run.created", Version: 1, CreatedAt: now},
+			{ID: "event-2", AnalysisRunID: "run-1", EventType: "analysis_run.progress", Version: 2, CreatedAt: now.Add(time.Minute)},
+		},
+		diagnostics: []storage.DiagnosticRecord{
+			{ID: "diag-1", Owner: owner, SubjectType: "analysis_run", SubjectID: "run-1", Severity: "warning", Code: "worker_partial", Message: "warn", CorrelationID: "corr-1", CreatedAt: now},
+			{ID: "diag-2", Owner: owner, SubjectType: "analysis_run", SubjectID: "run-2", Severity: "info", Code: "other", Message: "skip", CorrelationID: "corr-2", CreatedAt: now},
+		},
+		reconciled: 7,
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	t.Run("list media items paginates with cursor", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/media-items?owner_type=web&owner_id=u-1&cursor=media-1&page_size=1", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d want 200 body=%s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Items []struct {
+				ID string `json:"media_item_id"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("Unmarshal(list media items) error = %v", err)
+		}
+		if len(body.Items) != 1 || body.Items[0].ID != "media-2" {
+			t.Fatalf("items = %#v, want media-2 page", body.Items)
+		}
+	})
+
+	t.Run("create analysis run uses idempotency header", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := jsonRequest(http.MethodPost, "/v1/analysis-runs", map[string]any{
+			"owner":        map[string]any{"owner_type": "web", "owner_id": "u-1"},
+			"selection_id": "selection-1",
+			"run_type":     "report",
+		})
+		req.Header.Set("Idempotency-Key", "hdr-key")
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d want 202 body=%s", rec.Code, rec.Body.String())
+		}
+		if public.lastRun.IdempotencyKey != "hdr-key" || public.lastRun.RunType != "report" {
+			t.Fatalf("run request = %#v", public.lastRun)
+		}
+	})
+
+	t.Run("retry falls back to body owner and body idempotency key", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/retry", map[string]any{
+			"owner":           map[string]any{"owner_type": "web", "owner_id": "u-1"},
+			"idempotency_key": "body-key",
+		}))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d want 202 body=%s", rec.Code, rec.Body.String())
+		}
+		if public.retriedRunID != "run-1" {
+			t.Fatalf("retried run id = %q, want run-1", public.retriedRunID)
+		}
+	})
+
+	t.Run("list events and diagnostics paginate and filter", func(t *testing.T) {
+		eventsRec := httptest.NewRecorder()
+		mux.ServeHTTP(eventsRec, httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1/events?owner_type=web&owner_id=u-1&cursor=event-1&page_size=1", nil))
+		if eventsRec.Code != http.StatusOK {
+			t.Fatalf("events status = %d want 200 body=%s", eventsRec.Code, eventsRec.Body.String())
+		}
+		var eventsBody struct {
+			Items []struct {
+				ID string `json:"event_id"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(eventsRec.Body.Bytes(), &eventsBody); err != nil {
+			t.Fatalf("Unmarshal(events) error = %v", err)
+		}
+		if len(eventsBody.Items) != 1 || eventsBody.Items[0].ID != "event-2" {
+			t.Fatalf("events page = %#v, want event-2", eventsBody.Items)
+		}
+
+		diagRec := httptest.NewRecorder()
+		mux.ServeHTTP(diagRec, httptest.NewRequest(http.MethodGet, "/v1/diagnostics?owner_type=web&owner_id=u-1&subject_type=analysis_run&subject_id=run-1&severity=warning&code=worker_partial&correlation_id=corr-1&page_size=1", nil))
+		if diagRec.Code != http.StatusOK {
+			t.Fatalf("diagnostics status = %d want 200 body=%s", diagRec.Code, diagRec.Body.String())
+		}
+		if public.lastDiagnosticQuery != (storage.DiagnosticQuery{
+			SubjectType:   "analysis_run",
+			SubjectID:     "run-1",
+			Severity:      "warning",
+			Code:          "worker_partial",
+			CorrelationID: "corr-1",
+		}) {
+			t.Fatalf("diagnostic query = %#v", public.lastDiagnosticQuery)
+		}
+	})
+
+	t.Run("reconcile queue defaults non-positive limit", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/admin/reconcile-queue", map[string]any{"limit": 0}))
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("status = %d want 202 body=%s", rec.Code, rec.Body.String())
 		}
 	})
 }
