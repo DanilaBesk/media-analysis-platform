@@ -1004,6 +1004,307 @@ func TestApiHttpListDiagnosticsAppliesQueryFilters(t *testing.T) {
 	}
 }
 
+func TestApiHttpFinalRoutesCoverRemainingReadAndMutationEndpoints(t *testing.T) {
+	t.Parallel()
+
+	owner := storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	public := &fakePublicService{
+		mediaItem: storage.MediaItemRecord{
+			ID:          "media-1",
+			Owner:       owner,
+			Kind:        "audio",
+			Status:      storage.MediaStatusReady,
+			DisplayName: "source.wav",
+			Source: storage.MediaSourceMetadata{
+				SourceID:   "source-1",
+				OriginType: "object",
+				ObjectKey:  "sources/source.wav",
+				MIMEType:   "audio/wav",
+			},
+			Retention: storage.RetentionMetadata{State: storage.RetentionStateActive},
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		collection: storage.CollectionRecord{
+			ID:        "collection-1",
+			Owner:     owner,
+			Kind:      storage.CollectionKindUser,
+			Name:      "Review set",
+			Status:    storage.CollectionStatusActive,
+			Version:   3,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Items: []storage.CollectionItemRecord{
+				{MediaItemID: "media-1", Position: 0},
+				{MediaItemID: "media-2", Position: 1},
+			},
+		},
+		collections: []storage.CollectionRecord{
+			{
+				ID:        "inbox-1",
+				Owner:     owner,
+				Kind:      storage.CollectionKindInbox,
+				Name:      "Inbox",
+				Status:    storage.CollectionStatusActive,
+				Version:   1,
+				CreatedAt: now,
+				UpdatedAt: now,
+			},
+			{
+				ID:        "collection-1",
+				Owner:     owner,
+				Kind:      storage.CollectionKindUser,
+				Name:      "Review set",
+				Status:    storage.CollectionStatusActive,
+				Version:   3,
+				CreatedAt: now,
+				UpdatedAt: now,
+				Items: []storage.CollectionItemRecord{
+					{MediaItemID: "media-1", Position: 0},
+					{MediaItemID: "media-2", Position: 1},
+				},
+			},
+		},
+		selection: storage.SelectionRecord{
+			ID:        "selection-1",
+			Owner:     owner,
+			Status:    storage.SelectionStatusSealed,
+			CreatedBy: "u-1",
+			CreatedAt: now,
+			SealedAt:  now,
+			Items: []storage.SelectionItemSnapshot{{
+				ID:                "selection-item-1",
+				Position:          0,
+				MediaItemID:       "media-1",
+				Kind:              "audio",
+				DisplayName:       "source.wav",
+				StatusAtSelection: storage.MediaStatusReady,
+				SourceSnapshot:    storage.MediaSourceMetadata{SourceID: "source-1", OriginType: "object", MIMEType: "audio/wav"},
+				RetentionSnapshot: storage.RetentionMetadata{State: storage.RetentionStateActive},
+			}},
+		},
+		run: storage.AnalysisRunRecord{
+			ID:                "run-1",
+			Owner:             owner,
+			SelectionID:       "selection-1",
+			RunType:           "transcription",
+			Status:            storage.AnalysisRunStatusQueued,
+			Version:           2,
+			EvidenceGateState: "not_required",
+			CreatedAt:         now,
+		},
+		events: []storage.RunEventRecord{{
+			ID:            "event-1",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.created",
+			Status:        storage.AnalysisRunStatusQueued,
+			CreatedAt:     now,
+		}},
+	}
+	mux := newFinalMux(Dependencies{Public: public})
+
+	getMedia := httptest.NewRecorder()
+	mux.ServeHTTP(getMedia, httptest.NewRequest(http.MethodGet, "/v1/media-items/media-1?owner_type=web&owner_id=u-1", nil))
+	if getMedia.Code != http.StatusOK {
+		t.Fatalf("get media status = %d want 200 body=%s", getMedia.Code, getMedia.Body.String())
+	}
+
+	deleteMedia := httptest.NewRecorder()
+	mux.ServeHTTP(deleteMedia, httptest.NewRequest(http.MethodDelete, "/v1/media-items/media-1?owner_type=web&owner_id=u-1", nil))
+	if deleteMedia.Code != http.StatusOK {
+		t.Fatalf("delete media status = %d want 200 body=%s", deleteMedia.Code, deleteMedia.Body.String())
+	}
+
+	inboxRec := httptest.NewRecorder()
+	mux.ServeHTTP(inboxRec, httptest.NewRequest(http.MethodGet, "/v1/collections/inbox?owner_type=web&owner_id=u-1", nil))
+	if inboxRec.Code != http.StatusOK {
+		t.Fatalf("inbox status = %d want 200 body=%s", inboxRec.Code, inboxRec.Body.String())
+	}
+
+	createCollection := httptest.NewRecorder()
+	mux.ServeHTTP(createCollection, jsonRequest(http.MethodPost, "/v1/collections", map[string]any{
+		"owner": map[string]any{"owner_type": "web", "owner_id": "u-1"},
+		"name":  "Review set",
+		"items": []string{"media-1"},
+	}))
+	if createCollection.Code != http.StatusCreated {
+		t.Fatalf("create collection status = %d want 201 body=%s", createCollection.Code, createCollection.Body.String())
+	}
+
+	listCollections := httptest.NewRecorder()
+	mux.ServeHTTP(listCollections, httptest.NewRequest(http.MethodGet, "/v1/collections?owner_type=web&owner_id=u-1&page_size=1", nil))
+	if listCollections.Code != http.StatusOK {
+		t.Fatalf("list collections status = %d want 200 body=%s", listCollections.Code, listCollections.Body.String())
+	}
+
+	getCollection := httptest.NewRecorder()
+	mux.ServeHTTP(getCollection, httptest.NewRequest(http.MethodGet, "/v1/collections/collection-1?owner_type=web&owner_id=u-1", nil))
+	if getCollection.Code != http.StatusOK {
+		t.Fatalf("get collection status = %d want 200 body=%s", getCollection.Code, getCollection.Body.String())
+	}
+
+	updateCollection := httptest.NewRecorder()
+	mux.ServeHTTP(updateCollection, jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{
+		"owner":            map[string]any{"owner_type": "web", "owner_id": "u-1"},
+		"expected_version": float64(3),
+		"name":             "Review set v2",
+		"status":           storage.CollectionStatusArchived,
+	}))
+	if updateCollection.Code != http.StatusOK {
+		t.Fatalf("update collection status = %d want 200 body=%s", updateCollection.Code, updateCollection.Body.String())
+	}
+
+	removeCollectionItem := httptest.NewRecorder()
+	mux.ServeHTTP(removeCollectionItem, httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/media-2?owner_type=web&owner_id=u-1&expected_version=3", nil))
+	if removeCollectionItem.Code != http.StatusOK {
+		t.Fatalf("remove collection item status = %d want 200 body=%s", removeCollectionItem.Code, removeCollectionItem.Body.String())
+	}
+	if public.lastUpdateCollectionItems.CollectionID != "collection-1" || len(public.lastUpdateCollectionItems.Items) != 1 || public.lastUpdateCollectionItems.Items[0].MediaItemID != "media-1" || public.lastUpdateCollectionItems.Items[0].Position != 0 {
+		t.Fatalf("remove collection item request = %#v", public.lastUpdateCollectionItems)
+	}
+
+	getSelection := httptest.NewRecorder()
+	mux.ServeHTTP(getSelection, httptest.NewRequest(http.MethodGet, "/v1/selections/selection-1?owner_type=web&owner_id=u-1", nil))
+	if getSelection.Code != http.StatusOK {
+		t.Fatalf("get selection status = %d want 200 body=%s", getSelection.Code, getSelection.Body.String())
+	}
+
+	getRun := httptest.NewRecorder()
+	mux.ServeHTTP(getRun, httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1?owner_type=web&owner_id=u-1", nil))
+	if getRun.Code != http.StatusOK {
+		t.Fatalf("get run status = %d want 200 body=%s", getRun.Code, getRun.Body.String())
+	}
+
+	listEvents := httptest.NewRecorder()
+	mux.ServeHTTP(listEvents, httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1/events?owner_type=web&owner_id=u-1&page_size=1", nil))
+	if listEvents.Code != http.StatusOK {
+		t.Fatalf("list events status = %d want 200 body=%s", listEvents.Code, listEvents.Body.String())
+	}
+	var eventsBody struct {
+		Items []struct {
+			ID string `json:"event_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(listEvents.Body.Bytes(), &eventsBody); err != nil {
+		t.Fatalf("Unmarshal(events) error = %v", err)
+	}
+	if len(eventsBody.Items) != 1 || eventsBody.Items[0].ID != "event-1" {
+		t.Fatalf("events = %#v, want event-1", eventsBody.Items)
+	}
+
+	listArtifacts := httptest.NewRecorder()
+	mux.ServeHTTP(listArtifacts, httptest.NewRequest(http.MethodGet, "/v1/artifacts?owner_type=web&owner_id=u-1&analysis_run_id=run-1", nil))
+	if listArtifacts.Code != http.StatusOK {
+		t.Fatalf("list artifacts status = %d want 200 body=%s", listArtifacts.Code, listArtifacts.Body.String())
+	}
+	if public.listArtifactsAnalysisRunID != "run-1" {
+		t.Fatalf("list artifacts analysis_run_id = %q, want run-1", public.listArtifactsAnalysisRunID)
+	}
+}
+
+func TestApiServerCORSAndWebsocketBranches(t *testing.T) {
+	t.Parallel()
+
+	blockedServer := NewServer(Dependencies{})
+	blockedMux := http.NewServeMux()
+	blockedServer.RegisterRoutes(blockedMux)
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/v1/media-items", nil)
+	preflight.Header.Set("Origin", "http://localhost:3000")
+	preflightRec := httptest.NewRecorder()
+	blockedMux.ServeHTTP(preflightRec, preflight)
+	if preflightRec.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d want 204 body=%s", preflightRec.Code, preflightRec.Body.String())
+	}
+	if got := preflightRec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
+		t.Fatalf("allow origin = %q, want localhost origin", got)
+	}
+
+	forbidden := httptest.NewRequest(http.MethodOptions, "/v1/media-items", nil)
+	forbidden.Header.Set("Origin", "http://example.com")
+	forbiddenRec := httptest.NewRecorder()
+	blockedMux.ServeHTTP(forbiddenRec, forbidden)
+	if forbiddenRec.Code != http.StatusForbidden {
+		t.Fatalf("forbidden preflight status = %d want 403 body=%s", forbiddenRec.Code, forbiddenRec.Body.String())
+	}
+
+	noOrigin := httptest.NewRequest(http.MethodOptions, "/v1/media-items", nil)
+	noOriginRec := httptest.NewRecorder()
+	blockedMux.ServeHTTP(noOriginRec, noOrigin)
+	if noOriginRec.Code != http.StatusNoContent {
+		t.Fatalf("no origin preflight status = %d want 204 body=%s", noOriginRec.Code, noOriginRec.Body.String())
+	}
+
+	wsUnavailable := httptest.NewRecorder()
+	blockedMux.ServeHTTP(wsUnavailable, httptest.NewRequest(http.MethodGet, "/v1/ws", nil))
+	assertErrorCode(t, wsUnavailable, http.StatusServiceUnavailable, "dependency_unavailable")
+
+	ws := &fakeWebsocketAcceptor{}
+	allowedServer := NewServer(Dependencies{Websocket: ws})
+	allowedMux := http.NewServeMux()
+	allowedServer.RegisterRoutes(allowedMux)
+	wsRec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/ws", nil)
+	req.Header.Set("Origin", "https://127.0.0.1:8080")
+	allowedMux.ServeHTTP(wsRec, req)
+	if wsRec.Code != http.StatusCreated {
+		t.Fatalf("websocket status = %d want 201 body=%s", wsRec.Code, wsRec.Body.String())
+	}
+	if !ws.called {
+		t.Fatalf("websocket acceptor was not called")
+	}
+	if got := wsRec.Header().Get("Access-Control-Allow-Origin"); got != "https://127.0.0.1:8080" {
+		t.Fatalf("websocket allow origin = %q", got)
+	}
+}
+
+func TestApiUtilityBranches(t *testing.T) {
+	t.Parallel()
+
+	if got := parsePositiveQueryInt("", 7); got != 7 {
+		t.Fatalf("empty query int = %d, want fallback 7", got)
+	}
+	if got := parsePositiveQueryInt("bad", 7); got != 7 {
+		t.Fatalf("invalid query int = %d, want fallback 7", got)
+	}
+	if got := parsePositiveQueryInt("101", 7); got != 100 {
+		t.Fatalf("capped query int = %d, want 100", got)
+	}
+
+	if _, pageSize := parsePageRequest(httptest.NewRequest(http.MethodGet, "/v1/media-items?page_size=999", nil)); pageSize != 100 {
+		t.Fatalf("parsePageRequest capped page size = %d, want 100", pageSize)
+	}
+
+	if got := mapFinalStorageError(storage.ErrContractViolation); got.code != "invalid_request" || got.status != http.StatusBadRequest {
+		t.Fatalf("contract violation mapping = %#v", got)
+	}
+	if got := mapFinalStorageError(errors.New("boom")); got.code != "internal_error" || got.status != http.StatusInternalServerError {
+		t.Fatalf("default error mapping = %#v", got)
+	}
+
+	errWithDetails := apiError{status: http.StatusBadRequest, code: "invalid_request", message: "bad request", details: map[string]any{"field": "owner"}}
+	rec := httptest.NewRecorder()
+	NewServer(Dependencies{}).writeAPIError(rec, errWithDetails)
+	var body map[string]map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("Unmarshal(writeAPIError) error = %v", err)
+	}
+	if body["error"]["code"] != "invalid_request" || body["error"]["details"] == nil {
+		t.Fatalf("writeAPIError body = %#v", body)
+	}
+
+	if got := dependencyUnavailableError("missing queue"); got.status != http.StatusServiceUnavailable || got.code != "dependency_unavailable" {
+		t.Fatalf("dependencyUnavailableError = %#v", got)
+	}
+	if (apiError{message: "boom"}).Error() != "boom" {
+		t.Fatalf("apiError message branch not used")
+	}
+	if (apiError{code: "fallback_code"}).Error() != "fallback_code" {
+		t.Fatalf("apiError code fallback branch not used")
+	}
+}
+
 func newFinalMux(deps Dependencies) *http.ServeMux {
 	mux := http.NewServeMux()
 	NewServer(deps).RegisterRoutes(mux)
@@ -1039,9 +1340,11 @@ type fakePublicService struct {
 	mediaItem                  storage.MediaItemRecord
 	mediaItems                 []storage.MediaItemRecord
 	collection                 storage.CollectionRecord
+	collections                []storage.CollectionRecord
 	selection                  storage.SelectionRecord
 	run                        storage.AnalysisRunRecord
 	runs                       []storage.AnalysisRunRecord
+	events                     []storage.RunEventRecord
 	diagnostics                []storage.DiagnosticRecord
 	artifact                   storage.ArtifactRecord
 	artifacts                  []storage.ArtifactRecord
@@ -1049,6 +1352,7 @@ type fakePublicService struct {
 	lastAddMedia               storage.AddMediaItemRequest
 	lastRun                    storage.CreateAnalysisRunRequest
 	lastDiagnosticQuery        storage.DiagnosticQuery
+	lastUpdateCollectionItems  storage.UpdateCollectionItemsRequest
 	listArtifactsAnalysisRunID string
 	createAnalysisRunCalls     int
 	pendingTasks               []storage.AnalysisRunTaskRecord
@@ -1088,6 +1392,9 @@ func (f *fakePublicService) CreateCollection(context.Context, storage.CreateColl
 	return f.collection, f.err
 }
 func (f *fakePublicService) ListCollections(context.Context, storage.OwnerScope) ([]storage.CollectionRecord, error) {
+	if f.collections != nil {
+		return f.collections, f.err
+	}
 	return []storage.CollectionRecord{f.collection}, f.err
 }
 func (f *fakePublicService) GetCollection(context.Context, storage.OwnerScope, string) (storage.CollectionRecord, error) {
@@ -1096,7 +1403,8 @@ func (f *fakePublicService) GetCollection(context.Context, storage.OwnerScope, s
 func (f *fakePublicService) UpdateCollection(context.Context, storage.UpdateCollectionRequest) (storage.CollectionRecord, error) {
 	return f.collection, f.err
 }
-func (f *fakePublicService) UpdateCollectionItems(context.Context, storage.UpdateCollectionItemsRequest) (storage.CollectionRecord, error) {
+func (f *fakePublicService) UpdateCollectionItems(_ context.Context, req storage.UpdateCollectionItemsRequest) (storage.CollectionRecord, error) {
+	f.lastUpdateCollectionItems = req
 	return f.collection, f.err
 }
 func (f *fakePublicService) CreateSelection(context.Context, storage.CreateSelectionRequest) (storage.SelectionRecord, error) {
@@ -1150,7 +1458,7 @@ func (f *fakePublicService) GetAnalysisRun(context.Context, storage.OwnerScope, 
 	return f.run, f.err
 }
 func (f *fakePublicService) ListAnalysisRunEvents(context.Context, storage.OwnerScope, string) ([]storage.RunEventRecord, error) {
-	return nil, f.err
+	return append([]storage.RunEventRecord(nil), f.events...), f.err
 }
 func (f *fakePublicService) ListArtifacts(_ context.Context, _ storage.OwnerScope, analysisRunID string) ([]storage.ArtifactRecord, error) {
 	f.listArtifactsAnalysisRunID = analysisRunID
@@ -1339,6 +1647,16 @@ func (f *fakeWorkerService) ResolveArtifactDownloadAccess(context.Context, strin
 			ExpiresAt: time.Date(2099, 4, 25, 12, 0, 0, 0, time.UTC),
 		},
 	}, nil
+}
+
+type fakeWebsocketAcceptor struct {
+	called bool
+}
+
+func (f *fakeWebsocketAcceptor) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	f.called = true
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte(`{"ok":true}`))
 }
 
 func stringPtr(value string) *string {

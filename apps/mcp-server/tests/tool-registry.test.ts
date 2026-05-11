@@ -1504,3 +1504,298 @@ test("createMcpDomainRuntime returns actionable retry hints for preview failures
   });
   // END_BLOCK_BLOCK_VERIFY_PREVIEW_ERROR_HINTS
 });
+
+test("createMcpDomainRuntime covers the remaining upstream API hint branches", async () => {
+  // START_BLOCK_BLOCK_VERIFY_REMAINING_API_HINT_BRANCHES
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async (request: McpAdapterApiRequest) => {
+        if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`)) {
+          throw new McpAdapterApiClientError(
+            request.path,
+            424,
+            "artifact bytes are still materializing",
+            "artifact_resolution_failed",
+          );
+        }
+        if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`)) {
+          throw new McpAdapterApiClientError(
+            request.path,
+            409,
+            "run is not terminal yet",
+            "retry_requires_terminal_run",
+          );
+        }
+        if (request.path === `/v1/collections/${COLLECTION_ID}` && request.method === "PATCH") {
+          throw new McpAdapterApiClientError(
+            request.path,
+            409,
+            "collection version mismatch",
+            "collection_version_conflict",
+          );
+        }
+        if (request.path === withOwnerQuery("/v1/media-items")) {
+          throw new McpAdapterApiClientError(
+            request.path,
+            400,
+            "owner scope is invalid",
+            "invalid_request",
+          );
+        }
+        if (request.path === withOwnerQuery("/v1/analysis-runs")) {
+          throw new McpAdapterApiClientError(
+            request.path,
+            503,
+            "analysis service is unavailable",
+          );
+        }
+        if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`)) {
+          throw new McpAdapterApiClientError(
+            request.path,
+            418,
+            "unexpected upstream status",
+          );
+        }
+        throw new Error(`unexpected request path ${request.path}`);
+      },
+    },
+  });
+
+  const artifactResult = await runtime.callTool("get_artifact", {
+    owner: OWNER,
+    artifact_id: ARTIFACT_ID,
+  });
+  const retryResult = await runtime.callTool("retry_run", {
+    owner: OWNER,
+    analysis_run_id: RUN_ID,
+  });
+  const conflictResult = await runtime.callTool("update_collection", {
+    collection_id: COLLECTION_ID,
+    owner: OWNER,
+    expected_version: 1,
+    name: "Renamed collection",
+  });
+  const invalidRequestResult = await runtime.callTool("list_media", {
+    owner: OWNER,
+  });
+  const retryLaterResult = await runtime.callTool("list_runs", {
+    owner: OWNER,
+  });
+  const inspectResult = await runtime.callTool("get_run", {
+    owner: OWNER,
+    analysis_run_id: RUN_ID,
+  });
+
+  assert.deepEqual(artifactResult.structuredContent, {
+    error: {
+      code: "artifact_resolution_failed",
+      message: "artifact bytes are still materializing",
+      category: "upstream_api",
+      retryable: true,
+      action: "refresh_artifact_then_retry_preview",
+      details: {
+        path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+        status: 424,
+      },
+    },
+  });
+  assert.deepEqual(retryResult.structuredContent, {
+    error: {
+      code: "retry_requires_terminal_run",
+      message: "run is not terminal yet",
+      category: "upstream_api",
+      retryable: false,
+      action: "wait_for_terminal_run_before_retry",
+      details: {
+        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
+        status: 409,
+      },
+    },
+  });
+  assert.deepEqual(conflictResult.structuredContent, {
+    error: {
+      code: "collection_version_conflict",
+      message: "collection version mismatch",
+      category: "upstream_api",
+      retryable: false,
+      action: "reload_resource_and_retry_with_latest_version",
+      details: {
+        path: `/v1/collections/${COLLECTION_ID}`,
+        status: 409,
+      },
+    },
+  });
+  assert.deepEqual(invalidRequestResult.structuredContent, {
+    error: {
+      code: "invalid_request",
+      message: "owner scope is invalid",
+      category: "upstream_api",
+      retryable: false,
+      action: "fix_request",
+      details: {
+        path: withOwnerQuery("/v1/media-items"),
+        status: 400,
+      },
+    },
+  });
+  assert.deepEqual(retryLaterResult.structuredContent, {
+    error: {
+      code: "api_request_failed",
+      message: "analysis service is unavailable",
+      category: "upstream_api",
+      retryable: true,
+      action: "retry_later",
+      details: {
+        path: withOwnerQuery("/v1/analysis-runs"),
+        status: 503,
+      },
+    },
+  });
+  assert.deepEqual(inspectResult.structuredContent, {
+    error: {
+      code: "api_request_failed",
+      message: "unexpected upstream status",
+      category: "upstream_api",
+      retryable: false,
+      action: "inspect_upstream_error",
+      details: {
+        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`),
+        status: 418,
+      },
+    },
+  });
+  // END_BLOCK_BLOCK_VERIFY_REMAINING_API_HINT_BRANCHES
+});
+
+test("createMcpDomainRuntime shapes malformed success envelopes as contract errors", async () => {
+  // START_BLOCK_BLOCK_VERIFY_MALFORMED_SUCCESS_ENVELOPE
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async <TPayload = unknown>() => ({
+        status: 200,
+        data: [] as TPayload,
+      }),
+    },
+  });
+
+  const result = await runtime.callTool("get_media", {
+    owner: OWNER,
+    media_item_id: MEDIA_ID,
+  });
+
+  assert.deepEqual(result.structuredContent, {
+    error: {
+      code: "mcp_contract_violation",
+      message: "response must be an object",
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: {
+        field: "response",
+      },
+    },
+  });
+  // END_BLOCK_BLOCK_VERIFY_MALFORMED_SUCCESS_ENVELOPE
+});
+
+test("createMcpDomainRuntime rethrows unknown execution errors", async () => {
+  // START_BLOCK_BLOCK_VERIFY_UNKNOWN_ERROR_RETHROW
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async () => {
+        throw new Error("socket closed");
+      },
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      runtime.callTool("get_media", {
+        owner: OWNER,
+        media_item_id: MEDIA_ID,
+      }),
+    /socket closed/,
+  );
+  // END_BLOCK_BLOCK_VERIFY_UNKNOWN_ERROR_RETHROW
+});
+
+test("createMcpDomainRuntime shapes missing and invalid artifact preview text branches", async () => {
+  // START_BLOCK_BLOCK_VERIFY_ARTIFACT_PREVIEW_EDGE_BRANCHES
+  const missingTextArtifactID = "00000000-0000-4000-8000-000000000008";
+  const invalidJsonArtifactID = "00000000-0000-4000-8000-000000000009";
+
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+        if (request.path === withOwnerQuery(`/v1/artifacts/${missingTextArtifactID}`)) {
+          return {
+            status: 200,
+            data: {
+              artifact: {
+                artifact_id: missingTextArtifactID,
+                preview: {
+                  available: true,
+                  content_type: "text/plain",
+                },
+              },
+            } as TPayload,
+          };
+        }
+        if (request.path === withOwnerQuery(`/v1/artifacts/${invalidJsonArtifactID}`)) {
+          return {
+            status: 200,
+            data: {
+              artifact: {
+                artifact_id: invalidJsonArtifactID,
+                preview: {
+                  available: true,
+                  text_excerpt: "{not-json}",
+                  content_type: "application/json",
+                },
+              },
+            } as TPayload,
+          };
+        }
+        throw new Error(`unexpected request path ${request.path}`);
+      },
+    },
+  });
+
+  const missingTextResult = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
+    artifact_id: missingTextArtifactID,
+  });
+  const invalidJsonResult = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
+    artifact_id: invalidJsonArtifactID,
+    format: "json",
+  });
+
+  assert.deepEqual(missingTextResult.structuredContent, {
+    error: {
+      code: "artifact_preview_unavailable",
+      message: "Artifact preview is not available.",
+      category: "resource_state",
+      retryable: true,
+      action: "refresh_artifact_then_retry_preview",
+      details: {
+        artifact_id: missingTextArtifactID,
+        preview_available: true,
+      },
+    },
+  });
+  assert.deepEqual(invalidJsonResult.structuredContent, {
+    error: {
+      code: "artifact_preview_json_invalid",
+      message: "Artifact preview is not valid JSON.",
+      category: "resource_state",
+      retryable: false,
+      action: "request_text_preview_or_refresh_artifact",
+      details: {
+        artifact_id: invalidJsonArtifactID,
+        content_type: "application/json",
+      },
+    },
+  });
+  // END_BLOCK_BLOCK_VERIFY_ARTIFACT_PREVIEW_EDGE_BRANCHES
+});

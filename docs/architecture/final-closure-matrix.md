@@ -152,14 +152,14 @@ Expected gate:
 
 Latest measured baselines from the active tree:
 
-- Go `apps/api/internal/api`: `49.5%` statements
-- Go `apps/api/internal/storage`: `31.7%` statements
+- Go `apps/api/internal/api`: `60.1%` statements
+- Go `apps/api/internal/storage`: `37.0%` statements
 - Python `workers/common/src/transcriber_workers_common`: `95%`
 - Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
-- Python `apps/telegram-bot/src/telegram_adapter`: `66%`
+- Python `apps/telegram-bot/src/telegram_adapter`: `91%`
 - Node `apps/mcp-server/src`: `100%` lines, `79.91%` branches, `100%` functions
-- Web `apps/web/src`: `84.39%` lines, `73.2%` branches, `65.78%` functions
+- Web `apps/web/src`: `85.48%` lines, `73.68%` branches, `66.22%` functions
 
 ## Remaining Closure Truth
 

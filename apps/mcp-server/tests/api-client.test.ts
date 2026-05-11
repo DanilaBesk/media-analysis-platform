@@ -172,3 +172,93 @@ test("createMcpAdapterApiClient preserves upstream error envelopes", async () =>
   );
   // END_BLOCK_BLOCK_VERIFY_ERROR_SURFACE
 });
+
+test("createMcpAdapterApiClient handles 204 and text payload variants", async () => {
+  // START_BLOCK_BLOCK_VERIFY_TEXT_AND_EMPTY_PAYLOADS
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test",
+    fetchImpl: async (input) => {
+      const url = input instanceof URL ? input.toString() : String(input);
+      if (url.endsWith("/no-content")) {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith("/empty-text")) {
+        return new Response("", {
+          status: 200,
+          headers: {
+            "content-type": "text/plain",
+          },
+        });
+      }
+      return new Response("accepted", {
+        status: 202,
+        headers: {
+          "content-type": "text/plain",
+        },
+      });
+    },
+  });
+
+  assert.deepEqual(
+    await client.request({
+      path: "/no-content",
+    }),
+    {
+      status: 204,
+      data: null,
+    },
+  );
+  assert.deepEqual(
+    await client.request({
+      path: "/empty-text",
+    }),
+    {
+      status: 200,
+      data: null,
+    },
+  );
+  assert.deepEqual(
+    await client.request({
+      path: "/plain-text",
+    }),
+    {
+      status: 202,
+      data: "accepted",
+    },
+  );
+  // END_BLOCK_BLOCK_VERIFY_TEXT_AND_EMPTY_PAYLOADS
+});
+
+test("createMcpAdapterApiClient falls back when the error payload is not an envelope object", async () => {
+  // START_BLOCK_BLOCK_VERIFY_FALLBACK_ERROR_ENVELOPE
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test",
+    fetchImpl: async () =>
+      new Response("bad gateway", {
+        status: 502,
+        headers: {
+          "content-type": "text/plain",
+        },
+      }),
+  });
+
+  await assert.rejects(
+    () =>
+      client.request({
+        path: "/v1/media-items",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof McpAdapterApiClientError);
+      const apiError = error as McpAdapterApiClientError;
+      assert.equal(apiError.path, "/v1/media-items");
+      assert.equal(apiError.status, 502);
+      assert.equal(apiError.code, undefined);
+      assert.equal(apiError.message, "API request failed with status 502");
+      assert.equal((apiError as any).correlationId, undefined);
+      assert.equal((apiError as any).details, undefined);
+      assert.equal((apiError as any).diagnostics, undefined);
+      return true;
+    },
+  );
+  // END_BLOCK_BLOCK_VERIFY_FALLBACK_ERROR_ENVELOPE
+});

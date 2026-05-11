@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1024,6 +1025,298 @@ func TestApiStorageRecordsWorkerRunArtifactsDiagnosticsAndFinalizeState(t *testi
 	}
 }
 
+func TestApiStorageRepositoryReadQueueAndArtifactWrappers(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	state := newMemoryStateStore()
+	objectStore := newFakeObjectStore()
+	repo, err := NewRepository(state, objectStore,
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(sequenceIDs(
+			"source-1", "media-1", "inbox-1",
+			"collection-1",
+			"selection-1",
+			"run-1", "task-1", "event-1",
+			"artifact-1",
+			"event-2",
+		)),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+	owner := OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	item, err := repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: owner,
+		Kind:  "audio",
+		Source: AddMediaSource{
+			OriginType:  "object",
+			ObjectRef:   "sources/source.wav",
+			ContentType: "audio/wav",
+			SizeBytes:   42,
+		},
+		DisplayName: "source.wav",
+	})
+	if err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+
+	items, err := repo.ListMediaItems(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("ListMediaItems() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != item.ID {
+		t.Fatalf("items = %#v, want media-1", items)
+	}
+	fetchedItem, err := repo.GetMediaItem(context.Background(), owner, item.ID)
+	if err != nil {
+		t.Fatalf("GetMediaItem() error = %v", err)
+	}
+	if fetchedItem.ID != item.ID {
+		t.Fatalf("fetched item = %#v, want %q", fetchedItem, item.ID)
+	}
+
+	collection, err := repo.CreateCollection(context.Background(), CreateCollectionRequest{
+		Owner: owner,
+		Name:  "Review set",
+		Items: []string{item.ID},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection() error = %v", err)
+	}
+	collections, err := repo.ListCollections(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("ListCollections() error = %v", err)
+	}
+	if len(collections) != 2 {
+		t.Fatalf("collections = %#v, want inbox plus user collection", collections)
+	}
+	fetchedCollection, err := repo.GetCollection(context.Background(), owner, collection.ID)
+	if err != nil {
+		t.Fatalf("GetCollection() error = %v", err)
+	}
+	if fetchedCollection.ID != collection.ID {
+		t.Fatalf("fetched collection = %#v, want %q", fetchedCollection, collection.ID)
+	}
+	updatedCollection, err := repo.UpdateCollection(context.Background(), UpdateCollectionRequest{
+		CollectionID:    collection.ID,
+		Owner:           owner,
+		ExpectedVersion: collection.Version,
+		Name:            "Review set v2",
+		Status:          CollectionStatusArchived,
+	})
+	if err != nil {
+		t.Fatalf("UpdateCollection() error = %v", err)
+	}
+	if updatedCollection.Name != "Review set v2" || updatedCollection.Status != CollectionStatusArchived || updatedCollection.Version != collection.Version+1 {
+		t.Fatalf("updated collection = %#v", updatedCollection)
+	}
+
+	selection, err := repo.CreateSelection(context.Background(), CreateSelectionRequest{
+		Owner: owner,
+		Items: []CollectionItemRecord{{MediaItemID: item.ID, Position: 0}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSelection() error = %v", err)
+	}
+	fetchedSelection, err := repo.GetSelection(context.Background(), owner, selection.ID)
+	if err != nil {
+		t.Fatalf("GetSelection() error = %v", err)
+	}
+	if fetchedSelection.ID != selection.ID || len(fetchedSelection.Items) != 1 {
+		t.Fatalf("fetched selection = %#v", fetchedSelection)
+	}
+
+	run, err := repo.CreateAnalysisRun(context.Background(), CreateAnalysisRunRequest{
+		Owner:       owner,
+		SelectionID: selection.ID,
+		RunType:     "transcription",
+	})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun() error = %v", err)
+	}
+	pendingTasks, err := repo.ListPendingEnqueueTasks(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ListPendingEnqueueTasks() error = %v", err)
+	}
+	if len(pendingTasks) != 1 || pendingTasks[0].AnalysisRunID != run.ID {
+		t.Fatalf("pending tasks = %#v, want one task for %q", pendingTasks, run.ID)
+	}
+	queueBefore, err := repo.ListAnalysisRunQueue(context.Background(), AnalysisRunTaskStatusPendingEnqueue, "transcription", "selection.transcription", 10)
+	if err != nil {
+		t.Fatalf("ListAnalysisRunQueue(before) error = %v", err)
+	}
+	if len(queueBefore) != 1 || queueBefore[0].Status != AnalysisRunTaskStatusPendingEnqueue {
+		t.Fatalf("queue before = %#v", queueBefore)
+	}
+	if err := repo.MarkAnalysisRunTaskQueued(context.Background(), run.ID, "selection.transcription"); err != nil {
+		t.Fatalf("MarkAnalysisRunTaskQueued() error = %v", err)
+	}
+	queueAfter, err := repo.ListAnalysisRunQueue(context.Background(), AnalysisRunTaskStatusQueued, "transcription", "selection.transcription", 10)
+	if err != nil {
+		t.Fatalf("ListAnalysisRunQueue(after) error = %v", err)
+	}
+	if len(queueAfter) != 1 || queueAfter[0].Status != AnalysisRunTaskStatusQueued {
+		t.Fatalf("queue after = %#v", queueAfter)
+	}
+
+	runByID, err := repo.GetAnalysisRunByID(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("GetAnalysisRunByID() error = %v", err)
+	}
+	if runByID.ID != run.ID {
+		t.Fatalf("run by id = %#v, want %q", runByID, run.ID)
+	}
+	runByOwner, err := repo.GetAnalysisRun(context.Background(), owner, run.ID)
+	if err != nil {
+		t.Fatalf("GetAnalysisRun() error = %v", err)
+	}
+	if runByOwner.ID != run.ID {
+		t.Fatalf("run by owner = %#v, want %q", runByOwner, run.ID)
+	}
+	runs, err := repo.ListAnalysisRuns(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("ListAnalysisRuns() error = %v", err)
+	}
+	if len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("runs = %#v, want one run %q", runs, run.ID)
+	}
+	events, err := repo.ListAnalysisRunEvents(context.Background(), owner, run.ID)
+	if err != nil {
+		t.Fatalf("ListAnalysisRunEvents() error = %v", err)
+	}
+	if len(events) != 1 || events[0].EventType != "analysis_run.created" {
+		t.Fatalf("events = %#v, want created event", events)
+	}
+
+	if _, err := repo.RecordAnalysisRunProgress(context.Background(), owner, run.ID, "processing", "Started", []byte(`{"step":1}`)); err != nil {
+		t.Fatalf("RecordAnalysisRunProgress() error = %v", err)
+	}
+	events, err = repo.ListAnalysisRunEvents(context.Background(), owner, run.ID)
+	if err != nil {
+		t.Fatalf("ListAnalysisRunEvents(after progress) error = %v", err)
+	}
+	if len(events) != 2 || events[1].EventType != "analysis_run.progress" {
+		t.Fatalf("events after progress = %#v", events)
+	}
+
+	_, err = repo.RecordArtifacts(context.Background(), owner, run.ID, []ArtifactRecord{{
+		ID:          "artifact-1",
+		Kind:        "transcript",
+		Status:      ArtifactStatusAvailable,
+		ObjectKey:   "artifacts/" + run.ID + "/transcript.txt",
+		ContentType: "text/plain",
+		Visibility:  "owner",
+		SizeBytes:   24,
+	}})
+	if err != nil {
+		t.Fatalf("RecordArtifacts() error = %v", err)
+	}
+	artifacts, err := repo.ListArtifacts(context.Background(), owner, run.ID)
+	if err != nil {
+		t.Fatalf("ListArtifacts() error = %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].ID != "artifact-1" {
+		t.Fatalf("artifacts = %#v, want artifact-1", artifacts)
+	}
+	internalArtifact, err := repo.GetInternalArtifactDownloadAccess(context.Background(), "artifact-1")
+	if err != nil {
+		t.Fatalf("GetInternalArtifactDownloadAccess() error = %v", err)
+	}
+	if internalArtifact.Download == nil || internalArtifact.Download.URL == "" {
+		t.Fatalf("internal artifact download = %#v", internalArtifact.Download)
+	}
+	refreshedArtifact, err := repo.RefreshArtifactLink(context.Background(), owner, "artifact-1")
+	if err != nil {
+		t.Fatalf("RefreshArtifactLink() error = %v", err)
+	}
+	if refreshedArtifact.Download == nil || refreshedArtifact.Download.URL == "" {
+		t.Fatalf("refreshed artifact = %#v", refreshedArtifact)
+	}
+	if len(objectStore.presigns) != 2 {
+		t.Fatalf("presigns = %#v, want two presign calls", objectStore.presigns)
+	}
+}
+
+func TestApiStorageRepositoryValidationAndOptions(t *testing.T) {
+	t.Parallel()
+
+	if _, err := NewRepository(nil, newFakeObjectStore()); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("NewRepository(nil state) error = %v, want contract violation", err)
+	}
+	if _, err := NewRepository(newMemoryStateStore(), nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("NewRepository(nil objects) error = %v, want contract violation", err)
+	}
+
+	logger := &captureLogger{}
+	repo, err := NewRepository(newMemoryStateStore(), newFakeObjectStore(),
+		WithLogger(logger),
+		WithPresignTTL(30*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository(with options) error = %v", err)
+	}
+	if repo.logger != logger || repo.presignTTL != 30*time.Minute {
+		t.Fatalf("repository options not applied: %#v", repo)
+	}
+	repo.logf("hello %s", "world")
+	if len(logger.lines) != 1 || logger.lines[0] != "hello world" {
+		t.Fatalf("logged lines = %#v", logger.lines)
+	}
+
+	if _, err := repo.CreateCollection(context.Background(), CreateCollectionRequest{}); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("CreateCollection() error = %v, want contract violation", err)
+	}
+	if _, err := repo.CreateSelection(context.Background(), CreateSelectionRequest{Owner: OwnerScope{OwnerType: "web", OwnerID: "u-1"}}); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("CreateSelection() error = %v, want contract violation", err)
+	}
+	if _, err := repo.CreateAnalysisRun(context.Background(), CreateAnalysisRunRequest{}); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("CreateAnalysisRun() error = %v, want contract violation", err)
+	}
+
+	now := time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC)
+	runtimeRepo, err := NewRepository(newMemoryStateStore(), newFakeObjectStore(),
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(sequenceIDs(
+			"source-1", "media-1", "inbox-1",
+			"selection-1",
+			"run-1", "task-1", "event-1",
+		)),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository(runtimeRepo) error = %v", err)
+	}
+	owner := OwnerScope{OwnerType: "web", OwnerID: "u-1"}
+	if _, err := runtimeRepo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: owner,
+		Kind:  "text",
+		Source: AddMediaSource{
+			OriginType: "text",
+			Text:       "hello",
+		},
+	}); err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+	selection, err := runtimeRepo.CreateSelection(context.Background(), CreateSelectionRequest{
+		Owner: owner,
+		Items: []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+	})
+	if err != nil {
+		t.Fatalf("CreateSelection(runtimeRepo) error = %v", err)
+	}
+	run, err := runtimeRepo.CreateAnalysisRun(context.Background(), CreateAnalysisRunRequest{
+		Owner:       owner,
+		SelectionID: selection.ID,
+		RunType:     "transcription",
+	})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun(runtimeRepo) error = %v", err)
+	}
+	if _, err := runtimeRepo.RetryAnalysisRun(context.Background(), owner, run.ID, "retry-key"); !errors.Is(err, ErrRetryRequiresTerminalRun) {
+		t.Fatalf("RetryAnalysisRun(non-terminal) error = %v, want ErrRetryRequiresTerminalRun", err)
+	}
+}
+
 type memoryStateStore struct {
 	mediaItems   map[string]MediaItemRecord
 	collections  map[string]CollectionRecord
@@ -1702,6 +1995,14 @@ type fakeObjectStore struct {
 	presigns []objectPresignRecord
 }
 
+type captureLogger struct {
+	lines []string
+}
+
+func (l *captureLogger) Printf(format string, args ...any) {
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
 type objectPutRecord struct {
 	bucket      string
 	objectKey   string
@@ -1730,7 +2031,7 @@ func (f *fakeObjectStore) PutObject(_ context.Context, bucket, objectKey, conten
 
 func (f *fakeObjectStore) PresignGetObject(_ context.Context, bucket, objectKey string, _ time.Duration) (string, time.Time, error) {
 	f.presigns = append(f.presigns, objectPresignRecord{
-		bucket: bucket,
+		bucket:    bucket,
 		objectKey: objectKey,
 	})
 	return "https://minio.local/presigned", time.Now().UTC().Add(time.Minute), nil

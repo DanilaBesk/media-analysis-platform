@@ -883,6 +883,156 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
     )
 
 
+def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure(tmp_path: Path) -> None:
+    execution = ClaimedAnalysisRunExecution(
+        execution_id="exec-unsupported",
+        analysis_run_id="run-unsupported",
+        run_type="transcription",
+        selection=SealedSelectionInput(
+            selection_id="selection-unsupported",
+            option_snapshot={},
+            sealed_at="2026-05-10T12:00:00Z",
+            items=(
+                _v2_selection_item(
+                    position=0,
+                    selection_item_id="sel-item-document",
+                    media_item_id="media-document",
+                    source_id="source-document",
+                    media_kind="document",
+                    mime_type="application/pdf",
+                    object_key="objects/missing.pdf",
+                    display_label="Evidence PDF",
+                    original_filename="evidence.pdf",
+                ),
+            ),
+        ),
+        params={},
+        claimed_at="2026-05-10T12:01:00Z",
+    )
+
+    with pytest.raises(worker_module.SourceMaterializationError, match="no object-backed media items") as exc_info:
+        worker_module._materialize_execution_source(execution, tmp_path, FakeSourceStore({}))
+
+    diagnostic = exc_info.value.diagnostics[0]
+    assert diagnostic["context"]["selection_item_id"] == "sel-item-document"
+    assert "materialized_path" not in diagnostic["context"]
+
+
+def test_materialize_unsupported_object_descriptor_returns_none_for_non_object(tmp_path: Path) -> None:
+    descriptor = worker_module.SelectionItemMaterialization(
+        selection_item_id="sel-item-text",
+        position=0,
+        media_item_id="media-text",
+        media_kind="text",
+        role="reference",
+        labels=SelectionItemLabels(display_label="Manual note"),
+        source_id="source-text",
+        origin_type="text",
+        materialization_kind="text",
+        text_ref="text:source-text",
+    )
+
+    assert worker_module._materialize_unsupported_object_descriptor(descriptor, tmp_path, FakeSourceStore({})) is None
+
+
+def test_download_materialization_descriptor_requires_deterministic_filename(tmp_path: Path) -> None:
+    descriptor = worker_module.SelectionItemMaterialization(
+        selection_item_id="sel-item-audio",
+        position=0,
+        media_item_id="media-audio",
+        media_kind="audio",
+        role="primary",
+        labels=SelectionItemLabels(display_label="Voice message"),
+        source_id="source-audio",
+        origin_type="object",
+        materialization_kind="object",
+        mime_type="audio/ogg",
+        object_key="objects/audio-source",
+        deterministic_filename=None,
+    )
+
+    with pytest.raises(worker_module.SourceMaterializationError, match="missing deterministic filename"):
+        worker_module._download_materialization_descriptor(descriptor, tmp_path, FakeSourceStore({}))
+
+
+def test_concatenate_media_inputs_validates_input_count_and_ffmpeg_result(tmp_path: Path, monkeypatch) -> None:
+    output_path = tmp_path / "combined.wav"
+    first = tmp_path / "first.ogg"
+    second = tmp_path / "second.ogg"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+
+    with pytest.raises(worker_module.SourceMaterializationError, match="at least two inputs"):
+        worker_module._concatenate_media_inputs([first], output_path)
+
+    recorded_commands: list[list[str]] = []
+
+    def fake_success(command, **kwargs):
+        recorded_commands.append(list(command))
+        return type("Completed", (), {"returncode": 0, "stderr": "", "stdout": ""})()
+
+    monkeypatch.setattr(worker_module.subprocess, "run", fake_success)
+    worker_module._concatenate_media_inputs([first, second], output_path)
+    assert recorded_commands[0][:2] == ["ffmpeg", "-y"]
+    assert any("concat=n=2:v=0:a=1[outa]" in part for part in recorded_commands[0])
+
+    monkeypatch.setattr(
+        worker_module.subprocess,
+        "run",
+        lambda command, **kwargs: type("Completed", (), {"returncode": 1, "stderr": "bad ffmpeg", "stdout": ""})(),
+    )
+    with pytest.raises(worker_module.SourceMaterializationError, match="ffmpeg concat failed with exit code 1"):
+        worker_module._concatenate_media_inputs([first, second], output_path)
+
+
+def test_outcomes_from_diagnostics_marks_missing_selection_items_as_failed() -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-a",
+            source_kind="uploaded_file",
+            display_name="Audio A",
+            original_filename="a.ogg",
+            object_key="uploads/a.ogg",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-b",
+            source_kind="uploaded_file",
+            display_name="Audio B",
+            original_filename="b.ogg",
+            object_key="uploads/b.ogg",
+        ),
+    )
+    diagnostics = (
+        {"diagnostic_id": "ignored", "context": "not-a-mapping"},
+        {
+            "diagnostic_id": "exec-1:0:source-skipped",
+            "severity": "warning",
+            "context": {"selection_item_id": "selection-item-0"},
+        },
+    )
+
+    outcomes = worker_module._outcomes_from_diagnostics(execution, diagnostics)
+
+    assert [item["outcome"] for item in outcomes] == ["skipped", "failed"]
+    assert outcomes[0]["diagnostic_ids"] == ["exec-1:0:source-skipped"]
+    assert outcomes[1]["diagnostic_ids"] == []
+
+
+def test_assert_required_artifacts_exist_rejects_missing_docx(tmp_path: Path) -> None:
+    artifacts = worker_module.TranscriptArtifacts(
+        markdown_path=tmp_path / "transcript.md",
+        docx_path=tmp_path / "transcript.docx",
+        text_path=tmp_path / "transcript.txt",
+    )
+    artifacts.markdown_path.write_text("# Transcript\n", encoding="utf-8")
+    artifacts.text_path.write_text("Transcript\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="required transcript artifact is missing"):
+        worker_module._assert_required_artifacts_exist(artifacts)
+
+
 def _build_execution(
     *ordered_inputs: OrderedWorkerInput,
     analysis_run_id: str = "job-1",

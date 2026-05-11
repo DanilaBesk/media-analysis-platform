@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import builtins
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
@@ -108,6 +109,35 @@ def test_default_transcriber_uses_whisper_for_direct_audio(tmp_path: Path, monke
         mime_type="audio/ogg",
         file_name="call.ogg",
     )
+
+    assert default.transcribe(source, tmp_path) == expected
+
+
+def test_default_transcriber_falls_back_to_whisper_for_youtube_url(tmp_path: Path, monkeypatch) -> None:
+    default = DefaultTranscriber(
+        youtube_languages=("en",),
+        whisper_model=PODLODKA_WHISPER_MODEL,
+        whisper_device="auto",
+        whisper_compute_type="default",
+    )
+    expected = TranscriptResult(
+        title="Recovered",
+        source_label="YouTube: recovered",
+        segments=[TranscriptSegment(start_seconds=0, end_seconds=1, text="Recovered")],
+        language="en",
+        raw_text="Recovered",
+    )
+    source = SourceCandidate(
+        source_id="src-youtube",
+        kind="youtube_url",
+        display_name="YouTube: recovered",
+        url="https://youtu.be/demo123",
+        telegram_file_id=None,
+        mime_type=None,
+        file_name=None,
+    )
+    monkeypatch.setattr(default.youtube_transcriber, "transcribe", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("no subtitles")))
+    monkeypatch.setattr(default.whisper_transcriber, "transcribe", lambda *args, **kwargs: expected)
 
     assert default.transcribe(source, tmp_path) == expected
 
@@ -222,6 +252,41 @@ def test_whisper_runtime_helpers_cover_download_and_model_branches(tmp_path: Pat
     assert calls == [str(broken_root), str(broken_root)]
 
 
+def test_whisper_load_model_reraises_non_cache_runtime_errors(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        transcribers_module,
+        "WhisperModel",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("gpu exploded")),
+    )
+    transcriber = WhisperTranscriber(model_name="openai/whisper-tiny", device="auto", compute_type="default")
+
+    with pytest.raises(RuntimeError, match="gpu exploded"):
+        transcriber._load_model(tmp_path)
+
+
+def test_podlodka_cache_recovery_only_rebuilds_converted_directory(tmp_path: Path, monkeypatch) -> None:
+    converted_dir = tmp_path / _PODLODKA_CTRANSLATE2_DIR
+    converted_dir.mkdir(parents=True, exist_ok=True)
+    stale_file = converted_dir / "stale.txt"
+    stale_file.write_text("stale", encoding="utf-8")
+    calls = 0
+
+    def fake_whisper_model(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("Unable to open file 'model.bin' in converted cache")
+        assert not stale_file.exists()
+        return SimpleNamespace()
+
+    transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="cpu", compute_type="default")
+    monkeypatch.setattr(transcriber, "_model_source", lambda download_root: "converted-model")
+    monkeypatch.setattr(transcribers_module, "WhisperModel", fake_whisper_model)
+
+    assert transcriber._load_model(tmp_path) is not None
+    assert calls == 2
+
+
 def test_low_level_helper_branches_are_covered() -> None:
     item = SimpleNamespace(text="hello", start=1.0)
 
@@ -260,6 +325,53 @@ def test_podlodka_model_is_converted_before_faster_whisper_load(tmp_path: Path, 
 
     transcriber = WhisperTranscriber(model_name=PODLODKA_WHISPER_MODEL, device="cpu", compute_type="default")
     assert transcriber._model_source(tmp_path) == str(converted_dir)
+
+
+def test_podlodka_model_conversion_requires_model_bin(tmp_path: Path, monkeypatch) -> None:
+    class IncompleteConverter:
+        def __init__(self, model_name: str, **kwargs) -> None:
+            self.model_name = model_name
+
+        def convert(self, output_dir: str, **kwargs) -> None:
+            Path(output_dir, "not-model.txt").write_text("missing", encoding="utf-8")
+
+    monkeypatch.setattr(transcribers_module, "_build_podlodka_converter", IncompleteConverter)
+    monkeypatch.setattr(
+        transcribers_module,
+        "_download_podlodka_snapshot",
+        lambda download_root: download_root / "models--bond005--whisper-podlodka-turbo" / "snapshots" / "sha",
+    )
+
+    with pytest.raises(RuntimeError, match="missing model.bin"):
+        _ensure_podlodka_ctranslate2_model(tmp_path)
+
+
+def test_podlodka_snapshot_requires_huggingface_hub(tmp_path: Path, monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "huggingface_hub":
+            raise ImportError("missing huggingface_hub")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="requires huggingface_hub"):
+        transcribers_module._download_podlodka_snapshot(tmp_path)
+
+
+def test_podlodka_converter_requires_transformers_stack(monkeypatch) -> None:
+    original_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "ctranslate2.converters.transformers":
+            raise ImportError("missing ctranslate2")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    with pytest.raises(RuntimeError, match="requires transformers and torch"):
+        transcribers_module._build_podlodka_converter("demo-model")
 
 
 def test_whisper_model_cache_root_can_use_configured_directory(tmp_path: Path, monkeypatch) -> None:

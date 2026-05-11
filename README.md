@@ -100,14 +100,14 @@ bash infra/scripts/coverage-inventory.sh
 
 Measured baselines from the current tree:
 
-- Go `apps/api/internal/api`: `49.5%` statement coverage.
-- Go `apps/api/internal/storage`: `31.7%` statement coverage.
+- Go `apps/api/internal/api`: `60.1%` statement coverage.
+- Go `apps/api/internal/storage`: `37.0%` statement coverage.
 - Python `workers/common/src/transcriber_workers_common`: `95%` line coverage.
 - Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%` line coverage.
 - Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%` line coverage.
-- Python `apps/telegram-bot/src/telegram_adapter`: `66%` aggregate line coverage.
+- Python `apps/telegram-bot/src/telegram_adapter`: `91%` aggregate line coverage.
 - Node `apps/mcp-server/src`: `100%` line coverage from `node --test --experimental-test-coverage`.
-- Web `apps/web/src`: `84.39%` line coverage, `73.2%` branch coverage, `65.78%` function coverage.
+- Web `apps/web/src`: `85.48%` line coverage, `73.68%` branch coverage, `66.22%` function coverage.
 
 Current gap:
 
@@ -143,13 +143,13 @@ Current baseline snapshot from `2026-05-11`:
 
 | Surface | Metric | Current baseline | Status |
 | --- | --- | --- | --- |
-| `apps/api/internal/storage` | statement coverage | `31.7%` | measured gap |
-| `apps/api/internal/api` | statement coverage | `49.5%` | measured gap |
-| `apps/telegram-bot/src/telegram_adapter` | line coverage | `66%` | measured gap |
+| `apps/api/internal/storage` | statement coverage | `37.0%` | measured gap |
+| `apps/api/internal/api` | statement coverage | `60.1%` | measured gap |
+| `apps/telegram-bot/src/telegram_adapter` | line coverage | `91%` | measured gap |
 | `workers/common/src/transcriber_workers_common` | line coverage | `95%` | measured |
 | `workers/transcription/src` | line coverage | `91%` | measured |
 | `workers/agent-runner/src` | line coverage | `86%` | measured |
 | `apps/mcp-server/src` | line / branch / function coverage | `100% / 79.91% / 100%` | measured |
-| `apps/web/src` | line / branch / function coverage | `84.39% / 73.2% / 65.78%` | measured gap |
+| `apps/web/src` | line / branch / function coverage | `85.48% / 73.68% / 66.22%` | measured gap |
 
 This means the repo can currently prove focused coverage for several Python, Go, and MCP surfaces, but it cannot truthfully claim full closure across the whole stack yet.

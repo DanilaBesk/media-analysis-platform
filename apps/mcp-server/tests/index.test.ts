@@ -133,3 +133,28 @@ test("describeMcpServerRuntime exposes readiness with registered domain tools", 
   });
   // END_BLOCK_BLOCK_VERIFY_RUNTIME_DESCRIPTION
 });
+
+test("bootstrapMcpServerRuntime reads API_BASE_URL from process env when options are omitted", () => {
+  // START_BLOCK_BLOCK_VERIFY_PROCESS_ENV_BOOTSTRAP
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  };
+  const originalProcess = runtimeGlobal.process;
+
+  runtimeGlobal.process = {
+    env: {
+      API_BASE_URL: " https://process-env.example.test/root ",
+    },
+  };
+
+  try {
+    const runtime = bootstrapMcpServerRuntime();
+
+    assert.equal(runtime.env.apiBaseUrl, "https://process-env.example.test/root");
+    assert.equal(typeof runtime.apiClient.request, "function");
+    assert.equal(runtime.domainRuntime.listTools().length, 24);
+  } finally {
+    runtimeGlobal.process = originalProcess;
+  }
+  // END_BLOCK_BLOCK_VERIFY_PROCESS_ENV_BOOTSTRAP
+});

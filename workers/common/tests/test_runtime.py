@@ -168,6 +168,45 @@ def test_run_worker_loop_counts_queue_poll_failures(tmp_path: Path) -> None:
     assert result.idle_polls == 1
 
 
+def test_run_worker_loop_sleeps_and_recovers_after_queue_poll_failure(tmp_path: Path) -> None:
+    class FlakyApiClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def list_queued_runs(
+            self,
+            *,
+            status: str | None = None,
+            run_type: str | None = None,
+            task_type: str | None = None,
+            page_size: int = 20,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("temporary queue failure")
+            return (
+                AnalysisRunQueueItem(
+                    analysis_run_id="run-recovered",
+                    run_type="transcription",
+                    task_type="selection.transcription",
+                    status="queued",
+                    version=1,
+                ),
+            )
+
+    config = _config(tmp_path, max_processed_runs=1, max_idle_polls=2)
+    processed: list[str] = []
+    sleeps: list[float] = []
+
+    result = run_worker_loop(config, processed.append, api_client=FlakyApiClient(), sleeper=sleeps.append)
+
+    assert processed == ["run-recovered"]
+    assert result.processed_runs == 1
+    assert result.failed_runs == 1
+    assert result.idle_polls == 0
+    assert sleeps == [5.0]
+
+
 def test_run_worker_loop_returns_after_idle_limit(tmp_path: Path) -> None:
     config = _config(tmp_path, max_idle_polls=2)
     api_client = FakeApiClient([(), ()])
@@ -222,6 +261,32 @@ def test_runtime_config_rejects_invalid_numeric_env() -> None:
             env={
                 "API_BASE_URL": "http://api",
                 "INTERNAL_API_TIMEOUT_SECONDS": "bad",
+            },
+        )
+
+
+def test_runtime_config_rejects_invalid_optional_integer_env() -> None:
+    with pytest.raises(ValueError, match="integer"):
+        WorkerRuntimeConfig.from_env(
+            worker_kind="transcription",
+            task_type="selection.transcription",
+            run_type="transcription",
+            env={
+                "API_BASE_URL": "http://api",
+                "WORKER_MAX_IDLE_POLLS": "bad",
+            },
+        )
+
+
+def test_runtime_config_rejects_nonpositive_processed_limit() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        WorkerRuntimeConfig.from_env(
+            worker_kind="transcription",
+            task_type="selection.transcription",
+            run_type="transcription",
+            env={
+                "API_BASE_URL": "http://api",
+                "WORKER_MAX_PROCESSED_RUNS": "0",
             },
         )
 

@@ -1287,6 +1287,159 @@ def test_run_agent_harness_cancels_before_artifact_upload(tmp_path: Path) -> Non
     assert api_client.calls[-1][1]["outcome"] == "canceled"
 
 
+def test_default_registry_routes_local_fixture_and_requires_claude_settings(tmp_path: Path) -> None:
+    request = AgentHarnessRequest(
+        analysis_run_id="job-agent",
+        workspace_dir=tmp_path / "job-agent",
+        params={"harness_name": "fixture"},
+    )
+    registry = DefaultAgentHarnessRegistry()
+
+    result = registry.run("fixture", request, cancellation_hook=lambda: False)
+
+    assert result.harness_name == "fixture"
+    with pytest.raises(AgentHarnessExecutionFailed, match="provider settings are not configured"):
+        registry.run("claude-code", request, cancellation_hook=lambda: False)
+
+
+def test_local_fixture_registry_rejects_canceled_request(tmp_path: Path) -> None:
+    registry = LocalAgentHarnessRegistry()
+    request = AgentHarnessRequest(
+        analysis_run_id="job-agent",
+        workspace_dir=tmp_path / "job-agent",
+        params={"harness_name": "fixture"},
+    )
+
+    with pytest.raises(WorkerCancellationRequested, match="was canceled"):
+        registry.run("fixture", request, cancellation_hook=lambda: True)
+
+
+def test_agent_runner_helper_branches_cover_request_access_and_parsing(tmp_path: Path) -> None:
+    execution = _execution(
+        {
+            "harness_name": "fixture",
+            "request": {"prompt": "inline"},
+            "request_access": {
+                "provider": "inline",
+                "url": "https://minio.local/private/request.json",
+                "request_digest_sha256": "0" * 64,
+                "request_bytes": 42,
+                "request_ref": "inline-ref",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            "request_access_policy": {"allow_inline_request": False},
+        }
+    )
+    api_client = RecordingApiClient(execution)
+
+    with pytest.raises(AgentHarnessNotSupported, match="<missing>"):
+        agent_runner._resolve_harness_name({})
+
+    access = agent_runner._resolve_request_access(api_client, execution, "fixture")
+    assert access is not None
+    assert access.request_ref == "inline-ref"
+    assert agent_runner._inline_request_access_payload(execution) is None
+    assert agent_runner._parse_rfc3339_utc("2099-01-01T00:00:00").tzinfo is not None
+
+
+def test_agent_runner_helper_branches_cover_materialized_input_list_handling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(AgentHarnessExecutionFailed, match="must be a list"):
+        agent_runner._materialize_input_artifacts({"artifact_id": "bad"}, workspace_dir=tmp_path)
+
+    materialized_dir = tmp_path / "input-artifacts"
+    materialized_dir.mkdir(parents=True, exist_ok=True)
+    materialized_file = materialized_dir / "artifact-02.md"
+    materialized_file.write_text("artifact", encoding="utf-8")
+    monkeypatch.setattr(
+        agent_runner,
+        "_resolve_artifact",
+        lambda artifact_id: {
+            "artifact_kind": "transcript_segmented_markdown",
+            "mime_type": "text/markdown; charset=utf-8",
+            "filename": "artifact.md",
+        },
+    )
+    monkeypatch.setattr(
+        agent_runner,
+        "_write_materialized_artifact",
+        lambda resolution, *, workspace_dir, position: workspace_dir / "input-artifacts" / f"artifact-{position + 1:02d}.md",
+    )
+    artifacts = agent_runner._materialize_input_artifacts(
+        [{"artifact_id": "   "}, {"artifact_id": "artifact-2"}],
+        workspace_dir=tmp_path,
+    )
+    assert len(artifacts) == 1
+    assert artifacts[0]["filename"] == "artifact-02.md"
+
+
+def test_agent_runner_helper_branches_cover_resolution_and_download_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("API_BASE_URL", raising=False)
+    with pytest.raises(AgentHarnessExecutionFailed, match="API_BASE_URL is required"):
+        agent_runner._resolve_artifact("artifact-1")
+
+    monkeypatch.setenv("API_BASE_URL", "http://api.local")
+    monkeypatch.setattr(agent_runner.urlrequest, "urlopen", lambda request, timeout: (_ for _ in ()).throw(TimeoutError()))
+    with pytest.raises(AgentHarnessExecutionFailed, match="resolution timed out"):
+        agent_runner._resolve_artifact("artifact-1")
+
+    monkeypatch.setattr(agent_runner.urlrequest, "urlopen", lambda request, timeout: FakeHTTPResponse(b"{not-json"))
+    with pytest.raises(AgentHarnessExecutionFailed, match="malformed JSON"):
+        agent_runner._resolve_artifact("artifact-1")
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="download url is missing"):
+        agent_runner._write_materialized_artifact({"download": {}}, workspace_dir=tmp_path, position=0)
+
+    monkeypatch.setattr(agent_runner.urlrequest, "urlopen", lambda url, timeout: (_ for _ in ()).throw(TimeoutError()))
+    with pytest.raises(AgentHarnessExecutionFailed, match="download timed out"):
+        agent_runner._write_materialized_artifact(
+            {"download": {"url": "https://download.local/artifact.bin"}},
+            workspace_dir=tmp_path,
+            position=0,
+        )
+    assert agent_runner._safe_materialized_artifact_filename("", position=0) == "artifact-01.bin"
+
+
+def test_agent_runner_helper_branches_cover_policy_and_numeric_validation(tmp_path: Path) -> None:
+    secret_file = tmp_path / "secret.txt"
+    secret_file.write_text("top-secret\n", encoding="utf-8")
+
+    assert agent_runner._normalize_expected_output_artifacts(["report_markdown", 1, "report_markdown", "ignored"]) == (
+        "report_markdown",
+    )
+    assert agent_runner._is_safe_operation_name("report") is True
+    assert agent_runner._is_safe_operation_name("  ") is False
+    assert agent_runner._read_secret(
+        {"DIRECT": "", "FILE": str(secret_file)},
+        direct_key="DIRECT",
+        file_key="FILE",
+    ) == "top-secret"
+
+    with pytest.raises(ValueError, match="must use harness=limit"):
+        agent_runner._parse_concurrency_policy("fixture")
+    with pytest.raises(ValueError, match="must be positive"):
+        agent_runner._parse_concurrency_policy("fixture=0")
+    with pytest.raises(ValueError, match="value must be positive"):
+        agent_runner._parse_positive_float("0", 1.0)
+    with pytest.raises(ValueError, match="value must be positive"):
+        agent_runner._parse_positive_int("0", 1)
+
+
+def test_agent_runner_prompt_context_requires_some_prompt_material(tmp_path: Path) -> None:
+    with pytest.raises(AgentHarnessExecutionFailed, match="contains no prompt, payload, or input artifacts"):
+        agent_runner._load_agent_run_prompt_context(
+            {"request": {}},
+            workspace_dir=tmp_path,
+            request_params={},
+            redaction_values=(),
+        )
+
+
 def _execution(params: dict[str, object], *, item_count: int = 1) -> ClaimedAnalysisRunExecution:
     items = []
     for position in range(item_count):
