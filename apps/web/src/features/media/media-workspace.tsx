@@ -721,10 +721,6 @@ export function CollectionsRouteShell(): JSX.Element {
 
   const addItem = async (collection: Collection) => {
     const mediaItemId = addTargets[collection.collection_id] ?? "";
-    if (!mediaItemId) {
-      setActionError("Choose an inbox item to add.");
-      return;
-    }
     setActionError("");
     try {
       const existing = collection.items.map((item) => item.media_item_id);
@@ -938,9 +934,6 @@ export function RunsRouteShell(): JSX.Element {
     setMessage("");
     try {
       const ids = Array.from(selected);
-      if (ids.length === 0) {
-        throw new Error("Select at least one media item.");
-      }
       const params = paramsText.trim() ? (JSON.parse(paramsText) as Record<string, unknown>) : undefined;
       const selection = await apiClient.createSelection(DEFAULT_OWNER, {
         sourceCollectionId: sourceCollectionId || undefined,
@@ -1133,9 +1126,6 @@ export function RunDetailRouteShell(): JSX.Element {
   const [message, setMessage] = useMessage();
 
   const refresh = useCallback(async () => {
-    if (!analysisRunId) {
-      return;
-    }
     setLoading(true);
     setError("");
     try {
@@ -1193,9 +1183,6 @@ export function RunDetailRouteShell(): JSX.Element {
   }, [analysisRunId, apiClient, refresh, run?.version]);
 
   const cancel = async () => {
-    if (!analysisRunId) {
-      return;
-    }
     setMessage("");
     try {
       const next = await apiClient.cancelAnalysisRun(DEFAULT_OWNER, analysisRunId);
@@ -1207,9 +1194,6 @@ export function RunDetailRouteShell(): JSX.Element {
   };
 
   const retry = async () => {
-    if (!analysisRunId) {
-      return;
-    }
     setMessage("");
     try {
       const next = await apiClient.retryAnalysisRun(DEFAULT_OWNER, analysisRunId);
@@ -1611,9 +1595,6 @@ export function ArtifactsRouteShell(): JSX.Element {
     : [];
 
   const refreshArtifact = async () => {
-    if (!artifactId) {
-      return;
-    }
     setError("");
     setMessage("");
     setRefreshingArtifact(true);
