@@ -1973,6 +1973,129 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 19, 45, 0, 0, time.UTC)
+	stepErr := errors.New("retention-orphan branch failed")
+
+	t.Run("apply retention policies propagates later step errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items mi", affected: 1},
+				{match: "UPDATE collection_items ci", affected: 1},
+				{match: "UPDATE collections c", affected: 1},
+				{match: "UPDATE selections s", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ApplyRetentionPolicies(context.Background(), now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ApplyRetentionPolicies() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("detect orphan objects propagates query errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "SELECT 'source', s.id::text",
+				columns: orphanColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.DetectOrphanObjects(context.Background())
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("DetectOrphanObjects() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("detect orphan objects propagates scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "SELECT 'source', s.id::text",
+				columns: orphanColumns(),
+				rows: [][]driver.Value{{
+					"source", "source-1", "web", "user-1", "", nil, "sources/source-1/source.txt", "deleted_media_source",
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.DetectOrphanObjects(context.Background())
+		if err == nil {
+			t.Fatalf("DetectOrphanObjects() error = nil, want scan failure")
+		}
+	})
+
+	t.Run("record orphan cleanup covers deleted source update path", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items\nSET retention_state=$1", affected: 1},
+				{match: "UPDATE sources SET expires_at=$1", affected: 1},
+				{match: "INSERT INTO diagnostics", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		err = store.RecordOrphanObjectCleanup(context.Background(), OrphanObjectRecord{
+			SubjectType: "source",
+			SubjectID:   "source-1",
+			Owner:       OwnerScope{OwnerType: "web", OwnerID: "user-1"},
+			Bucket:      "sources",
+			ObjectKey:   "sources/source-1/source.txt",
+			Reason:      "expired_media_source",
+		}, true, "deleted from storage", now)
+		if err != nil {
+			t.Fatalf("RecordOrphanObjectCleanup(source deleted) error = %v", err)
+		}
+	})
+
+	t.Run("record orphan cleanup propagates diagnostics insert errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE artifacts\nSET status=CASE WHEN $1 THEN 'deleted' ELSE status END", affected: 1},
+				{match: "INSERT INTO diagnostics", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		err = store.RecordOrphanObjectCleanup(context.Background(), OrphanObjectRecord{
+			SubjectType: "artifact",
+			SubjectID:   "artifact-1",
+			Owner:       OwnerScope{OwnerType: "web", OwnerID: "user-1"},
+			Bucket:      "artifacts",
+			ObjectKey:   "artifacts/run-1/report.md",
+			Reason:      "deleted_artifact",
+		}, false, "metadata only", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordOrphanObjectCleanup(artifact) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 	t.Parallel()
 
