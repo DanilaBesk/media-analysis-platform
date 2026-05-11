@@ -267,6 +267,36 @@ test("createMcpAdapterApiClient treats missing content-type headers as plain tex
   // END_BLOCK_BLOCK_VERIFY_MISSING_CONTENT_TYPE_FALLBACK
 });
 
+test("createMcpAdapterApiClient treats explicit null content-type headers as missing", async () => {
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test",
+    fetchImpl: async () =>
+      ({
+        ok: true,
+        status: 202,
+        headers: {
+          get(name: string) {
+            return name.toLowerCase() === "content-type" ? null : null;
+          },
+        },
+        text: async () => "accepted-from-null-header",
+        json: async () => {
+          throw new Error("json should not be called");
+        },
+      }) as Response,
+  });
+
+  assert.deepEqual(
+    await client.request({
+      path: "/plain-null-header",
+    }),
+    {
+      status: 202,
+      data: "accepted-from-null-header",
+    },
+  );
+});
+
 test("createMcpAdapterApiClient falls back when the error payload is not an envelope object", async () => {
   // START_BLOCK_BLOCK_VERIFY_FALLBACK_ERROR_ENVELOPE
   const client = createMcpAdapterApiClient({
