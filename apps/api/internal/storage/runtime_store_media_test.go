@@ -778,6 +778,422 @@ func TestSQLStateStoreMutationNoRowMappings(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreMediaAndCollectionErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 13, 20, 0, 0, time.UTC)
+	size := int64(5)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("media-collection branch failed")
+
+	item := MediaItemRecord{
+		ID:    "media-1",
+		Owner: owner,
+		Source: MediaSourceMetadata{
+			SourceID:   "source-1",
+			OriginType: "object",
+			ObjectKey:  "sources/source-1/source.ogg",
+			Checksum:   "sha256:abc",
+			SizeBytes:  &size,
+			MIMEType:   "audio/ogg",
+		},
+		Kind:        "voice",
+		Status:      MediaStatusReady,
+		DisplayName: "voice.ogg",
+		MetadataJSON: []byte(
+			`{"lang":"ru"}`,
+		),
+		Retention: RetentionMetadata{State: RetentionStateActive},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	inbox := CollectionRecord{
+		ID:        "inbox-1",
+		Owner:     owner,
+		Kind:      CollectionKindInbox,
+		Name:      "Inbox",
+		Status:    CollectionStatusActive,
+		Version:   1,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	t.Run("add media item propagates inbox lookup, inbox insert, and target membership errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeLookupErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: collectionColumns(),
+				err:     stepErr,
+			}},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(lookup) error = %v", err)
+		}
+		if _, _, err := storeLookupErr.AddMediaItem(context.Background(), item, inbox, ""); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(inbox lookup) error = %v, want stepErr", err)
+		}
+
+		storeInboxInsertErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: collectionColumns(),
+			}},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+				{match: "INSERT INTO collections", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(inbox insert) error = %v", err)
+		}
+		if _, _, err := storeInboxInsertErr.AddMediaItem(context.Background(), item, inbox, ""); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(inbox insert) error = %v, want stepErr", err)
+		}
+
+		storeTargetMembershipErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+					rows: [][]driver.Value{{
+						"inbox-1", "web", "user-1", "", CollectionKindInbox, "Inbox", CollectionStatusActive, int64(1), now, now, nil, nil,
+					}},
+				},
+				{
+					match:   "SELECT id FROM collections",
+					columns: []string{"id"},
+					rows:    [][]driver.Value{{"target-collection"}},
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+				{match: "INSERT INTO collection_items", affected: 1},
+				{match: "INSERT INTO collection_items", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(target membership) error = %v", err)
+		}
+		if _, _, err := storeTargetMembershipErr.AddMediaItem(context.Background(), item, inbox, "target-collection"); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(target membership) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("list and get media items propagate query and scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeListQueryErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM media_items mi",
+				columns: mediaItemColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(list query) error = %v", err)
+		}
+		if _, err := storeListQueryErr.ListMediaItems(context.Background(), owner); !errors.Is(err, stepErr) {
+			t.Fatalf("ListMediaItems(query) error = %v, want stepErr", err)
+		}
+
+		storeListScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM media_items mi",
+				columns: mediaItemColumns(),
+				rows: [][]driver.Value{{
+					"media-1", "web", "user-1", "", "source-1", "object", "", "sources/source-1/source.ogg", "", "", "bad-size", "audio/ogg", nil, "voice", MediaStatusReady, "voice.ogg", "", []byte(`{"lang":"ru"}`), RetentionStateActive, "", nil, nil, now, now,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(list scan) error = %v", err)
+		}
+		if _, err := storeListScanErr.ListMediaItems(context.Background(), owner); err == nil {
+			t.Fatalf("ListMediaItems(scan) error = nil, want scan failure")
+		}
+
+		storeGetScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM media_items mi",
+				columns: mediaItemColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(get scan) error = %v", err)
+		}
+		if _, err := storeGetScanErr.GetMediaItem(context.Background(), owner, "media-1"); !errors.Is(err, stepErr) {
+			t.Fatalf("GetMediaItem(scan) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("create and read collections cover refresh and item-query branches", func(t *testing.T) {
+		t.Parallel()
+
+		storeCreateInsertErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "INSERT INTO collections",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(create insert) error = %v", err)
+		}
+		if _, err := storeCreateInsertErr.CreateCollection(context.Background(), CollectionRecord{
+			ID:        "collection-1",
+			Owner:     owner,
+			Kind:      CollectionKindUser,
+			Name:      "Review",
+			Status:    CollectionStatusActive,
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, nil); !errors.Is(err, stepErr) {
+			t.Fatalf("CreateCollection(insert) error = %v, want stepErr", err)
+		}
+
+		storeCreateMembershipErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "SELECT id FROM media_items",
+				columns: []string{"id"},
+				rows:    [][]driver.Value{{"media-1"}},
+			}},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO collections", affected: 1},
+				{match: "INSERT INTO collection_items", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(create membership) error = %v", err)
+		}
+		if _, err := storeCreateMembershipErr.CreateCollection(context.Background(), CollectionRecord{
+			ID:        "collection-1",
+			Owner:     owner,
+			Kind:      CollectionKindUser,
+			Name:      "Review",
+			Status:    CollectionStatusActive,
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, []string{"media-1"}); !errors.Is(err, stepErr) {
+			t.Fatalf("CreateCollection(membership) error = %v, want stepErr", err)
+		}
+
+		storeCreateRefreshErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT id FROM media_items",
+					columns: []string{"id"},
+					rows:    [][]driver.Value{{"media-1"}},
+				},
+				{
+					match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+					columns: collectionColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO collections", affected: 1},
+				{match: "INSERT INTO collection_items", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(create refresh) error = %v", err)
+		}
+		if _, err := storeCreateRefreshErr.CreateCollection(context.Background(), CollectionRecord{
+			ID:        "collection-1",
+			Owner:     owner,
+			Kind:      CollectionKindUser,
+			Name:      "Review",
+			Status:    CollectionStatusActive,
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, []string{"media-1"}); !errors.Is(err, stepErr) {
+			t.Fatalf("CreateCollection(refresh) error = %v, want stepErr", err)
+		}
+
+		storeListCollectionsItemErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+					rows: [][]driver.Value{{
+						"collection-1", "web", "user-1", "", CollectionKindUser, "Review", CollectionStatusActive, int64(2), now, now, nil, nil,
+					}},
+				},
+				{
+					match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
+					columns: collectionItemColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(list collections) error = %v", err)
+		}
+		collections, err := storeListCollectionsItemErr.ListCollections(context.Background(), owner)
+		if err != nil {
+			t.Fatalf("ListCollections() error = %v, want nil with ignored item lookup failure", err)
+		}
+		if len(collections) != 1 || len(collections[0].Items) != 0 {
+			t.Fatalf("collections = %#v, want collection with skipped items on lookup failure", collections)
+		}
+
+		storeGetCollectionItemErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+					columns: collectionColumns(),
+					rows: [][]driver.Value{{
+						"collection-1", "web", "user-1", "", CollectionKindUser, "Review", CollectionStatusActive, int64(2), now, now, nil, nil,
+					}},
+				},
+				{
+					match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
+					columns: collectionItemColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(get collection) error = %v", err)
+		}
+		if _, err := storeGetCollectionItemErr.GetCollection(context.Background(), owner, "collection-1"); !errors.Is(err, stepErr) {
+			t.Fatalf("GetCollection(items) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("update collection and items propagate exec and refresh failures", func(t *testing.T) {
+		t.Parallel()
+
+		storeUpdateExecErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE collections",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update exec) error = %v", err)
+		}
+		if _, err := storeUpdateExecErr.UpdateCollection(context.Background(), UpdateCollectionRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 2,
+			Name:            "Renamed",
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("UpdateCollection(exec) error = %v, want stepErr", err)
+		}
+
+		storeUpdateRefreshErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+				columns: collectionColumns(),
+				err:     stepErr,
+			}},
+			execResponses: []scriptedExecResponse{{
+				match:    "UPDATE collections",
+				affected: 1,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update refresh) error = %v", err)
+		}
+		if _, err := storeUpdateRefreshErr.UpdateCollection(context.Background(), UpdateCollectionRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 2,
+			Name:            "Renamed",
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("UpdateCollection(refresh) error = %v, want stepErr", err)
+		}
+
+		storeUpdateItemsRemoveErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE collections SET version=version+1", affected: 1},
+				{match: "UPDATE collection_items SET removed_at=$1", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update items remove) error = %v", err)
+		}
+		if _, err := storeUpdateItemsRemoveErr.UpdateCollectionItems(context.Background(), UpdateCollectionItemsRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 4,
+			Items:           []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+			AddedBy:         "tester",
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("UpdateCollectionItems(remove) error = %v, want stepErr", err)
+		}
+
+		storeUpdateItemsInsertErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "SELECT id FROM media_items",
+				columns: []string{"id"},
+				rows:    [][]driver.Value{{"media-1"}},
+			}},
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE collections SET version=version+1", affected: 1},
+				{match: "UPDATE collection_items SET removed_at=$1", affected: 1},
+				{match: "INSERT INTO collection_items", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update items insert) error = %v", err)
+		}
+		if _, err := storeUpdateItemsInsertErr.UpdateCollectionItems(context.Background(), UpdateCollectionItemsRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 4,
+			Items:           []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+			AddedBy:         "tester",
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("UpdateCollectionItems(insert) error = %v, want stepErr", err)
+		}
+
+		storeUpdateItemsRefreshErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT id FROM media_items",
+					columns: []string{"id"},
+					rows:    [][]driver.Value{{"media-1"}},
+				},
+				{
+					match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+					columns: collectionColumns(),
+					err:     stepErr,
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE collections SET version=version+1", affected: 1},
+				{match: "UPDATE collection_items SET removed_at=$1", affected: 1},
+				{match: "INSERT INTO collection_items", affected: 1},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(update items refresh) error = %v", err)
+		}
+		if _, err := storeUpdateItemsRefreshErr.UpdateCollectionItems(context.Background(), UpdateCollectionItemsRequest{
+			CollectionID:    "collection-1",
+			Owner:           owner,
+			ExpectedVersion: 4,
+			Items:           []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+			AddedBy:         "tester",
+		}, now); !errors.Is(err, stepErr) {
+			t.Fatalf("UpdateCollectionItems(refresh) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestRuntimeStoreSelectionHelpersNoRowMappings(t *testing.T) {
 	t.Parallel()
 
