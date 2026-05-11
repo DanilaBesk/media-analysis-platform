@@ -1461,6 +1461,241 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 	config.assertExhausted(t)
 }
 
+func TestSQLStateStoreExecutionErrorMappings(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 18, 0, 0, 0, time.UTC)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+
+	t.Run("create selection maps missing media item", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO selections", affected: 1},
+			},
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM media_items mi",
+					columns: mediaItemColumns(),
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.CreateSelection(context.Background(), SelectionRecord{
+			ID:        "selection-1",
+			Owner:     owner,
+			Status:    SelectionStatusSealed,
+			CreatedBy: "tester",
+			CreatedAt: now,
+			SealedAt:  now,
+		}, []CollectionItemRecord{{MediaItemID: "missing-media", Position: 0}})
+		if !errors.Is(err, ErrMediaItemNotFound) {
+			t.Fatalf("CreateSelection() error = %v, want ErrMediaItemNotFound", err)
+		}
+	})
+
+	t.Run("create analysis run maps missing selection", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.CreateAnalysisRun(context.Background(), AnalysisRunRecord{
+			ID:          "run-1",
+			Owner:       owner,
+			SelectionID: "selection-1",
+			RunType:     "summary",
+			Status:      AnalysisRunStatusQueued,
+			Version:     1,
+			CreatedAt:   now,
+		}, AnalysisRunTaskRecord{
+			ID:            "task-1",
+			AnalysisRunID: "run-1",
+			WorkerKind:    "analysis_runner",
+			TaskType:      "selection.analysis",
+			Status:        AnalysisRunTaskStatusQueued,
+			AttemptNo:     1,
+			CreatedAt:     now,
+		}, RunEventRecord{
+			ID:            "event-1",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.created",
+			Version:       1,
+			CreatedAt:     now,
+		})
+		if !errors.Is(err, ErrSelectionNotFound) {
+			t.Fatalf("CreateAnalysisRun() error = %v, want ErrSelectionNotFound", err)
+		}
+	})
+
+	t.Run("record progress maps missing active run", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "RETURNING version",
+					columns: []string{"version"},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.RecordAnalysisRunProgress(context.Background(), owner, "run-1", RunEventRecord{
+			ID:            "event-1",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.progress",
+			Status:        AnalysisRunStatusRunning,
+			CreatedAt:     now,
+		}, now)
+		if !errors.Is(err, ErrAnalysisRunNotFound) {
+			t.Fatalf("RecordAnalysisRunProgress() error = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+
+	t.Run("record artifacts and diagnostics map missing run", func(t *testing.T) {
+		t.Parallel()
+
+		missingRunConfig := func() *scriptedRuntimeStoreConfig {
+			return &scriptedRuntimeStoreConfig{
+				queryResponses: []scriptedQueryResponse{
+					{
+						match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+						columns: analysisRunColumns(),
+					},
+				},
+			}
+		}
+
+		storeArtifacts, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, missingRunConfig()))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(artifacts) error = %v", err)
+		}
+		_, err = storeArtifacts.RecordArtifacts(context.Background(), owner, "run-1", []ArtifactRecord{{
+			ID:            "artifact-1",
+			Owner:         owner,
+			AnalysisRunID: "run-1",
+			Kind:          "summary",
+			Status:        ArtifactStatusAvailable,
+			ContentType:   "text/plain",
+			Visibility:    "owner",
+		}}, now)
+		if !errors.Is(err, ErrAnalysisRunNotFound) {
+			t.Fatalf("RecordArtifacts() error = %v, want ErrAnalysisRunNotFound", err)
+		}
+
+		storeDiagnostics, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, missingRunConfig()))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(diagnostics) error = %v", err)
+		}
+		_, err = storeDiagnostics.RecordDiagnostics(context.Background(), owner, "run-1", []DiagnosticRecord{{
+			ID:          "diag-1",
+			Owner:       owner,
+			SubjectType: "analysis_run",
+			SubjectID:   "run-1",
+			Severity:    "warning",
+			Code:        "worker_partial",
+			Message:     "partial",
+			CreatedAt:   now,
+		}}, now)
+		if !errors.Is(err, ErrAnalysisRunNotFound) {
+			t.Fatalf("RecordDiagnostics() error = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+}
+
+func TestRuntimeStoreHelperErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	helperErr := errors.New("db helper failed")
+
+	t.Run("select inbox collection propagates generic errors", func(t *testing.T) {
+		t.Parallel()
+
+		db := openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: collectionColumns(),
+				err:     helperErr,
+			}},
+		})
+		err := withTx(context.Background(), db, func(tx *sql.Tx) error {
+			_, err := selectInboxCollection(context.Background(), tx, owner)
+			return err
+		})
+		if !errors.Is(err, helperErr) {
+			t.Fatalf("selectInboxCollection() error = %v, want helperErr", err)
+		}
+	})
+
+	t.Run("select analysis run by id propagates generic errors", func(t *testing.T) {
+		t.Parallel()
+
+		db := openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+				columns: analysisRunColumns(),
+				err:     helperErr,
+			}},
+		})
+		err := withTx(context.Background(), db, func(tx *sql.Tx) error {
+			_, err := selectAnalysisRunByID(context.Background(), tx, "run-1")
+			return err
+		})
+		if !errors.Is(err, helperErr) {
+			t.Fatalf("selectAnalysisRunByID() error = %v, want helperErr", err)
+		}
+	})
+
+	t.Run("list pending enqueue tasks normalizes non-positive limit", func(t *testing.T) {
+		t.Parallel()
+
+		now := time.Date(2026, 5, 11, 18, 30, 0, 0, time.UTC)
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+				columns: analysisRunTaskColumns(),
+				rows: [][]driver.Value{{
+					"task-1", "run-1", "analysis_runner", "selection.analysis", AnalysisRunTaskStatusPendingEnqueue, int64(1), "", nil, nil, nil, now,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		tasks, err := store.ListPendingEnqueueTasks(context.Background(), 0)
+		if err != nil {
+			t.Fatalf("ListPendingEnqueueTasks() error = %v", err)
+		}
+		if len(tasks) != 1 || tasks[0].TaskType != "selection.analysis" {
+			t.Fatalf("tasks = %#v", tasks)
+		}
+	})
+}
+
 type scriptedRuntimeStoreConfig struct {
 	mu             sync.Mutex
 	queryResponses []scriptedQueryResponse
