@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,6 +133,128 @@ func TestApiHttpFinalRoutesAddUploadedMediaItemWithoutPseudoObjectRef(t *testing
 	if public.lastAddMedia.Source.ContentType != "application/octet-stream" {
 		t.Fatalf("content type = %q, want application/octet-stream", public.lastAddMedia.Source.ContentType)
 	}
+}
+
+func TestApiHttpMultipartValidationAndErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	buildMultipartRequest := func(t *testing.T, metadata string, includeFile bool, fileContentType string) *http.Request {
+		t.Helper()
+
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		if metadata != "" {
+			metadataWriter, err := writer.CreateFormField("metadata")
+			if err != nil {
+				t.Fatalf("CreateFormField(metadata) error = %v", err)
+			}
+			if _, err := metadataWriter.Write([]byte(metadata)); err != nil {
+				t.Fatalf("Write(metadata) error = %v", err)
+			}
+		}
+		if includeFile {
+			header := textproto.MIMEHeader{}
+			header.Set("Content-Disposition", `form-data; name="file"; filename="voice.ogg"`)
+			if strings.TrimSpace(fileContentType) != "" {
+				header.Set("Content-Type", fileContentType)
+			}
+			fileWriter, err := writer.CreatePart(header)
+			if err != nil {
+				t.Fatalf("CreatePart(file) error = %v", err)
+			}
+			if _, err := fileWriter.Write([]byte("voice-bytes")); err != nil {
+				t.Fatalf("Write(file) error = %v", err)
+			}
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatalf("writer.Close() error = %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "/v1/media-items", &body)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		return req
+	}
+
+	validMetadata := `{"owner":{"owner_type":"telegram","owner_id":"chat-1"},"kind":"voice","display_name":"voice.ogg","adapter_origin":"telegram"}`
+
+	t.Run("rejects malformed multipart bodies", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/media-items", strings.NewReader("not-a-multipart-body"))
+		req.Header.Set("Content-Type", "multipart/form-data")
+
+		newFinalMux(Dependencies{Public: &fakePublicService{}}).ServeHTTP(rec, req)
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_item")
+	})
+
+	t.Run("rejects missing metadata", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{}}).ServeHTTP(rec, buildMultipartRequest(t, "", true, ""))
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_item")
+	})
+
+	t.Run("rejects invalid metadata json", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		req := buildMultipartRequest(t, `{"owner":{"owner_type":"telegram","owner_id":"chat-1"},"kind":"voice","unexpected":true}`, true, "")
+		newFinalMux(Dependencies{Public: &fakePublicService{}}).ServeHTTP(rec, req)
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_item")
+	})
+
+	t.Run("rejects missing file", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{}}).ServeHTTP(rec, buildMultipartRequest(t, validMetadata, false, ""))
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_item")
+	})
+
+	t.Run("maps public service errors for multipart uploads", func(t *testing.T) {
+		t.Parallel()
+
+		rec := httptest.NewRecorder()
+		req := buildMultipartRequest(t, validMetadata, true, "")
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, req)
+		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+	})
+
+	t.Run("preserves explicit upload content type", func(t *testing.T) {
+		t.Parallel()
+
+		public := &fakePublicService{
+			mediaItem: storage.MediaItemRecord{
+				ID:          "media-1",
+				Owner:       storage.OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"},
+				Kind:        "voice",
+				Status:      storage.MediaStatusReady,
+				DisplayName: "voice.ogg",
+				Source: storage.MediaSourceMetadata{
+					SourceID:   "source-1",
+					OriginType: "object",
+					ObjectKey:  "sources/telegram/chat-1/voice.ogg",
+					MIMEType:   "audio/ogg",
+				},
+				Retention: storage.RetentionMetadata{State: storage.RetentionStateActive},
+				CreatedAt: time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+				UpdatedAt: time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+			},
+		}
+
+		rec := httptest.NewRecorder()
+		req := buildMultipartRequest(t, validMetadata, true, "audio/ogg")
+		newFinalMux(Dependencies{Public: public}).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusCreated, rec.Body.String())
+		}
+		if public.lastAddMedia.Source.ContentType != "audio/ogg" {
+			t.Fatalf("content type = %q, want audio/ogg", public.lastAddMedia.Source.ContentType)
+		}
+	})
 }
 
 func TestApiHttpFinalRoutesPropagateCollectionVersionConflict(t *testing.T) {

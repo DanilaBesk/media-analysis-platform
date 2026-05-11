@@ -619,6 +619,66 @@ func TestApiHandlerErrorBranches(t *testing.T) {
 	assertErrorCode(t, artifactResolution, http.StatusBadGateway, "artifact_resolution_failed")
 }
 
+func TestApiInternalWorkerRouteErrorMappings(t *testing.T) {
+	t.Parallel()
+
+	runNotFoundMux := newFinalMux(Dependencies{Worker: &errorWorkerService{err: storage.ErrAnalysisRunNotFound}})
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/internal/v1/analysis-runs/queue?status=queued&page_size=5"},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/executions/claim", body: `{"worker_kind":"transcription","task_type":"selection.transcription"}`},
+		{method: http.MethodGet, path: "/internal/v1/analysis-runs/run-1/request-access?execution_id=exec-1"},
+		{method: http.MethodGet, path: "/internal/v1/analysis-runs/run-1/executions/cancel-check?execution_id=exec-1"},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/executions/progress", body: `{"stage":"uploading","message":"working"}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/artifacts", body: `{"artifacts":[]}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/diagnostics", body: `{"diagnostics":[]}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/executions/finalize", body: `{"outcome":"failed"}`},
+	} {
+		tc := tc
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			rec := httptest.NewRecorder()
+			runNotFoundMux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+		})
+	}
+
+	invalidMux := newFinalMux(Dependencies{Worker: &errorWorkerService{err: storage.ErrContractViolation}})
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/internal/v1/analysis-runs/queue?status=queued&page_size=bad"},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/executions/claim", body: `{"worker_kind":"transcription","task_type":"selection.transcription"}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/executions/progress", body: `{"progress_stage":"uploading"}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/artifacts", body: `{"artifacts":[]}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/diagnostics", body: `{"diagnostics":[]}`},
+		{method: http.MethodPost, path: "/internal/v1/analysis-runs/run-1/executions/finalize", body: `{"status":"failed"}`},
+	} {
+		tc := tc
+		t.Run("contract violation "+tc.method+" "+tc.path, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			rec := httptest.NewRecorder()
+			invalidMux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
+		})
+	}
+}
+
 type capturingLogger struct {
 	lines []string
 }
