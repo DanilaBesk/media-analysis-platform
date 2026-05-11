@@ -1944,3 +1944,236 @@ test("createMcpDomainRuntime omits optional contract fields on minimal calls and
   assert.equal(requests[8]?.path, withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts`));
   assert.equal(requests[9]?.path, withOwnerQuery("/v1/diagnostics"));
 });
+
+test("createMcpDomainRuntime preserves fully populated optional payload branches", async () => {
+  const richOwner = {
+    ...OWNER,
+    adapter_identity: {
+      ...OWNER.adapter_identity,
+      service_name: "mcp-suite",
+    },
+  };
+  const requests: McpAdapterApiRequest[] = [];
+  const richArtifactID = "00000000-0000-4000-8000-000000000008";
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      requests.push(request);
+      if (request.path === "/v1/media-items") {
+        return {
+          status: 201,
+          data: {
+            media_item: {
+              media_item_id: MEDIA_ID,
+              status: "ready",
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === "/v1/selections") {
+        return {
+          status: 201,
+          data: {
+            selection: {
+              selection_id: SELECTION_ID,
+              duplicate_policy: "allow",
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === "/v1/analysis-runs") {
+        return {
+          status: 202,
+          data: {
+            analysis_run: {
+              analysis_run_id: RUN_ID,
+              status: "queued",
+            },
+          } as TPayload,
+        };
+      }
+      if (request.path === withOwnerQuery(`/v1/artifacts/${richArtifactID}`)) {
+        return {
+          status: 200,
+          data: {
+            artifact: {
+              artifact_id: richArtifactID,
+              content_type: "text/plain",
+              preview: {
+                available: true,
+                kind: "text",
+                text_excerpt: "hello world!",
+              },
+            },
+          } as TPayload,
+        };
+      }
+      throw new Error(`unexpected request path ${request.path}`);
+    },
+  };
+  const runtime = createMcpDomainRuntime({ apiClient });
+
+  const addObjectResult = await runtime.callTool("add_media", {
+    owner: richOwner,
+    kind: "document",
+    source: {
+      origin_type: "object",
+      object_ref: "minio://bucket/reports/brief.json",
+      original_filename: "brief.json",
+      content_type: "application/json",
+      size_bytes: 128,
+    },
+    collection_id: COLLECTION_ID,
+    display_name: "Quarterly brief",
+    adapter_origin: "mcp-import",
+    metadata: {
+      source: "suite",
+    },
+    retention: {
+      policy: "keep",
+    },
+    idempotency_key: "media-rich-1",
+  });
+  const selectionResult = await runtime.callTool("create_selection", {
+    owner: richOwner,
+    source_collection_id: COLLECTION_ID,
+    items: [
+      {
+        media_item_id: MEDIA_ID,
+        position: 0,
+      },
+    ],
+    option_snapshot: {
+      mode: "full",
+    },
+    duplicate_policy: "allow",
+    created_by: "codex",
+    idempotency_key: "selection-rich-1",
+  });
+  const runResult = await runtime.callTool("run_analysis", {
+    owner: richOwner,
+    selection_id: SELECTION_ID,
+    run_type: "custom",
+    params: {
+      harness_name: "mcp-suite",
+    },
+    delivery: {
+      strategy: "webhook",
+      webhook: {
+        url: "https://example.test/hooks/run",
+      },
+    },
+    idempotency_key: "run-rich-1",
+  });
+  const previewResult = await runtime.callTool("get_artifact_preview", {
+    owner: richOwner,
+    artifact_id: richArtifactID,
+    format: "text",
+    max_chars: 12,
+  });
+
+  assert.deepEqual(addObjectResult.structuredContent, {
+    media_item: {
+      media_item_id: MEDIA_ID,
+      status: "ready",
+    },
+  });
+  assert.deepEqual(selectionResult.structuredContent, {
+    selection: {
+      selection_id: SELECTION_ID,
+      duplicate_policy: "allow",
+    },
+  });
+  assert.deepEqual(runResult.structuredContent, {
+    analysis_run: {
+      analysis_run_id: RUN_ID,
+      status: "queued",
+    },
+  });
+  assert.deepEqual(previewResult.structuredContent, {
+    artifact_preview: {
+      artifact_id: richArtifactID,
+      available: true,
+      content_type: "text/plain",
+      format: "text",
+      max_chars: 12,
+      source: "artifact.preview.text_excerpt",
+      text: "hello world!",
+      truncated: false,
+    },
+  });
+  assert.deepEqual(requests, [
+    {
+      path: "/v1/media-items",
+      method: "POST",
+      headers: {
+        "Idempotency-Key": "media-rich-1",
+      },
+      body: {
+        owner: richOwner,
+        kind: "document",
+        source: {
+          origin_type: "object",
+          object_ref: "minio://bucket/reports/brief.json",
+          original_filename: "brief.json",
+          content_type: "application/json",
+          size_bytes: 128,
+        },
+        collection_id: COLLECTION_ID,
+        display_name: "Quarterly brief",
+        adapter_origin: "mcp-import",
+        metadata: {
+          source: "suite",
+        },
+        retention: {
+          policy: "keep",
+        },
+      },
+    },
+    {
+      path: "/v1/selections",
+      method: "POST",
+      headers: {
+        "Idempotency-Key": "selection-rich-1",
+      },
+      body: {
+        owner: richOwner,
+        source_collection_id: COLLECTION_ID,
+        items: [
+          {
+            media_item_id: MEDIA_ID,
+            position: 0,
+          },
+        ],
+        option_snapshot: {
+          mode: "full",
+        },
+        duplicate_policy: "allow",
+        created_by: "codex",
+      },
+    },
+    {
+      path: "/v1/analysis-runs",
+      method: "POST",
+      headers: {
+        "Idempotency-Key": "run-rich-1",
+      },
+      body: {
+        owner: richOwner,
+        selection_id: SELECTION_ID,
+        run_type: "custom",
+        params: {
+          harness_name: "mcp-suite",
+        },
+        delivery: {
+          strategy: "webhook",
+          webhook: {
+            url: "https://example.test/hooks/run",
+          },
+        },
+      },
+    },
+    {
+      path: withOwnerQuery(`/v1/artifacts/${richArtifactID}`),
+    },
+  ]);
+});
