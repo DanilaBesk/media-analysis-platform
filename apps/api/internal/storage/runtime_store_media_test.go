@@ -1696,6 +1696,178 @@ func TestRuntimeStoreHelperErrorPaths(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreQueryAndQueueEdgeBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 18, 45, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("query branch failed")
+
+	t.Run("select analysis run by id maps no rows", func(t *testing.T) {
+		t.Parallel()
+
+		db := openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+				columns: analysisRunColumns(),
+			}},
+		})
+		err := withTx(context.Background(), db, func(tx *sql.Tx) error {
+			_, err := selectAnalysisRunByID(context.Background(), tx, "missing-run")
+			return err
+		})
+		if !errors.Is(err, ErrAnalysisRunNotFound) {
+			t.Fatalf("selectAnalysisRunByID(missing) error = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+
+	t.Run("list collection items propagates scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
+				columns: collectionItemColumns(),
+				rows: [][]driver.Value{{
+					"media-1", "bad-position", "tester", now, nil,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.listCollectionItems(context.Background(), "collection-1")
+		if err == nil {
+			t.Fatalf("listCollectionItems() error = nil, want scan failure")
+		}
+	})
+
+	t.Run("list run events propagates event scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, nil, nil, nil)},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+				{
+					match:   "SELECT id, analysis_run_id, event_type, version, payload, COALESCE(status,''), created_at FROM analysis_run_events",
+					columns: runEventColumns(),
+					rows: [][]driver.Value{{
+						"event-1", "run-1", "analysis_run.progress", "bad-version", []byte(`{"step":2}`), AnalysisRunStatusRunning, now,
+					}},
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListRunEvents(context.Background(), owner, "run-1")
+		if err == nil {
+			t.Fatalf("ListRunEvents() error = nil, want scan failure")
+		}
+	})
+
+	t.Run("list artifacts without run filter skips run lookup", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM artifacts a",
+				columns: artifactColumns(),
+				rows:    [][]driver.Value{artifactDriverRow(now, expiresAt)},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		artifacts, err := store.ListArtifacts(context.Background(), owner, "")
+		if err != nil {
+			t.Fatalf("ListArtifacts() error = %v", err)
+		}
+		if len(artifacts) != 1 || artifacts[0].ID != "artifact-1" {
+			t.Fatalf("artifacts = %#v, want one artifact without owner lookup", artifacts)
+		}
+	})
+
+	t.Run("list diagnostics propagates query errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM diagnostics\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: diagnosticColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListDiagnostics(context.Background(), owner, DiagnosticQuery{Code: "worker_partial"})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListDiagnostics() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("list analysis run queue normalizes limit and propagates scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+				columns: analysisRunQueueColumns(),
+				rows: [][]driver.Value{{
+					"run-1", "summary", "analysis_runner", "selection.analysis", AnalysisRunTaskStatusQueued, "bad-version", int64(1), now,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListAnalysisRunQueue(context.Background(), "", "", "", 0)
+		if err == nil {
+			t.Fatalf("ListAnalysisRunQueue() error = nil, want scan failure")
+		}
+	})
+
+	t.Run("mark analysis run task queued propagates exec errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE analysis_run_tasks\nSET status='queued'",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		err = store.MarkAnalysisRunTaskQueued(context.Background(), "run-1", "selection.analysis", now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("MarkAnalysisRunTaskQueued() error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 	t.Parallel()
 
