@@ -146,6 +146,130 @@ func TestSQLStateStoreAddMediaItemAndSoftDelete(t *testing.T) {
 	config.assertExhausted(t)
 }
 
+func TestSQLStateStoreAddMediaItemAndSoftDeleteErrorMappings(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 12, 30, 0, 0, time.UTC)
+	owner := OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"}
+	item := MediaItemRecord{
+		ID:    "media-1",
+		Owner: owner,
+		Source: MediaSourceMetadata{
+			SourceID:   "source-1",
+			OriginType: "object",
+			ObjectKey:  "sources/source-1/source.ogg",
+			MIMEType:   "audio/ogg",
+		},
+		Kind:        "voice",
+		Status:      MediaStatusReady,
+		DisplayName: "voice.ogg",
+		Retention:   RetentionMetadata{State: RetentionStateActive},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	inbox := CollectionRecord{
+		ID:        "inbox-1",
+		Owner:     owner,
+		Kind:      CollectionKindInbox,
+		Name:      "Inbox",
+		Status:    CollectionStatusActive,
+		Version:   1,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	t.Run("add media item propagates target collection lookup failures", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+				},
+				{
+					match:   "SELECT id FROM collections",
+					columns: []string{"id"},
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+				{match: "INSERT INTO collections", affected: 1},
+				{match: "INSERT INTO collection_items", affected: 1},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, _, err := store.AddMediaItem(context.Background(), item, inbox, "missing-target"); !errors.Is(err, ErrCollectionNotFound) {
+			t.Fatalf("AddMediaItem(target missing) error = %v, want ErrCollectionNotFound", err)
+		}
+	})
+
+	t.Run("add media item propagates membership insert errors", func(t *testing.T) {
+		t.Parallel()
+
+		stepErr := errors.New("membership failed")
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+					columns: collectionColumns(),
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO sources", affected: 1},
+				{match: "INSERT INTO media_items", affected: 1},
+				{match: "INSERT INTO collections", affected: 1},
+				{match: "INSERT INTO collection_items", err: stepErr},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, _, err := store.AddMediaItem(context.Background(), item, inbox, ""); !errors.Is(err, stepErr) {
+			t.Fatalf("AddMediaItem(insert membership) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("soft delete maps not found and collection update failures", func(t *testing.T) {
+		t.Parallel()
+
+		notFoundStore, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items", affected: 0},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(not found) error = %v", err)
+		}
+		if _, err := notFoundStore.SoftDeleteMediaItem(context.Background(), owner, "missing-media", now); !errors.Is(err, ErrMediaItemNotFound) {
+			t.Fatalf("SoftDeleteMediaItem(not found) error = %v, want ErrMediaItemNotFound", err)
+		}
+
+		stepErr := errors.New("remove memberships failed")
+		failStore, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items", affected: 1},
+				{match: "UPDATE collection_items", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(fail store) error = %v", err)
+		}
+		if _, err := failStore.SoftDeleteMediaItem(context.Background(), owner, "media-1", now); !errors.Is(err, stepErr) {
+			t.Fatalf("SoftDeleteMediaItem(collection update) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T) {
 	t.Parallel()
 
