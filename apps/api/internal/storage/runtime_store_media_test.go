@@ -2096,6 +2096,144 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 	})
 }
 
+func TestRuntimeStoreArtifactAndOpsDiagnosticErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 20, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("artifact-diagnostics branch failed")
+
+	t.Run("list artifacts propagates query errors after run lookup", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, nil, nil, nil)},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+				{
+					match:   "FROM artifacts a",
+					columns: artifactColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListArtifacts(context.Background(), owner, "run-1")
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListArtifacts() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("list artifacts propagates scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM artifacts a",
+				columns: artifactColumns(),
+				rows: [][]driver.Value{{
+					"artifact-1", "web", "user-1", "", "run-1", "transcript", ArtifactStatusAvailable, "artifacts/run-1/transcript.md", "text/markdown", "sha256:222", "bad-size", "owner", []byte(`{"available":true}`), RetentionStateActive, "", now, expiresAt, nil,
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.ListArtifacts(context.Background(), owner, "")
+		if err == nil {
+			t.Fatalf("ListArtifacts() error = nil, want scan failure")
+		}
+	})
+
+	t.Run("get artifact and by-id propagate generic scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeByOwner, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM artifacts a",
+				columns: artifactColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(owner) error = %v", err)
+		}
+		_, err = storeByOwner.GetArtifact(context.Background(), owner, "artifact-1")
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("GetArtifact() error = %v, want stepErr", err)
+		}
+
+		storeByID, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM artifacts a",
+				columns: artifactColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(by-id) error = %v", err)
+		}
+		_, err = storeByID.GetArtifactByID(context.Background(), "artifact-1")
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("GetArtifactByID() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("list operational diagnostics propagates query and scan errors", func(t *testing.T) {
+		t.Parallel()
+
+		storeQueryErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM diagnostics\nWHERE code IN",
+				columns: diagnosticColumns(),
+				err:     stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(query) error = %v", err)
+		}
+		_, err = storeQueryErr.ListOperationalDiagnostics(context.Background(), []string{"orphan_object_cleanup_failed"})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("ListOperationalDiagnostics(query) error = %v, want stepErr", err)
+		}
+
+		storeScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM diagnostics\nWHERE code IN",
+				columns: diagnosticColumns(),
+				rows: [][]driver.Value{{
+					"diag-1", "system", "cleanup", "", "artifact", "artifact-1", "error", "orphan_object_cleanup_failed", "delete failed", []byte(`{"bucket":"artifacts"}`), []byte(`{}`), "", "", "bad-time",
+				}},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(scan) error = %v", err)
+		}
+		_, err = storeScanErr.ListOperationalDiagnostics(context.Background(), []string{"orphan_object_cleanup_failed"})
+		if err == nil {
+			t.Fatalf("ListOperationalDiagnostics(scan) error = nil, want scan failure")
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
 	t.Parallel()
 
