@@ -163,10 +163,8 @@
   </BottomUpSequencing>
 
   <CurrentClosureState>
-    <completed>Implementation packets through contracts, server/storage, workers, Telegram, Web, MCP, and runtime-final proof are complete in the current tree.</completed>
-    <remaining>Remaining closure work is limited to GRACE truth refresh and the final ordered verification matrix.</remaining>
-    <remaining-bead id="media-gna">Normalize packet status so the canonical docs no longer describe completed packets as future work.</remaining-bead>
-    <remaining-bead id="media-i7m">Publish one final closure runbook that combines contract, runtime, coverage, and documentation gates honestly.</remaining-bead>
+    <completed>Implementation packets through contracts, server/storage, workers, Telegram, Web, MCP, runtime-final proof, coverage closure, and GRACE truth refresh are complete in the current tree.</completed>
+    <remaining>None.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>

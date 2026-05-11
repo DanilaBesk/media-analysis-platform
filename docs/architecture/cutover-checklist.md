@@ -73,18 +73,19 @@ bash infra/scripts/coverage-inventory.sh
 
 Current measurable baselines from the active tree:
 
-- Go `apps/api/internal/api`: `60.1%`
-- Go `apps/api/internal/storage`: `37.0%`
-- Python `workers/common/src/transcriber_workers_common`: `95%`
-- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
-- Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
-- Python `apps/telegram-bot/src/telegram_adapter`: `91%`
+- Go `apps/api/internal/api`: `100%`
+- Go `apps/api/internal/storage`: `100%`
+- Python `workers/common/src/transcriber_workers_common`: `100%`
+- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `100%`
+- Python `workers/transcription/src/transcriber_worker_transcription.py`: `100%`
+- Python `apps/telegram-bot/src/telegram_adapter`: `100%`
 - Node `apps/mcp-server/src`: `100%`
-- Web `apps/web/src`: `85.48%` lines, `73.68%` branches, `66.22%` functions
+- Web `apps/web/src`: `100%` lines, branches, and functions
 
-Known remaining gap:
+Current truth:
 
-- A repo-wide `100% coverage` statement remains unproven because multiple measured surfaces still sit well below that threshold.
+- All declared measurable coverage surfaces are now at `100%`.
+- Runtime smoke, contract verification, and XML integrity remain separate non-percentage gates.
 
 ## Legacy Removal Gate
 

@@ -8,8 +8,9 @@
     <completed-packet>media-7wo-web-adapter</completed-packet>
     <completed-packet>media-uhi-mcp-adapter</completed-packet>
     <completed-packet>runtime-final-inbox-first</completed-packet>
-    <remaining-closure-gate bead="media-gna">Refresh GRACE packet truth so only real remaining closure tasks stay open.</remaining-closure-gate>
-    <remaining-closure-gate bead="media-i7m">Publish the final ordered closure verification matrix for contracts, runtime, coverage, and docs.</remaining-closure-gate>
+    <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
+    <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
+    <remaining-closure-gate>none</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>

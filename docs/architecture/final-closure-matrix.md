@@ -2,8 +2,8 @@
 
 This document is the canonical ordered runbook for final repo closure against the inbox-first GRACE plan.
 
-It does not pretend the repository is at literal `100% coverage`.
-It records the exact commands that prove the current state, the metrics each surface can actually emit, and the remaining gaps that must be closed before making stronger claims.
+It records the exact commands that prove the current state and the metrics each surface can actually emit.
+All declared percentage-emitting surfaces in the current tree are now at literal `100%`.
 
 ## Preconditions
 
@@ -145,28 +145,27 @@ bash infra/scripts/coverage-inventory.sh
 
 Expected gate:
 - Script runs end to end.
-- Surfaces with measurable coverage emit their current baseline.
-- Any missing metric remains an explicit failing gap instead of being hidden.
+- Every declared measurable surface emits `100%`.
+- Any missing metric or non-`100%` regression remains an explicit failing gap instead of being hidden.
 
 ## Current Measurable Baselines
 
 Latest measured baselines from the active tree:
 
-- Go `apps/api/internal/api`: `60.1%` statements
-- Go `apps/api/internal/storage`: `37.0%` statements
-- Python `workers/common/src/transcriber_workers_common`: `95%`
-- Python `workers/transcription/src/transcriber_worker_transcription.py`: `91%`
-- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `86%`
-- Python `apps/telegram-bot/src/telegram_adapter`: `91%`
-- Node `apps/mcp-server/src`: `100%` lines, `79.91%` branches, `100%` functions
-- Web `apps/web/src`: `85.48%` lines, `73.68%` branches, `66.22%` functions
+- Go `apps/api/internal/api`: `100%` statements
+- Go `apps/api/internal/storage`: `100%` statements
+- Python `workers/common/src/transcriber_workers_common`: `100%`
+- Python `workers/transcription/src/transcriber_worker_transcription.py`: `100%`
+- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `100%`
+- Python `apps/telegram-bot/src/telegram_adapter`: `100%`
+- Node `apps/mcp-server/src`: `100%` lines, `100%` branches, `100%` functions
+- Web `apps/web/src`: `100%` lines, `100%` branches, `100%` functions
 
 ## Remaining Closure Truth
 
-The repo does **not** currently satisfy a literal `100% coverage` claim.
+The repo now satisfies a literal `100%` measured coverage claim for every declared percentage-emitting surface.
 
-Remaining explicit gap:
+Remaining truth:
 
-- Several measured surfaces still remain below a literal `100%` bar, especially Go API/storage, Telegram adapter, and agent-runner/transcription runtime code.
-
-Any future claim of full closure must cite this runbook and the actual command outputs, not proxy signals.
+- XML integrity, contract tests, and runtime-final compose proof remain separate acceptance gates and must still be cited alongside the coverage inventory.
+- Any future claim of full closure must cite this runbook and the actual command outputs, not proxy signals.
