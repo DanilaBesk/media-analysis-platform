@@ -43,48 +43,24 @@ type finalRuntimeStorageService interface {
 	ClaimAnalysisRunTask(ctx context.Context, analysisRunID, workerKind, taskType, leaseOwner string) (storage.AnalysisRunRecord, bool, error)
 }
 
-func (s *publicRuntimeService) finalStore() (finalRuntimeStorageService, error) {
-	return s.store, nil
-}
-
 func (s *publicRuntimeService) AddMediaItem(ctx context.Context, req storage.AddMediaItemRequest) (storage.MediaItemRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.MediaItemRecord{}, err
-	}
-	return store.AddMediaItem(ctx, req)
+	return s.store.AddMediaItem(ctx, req)
 }
 
 func (s *publicRuntimeService) ListMediaItems(ctx context.Context, owner storage.OwnerScope) ([]storage.MediaItemRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListMediaItems(ctx, owner)
+	return s.store.ListMediaItems(ctx, owner)
 }
 
 func (s *publicRuntimeService) GetMediaItem(ctx context.Context, owner storage.OwnerScope, mediaItemID string) (storage.MediaItemRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.MediaItemRecord{}, err
-	}
-	return store.GetMediaItem(ctx, owner, mediaItemID)
+	return s.store.GetMediaItem(ctx, owner, mediaItemID)
 }
 
 func (s *publicRuntimeService) RemoveMediaItem(ctx context.Context, owner storage.OwnerScope, mediaItemID string) (storage.MediaItemRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.MediaItemRecord{}, err
-	}
-	return store.RemoveMediaItem(ctx, owner, mediaItemID)
+	return s.store.RemoveMediaItem(ctx, owner, mediaItemID)
 }
 
 func (s *publicRuntimeService) GetInboxCollection(ctx context.Context, owner storage.OwnerScope) (storage.CollectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.CollectionRecord{}, err
-	}
-	collections, err := store.ListCollections(ctx, owner)
+	collections, err := s.store.ListCollections(ctx, owner)
 	if err != nil {
 		return storage.CollectionRecord{}, err
 	}
@@ -97,94 +73,54 @@ func (s *publicRuntimeService) GetInboxCollection(ctx context.Context, owner sto
 }
 
 func (s *publicRuntimeService) CreateCollection(ctx context.Context, req storage.CreateCollectionRequest) (storage.CollectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.CollectionRecord{}, err
-	}
-	return store.CreateCollection(ctx, req)
+	return s.store.CreateCollection(ctx, req)
 }
 
 func (s *publicRuntimeService) ListCollections(ctx context.Context, owner storage.OwnerScope) ([]storage.CollectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListCollections(ctx, owner)
+	return s.store.ListCollections(ctx, owner)
 }
 
 func (s *publicRuntimeService) GetCollection(ctx context.Context, owner storage.OwnerScope, collectionID string) (storage.CollectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.CollectionRecord{}, err
-	}
-	return store.GetCollection(ctx, owner, collectionID)
+	return s.store.GetCollection(ctx, owner, collectionID)
 }
 
 func (s *publicRuntimeService) UpdateCollection(ctx context.Context, req storage.UpdateCollectionRequest) (storage.CollectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.CollectionRecord{}, err
-	}
-	return store.UpdateCollection(ctx, req)
+	return s.store.UpdateCollection(ctx, req)
 }
 
 func (s *publicRuntimeService) UpdateCollectionItems(ctx context.Context, req storage.UpdateCollectionItemsRequest) (storage.CollectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.CollectionRecord{}, err
-	}
-	return store.UpdateCollectionItems(ctx, req)
+	return s.store.UpdateCollectionItems(ctx, req)
 }
 
 func (s *publicRuntimeService) CreateSelection(ctx context.Context, req storage.CreateSelectionRequest) (storage.SelectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.SelectionRecord{}, err
-	}
-	return store.CreateSelection(ctx, req)
+	return s.store.CreateSelection(ctx, req)
 }
 
 func (s *publicRuntimeService) GetSelection(ctx context.Context, owner storage.OwnerScope, selectionID string) (storage.SelectionRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.SelectionRecord{}, err
-	}
-	return store.GetSelection(ctx, owner, selectionID)
+	return s.store.GetSelection(ctx, owner, selectionID)
 }
 
 func (s *publicRuntimeService) CreateAnalysisRun(ctx context.Context, req storage.CreateAnalysisRunRequest) (storage.AnalysisRunRecord, error) {
-	store, err := s.finalStore()
+	run, err := s.store.CreateAnalysisRun(ctx, req)
 	if err != nil {
 		return storage.AnalysisRunRecord{}, err
 	}
-	run, err := store.CreateAnalysisRun(ctx, req)
-	if err != nil {
-		return storage.AnalysisRunRecord{}, err
-	}
-	if err := s.enqueueCreatedAnalysisRun(ctx, store, run); err != nil {
+	if err := s.enqueueCreatedAnalysisRun(ctx, s.store, run); err != nil {
 		return storage.AnalysisRunRecord{}, err
 	}
 	return run, nil
 }
 
 func (s *publicRuntimeService) CancelAnalysisRun(ctx context.Context, owner storage.OwnerScope, analysisRunID, message string) (storage.AnalysisRunRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.AnalysisRunRecord{}, err
-	}
-	return store.CancelAnalysisRun(ctx, owner, analysisRunID, message)
+	return s.store.CancelAnalysisRun(ctx, owner, analysisRunID, message)
 }
 
 func (s *publicRuntimeService) RetryAnalysisRun(ctx context.Context, owner storage.OwnerScope, analysisRunID, idempotencyKey string) (storage.AnalysisRunRecord, error) {
-	store, err := s.finalStore()
+	run, err := s.store.RetryAnalysisRun(ctx, owner, analysisRunID, idempotencyKey)
 	if err != nil {
 		return storage.AnalysisRunRecord{}, err
 	}
-	run, err := store.RetryAnalysisRun(ctx, owner, analysisRunID, idempotencyKey)
-	if err != nil {
-		return storage.AnalysisRunRecord{}, err
-	}
-	if err := s.enqueueCreatedAnalysisRun(ctx, store, run); err != nil {
+	if err := s.enqueueCreatedAnalysisRun(ctx, s.store, run); err != nil {
 		return storage.AnalysisRunRecord{}, err
 	}
 	return run, nil
@@ -210,14 +146,10 @@ func (s *publicRuntimeService) enqueueCreatedAnalysisRun(ctx context.Context, st
 }
 
 func (s *publicRuntimeService) ReconcileAnalysisRunQueue(ctx context.Context, limit int) (int, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return 0, err
-	}
 	if s.queue == nil {
 		return 0, nil
 	}
-	tasks, err := store.ListPendingEnqueueTasks(ctx, limit)
+	tasks, err := s.store.ListPendingEnqueueTasks(ctx, limit)
 	if err != nil {
 		return 0, err
 	}
@@ -231,7 +163,7 @@ func (s *publicRuntimeService) ReconcileAnalysisRunQueue(ctx context.Context, li
 		}); err != nil {
 			return recovered, err
 		}
-		if err := store.MarkAnalysisRunTaskQueued(ctx, task.AnalysisRunID, task.TaskType); err != nil {
+		if err := s.store.MarkAnalysisRunTaskQueued(ctx, task.AnalysisRunID, task.TaskType); err != nil {
 			return recovered, err
 		}
 		recovered++
@@ -240,65 +172,33 @@ func (s *publicRuntimeService) ReconcileAnalysisRunQueue(ctx context.Context, li
 }
 
 func (s *publicRuntimeService) ListAnalysisRuns(ctx context.Context, owner storage.OwnerScope) ([]storage.AnalysisRunRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListAnalysisRuns(ctx, owner)
+	return s.store.ListAnalysisRuns(ctx, owner)
 }
 
 func (s *publicRuntimeService) GetAnalysisRun(ctx context.Context, owner storage.OwnerScope, analysisRunID string) (storage.AnalysisRunRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.AnalysisRunRecord{}, err
-	}
-	return store.GetAnalysisRun(ctx, owner, analysisRunID)
+	return s.store.GetAnalysisRun(ctx, owner, analysisRunID)
 }
 
 func (s *publicRuntimeService) ListAnalysisRunEvents(ctx context.Context, owner storage.OwnerScope, analysisRunID string) ([]storage.RunEventRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListAnalysisRunEvents(ctx, owner, analysisRunID)
+	return s.store.ListAnalysisRunEvents(ctx, owner, analysisRunID)
 }
 
 func (s *publicRuntimeService) ListArtifacts(ctx context.Context, owner storage.OwnerScope, analysisRunID string) ([]storage.ArtifactRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListArtifacts(ctx, owner, analysisRunID)
+	return s.store.ListArtifacts(ctx, owner, analysisRunID)
 }
 
 func (s *publicRuntimeService) GetArtifact(ctx context.Context, owner storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.ArtifactRecord{}, err
-	}
-	return store.GetArtifact(ctx, owner, artifactID)
+	return s.store.GetArtifact(ctx, owner, artifactID)
 }
 
 func (s *publicRuntimeService) RefreshArtifactLink(ctx context.Context, owner storage.OwnerScope, artifactID string) (storage.ArtifactRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.ArtifactRecord{}, err
-	}
-	return store.RefreshArtifactLink(ctx, owner, artifactID)
+	return s.store.RefreshArtifactLink(ctx, owner, artifactID)
 }
 
 func (s *publicRuntimeService) ListDiagnostics(ctx context.Context, owner storage.OwnerScope, query storage.DiagnosticQuery) ([]storage.DiagnosticRecord, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return nil, err
-	}
-	return store.ListDiagnostics(ctx, owner, query)
+	return s.store.ListDiagnostics(ctx, owner, query)
 }
 
 func (s *publicRuntimeService) GetObservabilitySnapshot(ctx context.Context) (storage.ObservabilitySnapshot, error) {
-	store, err := s.finalStore()
-	if err != nil {
-		return storage.ObservabilitySnapshot{}, err
-	}
-	return store.GetObservabilitySnapshot(ctx)
+	return s.store.GetObservabilitySnapshot(ctx)
 }
