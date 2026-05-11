@@ -1696,6 +1696,224 @@ func TestRuntimeStoreHelperErrorPaths(t *testing.T) {
 	})
 }
 
+func TestSQLStateStoreExecutionStepErrors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 19, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(2 * time.Hour)
+	size := int64(42)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("step failed")
+
+	t.Run("create selection propagates selection-item insert error", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO selections", affected: 1},
+				{match: "INSERT INTO selection_items", err: stepErr},
+			},
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM media_items mi",
+					columns: mediaItemColumns(),
+					rows: [][]driver.Value{mediaItemDriverRow(mediaItemDriverRowInput{
+						id:             "media-1",
+						ownerType:      "web",
+						ownerID:        "user-1",
+						sourceID:       "source-1",
+						originType:     "object",
+						objectKey:      "sources/source-1/source.txt",
+						checksum:       "sha256:111",
+						sizeBytes:      &size,
+						mimeType:       "text/plain",
+						kind:           "text",
+						status:         MediaStatusReady,
+						displayName:    "source.txt",
+						metadataJSON:   []byte(`{"tag":"one"}`),
+						retentionState: RetentionStateActive,
+						createdAt:      now,
+						updatedAt:      now,
+					})},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.CreateSelection(context.Background(), SelectionRecord{
+			ID:        "selection-1",
+			Owner:     owner,
+			Status:    SelectionStatusSealed,
+			CreatedBy: "tester",
+			CreatedAt: now,
+			SealedAt:  now,
+		}, []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("CreateSelection() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("create analysis run propagates event insert error", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO analysis_runs", affected: 1},
+				{match: "INSERT INTO analysis_run_tasks", affected: 1},
+				{match: "INSERT INTO analysis_run_events", err: stepErr},
+			},
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.CreateAnalysisRun(context.Background(), AnalysisRunRecord{
+			ID:          "run-1",
+			Owner:       owner,
+			SelectionID: "selection-1",
+			RunType:     "summary",
+			Status:      AnalysisRunStatusQueued,
+			Version:     1,
+			CreatedAt:   now,
+		}, AnalysisRunTaskRecord{
+			ID:            "task-1",
+			AnalysisRunID: "run-1",
+			WorkerKind:    "analysis_runner",
+			TaskType:      "selection.analysis",
+			Status:        AnalysisRunTaskStatusQueued,
+			AttemptNo:     1,
+			CreatedAt:     now,
+		}, RunEventRecord{
+			ID:            "event-1",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.created",
+			Version:       1,
+			CreatedAt:     now,
+		})
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("CreateAnalysisRun() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("record progress propagates event insert error", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO analysis_run_events", err: stepErr},
+			},
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "RETURNING version",
+					columns: []string{"version"},
+					rows:    [][]driver.Value{{int64(2)}},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		_, err = store.RecordAnalysisRunProgress(context.Background(), owner, "run-1", RunEventRecord{
+			ID:            "event-2",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.progress",
+			Status:        AnalysisRunStatusRunning,
+			CreatedAt:     now,
+		}, now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordAnalysisRunProgress() error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("record artifacts and diagnostics propagate insert errors", func(t *testing.T) {
+		t.Parallel()
+
+		baseQueryResponses := []scriptedQueryResponse{
+			{
+				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+				columns: analysisRunColumns(),
+				rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, nil, nil, nil)},
+			},
+			{
+				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+				columns: selectionColumns(),
+				rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+			},
+			{
+				match:   "FROM selection_items WHERE selection_id=$1",
+				columns: selectionItemColumns(),
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
+			},
+		}
+
+		storeArtifacts, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: append([]scriptedQueryResponse(nil), baseQueryResponses...),
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO artifacts", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(artifacts) error = %v", err)
+		}
+		_, err = storeArtifacts.RecordArtifacts(context.Background(), owner, "run-1", []ArtifactRecord{{
+			ID:            "artifact-1",
+			Owner:         owner,
+			AnalysisRunID: "run-1",
+			Kind:          "summary",
+			Status:        ArtifactStatusAvailable,
+			ContentType:   "text/plain",
+			Visibility:    "owner",
+		}}, now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordArtifacts() error = %v, want stepErr", err)
+		}
+
+		storeDiagnostics, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: append([]scriptedQueryResponse(nil), baseQueryResponses...),
+			execResponses: []scriptedExecResponse{
+				{match: "INSERT INTO diagnostics", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(diagnostics) error = %v", err)
+		}
+		_, err = storeDiagnostics.RecordDiagnostics(context.Background(), owner, "run-1", []DiagnosticRecord{{
+			ID:          "diag-1",
+			Owner:       owner,
+			SubjectType: "analysis_run",
+			SubjectID:   "run-1",
+			Severity:    "warning",
+			Code:        "worker_partial",
+			Message:     "partial",
+			CreatedAt:   now,
+		}}, now)
+		if !errors.Is(err, stepErr) {
+			t.Fatalf("RecordDiagnostics() error = %v, want stepErr", err)
+		}
+	})
+}
+
 type scriptedRuntimeStoreConfig struct {
 	mu             sync.Mutex
 	queryResponses []scriptedQueryResponse
