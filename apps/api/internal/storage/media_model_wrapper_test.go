@@ -24,6 +24,7 @@ type erroringWrapperStateStore struct {
 	lastQueuedAt     time.Time
 	lastDeletedAt    time.Time
 	lastQuery        DiagnosticQuery
+	recordCleanup    bool
 }
 
 func newErroringWrapperStateStore(err error) *erroringWrapperStateStore {
@@ -102,7 +103,21 @@ func (s *erroringWrapperStateStore) ListDiagnostics(_ context.Context, owner Own
 	return nil, s.err
 }
 
+func (s *erroringWrapperStateStore) GetArtifactByID(_ context.Context, artifactID string) (ArtifactRecord, error) {
+	s.lastAnalysisRun = artifactID
+	return ArtifactRecord{}, s.err
+}
+
 func (s *erroringWrapperStateStore) DetectOrphanObjects(context.Context) ([]OrphanObjectRecord, error) {
+	return nil, s.err
+}
+
+func (s *erroringWrapperStateStore) RecordOrphanObjectCleanup(context.Context, OrphanObjectRecord, bool, string, time.Time) error {
+	s.recordCleanup = true
+	return s.err
+}
+
+func (s *erroringWrapperStateStore) ListOperationalDiagnostics(context.Context, []string) ([]DiagnosticRecord, error) {
 	return nil, s.err
 }
 
@@ -197,6 +212,9 @@ func TestRepositoryWrapperErrorPropagationAndNormalization(t *testing.T) {
 	if _, err := repo.GetAnalysisRun(ctx, owner, " run-2 "); !errors.Is(err, expectedErr) {
 		t.Fatalf("GetAnalysisRun() error = %v, want expectedErr", err)
 	}
+	if _, err := repo.RetryAnalysisRun(ctx, owner, " run-2 ", "retry"); !errors.Is(err, expectedErr) {
+		t.Fatalf("RetryAnalysisRun() error = %v, want expectedErr", err)
+	}
 	if _, err := repo.ListAnalysisRuns(ctx, owner); !errors.Is(err, expectedErr) {
 		t.Fatalf("ListAnalysisRuns() error = %v, want expectedErr", err)
 	}
@@ -207,6 +225,9 @@ func TestRepositoryWrapperErrorPropagationAndNormalization(t *testing.T) {
 	if _, err := repo.ListArtifacts(ctx, owner, " run-4 "); !errors.Is(err, expectedErr) {
 		t.Fatalf("ListArtifacts() error = %v, want expectedErr", err)
 	}
+	if _, err := repo.GetInternalArtifactDownloadAccess(ctx, " artifact-1 "); !errors.Is(err, expectedErr) {
+		t.Fatalf("GetInternalArtifactDownloadAccess() error = %v, want expectedErr", err)
+	}
 	if _, err := repo.ListDiagnostics(ctx, owner, DiagnosticQuery{Severity: "warning"}); !errors.Is(err, expectedErr) {
 		t.Fatalf("ListDiagnostics() error = %v, want expectedErr", err)
 	}
@@ -216,6 +237,9 @@ func TestRepositoryWrapperErrorPropagationAndNormalization(t *testing.T) {
 
 	if _, err := repo.CleanOrphanObjects(ctx); !errors.Is(err, expectedErr) {
 		t.Fatalf("CleanOrphanObjects() error = %v, want expectedErr", err)
+	}
+	if _, err := repo.GetObservabilitySnapshot(ctx); !errors.Is(err, expectedErr) {
+		t.Fatalf("GetObservabilitySnapshot() error = %v, want expectedErr", err)
 	}
 	if _, err := repo.ListPendingEnqueueTasks(ctx, 17); !errors.Is(err, expectedErr) {
 		t.Fatalf("ListPendingEnqueueTasks() error = %v, want expectedErr", err)
