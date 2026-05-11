@@ -465,6 +465,211 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 	config.assertExhausted(t)
 }
 
+func TestSQLStateStoreGetterNotFoundMappings(t *testing.T) {
+	t.Parallel()
+
+	config := &scriptedRuntimeStoreConfig{
+		queryResponses: []scriptedQueryResponse{
+			{
+				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+				columns: collectionColumns(),
+			},
+			{
+				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+				columns: selectionColumns(),
+			},
+			{
+				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+				columns: analysisRunColumns(),
+			},
+			{
+				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
+				columns: analysisRunColumns(),
+			},
+			{
+				match:   "FROM artifacts a",
+				columns: artifactColumns(),
+			},
+			{
+				match:   "FROM artifacts a",
+				columns: artifactColumns(),
+			},
+		},
+	}
+
+	store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+	if err != nil {
+		t.Fatalf("NewSQLStateStore() error = %v", err)
+	}
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+
+	if _, err := store.GetCollection(context.Background(), owner, "missing-collection"); !errors.Is(err, ErrCollectionNotFound) {
+		t.Fatalf("GetCollection(missing) error = %v, want ErrCollectionNotFound", err)
+	}
+	if _, err := store.GetSelection(context.Background(), owner, "missing-selection"); !errors.Is(err, ErrSelectionNotFound) {
+		t.Fatalf("GetSelection(missing) error = %v, want ErrSelectionNotFound", err)
+	}
+	if _, err := store.GetAnalysisRunByID(context.Background(), "missing-run"); !errors.Is(err, ErrAnalysisRunNotFound) {
+		t.Fatalf("GetAnalysisRunByID(missing) error = %v, want ErrAnalysisRunNotFound", err)
+	}
+	if _, err := store.GetAnalysisRun(context.Background(), owner, "missing-run"); !errors.Is(err, ErrAnalysisRunNotFound) {
+		t.Fatalf("GetAnalysisRun(missing) error = %v, want ErrAnalysisRunNotFound", err)
+	}
+	if _, err := store.GetArtifact(context.Background(), owner, "missing-artifact"); !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("GetArtifact(missing) error = %v, want ErrArtifactNotFound", err)
+	}
+	if _, err := store.GetArtifactByID(context.Background(), "missing-artifact"); !errors.Is(err, ErrArtifactNotFound) {
+		t.Fatalf("GetArtifactByID(missing) error = %v, want ErrArtifactNotFound", err)
+	}
+
+	config.assertExhausted(t)
+}
+
+func TestSQLStateStoreRunTransitionIdempotentBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 11, 13, 30, 0, 0, time.UTC)
+	startedAt := now.Add(-5 * time.Minute)
+	completedAt := now.Add(10 * time.Minute)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+
+	t.Run("finalize returns existing terminal run for same owner", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_runs\nSET status=$5",
+					columns: []string{"version"},
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusSucceeded, 4, &startedAt, &completedAt, nil)},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		run, err := store.FinalizeAnalysisRunTask(context.Background(), owner, "run-1", AnalysisRunStatusSucceeded, RunEventRecord{
+			ID:            "event-terminal",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.finalized",
+			PayloadJSON:   []byte(`{"result":"already_done"}`),
+			Status:        AnalysisRunStatusSucceeded,
+			CreatedAt:     completedAt,
+		}, completedAt)
+		if err != nil {
+			t.Fatalf("FinalizeAnalysisRunTask(idempotent) error = %v", err)
+		}
+		if run.Status != AnalysisRunStatusSucceeded || run.Version != 4 || run.Selection.ID != "selection-1" {
+			t.Fatalf("run = %#v", run)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("finalize returns owner mismatch for foreign terminal run", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_runs\nSET status=$5",
+					columns: []string{"version"},
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows: [][]driver.Value{{
+						"run-1", "telegram", "chat-9", "", "selection-1", "transcription", AnalysisRunStatusSucceeded, int64(4),
+						[]byte(`{"language":"ru"}`), []byte(`{"strategy":"polling"}`), "not_required", now, startedAt, completedAt, nil, expiresAt,
+					}},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		if _, err := store.FinalizeAnalysisRunTask(context.Background(), owner, "run-1", AnalysisRunStatusSucceeded, RunEventRecord{
+			ID:            "event-foreign",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run.finalized",
+			PayloadJSON:   []byte(`{"result":"foreign"}`),
+			Status:        AnalysisRunStatusSucceeded,
+			CreatedAt:     completedAt,
+		}, completedAt); !errors.Is(err, ErrOwnerMismatch) {
+			t.Fatalf("FinalizeAnalysisRunTask(foreign) error = %v, want ErrOwnerMismatch", err)
+		}
+
+		config.assertExhausted(t)
+	})
+
+	t.Run("claim returns existing run without claim when no queue row updated", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+					columns: analysisRunColumns(),
+				},
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 7, &startedAt, nil, nil)},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+			},
+		}
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		run, claimed, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "transcription", "selection.transcription", "worker-1", startedAt)
+		if err != nil {
+			t.Fatalf("ClaimAnalysisRunTask(idempotent) error = %v", err)
+		}
+		if claimed {
+			t.Fatalf("claimed = true, want false")
+		}
+		if run.Status != AnalysisRunStatusRunning || run.Version != 7 || run.Selection.ID != "selection-1" {
+			t.Fatalf("run = %#v", run)
+		}
+
+		config.assertExhausted(t)
+	})
+}
+
 func TestSQLStateStoreOperationalQueriesAndCleanup(t *testing.T) {
 	t.Parallel()
 
