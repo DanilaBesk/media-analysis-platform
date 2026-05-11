@@ -1333,4 +1333,112 @@ describe("createWebUiRoutes", () => {
       "https://minio.local/artifact-text-preview.log",
     );
   });
+
+  it("covers collection-sourced run creation with empty params and artifact-count fallback", async () => {
+    const runtime = renderRoute("/runs?collection=collection-1", {
+      listAnalysisRuns: vi.fn().mockResolvedValue({
+        items: [analysisRun({ artifact_count: undefined })],
+        page: { page_size: 25, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("Research set")).toBeVisible();
+    expect(await screen.findByText("#1 Call note")).toBeVisible();
+    expect(screen.getByText("0")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Params"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.createSelection).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          sourceCollectionId: "collection-1",
+          optionSnapshot: { source: "collection" },
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          selectionId: "selection-2",
+          params: undefined,
+        }),
+      );
+    });
+  });
+
+  it("covers manifest zero-summary defaults and selection-item outcome fallback", async () => {
+    const runtime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          artifacts: [
+            {
+              artifact_id: "artifact-manifest-zero",
+              analysis_run_id: "run-1",
+              kind: "run_manifest",
+              status: "available",
+              content_type: "application/json",
+              size_bytes: 64,
+              preview: {
+                available: true,
+                kind: "text",
+                format: "json",
+                text_excerpt: JSON.stringify({
+                  summary: {},
+                  items: [
+                    {
+                      media_item_id: "media-1",
+                      position: 0,
+                      outcome: "skipped",
+                    },
+                  ],
+                }),
+              },
+              created_at: "2026-05-10T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    const outcomeTable = await within(runtime.container).findByText("included");
+    const metrics = within(outcomeTable.closest(".metric-strip") as HTMLElement);
+    expect(metrics.getAllByText("0")).toHaveLength(3);
+    const selectionItem = screen.getByText("selection item");
+    expect(selectionItem).toBeVisible();
+    const outcomeRow = selectionItem.closest(".outcome-row") as HTMLElement;
+    expect(within(outcomeRow).getByText("skipped")).toBeVisible();
+  });
+
+  it("covers concrete Error message branches across route surfaces", async () => {
+    renderRoute("/collections", {
+      createCollection: vi.fn().mockRejectedValue(new Error("Collection create exploded")),
+      updateCollection: vi.fn().mockRejectedValue(new Error("Collection update exploded")),
+      removeCollectionItem: vi.fn().mockRejectedValue(new Error("Collection remove exploded")),
+      replaceCollectionItems: vi.fn().mockRejectedValue(new Error("Collection add exploded")),
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    expect(await screen.findByText("Collection create exploded")).toBeVisible();
+
+    fireEvent.blur(screen.getByLabelText("Rename Research set"), { target: { value: "Renamed with error" } });
+    expect(await screen.findByText("Collection update exploded")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText("Collection remove exploded")).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText("Add inbox item"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+    expect(await screen.findByText("Collection add exploded")).toBeVisible();
+  });
 });
