@@ -107,6 +107,14 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
   return runtime;
 }
 
+function deferredPromise<TValue>() {
+  let resolve!: (value: TValue) => void;
+  const promise = new Promise<TValue>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -166,5 +174,37 @@ describe("run detail reconciliation", () => {
     });
 
     expect(runtime.apiClient.getAnalysisRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles from version zero when a stream event lands before the first run snapshot", async () => {
+    const consoleSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const pendingRun = deferredPromise<ReturnType<typeof runSnapshot>>();
+    let emit: ((event: RunEvent) => void) | undefined;
+
+    const runtime = renderDetail({
+      getAnalysisRun: vi.fn().mockImplementation(() => pendingRun.promise),
+      subscribeToRunEvents: vi.fn().mockImplementation((options) => {
+        emit = options.onMessage;
+        return { close: vi.fn() };
+      }),
+    });
+
+    act(() => {
+      emit?.({
+        event_id: "event-early",
+        analysis_run_id: "run-1",
+        event_type: "analysis_run.progress",
+        version: 2,
+        status: "running",
+        emitted_at: "2026-05-10T00:00:01Z",
+        payload: { stage: "queued" },
+      });
+    });
+
+    expect(runtime.apiClient.getAnalysisRun).toHaveBeenCalledTimes(2);
+    expect(consoleSpy).toHaveBeenCalledWith("%s analysis_run_id=%s", RECONCILE_STATE_MARKER, "run-1");
+
+    pendingRun.resolve(runSnapshot());
+    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
   });
 });

@@ -720,7 +720,7 @@ export function CollectionsRouteShell(): JSX.Element {
   };
 
   const addItem = async (collection: Collection) => {
-    const mediaItemId = addTargets[collection.collection_id] ?? "";
+    const mediaItemId = addTargets[collection.collection_id]!;
     setActionError("");
     try {
       const existing = collection.items.map((item) => item.media_item_id);

@@ -1676,4 +1676,82 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(await within(mediaRuntime.container).findByRole("button", { name: "Soft delete Call note" }));
     expect(await within(mediaRuntime.container).findByText("Media removal exploded")).toBeVisible();
   });
+
+  it("covers generic inbox fallback messages and stale run-builder source labels", async () => {
+    const inboxRuntime = renderRoute("/", {
+      replaceCollectionItems: vi.fn().mockRejectedValue("boom"),
+      removeMediaItem: vi.fn().mockRejectedValue("boom"),
+    });
+
+    fireEvent.click(await screen.findByLabelText("Select Call note"));
+    fireEvent.change(screen.getByLabelText("Existing collection"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+    expect(await screen.findByText("Unable to update collection.")).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: "Soft delete Call note" }));
+    expect(await screen.findByText("Unable to remove media.")).toBeVisible();
+    inboxRuntime.unmount();
+
+    const listCollections = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [collection()],
+        page: { page_size: 50, has_more: false },
+      })
+      .mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      });
+    const runBuilderRuntime = renderRoute("/runs?collection=collection-1", {
+      listCollections,
+      listAnalysisRuns: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 25, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("Research set")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => {
+      expect(runBuilderRuntime.apiClient.listCollections).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("collection-1")).toBeVisible();
+  });
+
+  it("covers non-object manifest payload fallback", async () => {
+    const runtime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          artifacts: [
+            {
+              artifact_id: "artifact-manifest-scalar",
+              analysis_run_id: "run-1",
+              kind: "run_manifest",
+              status: "available",
+              content_type: "application/json",
+              size_bytes: 16,
+              preview: {
+                available: true,
+                kind: "text",
+                format: "json",
+                text_excerpt: "\"not-an-object\"",
+              },
+              created_at: "2026-05-10T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await within(runtime.container).findByText("Selected as")).toBeVisible();
+    expect(within(runtime.container).queryByText("Outcome")).toBeNull();
+  });
 });
