@@ -229,6 +229,8 @@ services:
       dockerfile: infra/images/telegram-bot/Dockerfile
     image: media-analysis-telegram-bot:local
     restart: unless-stopped
+    entrypoint:
+      - /usr/local/bin/python
     environment:
       PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/workers/common/src:/workspace/src
       DATA_DIR: /tmp/runtime/telegram-bot
@@ -241,13 +243,8 @@ services:
     depends_on:
       api:
         condition: service_started
-    working_dir: /workspace/apps/telegram-bot
+    working_dir: /workspace
     command:
-      - uv
-      - run
-      - --project
-      - /workspace/apps/telegram-bot
-      - python
       - -m
       - telegram_adapter
     networks:
