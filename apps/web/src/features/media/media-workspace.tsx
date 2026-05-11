@@ -271,7 +271,7 @@ function SectionHeader({
   );
 }
 
-function MediaItemList({
+export function MediaItemList({
   items,
   selected,
   onToggle,
