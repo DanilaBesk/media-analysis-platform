@@ -2391,3 +2391,44 @@ test("createDomainMcpTools skips null and empty owner-scoped query values", asyn
     },
   ]);
 });
+
+test("createMcpDomainRuntime falls back to requested artifact id when preview metadata is sparse", async () => {
+  const sparseArtifactID = "00000000-0000-4000-8000-000000000009";
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+        assert.equal(request.path, withOwnerQuery(`/v1/artifacts/${sparseArtifactID}`));
+        return {
+          status: 200,
+          data: {
+            artifact: {
+              preview: {
+                available: true,
+                text_excerpt: "sparse preview",
+              },
+            },
+          } as TPayload,
+        };
+      },
+    },
+  });
+
+  const result = await runtime.callTool("get_artifact_preview", {
+    owner: OWNER,
+    artifact_id: sparseArtifactID,
+    format: "text",
+    max_chars: 20,
+  });
+
+  assert.deepEqual(result.structuredContent, {
+    artifact_preview: {
+      artifact_id: sparseArtifactID,
+      available: true,
+      format: "text",
+      max_chars: 20,
+      source: "artifact.preview.text_excerpt",
+      text: "sparse preview",
+      truncated: false,
+    },
+  });
+});
