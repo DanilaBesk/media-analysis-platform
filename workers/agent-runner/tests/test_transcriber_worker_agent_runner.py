@@ -1440,6 +1440,151 @@ def test_agent_runner_prompt_context_requires_some_prompt_material(tmp_path: Pat
         )
 
 
+def test_agent_runner_helper_branches_cover_constructor_policy_and_lease_edges(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="analysis_run_id must not be empty"):
+        AgentHarnessRequest(analysis_run_id="   ", workspace_dir=tmp_path / "empty-analysis-run", params={})
+    with pytest.raises(ValueError, match="harness_name must not be empty"):
+        AgentHarnessResult(harness_name="   ", result_payload={}, execution_log="")
+    with pytest.raises(ValueError, match="harness_name must not be empty"):
+        AgentHarnessLease(harness_name="   ", lease_id="lease-1", metadata={})
+    with pytest.raises(ValueError, match="lease_id must not be empty"):
+        AgentHarnessLease(harness_name="fixture", lease_id="   ", metadata={})
+
+    policy = agent_runner._RequestAccessPolicy.from_params(
+        {
+            "request_access_policy": {
+                "mode": "required",
+                "required_for_harnesses": ["fixture"],
+                "required_for_operations": ["Deep-Research"],
+            }
+        }
+    )
+    assert policy.requires_access(harness_name="fixture", operation=None) is True
+    assert policy.requires_access(harness_name="test_fixture", operation="deep-research") is True
+    assert policy.requires_access(harness_name="other", operation=None) is False
+
+    with pytest.raises(ValueError, match="must be positive"):
+        LocalAgentHarnessLeaseClient({"fixture": 0})
+
+    lease_client = LocalAgentHarnessLeaseClient({"fixture": 2})
+    request = AgentHarnessRequest(
+        analysis_run_id="job-agent",
+        workspace_dir=tmp_path / "job-agent",
+        params={"harness_name": "fixture"},
+    )
+    first_lease = lease_client.acquire("fixture", request)
+    second_lease = lease_client.acquire("fixture", request)
+    lease_client.release(second_lease)
+    assert lease_client._active == {"fixture": 1}
+    lease_client.release(first_lease)
+    assert lease_client._active == {}
+
+    assert agent_runner._canonical_harness_name(" claude_code ") == "claude-code"
+
+
+def test_agent_runner_helper_branches_cover_validation_and_mapping_tails(tmp_path: Path) -> None:
+    request_access = AgentRunRequestAccessResult(
+        provider="minio_presigned_url",
+        url="https://minio.local/private/request.json",
+        expires_at="not-a-timestamp",
+        request_ref="req-1",
+        request_digest_sha256="0" * 64,
+        request_bytes=123,
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="expires_at is invalid"):
+        agent_runner._ensure_request_access_not_expired(request_access)
+
+    assert agent_runner._parse_concurrency_policy("fixture=2, , claude=1") == {"fixture": 2, "claude-code": 1}
+    with pytest.raises(ValueError, match="harness name must not be empty"):
+        agent_runner._parse_concurrency_policy(" =1")
+    with pytest.raises(ValueError, match="limits must be integers"):
+        agent_runner._parse_concurrency_policy("fixture=abc")
+
+    assert agent_runner._parse_positive_float("2.5", 1.0) == 2.5
+    assert agent_runner._parse_positive_int("   ", 7) == 7
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="payload must be an object"):
+        agent_runner._expect_mapping("not-a-mapping", context="payload")
+
+
+def test_agent_runner_helper_branches_cover_diagnostics_artifact_skip_and_cancellation_tails(
+    tmp_path: Path,
+) -> None:
+    execution = _execution({"harness_name": "fixture"})
+    diagnostics = agent_runner._normalize_non_fatal_diagnostics(
+        execution,
+        AgentHarnessResult(
+            harness_name="fixture",
+            result_payload={
+                "diagnostics": [
+                    "not-a-mapping",
+                    {"diagnostic_id": "   ", "code": "ignored", "message": "ignored"},
+                    {"diagnostic_id": "diag-2", "code": "   ", "message": "ignored"},
+                    {"diagnostic_id": "diag-3", "code": "kept", "message": "   "},
+                    {
+                        "diagnostic_id": "diag-4",
+                        "code": "kept",
+                        "message": "kept",
+                        "context": {"selection_item_id": "selection-item-agent"},
+                    },
+                ]
+            },
+            execution_log="",
+        ),
+    )
+    assert diagnostics == (
+        {
+            "diagnostic_id": "diag-4",
+            "subject_type": "analysis_run",
+            "subject_id": execution.analysis_run_id,
+            "severity": "warning",
+            "code": "kept",
+            "message": "kept",
+            "context": {
+                "selection_item_id": "selection-item-agent",
+                "analysis_run_id": execution.analysis_run_id,
+                "selection_id": execution.selection.selection_id,
+                "execution_id": execution.execution_id,
+                "harness_name": "fixture",
+            },
+        },
+    )
+
+    manifest_items, summary = agent_runner._manifest_items_with_diagnostics(
+        execution,
+        artifact_kinds=("agent_result_json",),
+        diagnostics=(
+            {
+                "diagnostic_id": "diag-x",
+                "context": "not-a-mapping",
+            },
+        ),
+    )
+    assert manifest_items[0]["included"] is True
+    assert summary == {"included_count": 1, "skipped_count": 0, "failed_count": 0}
+
+    artifact_store = InMemoryArtifactStore()
+    writer = agent_runner.ArtifactWriter(analysis_run_id=execution.analysis_run_id, object_store=artifact_store)
+    assert agent_runner._persist_report_operation_artifacts(
+        writer,
+        {"output_text": "# Summary\n"},
+        ("summary_markdown",),
+        workspace_dir=tmp_path,
+    ) == ()
+    assert agent_runner._persist_deep_research_operation_artifacts(
+        writer,
+        {"output_text": "# Summary\n"},
+        ("summary_markdown",),
+    ) == ()
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="summary output was empty"):
+        agent_runner._operation_output_text({"output_text": "   "}, operation="summary")
+
+    api_client = RecordingApiClient(execution, cancel_requested=True)
+    cancellation_hook = agent_runner._build_harness_cancellation_hook(api_client=api_client, execution=execution)
+    assert cancellation_hook() is True
+
+
 def _execution(params: dict[str, object], *, item_count: int = 1) -> ClaimedAnalysisRunExecution:
     items = []
     for position in range(item_count):
