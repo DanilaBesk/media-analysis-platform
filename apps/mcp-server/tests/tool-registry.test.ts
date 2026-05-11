@@ -36,6 +36,7 @@ import {
   MCP_TOOL_MAPPING_MARKER,
   createMcpDomainRuntime,
 } from "../src/tools/registry.ts";
+import { createDomainMcpTools } from "../src/tools/mapped-tools.ts";
 
 const OWNER = {
   owner_type: "mcp",
@@ -1428,6 +1429,71 @@ test("createMcpDomainRuntime treats missing known-tool arguments as an empty con
   });
 });
 
+test("createMcpDomainRuntime shapes mapped-tool refine contract failures", async () => {
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async () => ({
+        status: 200,
+        data: null,
+      }),
+    },
+  });
+
+  const addMediaResult = await runtime.callTool("add_media", {
+    owner: OWNER,
+    kind: "document",
+    source: {
+      origin_type: "text",
+      text: "duplicate source",
+    },
+    file: {
+      filename: "brief.txt",
+      content_type: "text/plain",
+      content_base64: Buffer.from("brief").toString("base64"),
+    },
+  });
+  const updateCollectionResult = await runtime.callTool("update_collection", {
+    owner: OWNER,
+    collection_id: COLLECTION_ID,
+    expected_version: 1,
+  });
+
+  assert.deepEqual(addMediaResult.structuredContent, {
+    error: {
+      code: "mcp_contract_violation",
+      message: "Tool input did not match the domain contract.",
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: {
+        issues: [
+          {
+            path: "",
+            message: "Exactly one of source or file is required",
+          },
+        ],
+      },
+    },
+  });
+  assert.deepEqual(updateCollectionResult.structuredContent, {
+    error: {
+      code: "mcp_contract_violation",
+      message: "Tool input did not match the domain contract.",
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: {
+        issues: [
+          {
+            path: "",
+            message: "At least one of name or status is required",
+          },
+        ],
+      },
+    },
+  });
+});
+
 test("createMcpDomainRuntime preserves upstream API details diagnostics and conflict metadata", async () => {
   const runtime = createMcpDomainRuntime({
     apiClient: {
@@ -2267,6 +2333,61 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
     },
     {
       path: withOwnerQuery(`/v1/artifacts/${richArtifactID}`),
+    },
+  ]);
+});
+
+test("createDomainMcpTools skips null and empty owner-scoped query values", async () => {
+  const requests: McpAdapterApiRequest[] = [];
+  const apiClient: McpAdapterApiClient = {
+    request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
+      requests.push(request);
+      return {
+        status: 200,
+        data: {
+          ok: true,
+          path: request.path,
+        } as TPayload,
+      };
+    },
+  };
+  const tools = createDomainMcpTools(apiClient);
+  const listMedia = tools.find((tool) => tool.name === "list_media");
+  const getDiagnostics = tools.find((tool) => tool.name === "get_diagnostics");
+
+  assert.ok(listMedia);
+  assert.ok(getDiagnostics);
+
+  await listMedia.execute({
+    owner: {
+      owner_type: "mcp",
+      owner_id: "assistant",
+      tenant_id: "",
+    } as any,
+    cursor: "",
+    page_size: null as any,
+    kind: "",
+    status: undefined,
+  });
+  await getDiagnostics.execute({
+    owner: {
+      owner_type: "mcp",
+      owner_id: "assistant",
+      tenant_id: null,
+    } as any,
+    cursor: undefined,
+    page_size: "",
+    subject_type: null,
+    subject_id: "",
+    severity: "",
+  });
+
+  assert.deepEqual(requests, [
+    {
+      path: "/v1/media-items?owner_type=mcp&owner_id=assistant",
+    },
+    {
+      path: "/v1/diagnostics?owner_type=mcp&owner_id=assistant",
     },
   ]);
 });
