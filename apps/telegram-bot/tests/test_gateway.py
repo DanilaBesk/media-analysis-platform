@@ -267,6 +267,35 @@ def test_photo_video_document_and_media_group_inputs_keep_telegram_metadata() ->
     assert all(request["metadata"]["media_group_id"] == "grp" for request in api.upload_requests)
 
 
+def test_voice_file_ingress_uses_multipart_upload_and_never_add_media_item_object_refs() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+
+    record = gateway.add_file(
+        owner=owner(),
+        file_input=TelegramFileInput(
+            kind="voice",
+            file_id="voice-file",
+            file_unique_id="voice-u",
+            content=b"voice-body",
+            content_type="audio/ogg",
+            size_bytes=10,
+            message_id=77,
+        ),
+    )
+
+    assert record.status == "accepted"
+    assert api.add_requests == []
+    assert len(api.upload_requests) == 1
+    assert api.upload_requests[0]["kind"] == "voice"
+    assert api.upload_requests[0]["content"] == b"voice-body"
+    assert api.upload_requests[0]["metadata"]["file_unique_id"] == "voice-u"
+    assert record.media_item is not None
+    assert record.media_item["source"]["origin_type"] == "object"
+    assert record.media_item["source"]["object_key"].startswith("sources/")
+    assert "telegram://file/" not in record.media_item["source"]["object_key"]
+
+
 def test_album_status_preview_groups_visible_media_together() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
