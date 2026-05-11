@@ -699,6 +699,25 @@ func TestApiWorkerRuntimeHelperBranches(t *testing.T) {
 		if _, err := service.FinalizeExecution(context.Background(), "run-1", ExecutionFinalizeRequest{Outcome: "failed"}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
 			t.Fatalf("FinalizeExecution(store error) = %v, want ErrAnalysisRunNotFound", err)
 		}
+		if _, err := service.ClaimExecution(context.Background(), "run-1", ExecutionClaimRequest{WorkerKind: "analysis_runner", TaskType: "selection.analysis"}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ClaimExecution(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+		if _, err := service.ResolveRequestAccess(context.Background(), "run-1", "exec-1"); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ResolveRequestAccess(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+		if _, err := service.CheckCancel(context.Background(), "run-1", "exec-1"); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("CheckCancel(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+		if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
+			Artifacts: []workerArtifactDescriptor{{ArtifactKind: "summary_markdown"}},
+		}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("RecordExecutionArtifacts(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
+		if err := service.RecordExecutionDiagnostics(context.Background(), "run-1", ExecutionDiagnosticsRequest{
+			Diagnostics: []workerDiagnosticDescriptor{{DiagnosticID: "diag-x"}},
+		}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("RecordExecutionDiagnostics(store error) = %v, want ErrAnalysisRunNotFound", err)
+		}
 
 		canceledAt := now.Add(15 * time.Minute)
 		cancelStore := &fakePublicService{
@@ -967,6 +986,18 @@ func TestApiHttpFinalRouteRemainingBranches(t *testing.T) {
 		}) {
 			t.Fatalf("diagnostic query = %#v", public.lastDiagnosticQuery)
 		}
+
+		var diagBody struct {
+			Items []struct {
+				ID string `json:"diagnostic_id"`
+			} `json:"items"`
+		}
+		if err := json.Unmarshal(diagRec.Body.Bytes(), &diagBody); err != nil {
+			t.Fatalf("Unmarshal(diagnostics) error = %v", err)
+		}
+		if len(diagBody.Items) != 1 || diagBody.Items[0].ID != "diag-1" {
+			t.Fatalf("diagnostic page = %#v, want diag-1", diagBody.Items)
+		}
 	})
 
 	t.Run("reconcile queue defaults non-positive limit", func(t *testing.T) {
@@ -998,6 +1029,17 @@ func TestApiHttpFinalRouteRemainingBranches(t *testing.T) {
 			rec := httptest.NewRecorder()
 			errMux.ServeHTTP(rec, req)
 			assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
+		}
+	})
+
+	t.Run("remove collection item keeps items when target is absent", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/missing?owner_type=web&owner_id=u-1&expected_version=3", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d want 200 body=%s", rec.Code, rec.Body.String())
+		}
+		if len(public.lastUpdateCollectionItems.Items) != 0 {
+			t.Fatalf("remove absent item request = %#v", public.lastUpdateCollectionItems)
 		}
 	})
 }
