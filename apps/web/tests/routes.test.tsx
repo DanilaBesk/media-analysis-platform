@@ -1135,6 +1135,38 @@ describe("createWebUiRoutes", () => {
     expect(screen.queryByRole("link", { name: "Open artifact" })).toBeNull();
   });
 
+  it("covers non-record manifest previews, missing collection labels, and generic run load fallback", async () => {
+    const runRuntime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockRejectedValue("boom"),
+      listAnalysisRunEvents: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+      listArtifacts: vi.fn().mockResolvedValue({
+        items: [
+          {
+            artifact_id: "artifact-manifest",
+            analysis_run_id: "run-1",
+            kind: "run_manifest",
+            status: "available",
+            content_type: "application/json",
+            size_bytes: 64,
+            preview: { available: true, kind: "text", format: "json", text_excerpt: "[]" },
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await within(runRuntime.container).findByText("Unable to load run.")).toBeVisible();
+    runRuntime.unmount();
+  });
+
   it("covers collection, runs, artifact, admin, and media refresh callbacks", async () => {
     const collectionsRuntime = renderRoute("/collections", {
       listCollections: vi.fn().mockResolvedValue({
