@@ -8,6 +8,18 @@ import (
 	"time"
 )
 
+type helperFailingPutObjectStore struct {
+	err error
+}
+
+func (s *helperFailingPutObjectStore) PutObject(context.Context, string, string, string, []byte) error {
+	return s.err
+}
+
+func (s *helperFailingPutObjectStore) PresignGetObject(context.Context, string, string, time.Duration) (string, time.Time, error) {
+	return "", time.Time{}, nil
+}
+
 func TestSanitizeSourceFilenameFallbacks(t *testing.T) {
 	t.Parallel()
 
@@ -257,5 +269,31 @@ func TestAddMediaItemUploadDefaultsObjectMetadata(t *testing.T) {
 	}
 	if objectStore.puts[0].contentType != "application/octet-stream" {
 		t.Fatalf("stored content type = %q, want application/octet-stream", objectStore.puts[0].contentType)
+	}
+}
+
+func TestAddMediaItemUploadPropagatesObjectStoreFailures(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("put failed")
+	repo, err := NewRepository(
+		newMemoryStateStore(),
+		&helperFailingPutObjectStore{err: expectedErr},
+		WithIDGenerator(sequenceIDs("source-1")),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+
+	_, err = repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"},
+		Kind:  "voice",
+		Source: AddMediaSource{
+			OriginType: "object",
+			UploadBody: []byte("voice-body"),
+		},
+	})
+	if !errors.Is(err, ErrStorageUnavailable) {
+		t.Fatalf("AddMediaItem(put failure) error = %v, want ErrStorageUnavailable", err)
 	}
 }

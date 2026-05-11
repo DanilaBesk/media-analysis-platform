@@ -332,6 +332,9 @@ func TestRepositoryWrapperValidationAndLateErrorBranches(t *testing.T) {
 	if _, err := repo.RecordDiagnostics(ctx, owner, "not-a-uuid", nil); !errors.Is(err, ErrContractViolation) {
 		t.Fatalf("RecordDiagnostics(contract violation) error = %v, want ErrContractViolation", err)
 	}
+	if _, err := repo.RecordDiagnostics(ctx, OwnerScope{}, "00000000-0000-0000-0000-000000000001", nil); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("RecordDiagnostics(missing owner) error = %v, want ErrContractViolation", err)
+	}
 	if _, err := repo.RecordAnalysisRunProgress(ctx, owner, " run-1 ", " ", "", nil); !errors.Is(err, ErrContractViolation) {
 		t.Fatalf("RecordAnalysisRunProgress(contract violation) error = %v, want ErrContractViolation", err)
 	}
