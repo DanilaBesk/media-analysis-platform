@@ -263,6 +263,44 @@ test("createMcpAdapterApiClient falls back when the error payload is not an enve
   // END_BLOCK_BLOCK_VERIFY_FALLBACK_ERROR_ENVELOPE
 });
 
+test("createMcpAdapterApiClient falls back when payload.error is not an object", async () => {
+  const client = createMcpAdapterApiClient({
+    baseUrl: "https://api.example.test",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          error: "bad gateway",
+        }),
+        {
+          status: 502,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+  });
+
+  await assert.rejects(
+    () =>
+      client.request({
+        path: "/v1/media-items/error-envelope",
+      }),
+    (error: unknown) => {
+      assert.ok(error instanceof McpAdapterApiClientError);
+      const apiError = error as McpAdapterApiClientError;
+      assert.equal(apiError.path, "/v1/media-items/error-envelope");
+      assert.equal(apiError.status, 502);
+      assert.equal(apiError.code, undefined);
+      assert.equal(apiError.message, "API request failed with status 502");
+      assert.equal((apiError as any).correlationId, undefined);
+      assert.equal((apiError as any).details, undefined);
+      assert.equal((apiError as any).diagnostics, undefined);
+      assert.equal((apiError as any).conflict, undefined);
+      return true;
+    },
+  );
+});
+
 test("createMcpAdapterApiClient preserves BodyInit variants and ignores malformed error-envelope fields", async () => {
   const calls: Array<{
     url: string;

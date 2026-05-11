@@ -1397,6 +1397,37 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
   // END_BLOCK_BLOCK_VERIFY_ERROR_SHAPING
 });
 
+test("createMcpDomainRuntime treats missing known-tool arguments as an empty contract object", async () => {
+  const runtime = createMcpDomainRuntime({
+    apiClient: {
+      request: async () => ({
+        status: 200,
+        data: null,
+      }),
+    },
+  });
+
+  const result = await runtime.callTool("list_media");
+
+  assert.deepEqual(result.structuredContent, {
+    error: {
+      code: "mcp_contract_violation",
+      message: "Tool input did not match the domain contract.",
+      category: "adapter_contract",
+      retryable: false,
+      action: "fix_tool_input",
+      details: {
+        issues: [
+          {
+            path: "owner",
+            message: "Invalid input: expected object, received undefined",
+          },
+        ],
+      },
+    },
+  });
+});
+
 test("createMcpDomainRuntime preserves upstream API details diagnostics and conflict metadata", async () => {
   const runtime = createMcpDomainRuntime({
     apiClient: {
