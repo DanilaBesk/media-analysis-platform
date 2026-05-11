@@ -481,6 +481,61 @@ def test_local_fixture_registry_supports_test_fixture_and_redacts_prompt_metadat
     assert "raw secret prompt" not in result.execution_log
 
 
+def test_claude_code_harness_rejects_cancellation_and_missing_request_access(tmp_path: Path) -> None:
+    harness = AgentClaudeCodeHarness(
+        AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "claude-config"),
+        runner=FakeClaudeCodeRunner(),
+    )
+    request = AgentHarnessRequest(
+        analysis_run_id="job-agent",
+        workspace_dir=tmp_path / "job-agent",
+        params={"harness_name": "claude-code"},
+    )
+
+    with pytest.raises(WorkerCancellationRequested, match="was canceled"):
+        harness.run(request, cancellation_hook=lambda: True)
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="request access is missing"):
+        harness.run(request, cancellation_hook=lambda: False)
+
+
+def test_claude_code_harness_wraps_runner_failures(tmp_path: Path) -> None:
+    request = AgentHarnessRequest(
+        analysis_run_id="job-agent",
+        workspace_dir=tmp_path / "job-agent",
+        params={"harness_name": "claude-code"},
+        request_access={"request": {"prompt": "raw secret prompt"}},
+    )
+
+    unavailable_harness = AgentClaudeCodeHarness(
+        AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "cfg-unavailable"),
+        runner=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError("claude missing")),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="executable is unavailable"):
+        unavailable_harness.run(request)
+
+    timeout_harness = AgentClaudeCodeHarness(
+        AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "cfg-timeout", run_timeout_seconds=12),
+        runner=lambda command, **_kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(command, timeout=12, output="secret-token", stderr="raw secret prompt")
+        ),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match=r"timed out after 12s"):
+        timeout_harness.run(request)
+
+    failed_harness = AgentClaudeCodeHarness(
+        AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "cfg-failed"),
+        runner=lambda command, **_kwargs: subprocess.CompletedProcess(
+            args=command,
+            returncode=9,
+            stdout="secret-token",
+            stderr="raw secret prompt",
+        ),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="exited with status 9"):
+        failed_harness.run(request)
+
+
 def test_run_agent_harness_unsupported_harness_fails_with_stable_error_code(tmp_path: Path) -> None:
     execution = _execution({"harness_name": "unsupported"})
     api_client = RecordingApiClient(execution)
@@ -1314,6 +1369,18 @@ def test_local_fixture_registry_rejects_canceled_request(tmp_path: Path) -> None
         registry.run("fixture", request, cancellation_hook=lambda: True)
 
 
+def test_local_fixture_registry_rejects_unsupported_harness_name(tmp_path: Path) -> None:
+    registry = LocalAgentHarnessRegistry()
+    request = AgentHarnessRequest(
+        analysis_run_id="job-agent",
+        workspace_dir=tmp_path / "job-agent",
+        params={"harness_name": "fixture"},
+    )
+
+    with pytest.raises(AgentHarnessNotSupported, match="unsupported-harness"):
+        registry.run("unsupported-harness", request, cancellation_hook=lambda: False)
+
+
 def test_agent_runner_helper_branches_cover_request_access_and_parsing(tmp_path: Path) -> None:
     execution = _execution(
         {
@@ -1403,6 +1470,81 @@ def test_agent_runner_helper_branches_cover_resolution_and_download_failures(
             position=0,
         )
     assert agent_runner._safe_materialized_artifact_filename("", position=0) == "artifact-01.bin"
+
+
+def test_agent_runner_helper_branches_cover_remote_request_and_download_url_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(AgentHarnessExecutionFailed, match="request access url is missing"):
+        agent_runner._load_agent_run_prompt_context(
+            {"provider": "minio_presigned_url"},
+            workspace_dir=tmp_path,
+            request_params={},
+            redaction_values=(),
+        )
+
+    with pytest.raises(AgentHarnessExecutionFailed, match="request access digest is missing"):
+        agent_runner._load_agent_run_prompt_context(
+            {"provider": "minio_presigned_url", "url": "https://minio.local/private/request.json"},
+            workspace_dir=tmp_path,
+            request_params={},
+            redaction_values=(),
+        )
+
+    monkeypatch.setattr(
+        agent_runner.urlrequest,
+        "urlopen",
+        lambda url, timeout: (_ for _ in ()).throw(agent_runner.error.URLError("dns failure")),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="request envelope download failed: dns failure"):
+        agent_runner._load_agent_run_prompt_context(
+            {"url": "https://minio.local/private/request.json", "request_digest_sha256": "0" * 64},
+            workspace_dir=tmp_path,
+            request_params={},
+            redaction_values=(),
+        )
+
+    monkeypatch.setattr(
+        agent_runner.urlrequest,
+        "urlopen",
+        lambda url, timeout: (_ for _ in ()).throw(TimeoutError()),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="request envelope download timed out"):
+        agent_runner._load_agent_run_prompt_context(
+            {"url": "https://minio.local/private/request.json", "request_digest_sha256": "0" * 64},
+            workspace_dir=tmp_path,
+            request_params={},
+            redaction_values=(),
+        )
+
+    monkeypatch.setattr(
+        agent_runner.urlrequest,
+        "urlopen",
+        lambda url, timeout: FakeHTTPResponse(b"{not-json"),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="request envelope is malformed JSON"):
+        agent_runner._load_agent_run_prompt_context(
+            {
+                "url": "https://minio.local/private/request.json",
+                "request_digest_sha256": hashlib.sha256(b"{not-json").hexdigest(),
+            },
+            workspace_dir=tmp_path,
+            request_params={},
+            redaction_values=(),
+        )
+
+    monkeypatch.setattr(
+        agent_runner.urlrequest,
+        "urlopen",
+        lambda url, timeout: (_ for _ in ()).throw(agent_runner.error.URLError("artifact unavailable")),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="input artifact download failed: artifact unavailable"):
+        agent_runner._write_materialized_artifact(
+            {"download": {"url": "https://download.local/artifact.bin"}},
+            workspace_dir=tmp_path,
+            position=0,
+        )
 
 
 def test_agent_runner_helper_branches_cover_policy_and_numeric_validation(tmp_path: Path) -> None:
@@ -1576,6 +1718,14 @@ def test_agent_runner_helper_branches_cover_diagnostics_artifact_skip_and_cancel
         {"output_text": "# Summary\n"},
         ("summary_markdown",),
     ) == ()
+    deep_research_descriptors = agent_runner._persist_deep_research_operation_artifacts(
+        writer,
+        {"output_text": "# Deep Research"},
+        ("deep_research_markdown",),
+    )
+    assert [descriptor.artifact_kind for descriptor in deep_research_descriptors] == ["deep_research_markdown"]
+    assert artifact_store.calls[-1]["object_key"].endswith("/deep-research/markdown/deep-research.md")
+    assert artifact_store.calls[-1]["content"].decode("utf-8") == "# Deep Research\n"
 
     with pytest.raises(AgentHarnessExecutionFailed, match="summary output was empty"):
         agent_runner._operation_output_text({"output_text": "   "}, operation="summary")
