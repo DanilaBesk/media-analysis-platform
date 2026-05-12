@@ -305,13 +305,13 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
         "run_manifest",
         "run_diagnostics",
     ]
-    assert artifact_store.calls[0]["object_key"] == "artifacts/job-agent/agent/result/result.json"
+    assert artifact_store.calls[0]["object_key"] == "job-agent/agent/result/result.json"
     assert json.loads(artifact_store.calls[0]["content"]) == {
         "echo": "abc123",
         "harness_name": "fixture",
         "status": "ok",
     }
-    assert artifact_store.calls[1]["object_key"] == "artifacts/job-agent/logs/execution.log"
+    assert artifact_store.calls[1]["object_key"] == "job-agent/logs/execution.log"
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["analysis_run_id"] == execution.analysis_run_id
     assert manifest["summary"] == {"included_count": 1, "skipped_count": 0, "failed_count": 0}

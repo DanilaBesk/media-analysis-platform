@@ -314,7 +314,7 @@ func (s *workerRuntimeService) RecordExecutionArtifacts(ctx context.Context, ana
 		artifacts = append(artifacts, storage.ArtifactRecord{
 			Kind:        publicKind,
 			Status:      storage.ArtifactStatusAvailable,
-			ObjectKey:   strings.TrimSpace(descriptor.ObjectKey),
+			ObjectKey:   normalizeWorkerArtifactObjectKey(descriptor.ObjectKey),
 			ContentType: strings.TrimSpace(descriptor.MIMEType),
 			SizeBytes:   descriptor.SizeBytes,
 			Visibility:  "owner",
@@ -346,6 +346,11 @@ func workerDescriptorPublicArtifactKind(kind string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeWorkerArtifactObjectKey(objectKey string) string {
+	trimmed := strings.TrimSpace(objectKey)
+	return strings.TrimPrefix(trimmed, "artifacts/")
 }
 
 func (s *workerRuntimeService) RecordExecutionDiagnostics(ctx context.Context, analysisRunID string, req ExecutionDiagnosticsRequest) error {

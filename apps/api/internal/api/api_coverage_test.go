@@ -464,14 +464,17 @@ func TestApiWorkerRuntimeServiceDirectBranches(t *testing.T) {
 		t.Fatalf("RecordExecutionProgress() stored stage=%q message=%q", store.recordedProgressStage, store.recordedProgressMsg)
 	}
 
-	if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
-		Artifacts: []workerArtifactDescriptor{{ArtifactKind: "summary_markdown", MIMEType: "text/markdown", ObjectKey: "artifacts/run-1/summary.md", SizeBytes: 7, Filename: "summary.md"}},
-	}); err != nil {
-		t.Fatalf("RecordExecutionArtifacts() error = %v", err)
-	}
-	if len(store.recordedArtifacts) != 1 || store.recordedArtifacts[0].Kind != "summary" {
-		t.Fatalf("RecordExecutionArtifacts() artifacts=%#v", store.recordedArtifacts)
-	}
+		if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
+			Artifacts: []workerArtifactDescriptor{{ArtifactKind: "summary_markdown", MIMEType: "text/markdown", ObjectKey: "artifacts/run-1/summary.md", SizeBytes: 7, Filename: "summary.md"}},
+		}); err != nil {
+			t.Fatalf("RecordExecutionArtifacts() error = %v", err)
+		}
+		if len(store.recordedArtifacts) != 1 || store.recordedArtifacts[0].Kind != "summary" {
+			t.Fatalf("RecordExecutionArtifacts() artifacts=%#v", store.recordedArtifacts)
+		}
+		if store.recordedArtifacts[0].ObjectKey != "run-1/summary.md" {
+			t.Fatalf("RecordExecutionArtifacts() object key=%q, want normalized relative key", store.recordedArtifacts[0].ObjectKey)
+		}
 	if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
 		Artifacts: []workerArtifactDescriptor{{ArtifactKind: "unknown_kind"}},
 	}); !errors.Is(err, storage.ErrContractViolation) {

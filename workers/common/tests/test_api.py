@@ -292,7 +292,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         artifact_kind="transcript_plain",
         filename="transcript.txt",
         mime_type="text/plain; charset=utf-8",
-        object_key="artifacts/job-1/transcript/plain/transcript.txt",
+        object_key="job-1/transcript/plain/transcript.txt",
         size_bytes=42,
         format="plain_text",
     )
@@ -340,7 +340,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
                         "format": "plain_text",
                         "filename": "transcript.txt",
                         "mime_type": "text/plain; charset=utf-8",
-                        "object_key": "artifacts/job-1/transcript/plain/transcript.txt",
+                        "object_key": "job-1/transcript/plain/transcript.txt",
                         "size_bytes": 42,
                     }
                 ],

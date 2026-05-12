@@ -168,3 +168,8 @@ Observability endpoint semantics:
 - `/v1/admin/observability` exposes cumulative counters like `artifact_resolution_failures` plus recent-window counters like `artifact_resolution_failures_recent`.
 - `observability_window_seconds` defines the current-window size used by the recent counters.
 - Use the recent counters to judge active breakage; use the cumulative counters to understand historical residue.
+
+Artifact object-key semantics:
+
+- New worker-generated artifact `object_key` values are artifact-bucket-relative, for example `<analysis_run_id>/agent/result/result.json`.
+- Legacy rows that still store `artifacts/...` keys remain readable for compatibility.

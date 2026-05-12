@@ -146,9 +146,9 @@ class WorkerObjectStore:
         )
 
     def _bucket_for_fetch(self, object_key: str) -> str:
-        if object_key.strip().startswith("artifacts/"):
-            return self.config.artifact_bucket
-        return self.config.source_bucket
+        if object_key.strip().startswith("sources/"):
+            return self.config.source_bucket
+        return self.config.artifact_bucket
 
     def _request_object(
         self,

@@ -986,17 +986,17 @@ func TestWorkerRuntimeRoutesPersistWorkerArtifactDiagnosticAndFinalizePayloads(t
 	mux.ServeHTTP(artifacts, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/"+runID+"/artifacts", map[string]any{
 		"execution_id": runID,
 		"artifacts": []map[string]any{
-			{"artifact_kind": "transcript_plain", "mime_type": "text/plain; charset=utf-8", "object_key": "artifacts/" + runID + "/transcript/plain/transcript.txt", "size_bytes": 42, "filename": "transcript.txt", "format": "plain_text"},
-			{"artifact_kind": "transcript_segmented_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/transcript/segmented/transcript.md", "size_bytes": 55, "filename": "transcript.md", "format": "markdown"},
-			{"artifact_kind": "transcript_docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "object_key": "artifacts/" + runID + "/transcript/docx/transcript.docx", "size_bytes": 66, "filename": "transcript.docx", "format": "docx"},
-			{"artifact_kind": "summary_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/summary/markdown/summary.md", "size_bytes": 77, "filename": "summary.md", "format": "markdown"},
-			{"artifact_kind": "report_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/report/markdown/report.md", "size_bytes": 88, "filename": "report.md", "format": "markdown"},
-			{"artifact_kind": "report_docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "object_key": "artifacts/" + runID + "/report/docx/report.docx", "size_bytes": 99, "filename": "report.docx", "format": "docx"},
-			{"artifact_kind": "deep_research_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": "artifacts/" + runID + "/deep-research/markdown/deep-research.md", "size_bytes": 111, "filename": "deep-research.md", "format": "markdown"},
-			{"artifact_kind": "agent_result_json", "mime_type": "application/json; charset=utf-8", "object_key": "artifacts/" + runID + "/agent/result/result.json", "size_bytes": 122, "filename": "result.json", "format": "json"},
-			{"artifact_kind": "execution_log", "mime_type": "text/plain; charset=utf-8", "object_key": "artifacts/" + runID + "/logs/execution.log", "size_bytes": 12, "filename": "execution.log", "format": "plain_text"},
-			{"artifact_kind": "run_manifest", "mime_type": "application/json; charset=utf-8", "object_key": "artifacts/" + runID + "/run/manifest/run-manifest.json", "size_bytes": 101, "filename": "run-manifest.json", "format": "json"},
-			{"artifact_kind": "run_diagnostics", "mime_type": "application/json; charset=utf-8", "object_key": "artifacts/" + runID + "/run/diagnostics/run-diagnostics.json", "size_bytes": 77, "filename": "run-diagnostics.json", "format": "json"},
+			{"artifact_kind": "transcript_plain", "mime_type": "text/plain; charset=utf-8", "object_key": runID + "/transcript/plain/transcript.txt", "size_bytes": 42, "filename": "transcript.txt", "format": "plain_text"},
+			{"artifact_kind": "transcript_segmented_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": runID + "/transcript/segmented/transcript.md", "size_bytes": 55, "filename": "transcript.md", "format": "markdown"},
+			{"artifact_kind": "transcript_docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "object_key": runID + "/transcript/docx/transcript.docx", "size_bytes": 66, "filename": "transcript.docx", "format": "docx"},
+			{"artifact_kind": "summary_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": runID + "/summary/markdown/summary.md", "size_bytes": 77, "filename": "summary.md", "format": "markdown"},
+			{"artifact_kind": "report_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": runID + "/report/markdown/report.md", "size_bytes": 88, "filename": "report.md", "format": "markdown"},
+			{"artifact_kind": "report_docx", "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "object_key": runID + "/report/docx/report.docx", "size_bytes": 99, "filename": "report.docx", "format": "docx"},
+			{"artifact_kind": "deep_research_markdown", "mime_type": "text/markdown; charset=utf-8", "object_key": runID + "/deep-research/markdown/deep-research.md", "size_bytes": 111, "filename": "deep-research.md", "format": "markdown"},
+			{"artifact_kind": "agent_result_json", "mime_type": "application/json; charset=utf-8", "object_key": runID + "/agent/result/result.json", "size_bytes": 122, "filename": "result.json", "format": "json"},
+			{"artifact_kind": "execution_log", "mime_type": "text/plain; charset=utf-8", "object_key": runID + "/logs/execution.log", "size_bytes": 12, "filename": "execution.log", "format": "plain_text"},
+			{"artifact_kind": "run_manifest", "mime_type": "application/json; charset=utf-8", "object_key": runID + "/run/manifest/run-manifest.json", "size_bytes": 101, "filename": "run-manifest.json", "format": "json"},
+			{"artifact_kind": "run_diagnostics", "mime_type": "application/json; charset=utf-8", "object_key": runID + "/run/diagnostics/run-diagnostics.json", "size_bytes": 77, "filename": "run-diagnostics.json", "format": "json"},
 		},
 	}))
 	if artifacts.Code != http.StatusAccepted {

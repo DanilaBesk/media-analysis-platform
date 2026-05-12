@@ -112,7 +112,7 @@ class ArtifactDescriptor:
 # START_CONTRACT: build_artifact_object_key
 # PURPOSE: Derive the canonical object-store key for one worker artifact.
 # INPUTS: { analysis_run_id: str - Owning analysis run identifier, artifact_kind: str - Frozen artifact kind, filename: str - Stored filename }
-# OUTPUTS: { str - Canonical `artifacts/...` object key }
+# OUTPUTS: { str - Canonical artifact-bucket-relative object key }
 # SIDE_EFFECTS: none
 # LINKS: M-WORKER-COMMON, M-CONTRACTS
 # END_CONTRACT: build_artifact_object_key
@@ -121,7 +121,7 @@ def build_artifact_object_key(analysis_run_id: str, artifact_kind: str, filename
     _require(bool(analysis_run_id), "analysis_run_id must not be empty")
     _require(artifact_kind in _ARTIFACT_KEY_SEGMENTS, "invalid artifact_kind")
     _require(bool(filename), "filename must not be empty")
-    return str(PurePosixPath("artifacts", analysis_run_id, *_ARTIFACT_KEY_SEGMENTS[artifact_kind], filename))
+    return str(PurePosixPath(analysis_run_id, *_ARTIFACT_KEY_SEGMENTS[artifact_kind], filename))
     # END_BLOCK_BLOCK_BUILD_CANONICAL_ARTIFACT_KEY
 
 
