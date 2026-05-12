@@ -33,7 +33,7 @@
     <scope name="adapter_identity">Telegram chat/user, Web account/session, and MCP caller identities are mapped into the same owner model at the API boundary.</scope>
     <rule>Cross-owner reads, writes, selection reuse, run access, and artifact access are rejected before storage mutation.</rule>
     <rule>Idempotency keys, pagination cursors, optimistic versions, and diagnostic queries are owner-scoped.</rule>
-    <rule>Paginated public list envelopes always encode items as an array, including empty pages.</rule>
+    <rule>Public collection and paginated list envelopes always encode items as an array, including empty collections and empty pages.</rule>
   </OwnerScope>
 
   <LifecycleStatuses>

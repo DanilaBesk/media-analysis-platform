@@ -240,6 +240,46 @@ func TestSQLStateStoreAddMediaItemAppendsAfterExistingActiveCollectionItems(t *t
 	config.assertExhausted(t)
 }
 
+func TestSQLStateStoreGetCollectionReturnsEmptyItemsArray(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 12, 12, 15, 0, 0, time.UTC)
+	owner := OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"}
+	config := &scriptedRuntimeStoreConfig{
+		queryResponses: []scriptedQueryResponse{
+			{
+				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+				columns: collectionColumns(),
+				rows: [][]driver.Value{{
+					"collection-1", "telegram", "chat-1", "", CollectionKindInbox, "Inbox", CollectionStatusActive, int64(5), now, now, nil, nil,
+				}},
+			},
+			{
+				match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
+				columns: collectionItemColumns(),
+			},
+		},
+	}
+
+	store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+	if err != nil {
+		t.Fatalf("NewSQLStateStore() error = %v", err)
+	}
+
+	collection, err := store.GetCollection(context.Background(), owner, "collection-1")
+	if err != nil {
+		t.Fatalf("GetCollection() error = %v", err)
+	}
+	if collection.Items == nil {
+		t.Fatalf("collection items = nil, want empty array slice")
+	}
+	if len(collection.Items) != 0 {
+		t.Fatalf("collection items = %#v, want empty", collection.Items)
+	}
+
+	config.assertExhausted(t)
+}
+
 func TestSQLStateStoreAddMediaItemAndSoftDeleteErrorMappings(t *testing.T) {
 	t.Parallel()
 
@@ -579,12 +619,12 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
 				columns: selectionItemColumns(),
-				rows: [][]driver.Value{selectionItemDriverRow(now)},
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
 			},
 			{
 				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
 				columns: analysisRunColumns(),
-				rows: [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
@@ -596,12 +636,12 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
 				columns: selectionItemColumns(),
-				rows: [][]driver.Value{selectionItemDriverRow(now)},
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
 			},
 			{
 				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
 				columns: analysisRunColumns(),
-				rows: [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
@@ -613,12 +653,12 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
 				columns: selectionItemColumns(),
-				rows: [][]driver.Value{selectionItemDriverRow(now)},
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
 			},
 			{
 				match:   "FROM analysis_runs\nWHERE owner_type=$1 AND owner_id=$2",
 				columns: analysisRunColumns(),
-				rows: [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
@@ -630,12 +670,12 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
 				columns: selectionItemColumns(),
-				rows: [][]driver.Value{selectionItemDriverRow(now)},
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
 			},
 			{
 				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
 				columns: analysisRunColumns(),
-				rows: [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
@@ -647,7 +687,7 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
 				columns: selectionItemColumns(),
-				rows: [][]driver.Value{selectionItemDriverRow(now)},
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
 			},
 			{
 				match:   "SELECT id, analysis_run_id, event_type, version, payload, COALESCE(status,''), created_at FROM analysis_run_events",
@@ -659,7 +699,7 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM analysis_runs\nWHERE id=$1 AND owner_type=$2",
 				columns: analysisRunColumns(),
-				rows: [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{analysisRunDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
@@ -671,22 +711,22 @@ func TestSQLStateStoreReadQueriesAcrossCollectionsRunsAndArtifacts(t *testing.T)
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
 				columns: selectionItemColumns(),
-				rows: [][]driver.Value{selectionItemDriverRow(now)},
+				rows:    [][]driver.Value{selectionItemDriverRow(now)},
 			},
 			{
 				match:   "FROM artifacts a",
 				columns: artifactColumns(),
-				rows: [][]driver.Value{artifactDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{artifactDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM artifacts a",
 				columns: artifactColumns(),
-				rows: [][]driver.Value{artifactDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{artifactDriverRow(now, expiresAt)},
 			},
 			{
 				match:   "FROM artifacts a",
 				columns: artifactColumns(),
-				rows: [][]driver.Value{artifactDriverRow(now, expiresAt)},
+				rows:    [][]driver.Value{artifactDriverRow(now, expiresAt)},
 			},
 		},
 	}
@@ -1883,22 +1923,22 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 			{
 				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
 				columns: collectionColumns(),
-				rows: [][]driver.Value{collectionDriverRow("collection-1", "Review", CollectionStatusActive, 1, now)},
+				rows:    [][]driver.Value{collectionDriverRow("collection-1", "Review", CollectionStatusActive, 1, now)},
 			},
 			{
 				match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
 				columns: collectionItemColumns(),
-				rows: [][]driver.Value{{"media-1", int64(0), "", now, nil}},
+				rows:    [][]driver.Value{{"media-1", int64(0), "", now, nil}},
 			},
 			{
 				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
 				columns: collectionColumns(),
-				rows: [][]driver.Value{collectionDriverRow("collection-1", "Review v2", CollectionStatusArchived, 2, now)},
+				rows:    [][]driver.Value{collectionDriverRow("collection-1", "Review v2", CollectionStatusArchived, 2, now)},
 			},
 			{
 				match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
 				columns: collectionItemColumns(),
-				rows: [][]driver.Value{{"media-1", int64(0), "", now, nil}},
+				rows:    [][]driver.Value{{"media-1", int64(0), "", now, nil}},
 			},
 			{
 				match:   "SELECT id FROM media_items",
@@ -1908,12 +1948,12 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 			{
 				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
 				columns: collectionColumns(),
-				rows: [][]driver.Value{collectionDriverRow("collection-1", "Review v2", CollectionStatusArchived, 3, now)},
+				rows:    [][]driver.Value{collectionDriverRow("collection-1", "Review v2", CollectionStatusArchived, 3, now)},
 			},
 			{
 				match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
 				columns: collectionItemColumns(),
-				rows: [][]driver.Value{{"media-1", int64(1), "tester", completedAt, nil}},
+				rows:    [][]driver.Value{{"media-1", int64(1), "tester", completedAt, nil}},
 			},
 			{
 				match:   "FROM media_items mi",
@@ -1940,7 +1980,7 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
 				columns: selectionColumns(),
-				rows: [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
 			},
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
@@ -1950,7 +1990,7 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 			{
 				match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
 				columns: selectionColumns(),
-				rows: [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
 			},
 			{
 				match:   "FROM selection_items WHERE selection_id=$1",
@@ -2840,8 +2880,8 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 		}
 	})
 
-		t.Run("claim analysis run task propagates claimed-row scan failures", func(t *testing.T) {
-			t.Parallel()
+	t.Run("claim analysis run task propagates claimed-row scan failures", func(t *testing.T) {
+		t.Parallel()
 
 		invalidRunRow := []driver.Value{
 			"run-1", "web", "user-1", "", "selection-1", "transcription", AnalysisRunStatusQueued, "bad-version",
@@ -2859,36 +2899,36 @@ func TestRuntimeStoreTaskQueueErrorBranches(t *testing.T) {
 			t.Fatalf("NewSQLStateStore() error = %v", err)
 		}
 
-			if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); err == nil {
-				t.Fatalf("ClaimAnalysisRunTask(scan) error = nil, want scan failure")
-			}
-		})
+		if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); err == nil {
+			t.Fatalf("ClaimAnalysisRunTask(scan) error = nil, want scan failure")
+		}
+	})
 
-		t.Run("claim analysis run task propagates refreshed-run lookup errors after no claimed row", func(t *testing.T) {
-			t.Parallel()
+	t.Run("claim analysis run task propagates refreshed-run lookup errors after no claimed row", func(t *testing.T) {
+		t.Parallel()
 
-			store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
-				queryResponses: []scriptedQueryResponse{
-					{
-						match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
-						columns: analysisRunColumns(),
-					},
-					{
-						match:   "FROM analysis_runs\nWHERE id=$1::uuid",
-						columns: analysisRunColumns(),
-						err:     stepErr,
-					},
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "UPDATE analysis_run_tasks t\nSET status='claimed'",
+					columns: analysisRunColumns(),
 				},
-			}))
-			if err != nil {
-				t.Fatalf("NewSQLStateStore() error = %v", err)
-			}
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
 
-			if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); !errors.Is(err, stepErr) {
-				t.Fatalf("ClaimAnalysisRunTask(no claimed row lookup) error = %v, want stepErr", err)
-			}
-		})
-	}
+		if _, _, err := store.ClaimAnalysisRunTask(context.Background(), "run-1", "analysis_runner", "selection.analysis", "worker-1", now); !errors.Is(err, stepErr) {
+			t.Fatalf("ClaimAnalysisRunTask(no claimed row lookup) error = %v, want stepErr", err)
+		}
+	})
+}
 
 func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
 	t.Parallel()

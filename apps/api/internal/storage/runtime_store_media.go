@@ -1002,7 +1002,7 @@ func (s *SQLStateStore) listCollectionItems(ctx context.Context, collectionID st
 		return nil, err
 	}
 	defer rows.Close()
-	var items []CollectionItemRecord
+	items := []CollectionItemRecord{}
 	for rows.Next() {
 		var item CollectionItemRecord
 		if err := rows.Scan(&item.MediaItemID, &item.Position, &item.AddedBy, &item.AddedAt, &item.RemovedAt); err != nil {

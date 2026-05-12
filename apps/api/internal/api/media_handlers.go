@@ -237,7 +237,7 @@ func (s *Server) handleGetInboxCollection(w http.ResponseWriter, r *http.Request
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
+	writeJSON(w, http.StatusOK, map[string]any{"collection": normalizeCollectionEnvelope(collection)})
 }
 
 func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request) {
@@ -255,7 +255,7 @@ func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request) 
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"collection": collection})
+	writeJSON(w, http.StatusCreated, map[string]any{"collection": normalizeCollectionEnvelope(collection)})
 }
 
 func (s *Server) handleListCollections(w http.ResponseWriter, r *http.Request) {
@@ -263,6 +263,9 @@ func (s *Server) handleListCollections(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
+	}
+	for idx := range collections {
+		collections[idx] = normalizeCollectionEnvelope(collections[idx])
 	}
 	cursor, pageSize := parsePageRequest(r)
 	pageItems, page := cursorPage(collections, cursor, pageSize, func(collection storage.CollectionRecord) string { return collection.ID })
@@ -275,7 +278,7 @@ func (s *Server) handleGetCollection(w http.ResponseWriter, r *http.Request) {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
+	writeJSON(w, http.StatusOK, map[string]any{"collection": normalizeCollectionEnvelope(collection)})
 }
 
 func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request) {
@@ -300,7 +303,7 @@ func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request) 
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
+	writeJSON(w, http.StatusOK, map[string]any{"collection": normalizeCollectionEnvelope(collection)})
 }
 
 func (s *Server) handleUpdateCollectionItems(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +326,7 @@ func (s *Server) handleUpdateCollectionItems(w http.ResponseWriter, r *http.Requ
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
+	writeJSON(w, http.StatusOK, map[string]any{"collection": normalizeCollectionEnvelope(collection)})
 }
 
 func (s *Server) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request) {
@@ -354,7 +357,7 @@ func (s *Server) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Reque
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
+	writeJSON(w, http.StatusOK, map[string]any{"collection": normalizeCollectionEnvelope(collection)})
 }
 
 func (s *Server) handleCreateSelection(w http.ResponseWriter, r *http.Request) {
@@ -730,6 +733,13 @@ func paged[T any](items []T, page pageMetadata) map[string]any {
 		"items": items,
 		"page":  page,
 	}
+}
+
+func normalizeCollectionEnvelope(collection storage.CollectionRecord) storage.CollectionRecord {
+	if collection.Items == nil {
+		collection.Items = []storage.CollectionItemRecord{}
+	}
+	return collection
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

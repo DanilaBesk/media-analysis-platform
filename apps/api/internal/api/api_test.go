@@ -1365,6 +1365,30 @@ func TestPagedEmptyResultEncodesItemsAsArray(t *testing.T) {
 	}
 }
 
+func TestGetInboxCollectionEncodesEmptyItemsAsArray(t *testing.T) {
+	t.Parallel()
+
+	mux := newFinalMux(Dependencies{Public: &fakePublicService{
+		collection: storage.CollectionRecord{
+			ID:      "collection-1",
+			Owner:   storage.OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"},
+			Kind:    storage.CollectionKindInbox,
+			Name:    "Inbox",
+			Status:  storage.CollectionStatusActive,
+			Version: 5,
+		},
+	}})
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/collections/inbox?owner_type=telegram&owner_id=chat-1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"items":[]`) {
+		t.Fatalf("inbox body = %s, want collection items as empty array", rec.Body.String())
+	}
+}
+
 func TestHandleUpdateCollectionItemsMapsServiceErrors(t *testing.T) {
 	t.Parallel()
 

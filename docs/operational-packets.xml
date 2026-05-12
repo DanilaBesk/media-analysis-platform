@@ -10,6 +10,7 @@
     <completed-packet>runtime-final-inbox-first</completed-packet>
     <completed-packet>media-xgf-sql-collection-append</completed-packet>
     <completed-packet>media-fwx-paged-empty-array</completed-packet>
+    <completed-packet>media-722-collection-empty-array</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
     <remaining-closure-gate>none</remaining-closure-gate>
@@ -215,6 +216,27 @@ Public paginated list envelopes must encode items as an array on every page, inc
       <check>Focused API regression proves nil source slices encode as items: [] through the shared paging helper.</check>
       <check>Live diagnostics endpoint for the Telegram owner returns items: [] for an empty run diagnostic page.</check>
       <check>Telegram gateway restore_status completes against the live API for the affected owner and terminal run.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-722-collection-empty-array" module="M-API-STORAGE,M-API-HTTP" phase="RuntimeBugfix" verification-ref="EV-STORAGE,EV-API,EV-RUNTIME">
+    <purpose>Fix Telegram callback UI refresh when the inbox collection becomes empty after mutation.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/storage/runtime_store_media.go</file-1>
+      <file-2>apps/api/internal/storage/runtime_store_media_test.go</file-2>
+      <file-3>apps/api/internal/api/media_handlers.go</file-3>
+      <file-4>apps/api/internal/api/api_test.go</file-4>
+      <file-5>docs/requirements.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+      <file-7>docs/operational-packets.xml</file-7>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Collection envelopes must expose items as an array even when the collection is empty. Telegram callback UI refresh depends on the API-owned inbox shape and must not require adapter-local fallback rendering for null collection items.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused storage regression proves GetCollection returns an empty items slice instead of nil.</check>
+      <check>Focused API regression proves GET /v1/collections/inbox encodes items: [] for an empty inbox collection.</check>
+      <check>Live restore_status against the affected Telegram owner renders after the empty inbox collection response without callback-handler errors.</check>
     </verification>
   </HotfixPacket>
 </OperationalPackets>

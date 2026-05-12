@@ -44,7 +44,7 @@
         <item>Cancel analysis_run cooperatively.</item>
         <item>Resolve artifact preview and download metadata through owner-scoped API access.</item>
         <item>Query diagnostics by subject, severity, code, and correlation id.</item>
-        <item>Empty paginated list results encode items as [] rather than null.</item>
+        <item>Empty collection and paginated list results encode items as [] rather than null.</item>
       </required>
     </ApiTests>
 
