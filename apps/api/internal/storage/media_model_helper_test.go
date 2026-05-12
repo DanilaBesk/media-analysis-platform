@@ -76,6 +76,9 @@ func TestNormalizeJSONAndDeliveryFallbacks(t *testing.T) {
 	if got := string(normalizeDelivery([]byte("not-json"))); got != `{"strategy":"polling"}` {
 		t.Fatalf("normalizeDelivery(invalid) = %q", got)
 	}
+	if got := artifactObjectStoreKey("artifacts/run-1/report.md"); got != "artifacts/run-1/report.md" {
+		t.Fatalf("artifactObjectStoreKey(artifacts/run-1/report.md) = %q, want full stored key", got)
+	}
 
 	merged := mergeJSONObject([]byte(`{"strategy":"push"}`), map[string]any{
 		"strategy": "polling",

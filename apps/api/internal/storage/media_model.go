@@ -486,7 +486,7 @@ func checksumBytes(body []byte) string {
 }
 
 func artifactObjectStoreKey(objectKey string) string {
-	return strings.TrimPrefix(strings.TrimSpace(objectKey), "artifacts/")
+	return strings.TrimSpace(objectKey)
 }
 
 func (r *Repository) ListMediaItems(ctx context.Context, owner OwnerScope) ([]MediaItemRecord, error) {

@@ -6,8 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
+	"io"
 	"net/url"
 	"strconv"
 	"strings"
@@ -17,6 +16,36 @@ import (
 
 	"github.com/minio/minio-go/v7"
 )
+
+type fakeMinioObjectClient struct {
+	endpoint       *url.URL
+	presignedURL   *url.URL
+	presignErr     error
+	putErr         error
+	removeErr      error
+	lastPresignKey string
+}
+
+func (f *fakeMinioObjectClient) PutObject(_ context.Context, _ string, _ string, _ io.Reader, _ int64, _ minio.PutObjectOptions) (minio.UploadInfo, error) {
+	return minio.UploadInfo{}, f.putErr
+}
+
+func (f *fakeMinioObjectClient) PresignedGetObject(_ context.Context, _ string, objectName string, _ time.Duration, _ url.Values) (*url.URL, error) {
+	f.lastPresignKey = objectName
+	if f.presignErr != nil {
+		return nil, f.presignErr
+	}
+	clone := *f.presignedURL
+	return &clone, nil
+}
+
+func (f *fakeMinioObjectClient) RemoveObject(_ context.Context, _ string, _ string, _ minio.RemoveObjectOptions) error {
+	return f.removeErr
+}
+
+func (f *fakeMinioObjectClient) EndpointURL() *url.URL {
+	return f.endpoint
+}
 
 func TestNewSQLStateStoreRequiresDB(t *testing.T) {
 	t.Parallel()
@@ -114,22 +143,22 @@ func TestNewMinioObjectStoreRequiresClients(t *testing.T) {
 }
 
 func TestMinioObjectStorePresignHostsAndObjectMethodErrors(t *testing.T) {
-	internalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/xml")
-		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`))
-	}))
-	defer internalServer.Close()
+	internalEndpoint, _ := url.Parse("http://minio:9000")
+	publicEndpoint, _ := url.Parse("http://localhost:9000")
+	internalSigned, _ := url.Parse("http://minio:9000/artifacts/reports/output.txt?X-Amz-Signature=internal")
+	publicSigned, _ := url.Parse("http://localhost:9000/artifacts/reports/output.txt?X-Amz-Signature=public")
 
-	publicServer := httptest.NewServer(http.NotFoundHandler())
-	defer publicServer.Close()
-
-	internalClient := newRuntimeStoreMinioClient(t, internalServer.URL)
-	publicClient := newRuntimeStoreMinioClient(t, publicServer.URL)
-
-	store, err := NewMinioObjectStoreWithPresignClient(internalClient, publicClient)
-	if err != nil {
-		t.Fatalf("NewMinioObjectStoreWithPresignClient() error = %v", err)
+	internalClient := &fakeMinioObjectClient{
+		endpoint:     internalEndpoint,
+		presignedURL: internalSigned,
+		putErr:       errors.New("put failed"),
+		removeErr:    errors.New("delete failed"),
 	}
+	publicClient := &fakeMinioObjectClient{
+		endpoint:     publicEndpoint,
+		presignedURL: publicSigned,
+	}
+	store := &MinioObjectStore{client: internalClient, presignClient: publicClient}
 
 	publicURL, publicExpiry, err := store.PresignGetObject(context.Background(), "artifacts", "reports/output.txt", 5*time.Minute)
 	if err != nil {
@@ -140,30 +169,27 @@ func TestMinioObjectStorePresignHostsAndObjectMethodErrors(t *testing.T) {
 		t.Fatalf("PresignInternalGetObject() error = %v", err)
 	}
 
-	parsedPublicURL, err := url.Parse(publicURL)
-	if err != nil {
-		t.Fatalf("Parse(publicURL) error = %v", err)
+	if publicURL != publicSigned.String() {
+		t.Fatalf("public presign url = %q, want %q", publicURL, publicSigned.String())
 	}
-	parsedInternalURL, err := url.Parse(internalURL)
-	if err != nil {
-		t.Fatalf("Parse(internalURL) error = %v", err)
+	if internalURL != internalSigned.String() {
+		t.Fatalf("internal presign url = %q, want %q", internalURL, internalSigned.String())
 	}
-	if parsedPublicURL.Host != strings.TrimPrefix(publicServer.URL, "http://") {
-		t.Fatalf("public presign host = %q, want %q", parsedPublicURL.Host, strings.TrimPrefix(publicServer.URL, "http://"))
-	}
-	if parsedInternalURL.Host != strings.TrimPrefix(internalServer.URL, "http://") {
-		t.Fatalf("internal presign host = %q, want %q", parsedInternalURL.Host, strings.TrimPrefix(internalServer.URL, "http://"))
+	if internalClient.lastPresignKey != "reports/output.txt" || publicClient.lastPresignKey != "reports/output.txt" {
+		t.Fatalf("presign keys = internal:%q public:%q, want reports/output.txt", internalClient.lastPresignKey, publicClient.lastPresignKey)
 	}
 	if time.Until(publicExpiry) <= 0 || time.Until(internalExpiry) <= 0 {
 		t.Fatalf("expiry timestamps must be in the future: public=%s internal=%s", publicExpiry, internalExpiry)
 	}
+	if publicURL == internalURL {
+		t.Fatalf("public and internal presign urls must differ when clients target different hosts: %q", publicURL)
+	}
 
-	internalServer.Close()
 	if err := store.PutObject(context.Background(), "artifacts", "reports/output.txt", "text/plain", []byte("payload")); err == nil {
-		t.Fatalf("PutObject() error = nil, want network failure")
+		t.Fatalf("PutObject() error = nil, want client error")
 	}
 	if err := store.DeleteObject(context.Background(), "artifacts", "reports/output.txt"); err == nil {
-		t.Fatalf("DeleteObject() error = nil, want network failure")
+		t.Fatalf("DeleteObject() error = nil, want client error")
 	}
 }
 

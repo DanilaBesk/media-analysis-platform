@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -23,9 +24,16 @@ type SQLStateStore struct {
 	db *sql.DB
 }
 
+type minioObjectClient interface {
+	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
+	PresignedGetObject(ctx context.Context, bucketName, objectName string, expires time.Duration, reqParams url.Values) (*url.URL, error)
+	RemoveObject(ctx context.Context, bucketName, objectName string, opts minio.RemoveObjectOptions) error
+	EndpointURL() *url.URL
+}
+
 type MinioObjectStore struct {
-	client        *minio.Client
-	presignClient *minio.Client
+	client        minioObjectClient
+	presignClient minioObjectClient
 }
 
 func NewSQLStateStore(db *sql.DB) (*SQLStateStore, error) {
@@ -66,6 +74,7 @@ func NewMinioClient(endpoint, accessKey, secretKey string) (*minio.Client, error
 	client, err := newMinioSDK(host, &minio.Options{
 		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure: secure,
+		Region: "us-east-1",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: create minio client: %v", ErrStorageUnavailable, err)
@@ -91,13 +100,9 @@ func (s *MinioObjectStore) PutObject(ctx context.Context, bucket, objectKey, con
 
 func (s *MinioObjectStore) PresignGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error) {
 	expiresAt := time.Now().UTC().Add(expiry)
-	url, err := s.client.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
+	url, err := s.presignClient.PresignedGetObject(ctx, bucket, objectKey, expiry, nil)
 	if err != nil {
 		return "", time.Time{}, err
-	}
-	if endpoint := s.presignClient.EndpointURL(); endpoint != nil {
-		url.Scheme = endpoint.Scheme
-		url.Host = endpoint.Host
 	}
 	return url.String(), expiresAt, nil
 }

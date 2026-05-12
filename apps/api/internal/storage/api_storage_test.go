@@ -651,8 +651,8 @@ func TestApiStorageArtifactResolutionStripsArtifactsPrefixBeforePresign(t *testi
 	if objectStore.presigns[0].bucket != ArtifactsBucket {
 		t.Fatalf("presign bucket = %q, want %q", objectStore.presigns[0].bucket, ArtifactsBucket)
 	}
-	if objectStore.presigns[0].objectKey != "run-1/run/manifest/run-manifest.json" {
-		t.Fatalf("presign object key = %q, want stripped artifact key", objectStore.presigns[0].objectKey)
+	if objectStore.presigns[0].objectKey != "artifacts/run-1/run/manifest/run-manifest.json" {
+		t.Fatalf("presign object key = %q, want full stored artifact key", objectStore.presigns[0].objectKey)
 	}
 }
 
