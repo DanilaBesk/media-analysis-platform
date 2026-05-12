@@ -40,14 +40,14 @@ VALUES ($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10)
 			}
 			found = inbox
 		}
-		if err := insertCollectionMembership(ctx, tx, found.ID, item.ID, len(found.Items), "", item.CreatedAt); err != nil {
+		if err := appendCollectionMembership(ctx, tx, found.ID, item.ID, "", item.CreatedAt); err != nil {
 			return err
 		}
 		if targetCollectionID != "" {
 			if _, err := selectCollectionHeader(ctx, tx, item.Owner, targetCollectionID); err != nil {
 				return err
 			}
-			if err := insertCollectionMembership(ctx, tx, targetCollectionID, item.ID, 0, "", item.CreatedAt); err != nil {
+			if err := appendCollectionMembership(ctx, tx, targetCollectionID, item.ID, "", item.CreatedAt); err != nil {
 				return err
 			}
 		}
@@ -947,6 +947,7 @@ func selectCollectionHeader(ctx context.Context, tx *sql.Tx, owner OwnerScope, c
 	err := tx.QueryRowContext(ctx, `
 SELECT id FROM collections
 WHERE id=$1 AND owner_type=$2 AND owner_id=$3 AND COALESCE(tenant_id,'')=COALESCE(NULLIF($4,''),'') AND status <> 'deleted'
+FOR UPDATE
 `, collectionID, owner.OwnerType, owner.OwnerID, owner.TenantID).Scan(&id)
 	if err == sql.ErrNoRows {
 		return "", ErrCollectionNotFound
@@ -961,11 +962,21 @@ VALUES ($1,$2,$3,$4,NULLIF($5,''),$6)`, uuidString(), collectionID, mediaItemID,
 	return err
 }
 
+func appendCollectionMembership(ctx context.Context, tx *sql.Tx, collectionID, mediaItemID string, addedBy string, addedAt time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO collection_items (id, collection_id, media_item_id, position, added_by, added_at)
+SELECT $1, $2, $3, COALESCE(MAX(position) + 1, 0), NULLIF($4,''), $5
+FROM collection_items
+WHERE collection_id=$2 AND removed_at IS NULL`, uuidString(), collectionID, mediaItemID, addedBy, addedAt)
+	return err
+}
+
 func selectInboxCollection(ctx context.Context, tx *sql.Tx, owner OwnerScope) (CollectionRecord, error) {
 	row := tx.QueryRowContext(ctx, `
 SELECT id, owner_type, owner_id, COALESCE(tenant_id,''), kind, name, status, version, created_at, updated_at, archived_at, deleted_at
 FROM collections
-WHERE owner_type=$1 AND owner_id=$2 AND COALESCE(tenant_id,'')=COALESCE(NULLIF($3,''),'') AND kind='inbox' AND status='active'`, owner.OwnerType, owner.OwnerID, owner.TenantID)
+WHERE owner_type=$1 AND owner_id=$2 AND COALESCE(tenant_id,'')=COALESCE(NULLIF($3,''),'') AND kind='inbox' AND status='active'
+FOR UPDATE`, owner.OwnerType, owner.OwnerID, owner.TenantID)
 	collection, err := scanCollectionHeader(row)
 	if err == sql.ErrNoRows {
 		return CollectionRecord{}, ErrCollectionNotFound

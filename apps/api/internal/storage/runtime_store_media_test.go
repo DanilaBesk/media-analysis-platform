@@ -146,6 +146,100 @@ func TestSQLStateStoreAddMediaItemAndSoftDelete(t *testing.T) {
 	config.assertExhausted(t)
 }
 
+func TestSQLStateStoreAddMediaItemAppendsAfterExistingActiveCollectionItems(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 12, 11, 20, 0, 0, time.UTC)
+	size := int64(5)
+	owner := OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"}
+
+	config := &scriptedRuntimeStoreConfig{
+		queryResponses: []scriptedQueryResponse{
+			{
+				match:   "FROM collections\nWHERE owner_type=$1 AND owner_id=$2",
+				columns: collectionColumns(),
+				rows: [][]driver.Value{{
+					"inbox-1", "telegram", "chat-1", "", CollectionKindInbox, "Inbox", CollectionStatusActive, int64(1), now, now, nil, nil,
+				}},
+			},
+			{
+				match:   "SELECT id FROM collections",
+				columns: []string{"id"},
+				rows:    [][]driver.Value{{"target-collection"}},
+			},
+			{
+				match:   "FROM collections\nWHERE id=$1 AND owner_type=$2",
+				columns: collectionColumns(),
+				rows: [][]driver.Value{{
+					"inbox-1", "telegram", "chat-1", "", CollectionKindInbox, "Inbox", CollectionStatusActive, int64(1), now, now, nil, nil,
+				}},
+			},
+			{
+				match:   "SELECT media_item_id, position, COALESCE(added_by,''), added_at, removed_at FROM collection_items",
+				columns: collectionItemColumns(),
+				rows: [][]driver.Value{
+					{"old-media", int64(0), "", now.Add(-time.Minute), nil},
+					{"media-2", int64(1), "", now, nil},
+				},
+			},
+		},
+		execResponses: []scriptedExecResponse{
+			{match: "INSERT INTO sources", affected: 1},
+			{match: "INSERT INTO media_items", affected: 1},
+			{match: "COALESCE(MAX(position) + 1, 0)", affected: 1, checkArgs: expectExecArgs(map[int]any{1: "inbox-1", 2: "media-2"})},
+			{match: "COALESCE(MAX(position) + 1, 0)", affected: 1, checkArgs: expectExecArgs(map[int]any{1: "target-collection", 2: "media-2"})},
+		},
+	}
+
+	store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+	if err != nil {
+		t.Fatalf("NewSQLStateStore() error = %v", err)
+	}
+
+	item := MediaItemRecord{
+		ID:    "media-2",
+		Owner: owner,
+		Source: MediaSourceMetadata{
+			SourceID:   "source-2",
+			OriginType: "object",
+			ObjectKey:  "sources/source-2/source.ogg",
+			Checksum:   "sha256:def",
+			SizeBytes:  &size,
+			MIMEType:   "audio/ogg",
+		},
+		Kind:         "voice",
+		Status:       MediaStatusReady,
+		DisplayName:  "voice-2.ogg",
+		MetadataJSON: []byte(`{}`),
+		Retention:    RetentionMetadata{State: RetentionStateActive},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	inbox := CollectionRecord{
+		ID:        "unused-new-inbox",
+		Owner:     owner,
+		Kind:      CollectionKindInbox,
+		Name:      "Inbox",
+		Status:    CollectionStatusActive,
+		Version:   1,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	created, collection, err := store.AddMediaItem(context.Background(), item, inbox, "target-collection")
+	if err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+	if created.ID != item.ID {
+		t.Fatalf("created id = %q, want %q", created.ID, item.ID)
+	}
+	if collection.ID != "inbox-1" || len(collection.Items) != 2 || collection.Items[1].Position != 1 {
+		t.Fatalf("collection = %#v, want new inbox item appended at position 1", collection)
+	}
+
+	config.assertExhausted(t)
+}
+
 func TestSQLStateStoreAddMediaItemAndSoftDeleteErrorMappings(t *testing.T) {
 	t.Parallel()
 
@@ -4038,9 +4132,10 @@ type scriptedQueryResponse struct {
 }
 
 type scriptedExecResponse struct {
-	match    string
-	affected int64
-	err      error
+	match     string
+	affected  int64
+	err       error
+	checkArgs func([]driver.NamedValue) error
 }
 
 type scriptedRuntimeStoreDriver struct {
@@ -4099,10 +4194,15 @@ func (c *scriptedRuntimeStoreConn) BeginTx(context.Context, driver.TxOptions) (d
 	return &scriptedRuntimeStoreTx{}, nil
 }
 
-func (c *scriptedRuntimeStoreConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
+func (c *scriptedRuntimeStoreConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	response, err := c.config.nextExec(query)
 	if err != nil {
 		return nil, err
+	}
+	if response.checkArgs != nil {
+		if err := response.checkArgs(args); err != nil {
+			return nil, err
+		}
 	}
 	if response.err != nil {
 		return nil, response.err
@@ -4340,6 +4440,21 @@ func startedAtValue(ts *time.Time) any {
 
 func compactSQL(query string) string {
 	return strings.Join(strings.Fields(query), " ")
+}
+
+func expectExecArgs(expected map[int]any) func([]driver.NamedValue) error {
+	return func(args []driver.NamedValue) error {
+		for index, want := range expected {
+			if index < 0 || index >= len(args) {
+				return fmt.Errorf("exec arg %d missing: got %d args", index, len(args))
+			}
+			got := args[index].Value
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				return fmt.Errorf("exec arg %d = %v, want %v", index, got, want)
+			}
+		}
+		return nil
+	}
 }
 
 func mediaItemColumns() []string {

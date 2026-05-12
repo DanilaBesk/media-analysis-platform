@@ -8,6 +8,7 @@
     <completed-packet>media-7wo-web-adapter</completed-packet>
     <completed-packet>media-uhi-mcp-adapter</completed-packet>
     <completed-packet>runtime-final-inbox-first</completed-packet>
+    <completed-packet>media-xgf-sql-collection-append</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
     <remaining-closure-gate>none</remaining-closure-gate>
@@ -177,4 +178,23 @@ MCP tools: add_media, list_media, search_media, get_media, remove_media, get_inb
       <check>Focused stale vocabulary search passes across active docs and public contracts.</check>
     </verification>
   </RuntimePacket>
+
+  <HotfixPacket packet-id="media-xgf-sql-collection-append" module="M-API-STORAGE" phase="RuntimeBugfix" verification-ref="EV-STORAGE,EV-API,EV-RUNTIME">
+    <purpose>Fix API-owned inbox ingestion when an owner already has active collection_items.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/storage/runtime_store_media.go</file-1>
+      <file-2>apps/api/internal/storage/runtime_store_media_test.go</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+New media_item records remain API-owned and append to inbox or named collection membership using the next active collection position. Telegram, Web, and MCP must not carry durable local inbox state or legacy fallback buffers.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused SQL storage regression proves existing inbox and target collection appends do not reuse position 0.</check>
+      <check>Storage and API package tests pass.</check>
+      <check>Compose API accepts a second media_item for an owner with an existing inbox item.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

@@ -80,7 +80,7 @@
     </Requirement>
     <Requirement id="REQ-COLLECTION-001">
       <Action>Maintain inbox and user collections independently of execution.</Action>
-      <AcceptanceCriteria>Every owner has a default inbox; callers can list, create, rename, archive, delete, and reorder collection items subject to owner scope and optimistic version checks.</AcceptanceCriteria>
+      <AcceptanceCriteria>Every owner has a default inbox; callers can list, create, rename, archive, delete, and reorder collection items subject to owner scope and optimistic version checks. Accepted media appends to the next active collection position and must not create duplicate active positions in inbox or user collections.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-SELECTION-001">
       <Action>Create immutable selections from explicit ordered media_item references.</Action>

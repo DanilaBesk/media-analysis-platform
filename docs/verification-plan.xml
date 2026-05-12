@@ -23,6 +23,7 @@
       <required>
         <item>Create media_item from text, URL, and uploaded body with owner scope and source metadata.</item>
         <item>Default inbox membership is created for accepted media_item records.</item>
+        <item>Adding media to an existing inbox or user collection appends after the current highest active position without duplicate active positions.</item>
         <item>Collection add, remove, reorder, archive, restore, and delete use version checks.</item>
         <item>Selection snapshot remains unchanged after collection membership and media_item metadata changes.</item>
         <item>analysis_run creation requires a sealed selection owned by the caller.</item>
