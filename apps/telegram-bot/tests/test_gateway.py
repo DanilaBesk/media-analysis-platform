@@ -308,10 +308,11 @@ def test_album_status_preview_groups_visible_media_together() -> None:
 
     text = render_status_text(gateway.restore_status(owner=owner()))
 
-    assert "Альбом grp (3 шт.)" in text
-    assert "1. Фото из Telegram [фото, готов, сообщение 1]" in text
-    assert "2. clip.mp4 [видео, готов, сообщение 2]" in text
-    assert "3. brief.pdf [документ, готов, сообщение 3]" in text
+    assert text.startswith("Транскрибация\nМатериалов: 3\n")
+    assert "Фото из Telegram · 10 B" in text
+    assert "clip.mp4 · 10 B" in text
+    assert "brief.pdf · 8 B" in text
+    assert "Альбом grp" not in text
 
 
 def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
@@ -332,7 +333,7 @@ def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
     assert "Отклонено: photo (неподдерживаемый ввод:" in text
 
 
-def test_status_surface_supports_resource_callbacks_explicit_selection_and_run_actions() -> None:
+def test_status_surface_splits_main_card_and_materials_actions() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api, page_size=1)
     gateway.add_text(owner=owner(), text="one")
@@ -342,7 +343,13 @@ def test_status_surface_supports_resource_callbacks_explicit_selection_and_run_a
     keyboard = build_status_keyboard(status, can_go_back=True, current_cursor=None)
     text = render_status_text(status)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
-    remove_callback = next(callback for callback in callbacks if callback.startswith("ib:rm:"))
+    run_callback = next(callback for callback in callbacks if callback.startswith("ib:rn:"))
+    run_action, run_tokens = _parse_callback_payload(run_callback)
+    materials_keyboard = build_status_keyboard(status, can_go_back=True, current_cursor=None, screen="materials")
+    materials_callbacks = [
+        button.callback_data for row in materials_keyboard.inline_keyboard for button in row
+    ]
+    remove_callback = next(callback for callback in materials_callbacks if callback.startswith("ib:rm:"))
     remove_action, remove_tokens = _parse_callback_payload(remove_callback)
     updated = gateway.remove_collection_item(
         owner=owner(),
@@ -352,37 +359,36 @@ def test_status_surface_supports_resource_callbacks_explicit_selection_and_run_a
     )
     updated_keyboard = build_status_keyboard(updated)
     updated_callbacks = [button.callback_data for row in updated_keyboard.inline_keyboard for button in row]
-    selection_callback = next(callback for callback in updated_callbacks if callback.startswith("ib:sl:"))
-    selection_action, selection_tokens = _parse_callback_payload(selection_callback)
+    updated_run_callback = next(callback for callback in updated_callbacks if callback.startswith("ib:rn:"))
+    updated_run_action, updated_run_tokens = _parse_callback_payload(updated_run_callback)
     selection = gateway.create_selection(
         owner=owner(),
-        collection_id=_decode_callback_token(selection_tokens[0]),
-        expected_version=_decode_callback_version(selection_tokens[1]),
+        collection_id=_decode_callback_token(updated_run_tokens[0]),
+        expected_version=_decode_callback_version(updated_run_tokens[1]),
     )
-    selection_keyboard = build_status_keyboard(updated, selection=selection)
-    run_callback = next(
-        button.callback_data
-        for row in selection_keyboard.inline_keyboard
-        for button in row
-        if button.callback_data.startswith("ib:rn:")
-    )
-    run_action, run_tokens = _parse_callback_payload(run_callback)
-    run = gateway.start_analysis(owner=owner(), selection_id=_decode_callback_token(run_tokens[0]))
+    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
 
-    assert "Входящие" in text
-    assert any(callback.startswith("ib:rf") for callback in callbacks)
-    assert any(callback.startswith("ib:pp") for callback in callbacks)
-    assert any(callback.startswith("ib:pn") for callback in callbacks)
-    assert any(callback.startswith("ib:rm:") for callback in callbacks)
-    assert any(callback.startswith("ib:cl:") for callback in callbacks)
-    assert any(callback.startswith("ib:sl:") for callback in callbacks)
+    assert text.startswith("Транскрибация\nМатериалов: 2\n")
+    assert [button.text for button in keyboard.inline_keyboard[0]] == ["Транскрибировать 2", "Материалы"]
+    assert run_action == "rn"
+    assert _decode_callback_token(run_tokens[0]) == "inbox-1"
+    assert _decode_callback_version(run_tokens[1]) == 1
+    assert any(callback.startswith("ib:mt") for callback in callbacks)
+    assert not any(callback.startswith("ib:rf") for callback in callbacks)
+    assert not any(callback.startswith("ib:rm:") for callback in callbacks)
+    assert not any(callback.startswith("ib:cl:") for callback in callbacks)
+    assert not any(callback.startswith("ib:sl:") for callback in callbacks)
+    assert any(callback.startswith("ib:pp") for callback in materials_callbacks)
+    assert any(callback.startswith("ib:pn") for callback in materials_callbacks)
+    assert any(callback.startswith("ib:rm:") for callback in materials_callbacks)
+    assert any(callback.startswith("ib:cl:") for callback in materials_callbacks)
     assert remove_action == "rm"
     assert _decode_callback_token(remove_tokens[0]) == "inbox-1"
     assert _decode_callback_version(remove_tokens[1]) == 1
     assert _decode_callback_token(remove_tokens[2]) == "media-1"
-    assert selection_action == "sl"
-    assert run_action == "rn"
-    assert _decode_callback_token(run_tokens[0]) == selection["selection_id"]
+    assert updated_run_action == "rn"
+    assert _decode_callback_token(updated_run_tokens[0]) == "inbox-1"
+    assert _decode_callback_version(updated_run_tokens[1]) == 2
     assert updated.collection is not None
     assert updated.collection["version"] == 2
     assert selection["items"] == [{"media_item_id": "media-2", "position": 0}]
@@ -396,14 +402,17 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
         gateway.add_text(owner=owner(), text=f"item {index + 1}")
 
     status = gateway.restore_status(owner=owner())
-    keyboard = build_status_keyboard(status, current_cursor=None)
+    main_keyboard = build_status_keyboard(status, current_cursor=None)
+    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибировать 12", "Материалы"]
+
+    keyboard = build_status_keyboard(status, current_cursor=None, screen="materials")
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
-    assert callbacks[0] == "ib:rf"
-    assert all(callback.startswith("ib:rm:") for callback in callbacks[1:6])
+    assert all(callback.startswith("ib:rm:") for callback in callbacks[:5])
     assert "ib:pn" in callbacks
     assert any(callback.startswith("ib:cl:") for callback in callbacks)
+    assert "ib:rf" not in callbacks
     assert max(len(callback) for callback in callbacks) <= 64
-    remove_action, remove_tokens = _parse_callback_payload(callbacks[2])
+    remove_action, remove_tokens = _parse_callback_payload(callbacks[1])
     after_slot_remove = gateway.remove_collection_item(
         owner=owner(),
         collection_id=_decode_callback_token(remove_tokens[0]),
@@ -411,7 +420,7 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
     page_two_status = gateway.restore_status(owner=owner(), cursor="media-6")
-    page_two_keyboard = build_status_keyboard(page_two_status, current_cursor="media-6")
+    page_two_keyboard = build_status_keyboard(page_two_status, current_cursor="media-6", screen="materials")
     clear_callback = next(
         button.callback_data
         for row in page_two_keyboard.inline_keyboard
@@ -469,7 +478,7 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
         gateway.add_text(owner=owner(), text=f"item {index + 1}")
 
     status = gateway.restore_status(owner=owner())
-    keyboard = build_status_keyboard(status)
+    keyboard = build_status_keyboard(status, screen="materials")
     remove_callback = next(
         button.callback_data
         for row in keyboard.inline_keyboard
@@ -491,9 +500,10 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
         "media-4",
         "media-5",
     ]
-    assert "1. item 1 [текст, готов]" not in updated_text
-    assert "1. item 2 [текст, готов]" in updated_text
-    assert "В инбоксе: 4 | версия 2" in updated_text
+    assert "Текст: «item 1»" not in updated_text
+    assert "Текст: «item 2»" in updated_text
+    assert "Материалов: 4" in updated_text
+    assert "версия" not in updated_text
 
 
 def test_uuid_callbacks_stay_within_telegram_limit() -> None:
@@ -527,7 +537,7 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
         diagnostics_by_run={},
         rejected=[],
     )
-    keyboard = build_status_keyboard(
+    main_keyboard = build_status_keyboard(
         status,
         current_cursor="44444444-4444-4444-4444-444444444444",
         selection={
@@ -535,12 +545,24 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
             "items": [{"media_item_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
         },
     )
-    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    materials_keyboard = build_status_keyboard(
+        status,
+        current_cursor="44444444-4444-4444-4444-444444444444",
+        selection={
+            "selection_id": "55555555-5555-5555-5555-555555555555",
+            "items": [{"media_item_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
+        },
+        screen="materials",
+    )
+    callbacks = [
+        *[button.callback_data for row in main_keyboard.inline_keyboard for button in row],
+        *[button.callback_data for row in materials_keyboard.inline_keyboard for button in row],
+    ]
 
     assert max(len(callback) for callback in callbacks) <= 64
     assert any(callback.startswith("ib:rm:") for callback in callbacks)
-    assert any(callback.startswith("ib:sl:") for callback in callbacks)
     assert any(callback.startswith("ib:rn:") for callback in callbacks)
+    assert any(callback.startswith("ib:mt") for callback in callbacks)
     assert any(callback.startswith("ib:ar:") for callback in callbacks)
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
 
@@ -587,8 +609,10 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
 
     selection_text = render_status_text(status, selection={"selection_id": "selection-1", "items": status.collection["items"]})
-    assert "Выборка готова:" in selection_text
-    assert "Кнопка ниже запустит анализ этой выборки." in selection_text
+    assert "Последние результаты:" in selection_text
+    assert "1. run-1 — успешно" in selection_text
+    assert "Выборка готова:" not in selection_text
+    assert "Кнопка ниже запустит анализ этой выборки." not in selection_text
     assert "artifact-1: transcript [available, text/plain]" not in selection_text
     assert "worker_note: Ready for review." not in selection_text
 
@@ -709,8 +733,9 @@ def test_restore_status_tolerates_missing_collection_and_renders_without_collect
     assert [run["analysis_run_id"] for run in status.active_runs] == ["run-active"]
     assert status.artifacts_by_run["run-done"][0]["artifact_id"] == "artifact-1"
     assert status.diagnostics_by_run["run-done"][0]["diagnostic_id"] == "diagnostic-1"
-    assert "В инбоксе: 0" in text
-    assert "Кнопки ниже открывают файлы результата и диагностику по каждому запуску." in text
+    assert "Материалов: 1" in text
+    assert "Текст: «item»" in text
+    assert "Кнопки ниже открывают файлы результата и диагностику." in text
 
 
 def test_stale_callback_copy_is_safe_and_actionable() -> None:
@@ -751,7 +776,7 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
 
     assert "- run-1: в очереди" in queued_text
     assert "failed" not in queued_text
-    assert "результат появится позже" in queued_text
+    assert "Последние результаты:" not in queued_text
 
     api.runs[0]["status"] = "succeeded"
     api.artifacts.append(
@@ -781,9 +806,9 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
     completed_callbacks = [button.callback_data for row in completed_keyboard.inline_keyboard for button in row]
 
     assert completed.active_runs == []
-    assert "Завершённые запуски:" in completed_text
+    assert "Последние результаты:" in completed_text
     assert "1. run-1 — успешно" in completed_text
-    assert "Кнопки ниже открывают файлы результата и диагностику по каждому запуску." in completed_text
+    assert "Кнопки ниже открывают файлы результата и диагностику." in completed_text
     assert "artifact-1: transcript [available, text/plain]" not in completed_text
     assert "worker_note: Result stored for later delivery." not in completed_text
     assert any(callback.startswith("ib:ar:") for callback in completed_callbacks)
@@ -812,7 +837,7 @@ def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() 
     assert app.page_states[(10, 7)].current_cursor is None
     assert "restore after reconnect" in message.answers[0]["text"]
     assert "- run-1: в очереди" in message.answers[0]["text"]
-    assert "результат появится позже" in message.answers[0]["text"]
+    assert "Последние результаты:" not in message.answers[0]["text"]
 
 
 class _FakeMessage:

@@ -485,7 +485,7 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
 
     await app._handle_any_message(accepted_message)
 
-    assert "Keep text [текст, готов, сообщение 42]" in accepted_message.answers[0]["text"]
+    assert accepted_message.answers[0]["text"].startswith("Транскрибация\nМатериалов: 1\nТекст: «Keep text»")
     assert "Отклонено: ftp://bad.example/file" in accepted_message.answers[0]["text"]
     assert app.status_message_ids[(10, 7)] == 9001
 
@@ -582,12 +582,13 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
         return None
 
     app._sleep = no_sleep  # type: ignore[assignment]
-    status, prefix, answer_text = await app._resolve_run_start_status(owner=owner(), run=run)
+    status, prefix, answer_text, track_run_id = await app._resolve_run_start_status(owner=owner(), run=run)
 
     assert api.runs[0]["status"] == "queued"
-    assert answer_text == "Запуск поставлен в очередь"
-    assert prefix.startswith("Запуск поставлен в очередь:")
+    assert answer_text == "Транскрибация запущена"
+    assert prefix.startswith("Транскрибация запущена:")
     assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
+    assert track_run_id == run["analysis_run_id"]
 
 
 @pytest.mark.asyncio
@@ -619,60 +620,72 @@ async def test_access_checks_cover_allowlist_and_scope_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_details() -> None:
+async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_back() -> None:
     api, gateway, app = make_app(page_size=1)
     gateway.add_text(owner=owner(), text="one")
     gateway.add_text(owner=owner(), text="two")
     base_message = FakeMessage()
-    original_edit_text = base_message.edit_text
 
     refresh_status = status_for(gateway)
-    app._set_page_state((10, 7), refresh_status, current_cursor=None, previous_cursors=[], selection=None)
+    app._set_page_state((10, 7), refresh_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
     refresh_callback = FakeCallback(data="ib:rf", message=base_message)
     await app._handle_status_callback(refresh_callback)
     assert refresh_callback.answers[-1]["text"] == "Состояние обновлено"
+    assert "Материалов: 2" in base_message.edits[-1]["text"]
+    assert "версия" not in base_message.edits[-1]["text"]
 
-    next_status = status_for(gateway)
-    app._set_page_state((10, 7), next_status, current_cursor=None, previous_cursors=[], selection=None)
+    main_keyboard = build_status_keyboard(refresh_status)
+    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибировать 2", "Материалы"]
+
+    materials_callback = FakeCallback(data="ib:mt", message=base_message)
+    await app._handle_status_callback(materials_callback)
+    assert materials_callback.answers[-1]["text"] == "Открыт список материалов"
+    assert app.page_states[(10, 7)].screen == "materials"
+    assert base_message.edits[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
+
+    page_one_status = status_for(gateway)
+    app._set_page_state((10, 7), page_one_status, current_cursor=None, previous_cursors=[], selection=None, screen="materials")
     next_callback = FakeCallback(data="ib:pn", message=base_message)
     await app._handle_status_callback(next_callback)
     assert next_callback.answers[-1]["text"] == "Открыта следующая страница"
     assert app.page_states[(10, 7)].current_cursor == "media-1"
 
-    previous_callback = FakeCallback(data="ib:pp", message=base_message)
-    await app._handle_status_callback(previous_callback)
-    assert previous_callback.answers[-1]["text"] == "Открыта предыдущая страница"
-    assert app.page_states[(10, 7)].current_cursor is None
-
-    remove_status = status_for(gateway)
-    remove_keyboard = build_status_keyboard(remove_status)
+    remove_status = status_for(gateway, cursor="media-1")
+    remove_keyboard = build_status_keyboard(remove_status, can_go_back=True, current_cursor="media-1", screen="materials")
     remove_callback_data = next(
         button.callback_data
         for row in remove_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith("ib:rm:")
     )
-    app._set_page_state((10, 7), remove_status, current_cursor=None, previous_cursors=[], selection=None)
+    app._set_page_state((10, 7), remove_status, current_cursor="media-1", previous_cursors=[None], selection=None, screen="materials")
     remove_callback = FakeCallback(data=remove_callback_data, message=base_message)
     await app._handle_status_callback(remove_callback)
-    assert remove_callback.answers[-1]["text"] == "Элемент убран из инбокса"
-    assert api.remove_requests[-1]["media_item_id"] == "media-1"
+    assert remove_callback.answers[-1]["text"] == "Материал убран"
+    assert api.remove_requests[-1]["media_item_id"] == "media-2"
+    assert app.page_states[(10, 7)].screen == "materials"
 
-    page_two_status = status_for(gateway, cursor="media-1")
     gateway.add_text(owner=owner(), text="three")
-    next_page_status = status_for(gateway, cursor="media-2")
-    clear_keyboard = build_status_keyboard(next_page_status, current_cursor="media-2")
+    next_page_status = status_for(gateway, cursor="media-1")
+    clear_keyboard = build_status_keyboard(next_page_status, can_go_back=True, current_cursor="media-1", screen="materials")
     clear_callback_data = next(
         button.callback_data
         for row in clear_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith("ib:cl:")
     )
-    app._set_page_state((10, 7), next_page_status, current_cursor="media-2", previous_cursors=[None], selection=None)
+    app._set_page_state((10, 7), next_page_status, current_cursor="media-1", previous_cursors=[None], selection=None, screen="materials")
     clear_callback = FakeCallback(data=clear_callback_data, message=base_message)
     await app._handle_status_callback(clear_callback)
-    assert clear_callback.answers[-1]["text"] == "Видимые элементы убраны"
+    assert clear_callback.answers[-1]["text"] == "Видимые материалы убраны"
     assert app.page_states[(10, 7)].current_cursor is None
+    assert app.page_states[(10, 7)].screen == "materials"
+
+    back_callback = FakeCallback(data="ib:mn", message=base_message)
+    await app._handle_status_callback(back_callback)
+    assert back_callback.answers[-1]["text"] == "Открыта главная карточка"
+    assert app.page_states[(10, 7)].screen == "main"
+    assert base_message.edits[-1]["text"].startswith("Транскрибация\nМатериалов: 1")
 
 
 @pytest.mark.asyncio
@@ -698,51 +711,40 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     assert refresh_callback.answers[-1]["text"] == "Состояние обновлено"
     base_message.edit_text = original_edit_text  # type: ignore[method-assign]
 
-    gateway.add_text(owner=owner(), text="selection item 1")
-    gateway.add_text(owner=owner(), text="selection item 2")
-    selection_status = status_for(gateway)
-    selection_keyboard = build_status_keyboard(selection_status)
-    selection_callback_data = next(
-        button.callback_data
-        for row in selection_keyboard.inline_keyboard
-        for button in row
-        if button.callback_data.startswith("ib:sl:")
-    )
-    app._set_page_state((10, 7), selection_status, current_cursor=None, previous_cursors=[], selection=None)
-    selection_callback = FakeCallback(data=selection_callback_data, message=base_message)
-    await app._handle_status_callback(selection_callback)
-    assert selection_callback.answers[-1]["text"] == "Выборка создана"
-    selection = app.page_states[(10, 7)].selection
-    assert selection is not None
-
+    gateway.add_text(owner=owner(), text="run item 2")
     run_status = status_for(gateway)
-    run_keyboard = build_status_keyboard(run_status, selection=selection)
+    run_keyboard = build_status_keyboard(run_status)
     run_callback_data = next(
         button.callback_data
         for row in run_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith("ib:rn:")
     )
-    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=selection)
+    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
     run_callback = FakeCallback(data=run_callback_data, message=base_message)
 
     async def no_sleep(_seconds: float) -> None:
         return None
 
     original_get_run_status = gateway.get_run_status
+    statuses = iter(("queued", "running", "succeeded"))
 
-    def fast_fail_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
-        api.runs[0]["status"] = "failed"
+    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = next(statuses, "succeeded")
         return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
 
     app._sleep = no_sleep  # type: ignore[assignment]
-    gateway.get_run_status = fast_fail_run_status  # type: ignore[method-assign]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 4
+    app.run_status_follow_delay_seconds = 0
+    gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
     await app._handle_status_callback(run_callback)
-    assert run_callback.answers[-1]["text"] == "Запуск: ошибка"
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
     assert app.page_states[(10, 7)].selection is None
-    assert "Запуск ошибка:" in base_message.edits[-1]["text"]
-    assert "Завершённые запуски:" in base_message.edits[-1]["text"]
-    assert "1. run-1 — ошибка" in base_message.edits[-1]["text"]
+    assert "Карточка обновится автоматически." in base_message.edits[-1]["text"]
 
     api.runs[0]["status"] = "succeeded"
     api.artifacts.append(
@@ -764,6 +766,15 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
             "message": "Saved for later review.",
         }
     )
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert app.run_watch_tasks == {}
+    assert app.bot.edit_calls
+    assert "Последние результаты:" in app.bot.edit_calls[-1]["text"]
+    assert "1. run-1 — успешно" in app.bot.edit_calls[-1]["text"]
+    assert "Обновить состояние" not in [button.text for row in app.bot.edit_calls[-1]["reply_markup"].inline_keyboard for button in row]
+
     completed_status = status_for(gateway)
     completed_keyboard = build_status_keyboard(completed_status)
     details = {
@@ -772,7 +783,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
         for button in row
         if button.callback_data.startswith(("ib:ar:", "ib:dg:"))
     }
-    app._set_page_state((10, 7), completed_status, current_cursor=None, previous_cursors=[], selection=None)
+    app._set_page_state((10, 7), completed_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
     artifacts_callback = FakeCallback(data=details["ar"], message=base_message)
     diagnostics_callback = FakeCallback(data=details["dg"], message=base_message)
     await app._handle_status_callback(artifacts_callback)
@@ -782,6 +793,60 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     assert diagnostics_callback.answers[-1]["text"] == "Открыта диагностика"
     assert "Файлы запуска run-1" in base_message.edits[-2]["text"]
     assert "Диагностика запуска run-1" in base_message.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> None:
+    api, gateway, app = make_app(page_size=1)
+    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(owner=owner(), text="two")
+    base_message = FakeMessage()
+
+    run_status = status_for(gateway)
+    run_keyboard = build_status_keyboard(run_status)
+    run_callback_data = next(
+        button.callback_data
+        for row in run_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rn:")
+    )
+    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    run_callback = FakeCallback(data=run_callback_data, message=base_message)
+
+    tick = asyncio.Event()
+    original_get_run_status = gateway.get_run_status
+    statuses = iter(("queued", "running"))
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = next(statuses, "running")
+        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 1
+    app.run_status_follow_delay_seconds = 0
+    gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
+
+    await app._handle_status_callback(run_callback)
+    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+
+    materials_callback = FakeCallback(data="ib:mt", message=base_message)
+    await app._handle_status_callback(materials_callback)
+
+    assert materials_callback.answers[-1]["text"] == "Открыт список материалов"
+    assert app.page_states[(10, 7)].screen == "materials"
+    assert base_message.edits[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
+
+    tick.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert app.run_watch_tasks == {}
+    assert app.page_states[(10, 7)].screen == "materials"
+    assert app.bot.edit_calls[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
 
 
 @pytest.mark.asyncio
@@ -806,13 +871,13 @@ async def test_callback_error_paths_cover_stale_unknown_and_normalized_failures(
     await app._handle_status_callback(unknown_callback)
     assert unknown_callback.answers[-1]["show_alert"] is True
 
-    app._set_page_state((10, 7), status_for(gateway), current_cursor=None, previous_cursors=[], selection=None)
+    app._set_page_state((10, 7), status_for(gateway), current_cursor=None, previous_cursors=[], selection=None, screen="materials")
     broken_remove = FakeCallback(data="ib:rm", message=message)
     await app._handle_status_callback(broken_remove)
     assert broken_remove.answers[-1]["show_alert"] is True
 
     no_next_state = status_for(gateway)
-    app._set_page_state((10, 7), no_next_state, current_cursor=None, previous_cursors=[], selection=None)
+    app._set_page_state((10, 7), no_next_state, current_cursor=None, previous_cursors=[], selection=None, screen="materials")
     no_next_callback = FakeCallback(data="ib:pn", message=message)
     await app._handle_status_callback(no_next_callback)
     assert no_next_callback.answers[-1]["show_alert"] is True
