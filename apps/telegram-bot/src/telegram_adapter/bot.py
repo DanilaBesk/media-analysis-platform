@@ -298,6 +298,26 @@ class TelegramInboxApp:
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Видимые материалы убраны")
                 return
+            if action == "rl":
+                collection_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                status = self.gateway.remove_latest_collection_item(
+                    owner=owner,
+                    collection_id=collection_id,
+                    expected_version=expected_version,
+                    cursor=page_state.current_cursor if page_state else None,
+                )
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=page_state.current_cursor if page_state else None,
+                    previous_cursors=page_state.previous_cursors if page_state else [],
+                    selection=page_state.selection if page_state else None,
+                    screen=page_state.screen if page_state else "materials",
+                )
+                await self._edit_callback_status(callback, status)
+                await callback.answer("Последний материал убран")
+                return
             if action == "sl":
                 collection_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
@@ -769,6 +789,14 @@ def build_status_keyboard(
         if status.items and collection_id:
             rows.append(
                 [
+                    InlineKeyboardButton(
+                        text="Убрать последнее",
+                        callback_data=_callback_payload(
+                            "rl",
+                            _encode_callback_token(collection_id),
+                            _encode_callback_version(collection_version),
+                        ),
+                    ),
                     InlineKeyboardButton(
                         text="Очистить видимое",
                         callback_data=_callback_payload(

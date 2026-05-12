@@ -668,17 +668,22 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     gateway.add_text(owner=owner(), text="three")
     next_page_status = status_for(gateway, cursor="media-1")
     clear_keyboard = build_status_keyboard(next_page_status, can_go_back=True, current_cursor="media-1", screen="materials")
+    remove_latest_callback_data = next(
+        button.callback_data
+        for row in clear_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rl:")
+    )
     clear_callback_data = next(
         button.callback_data
         for row in clear_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith("ib:cl:")
     )
-    app._set_page_state((10, 7), next_page_status, current_cursor="media-1", previous_cursors=[None], selection=None, screen="materials")
-    clear_callback = FakeCallback(data=clear_callback_data, message=base_message)
-    await app._handle_status_callback(clear_callback)
-    assert clear_callback.answers[-1]["text"] == "Видимые материалы убраны"
-    assert app.page_states[(10, 7)].current_cursor is None
+    remove_latest_callback = FakeCallback(data=remove_latest_callback_data, message=base_message)
+    await app._handle_status_callback(remove_latest_callback)
+    assert remove_latest_callback.answers[-1]["text"] == "Последний материал убран"
+    assert api.remove_requests[-1]["media_item_id"] == "media-2"
     assert app.page_states[(10, 7)].screen == "materials"
 
     back_callback = FakeCallback(data="ib:mn", message=base_message)

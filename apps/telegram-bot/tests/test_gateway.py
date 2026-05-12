@@ -409,6 +409,7 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
     assert all(callback.startswith("ib:rm:") for callback in callbacks[:5])
     assert "ib:pn" in callbacks
+    assert any(callback.startswith("ib:rl:") for callback in callbacks)
     assert any(callback.startswith("ib:cl:") for callback in callbacks)
     assert "ib:rf" not in callbacks
     assert max(len(callback) for callback in callbacks) <= 64
@@ -458,6 +459,36 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
         "media-5",
         "media-6",
         "media-12",
+    ]
+
+
+def test_remove_latest_collection_item_removes_last_item_from_full_collection() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api, page_size=2)
+    for index in range(4):
+        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status, screen="materials")
+    remove_latest_callback = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rl:")
+    )
+    action, tokens = _parse_callback_payload(remove_latest_callback)
+    updated = gateway.remove_latest_collection_item(
+        owner=owner(),
+        collection_id=_decode_callback_token(tokens[0]),
+        expected_version=_decode_callback_version(tokens[1]),
+    )
+
+    assert action == "rl"
+    assert api.remove_requests[-1]["media_item_id"] == "media-4"
+    assert [item["media_item_id"] for item in updated.collection["items"]] == [
+        "media-1",
+        "media-2",
+        "media-3",
     ]
 
 

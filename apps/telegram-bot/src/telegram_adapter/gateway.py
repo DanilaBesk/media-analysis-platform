@@ -301,6 +301,38 @@ class TelegramInboxGateway:
             version = int(collection["version"])
         return self.restore_status(owner=owner, cursor=cursor)
 
+    def remove_latest_collection_item(
+        self,
+        *,
+        owner: JsonObject,
+        collection_id: str,
+        expected_version: int,
+        cursor: str | None = None,
+    ) -> InboxStatus:
+        collection = self._get_verified_inbox_collection(
+            owner=owner,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        collection_items = list(collection.get("items", []) or [])
+        latest_item = next(
+            (
+                item
+                for item in reversed(collection_items)
+                if str(item.get("media_item_id") or "").strip()
+            ),
+            None,
+        )
+        if latest_item is None:
+            raise RuntimeError("inbox_empty")
+        self.api_client.remove_collection_item(
+            owner=owner,
+            collection_id=collection["collection_id"],
+            media_item_id=str(latest_item["media_item_id"]),
+            expected_version=int(collection["version"]),
+        )
+        return self.restore_status(owner=owner, cursor=cursor)
+
     def create_selection(
         self,
         *,
