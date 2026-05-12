@@ -715,6 +715,9 @@ func cursorPage[T any](items []T, cursor string, pageSize int, cursorOf func(T) 
 		end = len(items)
 	}
 	pageItems := items[start:end]
+	if pageItems == nil {
+		pageItems = []T{}
+	}
 	page := pageMetadata{PageSize: pageSize, HasMore: hasMore}
 	if hasMore && len(pageItems) > 0 {
 		page.NextCursor = cursorOf(pageItems[len(pageItems)-1])

@@ -659,18 +659,18 @@ func TestApiHttpAdminLifecycleRoutesCancelRetryRefreshAndReconcile(t *testing.T)
 func TestApiHttpObservabilitySurfacesOperationalFailuresAndQueueLag(t *testing.T) {
 	t.Parallel()
 
-		public := &fakePublicService{
-			observability: storage.ObservabilitySnapshot{
-				QueueTasks:                       3,
-				QueueLagSeconds:                  42,
-				CleanupFailures:                  1,
-				CleanupFailuresRecent:            1,
-				ArtifactResolutionFailures:       2,
-				ArtifactResolutionFailuresRecent: 1,
-				ObservabilityWindowSeconds:       900,
-				GeneratedAt:                      time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
-			},
-		}
+	public := &fakePublicService{
+		observability: storage.ObservabilitySnapshot{
+			QueueTasks:                       3,
+			QueueLagSeconds:                  42,
+			CleanupFailures:                  1,
+			CleanupFailuresRecent:            1,
+			ArtifactResolutionFailures:       2,
+			ArtifactResolutionFailuresRecent: 1,
+			ObservabilityWindowSeconds:       900,
+			GeneratedAt:                      time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+		},
+	}
 	mux := newFinalMux(Dependencies{Public: public})
 
 	rec := httptest.NewRecorder()
@@ -684,15 +684,15 @@ func TestApiHttpObservabilitySurfacesOperationalFailuresAndQueueLag(t *testing.T
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("Unmarshal(observability) error = %v", err)
 	}
-		if body.Observability.QueueLagSeconds != 42 ||
-			body.Observability.CleanupFailures != 1 ||
-			body.Observability.CleanupFailuresRecent != 1 ||
-			body.Observability.ArtifactResolutionFailures != 2 ||
-			body.Observability.ArtifactResolutionFailuresRecent != 1 ||
-			body.Observability.ObservabilityWindowSeconds != 900 {
-			t.Fatalf("observability = %#v", body.Observability)
-		}
+	if body.Observability.QueueLagSeconds != 42 ||
+		body.Observability.CleanupFailures != 1 ||
+		body.Observability.CleanupFailuresRecent != 1 ||
+		body.Observability.ArtifactResolutionFailures != 2 ||
+		body.Observability.ArtifactResolutionFailuresRecent != 1 ||
+		body.Observability.ObservabilityWindowSeconds != 900 {
+		t.Fatalf("observability = %#v", body.Observability)
 	}
+}
 
 func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
 	t.Parallel()
@@ -740,8 +740,8 @@ func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
 		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
 	})
 
-		t.Run("update collection maps contract violation", func(t *testing.T) {
-			t.Parallel()
+	t.Run("update collection maps contract violation", func(t *testing.T) {
+		t.Parallel()
 
 		rec := httptest.NewRecorder()
 		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrContractViolation}}).ServeHTTP(rec, jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{
@@ -749,23 +749,23 @@ func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
 			"expected_version": float64(3),
 			"name":             "Review set v2",
 		}))
-			assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
-		})
+		assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request")
+	})
 
-		t.Run("update collection items maps owner mismatch", func(t *testing.T) {
-			t.Parallel()
+	t.Run("update collection items maps owner mismatch", func(t *testing.T) {
+		t.Parallel()
 
-			rec := httptest.NewRecorder()
-			newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{
-				"owner":            owner,
-				"expected_version": float64(3),
-				"items":            []map[string]any{{"media_item_id": "media-1", "position": float64(0)}},
-			}))
-			assertErrorCode(t, rec, http.StatusNotFound, "not_found")
-		})
+		rec := httptest.NewRecorder()
+		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{
+			"owner":            owner,
+			"expected_version": float64(3),
+			"items":            []map[string]any{{"media_item_id": "media-1", "position": float64(0)}},
+		}))
+		assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+	})
 
-		t.Run("create selection maps owner mismatch", func(t *testing.T) {
-			t.Parallel()
+	t.Run("create selection maps owner mismatch", func(t *testing.T) {
+		t.Parallel()
 
 		rec := httptest.NewRecorder()
 		newFinalMux(Dependencies{Public: &fakePublicService{err: storage.ErrOwnerMismatch}}).ServeHTTP(rec, jsonRequest(http.MethodPost, "/v1/selections", map[string]any{
@@ -1349,6 +1349,22 @@ func TestApiHttpListDiagnosticsPaginatesAndMapsServiceErrors(t *testing.T) {
 	assertErrorCode(t, errRec, http.StatusNotFound, "not_found")
 }
 
+func TestPagedEmptyResultEncodesItemsAsArray(t *testing.T) {
+	t.Parallel()
+
+	items, page := cursorPage([]storage.DiagnosticRecord(nil), "", 3, func(diagnostic storage.DiagnosticRecord) string {
+		return diagnostic.ID
+	})
+	body, err := json.Marshal(paged(items, page))
+	if err != nil {
+		t.Fatalf("Marshal(paged empty diagnostics) error = %v", err)
+	}
+
+	if !strings.Contains(string(body), `"items":[]`) {
+		t.Fatalf("paged empty body = %s, want items as empty array", body)
+	}
+}
+
 func TestHandleUpdateCollectionItemsMapsServiceErrors(t *testing.T) {
 	t.Parallel()
 
@@ -1370,7 +1386,7 @@ func TestHandleRemoveCollectionItemMapsUpdateErrors(t *testing.T) {
 	store := &updateCollectionItemsErrorStore{
 		fakePublicService: &fakePublicService{
 			collection: storage.CollectionRecord{
-				ID: "collection-1",
+				ID:    "collection-1",
 				Owner: storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"},
 				Items: []storage.CollectionItemRecord{
 					{MediaItemID: "media-1", Position: 0},

@@ -9,6 +9,7 @@
     <completed-packet>media-uhi-mcp-adapter</completed-packet>
     <completed-packet>runtime-final-inbox-first</completed-packet>
     <completed-packet>media-xgf-sql-collection-append</completed-packet>
+    <completed-packet>media-fwx-paged-empty-array</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
     <remaining-closure-gate>none</remaining-closure-gate>
@@ -195,6 +196,25 @@ New media_item records remain API-owned and append to inbox or named collection 
       <check>Focused SQL storage regression proves existing inbox and target collection appends do not reuse position 0.</check>
       <check>Storage and API package tests pass.</check>
       <check>Compose API accepts a second media_item for an owner with an existing inbox item.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-fwx-paged-empty-array" module="M-API-HTTP" phase="RuntimeBugfix" verification-ref="EV-API,EV-RUNTIME">
+    <purpose>Fix Telegram status refresh failure caused by empty diagnostics lists encoded as null.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/api/media_handlers.go</file-1>
+      <file-2>apps/api/internal/api/api_test.go</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Public paginated list envelopes must encode items as an array on every page, including empty diagnostics, artifacts, media, run, and event pages. Adapters must not need legacy local fallback state to render an empty API-owned result.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused API regression proves nil source slices encode as items: [] through the shared paging helper.</check>
+      <check>Live diagnostics endpoint for the Telegram owner returns items: [] for an empty run diagnostic page.</check>
+      <check>Telegram gateway restore_status completes against the live API for the affected owner and terminal run.</check>
     </verification>
   </HotfixPacket>
 </OperationalPackets>
