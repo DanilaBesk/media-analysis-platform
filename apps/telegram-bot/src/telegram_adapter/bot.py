@@ -378,11 +378,11 @@ class TelegramInboxApp:
                     callback,
                     status,
                     prefix=_detail_prefix(
-                        title=f"Файлы запуска {_short_id(analysis_run_id)}",
+                        title="Результат",
                         lines=[f"- {_artifact_label(artifact)}" for artifact in artifacts] or ["- Файлов пока нет."],
                     ),
                 )
-                await callback.answer("Открыт список файлов")
+                await callback.answer("Открыт результат")
                 return
             if action == "dg":
                 analysis_run_id = _decode_callback_token(tokens[0])
@@ -405,7 +405,7 @@ class TelegramInboxApp:
                     callback,
                     status,
                     prefix=_detail_prefix(
-                        title=f"Диагностика запуска {_short_id(analysis_run_id)}",
+                        title="Диагностика",
                         lines=[f"- {_diagnostic_label(diagnostic)}" for diagnostic in diagnostics] or ["- Диагностики пока нет."],
                     ),
                 )
@@ -477,7 +477,7 @@ class TelegramInboxApp:
                 status = self.gateway.restore_status(owner=owner)
                 return (
                     status,
-                    f"Транскрибация {_run_status_text(status_name)}: {_short_id(run_id)}\n\n",
+                    f"Транскрибация: {_run_status_text(status_name)}\n\n",
                     f"Транскрибация: {_run_status_text(status_name)}",
                     None,
                 )
@@ -486,7 +486,7 @@ class TelegramInboxApp:
         status = self.gateway.restore_status(owner=owner)
         return (
             status,
-            f"Транскрибация запущена: {_short_id(run_id)}\n"
+            "Транскрибация запущена.\n"
             "Карточка обновится автоматически.\n\n",
             "Транскрибация запущена",
             run_id or None,
@@ -708,26 +708,10 @@ def render_status_text(
     for record in status.rejected:
         lines.append(f"Отклонено: {record.label} ({rejected_reason_text(record.reason)})")
 
-    if status.active_runs:
+    active_run = _latest_active_run(status)
+    if active_run is not None:
         lines.append("")
-        lines.append("Сейчас в работе:")
-        for run in status.active_runs[:3]:
-            lines.append(
-                f"- {_short_id(run['analysis_run_id'])}: {_run_status_text(str(run.get('status') or 'unknown'))}"
-            )
-
-    completed_runs = [
-        run
-        for run in status.recent_runs
-        if run.get("status") in TERMINAL_RUN_STATUSES and run.get("analysis_run_id")
-    ]
-    if completed_runs:
-        lines.append("")
-        lines.append("Последние результаты:")
-        for index, run in enumerate(completed_runs[:3], start=1):
-            run_id = str(run["analysis_run_id"])
-            lines.append(f"{index}. {_short_id(run_id)} — {_run_status_text(str(run.get('status') or 'unknown'))}")
-        lines.append("Кнопки ниже открывают файлы результата и диагностику.")
+        lines.append(f"Сейчас в работе: {_run_status_text(str(active_run.get('status') or 'unknown'))}")
     return "\n".join(lines)
 
 
@@ -749,7 +733,7 @@ def build_status_keyboard(
         if material_count and collection_id:
             primary_row.append(
                 InlineKeyboardButton(
-                    text=f"Транскрибировать {material_count}",
+                    text=f"Транскрибация ({material_count})",
                     callback_data=_callback_payload(
                         "rn",
                         _encode_callback_token(collection_id),
@@ -797,32 +781,36 @@ def build_status_keyboard(
                 ]
             )
         rows.append([InlineKeyboardButton(text="К карточке", callback_data=_callback_payload("mn"))])
-    completed_runs = [
-        run
-        for run in status.recent_runs
-        if run.get("status") in TERMINAL_RUN_STATUSES and run.get("analysis_run_id")
-    ]
-    for index, run in enumerate(completed_runs, start=1):
-        rows.append(
-            [
+    if screen == "main":
+        latest_result_run = _latest_terminal_run_with_payload(status, status.artifacts_by_run)
+        latest_diagnostics_run = _latest_terminal_run_with_payload(status, status.diagnostics_by_run)
+        result_row: list[InlineKeyboardButton] = []
+        if latest_result_run is not None:
+            run_id = str(latest_result_run["analysis_run_id"])
+            result_row.append(
                 InlineKeyboardButton(
-                    text=f"Файлы {index}",
+                    text="Результат",
                     callback_data=_callback_payload(
                         "ar",
-                        _encode_callback_token(str(run["analysis_run_id"])),
-                        _encode_callback_version(int(run.get("version") or 0)),
+                        _encode_callback_token(run_id),
+                        _encode_callback_version(int(latest_result_run.get("version") or 0)),
                     ),
-                ),
+                )
+            )
+        if latest_diagnostics_run is not None:
+            run_id = str(latest_diagnostics_run["analysis_run_id"])
+            result_row.append(
                 InlineKeyboardButton(
-                    text=f"Диагностика {index}",
+                    text="Диагностика",
                     callback_data=_callback_payload(
                         "dg",
-                        _encode_callback_token(str(run["analysis_run_id"])),
-                        _encode_callback_version(int(run.get("version") or 0)),
+                        _encode_callback_token(run_id),
+                        _encode_callback_version(int(latest_diagnostics_run.get("version") or 0)),
                     ),
-                ),
-            ]
-    )
+                )
+            )
+        if result_row:
+            rows.append(result_row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -1081,18 +1069,21 @@ def _item_label(item: JsonObject) -> str:
 
 
 def _artifact_label(artifact: JsonObject) -> str:
-    artifact_id = str(artifact.get("artifact_id") or "artifact")
     kind = str(artifact.get("kind") or "artifact")
     status = str(artifact.get("status") or "unknown")
-    content_type = artifact.get("content_type")
-    content_suffix = f", {content_type}" if content_type else ""
-    return f"{_short_id(artifact_id)}: {_artifact_kind_text(kind)} [{_artifact_status_text(status)}{content_suffix}]"
+    kind_text = _artifact_kind_text(kind).capitalize()
+    status_text = _artifact_status_text(status)
+    if status_text == "готов":
+        return kind_text
+    return f"{kind_text} · {status_text}"
 
 
 def _diagnostic_label(diagnostic: JsonObject) -> str:
-    code = str(diagnostic.get("code") or "diagnostic")
-    message = str(diagnostic.get("message") or diagnostic.get("severity") or "recorded")
-    return f"{code}: {message}"
+    message = str(diagnostic.get("message") or "").strip()
+    severity = _diagnostic_severity_text(str(diagnostic.get("severity") or "info"))
+    if message:
+        return f"{severity}: {message}"
+    return severity
 
 
 def _visible_item_lines(items: list[JsonObject]) -> list[str]:
@@ -1127,8 +1118,21 @@ def _media_group_id(item: JsonObject) -> str | None:
     return str(media_group_id) if media_group_id else None
 
 
-def _short_id(value: str) -> str:
-    return value if len(value) <= 12 else f"{value[:8]}...{value[-4:]}"
+def _latest_active_run(status: InboxStatus) -> JsonObject | None:
+    return status.active_runs[-1] if status.active_runs else None
+
+
+def _latest_terminal_run_with_payload(
+    status: InboxStatus,
+    payloads_by_run: dict[str, list[JsonObject]],
+) -> JsonObject | None:
+    for run in reversed(status.recent_runs):
+        if run.get("status") not in TERMINAL_RUN_STATUSES or not run.get("analysis_run_id"):
+            continue
+        run_id = str(run["analysis_run_id"])
+        if payloads_by_run.get(run_id):
+            return run
+    return None
 
 
 def _start_text() -> str:
@@ -1138,7 +1142,7 @@ def _start_text() -> str:
 def _help_text() -> str:
     return (
         "/inbox - показать текущее состояние входящих\n"
-        "Кнопки ниже обновляют состояние, листают страницы, убирают элементы из входящих, готовят запуск и открывают файлы или диагностику по завершённым запускам."
+        "Кнопки помогают открыть список материалов, убрать лишнее, запустить транскрибацию и открыть последний результат или диагностику."
     )
 
 
@@ -1202,6 +1206,15 @@ def _artifact_kind_text(kind: str) -> str:
         "run_diagnostics": "диагностика запуска",
         "artifact": "файл",
     }.get(kind, kind)
+
+
+def _diagnostic_severity_text(severity: str) -> str:
+    return {
+        "info": "Инфо",
+        "warning": "Предупреждение",
+        "error": "Ошибка",
+        "critical": "Критично",
+    }.get(severity, "Диагностика")
 
 
 def _display_name_text(value: str) -> str:

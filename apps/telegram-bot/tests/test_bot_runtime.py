@@ -586,7 +586,7 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
 
     assert api.runs[0]["status"] == "queued"
     assert answer_text == "Транскрибация запущена"
-    assert prefix.startswith("Транскрибация запущена:")
+    assert prefix.startswith("Транскрибация запущена.")
     assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
     assert track_run_id == run["analysis_run_id"]
 
@@ -635,7 +635,7 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     assert "версия" not in base_message.edits[-1]["text"]
 
     main_keyboard = build_status_keyboard(refresh_status)
-    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибировать 2", "Материалы"]
+    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибация (2)", "Материалы"]
 
     materials_callback = FakeCallback(data="ib:mt", message=base_message)
     await app._handle_status_callback(materials_callback)
@@ -771,8 +771,8 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
 
     assert app.run_watch_tasks == {}
     assert app.bot.edit_calls
-    assert "Последние результаты:" in app.bot.edit_calls[-1]["text"]
-    assert "1. run-1 — успешно" in app.bot.edit_calls[-1]["text"]
+    assert "Последние результаты:" not in app.bot.edit_calls[-1]["text"]
+    assert "run-1" not in app.bot.edit_calls[-1]["text"]
     assert "Обновить состояние" not in [button.text for row in app.bot.edit_calls[-1]["reply_markup"].inline_keyboard for button in row]
 
     completed_status = status_for(gateway)
@@ -789,10 +789,12 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     await app._handle_status_callback(artifacts_callback)
     await app._handle_status_callback(diagnostics_callback)
 
-    assert artifacts_callback.answers[-1]["text"] == "Открыт список файлов"
+    assert artifacts_callback.answers[-1]["text"] == "Открыт результат"
     assert diagnostics_callback.answers[-1]["text"] == "Открыта диагностика"
-    assert "Файлы запуска run-1" in base_message.edits[-2]["text"]
-    assert "Диагностика запуска run-1" in base_message.edits[-1]["text"]
+    assert "Результат" in base_message.edits[-2]["text"]
+    assert "run-1" not in base_message.edits[-2]["text"]
+    assert "Диагностика" in base_message.edits[-1]["text"]
+    assert "run-1" not in base_message.edits[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -979,8 +981,8 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
     assert _message_text(message) == "caption"
     assert [file.kind for file in files] == ["photo", "video", "document", "audio", "voice"]
     assert _chat_type(SimpleNamespace(type=SimpleNamespace(value="supergroup"))) == "supergroup"
-    assert _artifact_label({"artifact_id": "artifact-1234567890", "kind": "report", "status": "ready"}) == "artifact...7890: отчёт [готов]"
-    assert _diagnostic_label({"severity": "warning"}) == "diagnostic: warning"
+    assert _artifact_label({"artifact_id": "artifact-1234567890", "kind": "report", "status": "ready"}) == "Отчёт"
+    assert _diagnostic_label({"severity": "warning"}) == "Предупреждение"
     assert _media_group_id({"metadata": "not-a-dict"}) is None
     assert _detail_prefix(title="Artifacts", lines=["- one"]) == "Artifacts\n- one\n\n"
     assert _start_text().startswith("Отправь текст, ссылку")

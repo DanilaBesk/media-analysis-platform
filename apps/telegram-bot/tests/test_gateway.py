@@ -369,7 +369,7 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
 
     assert text.startswith("Транскрибация\nМатериалов: 2\n")
-    assert [button.text for button in keyboard.inline_keyboard[0]] == ["Транскрибировать 2", "Материалы"]
+    assert [button.text for button in keyboard.inline_keyboard[0]] == ["Транскрибация (2)", "Материалы"]
     assert run_action == "rn"
     assert _decode_callback_token(run_tokens[0]) == "inbox-1"
     assert _decode_callback_version(run_tokens[1]) == 1
@@ -403,7 +403,7 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
 
     status = gateway.restore_status(owner=owner())
     main_keyboard = build_status_keyboard(status, current_cursor=None)
-    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибировать 12", "Материалы"]
+    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибация (12)", "Материалы"]
 
     keyboard = build_status_keyboard(status, current_cursor=None, screen="materials")
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
@@ -533,8 +533,12 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
                 "version": 123456,
             }
         ],
-        artifacts_by_run={},
-        diagnostics_by_run={},
+        artifacts_by_run={
+            "33333333-3333-3333-3333-333333333333": [{"artifact_id": "artifact-1", "kind": "report", "status": "available"}]
+        },
+        diagnostics_by_run={
+            "33333333-3333-3333-3333-333333333333": [{"diagnostic_id": "diagnostic-1", "severity": "info"}]
+        },
         rejected=[],
     )
     main_keyboard = build_status_keyboard(
@@ -565,6 +569,65 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
     assert any(callback.startswith("ib:mt") for callback in callbacks)
     assert any(callback.startswith("ib:ar:") for callback in callbacks)
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
+
+
+def test_main_card_keeps_latest_useful_result_when_newer_terminal_run_failed() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="transcript candidate")
+
+    api.runs.extend(
+        [
+            {"analysis_run_id": "run-succeeded", "status": "succeeded", "version": 1},
+            {"analysis_run_id": "run-failed", "status": "failed", "version": 2},
+        ]
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-succeeded",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+        }
+    )
+    api.diagnostics.extend(
+        [
+            {
+                "diagnostic_id": "diagnostic-older",
+                "subject_type": "analysis_run",
+                "subject_id": "run-succeeded",
+                "severity": "info",
+                "message": "Older success note.",
+            },
+            {
+                "diagnostic_id": "diagnostic-newer",
+                "subject_type": "analysis_run",
+                "subject_id": "run-failed",
+                "severity": "error",
+                "message": "Newer failure note.",
+            },
+        ]
+    )
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status)
+    callbacks_by_text = {
+        button.text: button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.text in {"Результат", "Диагностика"}
+    }
+
+    result_action, result_tokens = _parse_callback_payload(callbacks_by_text["Результат"])
+    diagnostics_action, diagnostics_tokens = _parse_callback_payload(callbacks_by_text["Диагностика"])
+
+    assert result_action == "ar"
+    assert _decode_callback_token(result_tokens[0]) == "run-succeeded"
+    assert _decode_callback_version(result_tokens[1]) == 1
+    assert diagnostics_action == "dg"
+    assert _decode_callback_token(diagnostics_tokens[0]) == "run-failed"
+    assert _decode_callback_version(diagnostics_tokens[1]) == 2
 
 
 def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
@@ -609,8 +672,8 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
 
     selection_text = render_status_text(status, selection={"selection_id": "selection-1", "items": status.collection["items"]})
-    assert "Последние результаты:" in selection_text
-    assert "1. run-1 — успешно" in selection_text
+    assert "Последние результаты:" not in selection_text
+    assert "run-1" not in selection_text
     assert "Выборка готова:" not in selection_text
     assert "Кнопка ниже запустит анализ этой выборки." not in selection_text
     assert "artifact-1: transcript [available, text/plain]" not in selection_text
@@ -735,7 +798,7 @@ def test_restore_status_tolerates_missing_collection_and_renders_without_collect
     assert status.diagnostics_by_run["run-done"][0]["diagnostic_id"] == "diagnostic-1"
     assert "Материалов: 1" in text
     assert "Текст: «item»" in text
-    assert "Кнопки ниже открывают файлы результата и диагностику." in text
+    assert "run-done" not in text
 
 
 def test_stale_callback_copy_is_safe_and_actionable() -> None:
@@ -774,7 +837,7 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
 
     queued_text = render_status_text(gateway.restore_status(owner=owner()))
 
-    assert "- run-1: в очереди" in queued_text
+    assert "Сейчас в работе: в очереди" in queued_text
     assert "failed" not in queued_text
     assert "Последние результаты:" not in queued_text
 
@@ -806,9 +869,8 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
     completed_callbacks = [button.callback_data for row in completed_keyboard.inline_keyboard for button in row]
 
     assert completed.active_runs == []
-    assert "Последние результаты:" in completed_text
-    assert "1. run-1 — успешно" in completed_text
-    assert "Кнопки ниже открывают файлы результата и диагностику." in completed_text
+    assert "Последние результаты:" not in completed_text
+    assert "run-1" not in completed_text
     assert "artifact-1: transcript [available, text/plain]" not in completed_text
     assert "worker_note: Result stored for later delivery." not in completed_text
     assert any(callback.startswith("ib:ar:") for callback in completed_callbacks)
@@ -836,7 +898,7 @@ def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() 
     assert app.status_message_ids == {(10, 7): 9001}
     assert app.page_states[(10, 7)].current_cursor is None
     assert "restore after reconnect" in message.answers[0]["text"]
-    assert "- run-1: в очереди" in message.answers[0]["text"]
+    assert "Сейчас в работе: в очереди" in message.answers[0]["text"]
     assert "Последние результаты:" not in message.answers[0]["text"]
 
 
