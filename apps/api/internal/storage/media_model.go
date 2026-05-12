@@ -939,13 +939,15 @@ func (r *Repository) CleanOrphanObjects(ctx context.Context) (OrphanCleanupResul
 
 func (r *Repository) GetObservabilitySnapshot(ctx context.Context) (ObservabilitySnapshot, error) {
 	now := r.now()
+	windowStart := now.Add(-15 * time.Minute)
 	queueRecords, err := r.state.ListAnalysisRunQueue(ctx, "", "", "", 1000)
 	if err != nil {
 		return ObservabilitySnapshot{}, err
 	}
 	snapshot := ObservabilitySnapshot{
-		QueueTasks:  len(queueRecords),
-		GeneratedAt: now,
+		QueueTasks:                 len(queueRecords),
+		ObservabilityWindowSeconds: int64((15 * time.Minute).Seconds()),
+		GeneratedAt:                now,
 	}
 	for _, record := range queueRecords {
 		if record.CreatedAt.IsZero() || record.CreatedAt.After(now) {
@@ -961,11 +963,18 @@ func (r *Repository) GetObservabilitySnapshot(ctx context.Context) (Observabilit
 		return ObservabilitySnapshot{}, err
 	}
 	for _, diagnostic := range diagnostics {
+		isRecent := !diagnostic.CreatedAt.IsZero() && !diagnostic.CreatedAt.Before(windowStart) && !diagnostic.CreatedAt.After(now)
 		switch diagnostic.Code {
 		case "orphan_object_cleanup_failed":
 			snapshot.CleanupFailures++
+			if isRecent {
+				snapshot.CleanupFailuresRecent++
+			}
 		case "artifact_resolution_failed":
 			snapshot.ArtifactResolutionFailures++
+			if isRecent {
+				snapshot.ArtifactResolutionFailuresRecent++
+			}
 		}
 	}
 	return snapshot, nil

@@ -162,3 +162,9 @@ When diagnosing Telegram adapter incidents, distinguish external polling degrada
 - External Telegram upstream flaps are logged with `[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE] classification=telegram_upstream_failure` and later `classification=telegram_upstream_recovered`.
 - Internal message/callback/status handler failures are logged with `[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]` plus normalized error metadata.
 - Generic user-facing outage copy must not be treated as proof of a platform outage by itself; check the structured log marker first.
+
+Observability endpoint semantics:
+
+- `/v1/admin/observability` exposes cumulative counters like `artifact_resolution_failures` plus recent-window counters like `artifact_resolution_failures_recent`.
+- `observability_window_seconds` defines the current-window size used by the recent counters.
+- Use the recent counters to judge active breakage; use the cumulative counters to understand historical residue.

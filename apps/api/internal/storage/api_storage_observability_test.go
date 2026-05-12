@@ -229,8 +229,9 @@ func TestApiStorageObservabilityIgnoresFutureQueueRecords(t *testing.T) {
 		{AnalysisRunID: "run-3", CreatedAt: now.Add(time.Minute)},
 	}
 	state.ops = []DiagnosticRecord{
-		{Code: "orphan_object_cleanup_failed"},
-		{Code: "artifact_resolution_failed"},
+		{Code: "orphan_object_cleanup_failed", CreatedAt: now.Add(-10 * time.Minute)},
+		{Code: "artifact_resolution_failed", CreatedAt: now.Add(-20 * time.Minute)},
+		{Code: "artifact_resolution_failed", CreatedAt: now.Add(-5 * time.Minute)},
 	}
 	repo, err := NewRepository(state, newFakeObjectStore(), WithClock(func() time.Time { return now }))
 	if err != nil {
@@ -241,7 +242,13 @@ func TestApiStorageObservabilityIgnoresFutureQueueRecords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetObservabilitySnapshot() error = %v", err)
 	}
-	if snapshot.QueueTasks != 3 || snapshot.QueueLagSeconds != 30 || snapshot.CleanupFailures != 1 || snapshot.ArtifactResolutionFailures != 1 {
+	if snapshot.QueueTasks != 3 ||
+		snapshot.QueueLagSeconds != 30 ||
+		snapshot.CleanupFailures != 1 ||
+		snapshot.CleanupFailuresRecent != 1 ||
+		snapshot.ArtifactResolutionFailures != 2 ||
+		snapshot.ArtifactResolutionFailuresRecent != 1 ||
+		snapshot.ObservabilityWindowSeconds != 900 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 }

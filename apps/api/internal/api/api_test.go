@@ -659,15 +659,18 @@ func TestApiHttpAdminLifecycleRoutesCancelRetryRefreshAndReconcile(t *testing.T)
 func TestApiHttpObservabilitySurfacesOperationalFailuresAndQueueLag(t *testing.T) {
 	t.Parallel()
 
-	public := &fakePublicService{
-		observability: storage.ObservabilitySnapshot{
-			QueueTasks:                 3,
-			QueueLagSeconds:            42,
-			CleanupFailures:            1,
-			ArtifactResolutionFailures: 2,
-			GeneratedAt:                time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
-		},
-	}
+		public := &fakePublicService{
+			observability: storage.ObservabilitySnapshot{
+				QueueTasks:                       3,
+				QueueLagSeconds:                  42,
+				CleanupFailures:                  1,
+				CleanupFailuresRecent:            1,
+				ArtifactResolutionFailures:       2,
+				ArtifactResolutionFailuresRecent: 1,
+				ObservabilityWindowSeconds:       900,
+				GeneratedAt:                      time.Date(2026, 5, 10, 12, 0, 0, 0, time.UTC),
+			},
+		}
 	mux := newFinalMux(Dependencies{Public: public})
 
 	rec := httptest.NewRecorder()
@@ -681,10 +684,15 @@ func TestApiHttpObservabilitySurfacesOperationalFailuresAndQueueLag(t *testing.T
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("Unmarshal(observability) error = %v", err)
 	}
-	if body.Observability.QueueLagSeconds != 42 || body.Observability.CleanupFailures != 1 || body.Observability.ArtifactResolutionFailures != 2 {
-		t.Fatalf("observability = %#v", body.Observability)
+		if body.Observability.QueueLagSeconds != 42 ||
+			body.Observability.CleanupFailures != 1 ||
+			body.Observability.CleanupFailuresRecent != 1 ||
+			body.Observability.ArtifactResolutionFailures != 2 ||
+			body.Observability.ArtifactResolutionFailuresRecent != 1 ||
+			body.Observability.ObservabilityWindowSeconds != 900 {
+			t.Fatalf("observability = %#v", body.Observability)
+		}
 	}
-}
 
 func TestApiHttpPublicHandlerErrorMappings(t *testing.T) {
 	t.Parallel()

@@ -603,7 +603,7 @@ func TestApiStorageRecordsArtifactResolutionFailuresForObservability(t *testing.
 	if err != nil {
 		t.Fatalf("GetObservabilitySnapshot() error = %v", err)
 	}
-	if snapshot.ArtifactResolutionFailures != 1 {
+	if snapshot.ArtifactResolutionFailures != 1 || snapshot.ArtifactResolutionFailuresRecent != 1 || snapshot.ObservabilityWindowSeconds != 900 {
 		t.Fatalf("observability = %#v, want one artifact resolution failure", snapshot)
 	}
 	diagnostics, err := repo.ListDiagnostics(context.Background(), owner, DiagnosticQuery{SubjectType: "artifact", SubjectID: "66666666-6666-6666-6666-666666666666"})

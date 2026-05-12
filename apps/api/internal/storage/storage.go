@@ -166,11 +166,14 @@ type OrphanCleanupResult struct {
 }
 
 type ObservabilitySnapshot struct {
-	QueueTasks                 int       `json:"queue_tasks"`
-	QueueLagSeconds           int64     `json:"queue_lag_seconds"`
-	CleanupFailures            int       `json:"cleanup_failures"`
-	ArtifactResolutionFailures int       `json:"artifact_resolution_failures"`
-	GeneratedAt                time.Time `json:"generated_at"`
+	QueueTasks                        int       `json:"queue_tasks"`
+	QueueLagSeconds                   int64     `json:"queue_lag_seconds"`
+	CleanupFailures                   int       `json:"cleanup_failures"`
+	CleanupFailuresRecent             int       `json:"cleanup_failures_recent"`
+	ArtifactResolutionFailures        int       `json:"artifact_resolution_failures"`
+	ArtifactResolutionFailuresRecent  int       `json:"artifact_resolution_failures_recent"`
+	ObservabilityWindowSeconds        int64     `json:"observability_window_seconds"`
+	GeneratedAt                       time.Time `json:"generated_at"`
 }
 
 func (r *Repository) logf(format string, args ...any) {
