@@ -12,6 +12,7 @@
     <completed-packet>media-fwx-paged-empty-array</completed-packet>
     <completed-packet>media-722-collection-empty-array</completed-packet>
     <completed-packet>media-9gx-telegram-inbox-collection-view</completed-packet>
+    <completed-packet>media-vim-telegram-russian-status-ux</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
     <remaining-closure-gate>none</remaining-closure-gate>
@@ -259,6 +260,28 @@ Telegram inbox pagination, remove, and clear-visible actions must render the API
       <check>Focused gateway regression proves collection-only removal changes the visible inbox surface even when owner-wide media inventory still contains the removed items.</check>
       <check>Focused runtime regression proves refresh tolerates Telegram message-not-modified responses.</check>
       <check>Live restore_status for the affected owner shows zero visible inbox items when the inbox collection is empty.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-vim-telegram-russian-status-ux" module="M-TELEGRAM-ADAPTER" phase="RuntimeUX" verification-ref="EV-ADAPTERS,EV-RUNTIME">
+    <purpose>Make Telegram status text and actions Russian-first and easier to understand.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/src/telegram_adapter/errors.py</file-2>
+      <file-3>apps/telegram-bot/src/telegram_adapter/i18n/catalogs.py</file-3>
+      <file-4>apps/telegram-bot/tests/test_api_client.py</file-4>
+      <file-5>apps/telegram-bot/tests/test_bot_runtime.py</file-5>
+      <file-6>apps/telegram-bot/tests/test_gateway.py</file-6>
+      <file-7>docs/requirements.xml</file-7>
+      <file-8>docs/verification-plan.xml</file-8>
+      <file-9>docs/operational-packets.xml</file-9>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram status text and button labels must explain refresh, collection mutations, and per-run files or diagnostics in Russian. When multiple completed runs are shown, the user must be able to match each pair of result buttons to a numbered run in the status text.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused telegram-bot tests prove Russian-first callback copy, status text, and button semantics.</check>
+      <check>Live restored status text for the affected Telegram owner is Russian-first and renders the current inbox state clearly.</check>
     </verification>
   </HotfixPacket>
 </OperationalPackets>

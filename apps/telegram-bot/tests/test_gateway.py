@@ -212,7 +212,7 @@ def test_private_chat_scope_is_deterministic_and_groups_are_not_supported() -> N
 
     assert group_error.value.code == TelegramUserErrorCode.GROUP_NOT_SUPPORTED
     assert topic_error.value.code == TelegramUserErrorCode.GROUP_NOT_SUPPORTED
-    assert "private-chat only" in user_error_text(group_error.value)
+    assert "только в личном чате" in user_error_text(group_error.value)
 
 
 def test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files() -> None:
@@ -308,10 +308,10 @@ def test_album_status_preview_groups_visible_media_together() -> None:
 
     text = render_status_text(gateway.restore_status(owner=owner()))
 
-    assert "Album grp (3 items)" in text
-    assert "1. Telegram photo [photo, ready, message 1]" in text
-    assert "2. clip.mp4 [video, ready, message 2]" in text
-    assert "3. brief.pdf [document, ready, message 3]" in text
+    assert "Альбом grp (3 шт.)" in text
+    assert "1. Фото из Telegram [фото, готов, сообщение 1]" in text
+    assert "2. clip.mp4 [видео, готов, сообщение 2]" in text
+    assert "3. brief.pdf [документ, готов, сообщение 3]" in text
 
 
 def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
@@ -328,8 +328,8 @@ def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
     assert api.add_requests == []
 
     text = render_status_text(gateway.restore_status(owner=owner(), rejected=[records[0], missing_file[0]]))
-    assert "Rejected: Telegram message (unsupported input:" in text
-    assert "Rejected: photo (unsupported input:" in text
+    assert "Отклонено: Telegram message (неподдерживаемый ввод:" in text
+    assert "Отклонено: photo (неподдерживаемый ввод:" in text
 
 
 def test_status_surface_supports_resource_callbacks_explicit_selection_and_run_actions() -> None:
@@ -369,7 +369,7 @@ def test_status_surface_supports_resource_callbacks_explicit_selection_and_run_a
     run_action, run_tokens = _parse_callback_payload(run_callback)
     run = gateway.start_analysis(owner=owner(), selection_id=_decode_callback_token(run_tokens[0]))
 
-    assert "Inbox" in text
+    assert "Входящие" in text
     assert any(callback.startswith("ib:rf") for callback in callbacks)
     assert any(callback.startswith("ib:pp") for callback in callbacks)
     assert any(callback.startswith("ib:pn") for callback in callbacks)
@@ -491,9 +491,9 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
         "media-4",
         "media-5",
     ]
-    assert "1. item 1 [text, ready]" not in updated_text
-    assert "1. item 2 [text, ready]" in updated_text
-    assert "Items: 4 | version 2" in updated_text
+    assert "1. item 1 [текст, готов]" not in updated_text
+    assert "1. item 2 [текст, готов]" in updated_text
+    assert "В инбоксе: 4 | версия 2" in updated_text
 
 
 def test_uuid_callbacks_stay_within_telegram_limit() -> None:
@@ -587,8 +587,8 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
 
     selection_text = render_status_text(status, selection={"selection_id": "selection-1", "items": status.collection["items"]})
-    assert "Selection ready:" in selection_text
-    assert "Use Run selection to start analysis." in selection_text
+    assert "Выборка готова:" in selection_text
+    assert "Кнопка ниже запустит анализ этой выборки." in selection_text
     assert "artifact-1: transcript [available, text/plain]" not in selection_text
     assert "worker_note: Ready for review." not in selection_text
 
@@ -709,15 +709,15 @@ def test_restore_status_tolerates_missing_collection_and_renders_without_collect
     assert [run["analysis_run_id"] for run in status.active_runs] == ["run-active"]
     assert status.artifacts_by_run["run-done"][0]["artifact_id"] == "artifact-1"
     assert status.diagnostics_by_run["run-done"][0]["diagnostic_id"] == "diagnostic-1"
-    assert "Items: 0" in text
-    assert "Use the run buttons below for artifacts and diagnostics." in text
+    assert "В инбоксе: 0" in text
+    assert "Кнопки ниже открывают файлы результата и диагностику по каждому запуску." in text
 
 
 def test_stale_callback_copy_is_safe_and_actionable() -> None:
     answer = safe_callback_answer(RuntimeError("slot_not_visible"))
 
     assert answer == {
-        "text": "This button is stale. Open /inbox and try again.",
+        "text": "Эта кнопка устарела. Откройте /inbox ещё раз и повторите действие.",
         "show_alert": True,
     }
     assert "slot_not_visible" not in answer["text"]
@@ -749,9 +749,9 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
 
     queued_text = render_status_text(gateway.restore_status(owner=owner()))
 
-    assert "run-1: queued" in queued_text
+    assert "- run-1: в очереди" in queued_text
     assert "failed" not in queued_text
-    assert "available later" in queued_text
+    assert "результат появится позже" in queued_text
 
     api.runs[0]["status"] = "succeeded"
     api.artifacts.append(
@@ -781,9 +781,9 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
     completed_callbacks = [button.callback_data for row in completed_keyboard.inline_keyboard for button in row]
 
     assert completed.active_runs == []
-    assert "Completed runs:" in completed_text
-    assert "run-1: succeeded" in completed_text
-    assert "Use the run buttons below for artifacts and diagnostics." in completed_text
+    assert "Завершённые запуски:" in completed_text
+    assert "1. run-1 — успешно" in completed_text
+    assert "Кнопки ниже открывают файлы результата и диагностику по каждому запуску." in completed_text
     assert "artifact-1: transcript [available, text/plain]" not in completed_text
     assert "worker_note: Result stored for later delivery." not in completed_text
     assert any(callback.startswith("ib:ar:") for callback in completed_callbacks)
@@ -811,8 +811,8 @@ def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() 
     assert app.status_message_ids == {(10, 7): 9001}
     assert app.page_states[(10, 7)].current_cursor is None
     assert "restore after reconnect" in message.answers[0]["text"]
-    assert "run-1: queued" in message.answers[0]["text"]
-    assert "available later" in message.answers[0]["text"]
+    assert "- run-1: в очереди" in message.answers[0]["text"]
+    assert "результат появится позже" in message.answers[0]["text"]
 
 
 class _FakeMessage:

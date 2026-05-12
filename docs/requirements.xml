@@ -105,7 +105,7 @@
     </Requirement>
     <Requirement id="REQ-ADAPTER-001">
       <Action>Keep Telegram, Web, and MCP as thin adapters over the same API-owned state.</Action>
-      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the owner-wide media list.</AcceptanceCriteria>
+      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the owner-wide media list. Telegram status copy and action labels are Russian-first and make collection actions plus run-specific result buttons explicit to the user.</AcceptanceCriteria>
     </Requirement>
   </FunctionalRequirements>
 

@@ -20,21 +20,21 @@ TranslationCatalogs: TypeAlias = dict[SupportedLocale, TranslationCatalog]
 
 TRANSLATION_CATALOGS: TranslationCatalogs = {
     "ru": {
-        TelegramTextKey.COMMAND_START_DESCRIPTION: "Открыть inbox",
-        TelegramTextKey.COMMAND_HELP_DESCRIPTION: "Как управлять inbox",
-        TelegramTextKey.COMMAND_INBOX_DESCRIPTION: "Показать текущий inbox",
+        TelegramTextKey.COMMAND_START_DESCRIPTION: "Открыть входящие",
+        TelegramTextKey.COMMAND_HELP_DESCRIPTION: "Как работать с ботом",
+        TelegramTextKey.COMMAND_INBOX_DESCRIPTION: "Показать входящие",
         TelegramTextKey.START_PROMPT: (
-            "Отправьте текст, ссылку, фото, видео или документ. Всё принятое сначала попадает в inbox."
+            "Отправьте текст, ссылку, фото, видео или документ. Всё принятое сначала попадает во входящие."
         ),
         TelegramTextKey.HELP_MENU: (
-            "/inbox - восстановить текущий inbox\n"
-            "Кнопками можно обновить статус, открыть следующую страницу, убрать элемент и запустить анализ."
+            "/inbox - показать текущее состояние входящих\n"
+            "Кнопки ниже обновляют состояние, листают страницы, убирают элементы, готовят запуск и открывают файлы или диагностику."
         ),
         TelegramTextKey.INBOX_SUMMARY_ADDED: "Принято: {count}",
-        TelegramTextKey.INBOX_SUMMARY_HEADER: "Inbox ({count}):",
+        TelegramTextKey.INBOX_SUMMARY_HEADER: "Входящие ({count}):",
         TelegramTextKey.INBOX_SUMMARY_ITEM: "{index}. {label}",
         TelegramTextKey.INBOX_REJECTED_ITEM: "Отклонено: {label} ({reason})",
-        TelegramTextKey.INBOX_EMPTY: "Inbox пока пуст.",
+        TelegramTextKey.INBOX_EMPTY: "Входящие пока пусты.",
         TelegramTextKey.INBOX_BUTTON_REFRESH: "Обновить",
         TelegramTextKey.INBOX_BUTTON_NEXT_PAGE: "Дальше",
         TelegramTextKey.INBOX_BUTTON_REMOVE: "Убрать {index}",

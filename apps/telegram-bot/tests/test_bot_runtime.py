@@ -485,8 +485,8 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
 
     await app._handle_any_message(accepted_message)
 
-    assert "Keep text [text, ready, message 42]" in accepted_message.answers[0]["text"]
-    assert "Rejected: ftp://bad.example/file" in accepted_message.answers[0]["text"]
+    assert "Keep text [текст, готов, сообщение 42]" in accepted_message.answers[0]["text"]
+    assert "Отклонено: ftp://bad.example/file" in accepted_message.answers[0]["text"]
     assert app.status_message_ids[(10, 7)] == 9001
 
     failing_message = FakeMessage(text="hello")
@@ -498,9 +498,7 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
     with caplog.at_level(logging.ERROR):
         await app._handle_any_message(failing_message)
 
-    assert failing_message.answers[-1]["text"] == (
-        "unsupported input: Telegram file content could not be downloaded."
-    )
+    assert failing_message.answers[-1]["text"] == "неподдерживаемый ввод: не удалось скачать файл из Telegram."
     assert "scope=message_ingest" in caplog.text
     assert "normalized_code=unsupported_input" in caplog.text
 
@@ -571,8 +569,8 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
     status, prefix, answer_text = await app._resolve_run_start_status(owner=owner(), run=run)
 
     assert api.runs[0]["status"] == "queued"
-    assert answer_text == "Run queued"
-    assert prefix.startswith("Run queued:")
+    assert answer_text == "Запуск поставлен в очередь"
+    assert prefix.startswith("Запуск поставлен в очередь:")
     assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
 
 
@@ -601,7 +599,7 @@ async def test_access_checks_cover_allowlist_and_scope_errors() -> None:
     scope_app.gateway.scope_for = raise_scope_error  # type: ignore[method-assign]
     scope_message = FakeMessage()
     assert await scope_app._ensure_message_allowed(scope_message) is False
-    assert "private-chat only" in scope_message.answers[0]["text"]
+    assert "только в личном чате" in scope_message.answers[0]["text"]
 
 
 @pytest.mark.asyncio
@@ -616,18 +614,18 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     app._set_page_state((10, 7), refresh_status, current_cursor=None, previous_cursors=[], selection=None)
     refresh_callback = FakeCallback(data="ib:rf", message=base_message)
     await app._handle_status_callback(refresh_callback)
-    assert refresh_callback.answers[-1]["text"] == "Refreshed"
+    assert refresh_callback.answers[-1]["text"] == "Состояние обновлено"
 
     next_status = status_for(gateway)
     app._set_page_state((10, 7), next_status, current_cursor=None, previous_cursors=[], selection=None)
     next_callback = FakeCallback(data="ib:pn", message=base_message)
     await app._handle_status_callback(next_callback)
-    assert next_callback.answers[-1]["text"] == "Page loaded"
+    assert next_callback.answers[-1]["text"] == "Открыта следующая страница"
     assert app.page_states[(10, 7)].current_cursor == "media-1"
 
     previous_callback = FakeCallback(data="ib:pp", message=base_message)
     await app._handle_status_callback(previous_callback)
-    assert previous_callback.answers[-1]["text"] == "Page loaded"
+    assert previous_callback.answers[-1]["text"] == "Открыта предыдущая страница"
     assert app.page_states[(10, 7)].current_cursor is None
 
     remove_status = status_for(gateway)
@@ -641,7 +639,7 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     app._set_page_state((10, 7), remove_status, current_cursor=None, previous_cursors=[], selection=None)
     remove_callback = FakeCallback(data=remove_callback_data, message=base_message)
     await app._handle_status_callback(remove_callback)
-    assert remove_callback.answers[-1]["text"] == "Removed"
+    assert remove_callback.answers[-1]["text"] == "Элемент убран из инбокса"
     assert api.remove_requests[-1]["media_item_id"] == "media-1"
 
     page_two_status = status_for(gateway, cursor="media-1")
@@ -657,7 +655,7 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     app._set_page_state((10, 7), next_page_status, current_cursor="media-2", previous_cursors=[None], selection=None)
     clear_callback = FakeCallback(data=clear_callback_data, message=base_message)
     await app._handle_status_callback(clear_callback)
-    assert clear_callback.answers[-1]["text"] == "Cleared"
+    assert clear_callback.answers[-1]["text"] == "Видимые элементы убраны"
     assert app.page_states[(10, 7)].current_cursor is None
 
 
@@ -681,7 +679,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     refresh_callback = FakeCallback(data="ib:rf", message=base_message)
     await app._handle_status_callback(refresh_callback)
 
-    assert refresh_callback.answers[-1]["text"] == "Refreshed"
+    assert refresh_callback.answers[-1]["text"] == "Состояние обновлено"
     base_message.edit_text = original_edit_text  # type: ignore[method-assign]
 
     gateway.add_text(owner=owner(), text="selection item 1")
@@ -697,7 +695,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     app._set_page_state((10, 7), selection_status, current_cursor=None, previous_cursors=[], selection=None)
     selection_callback = FakeCallback(data=selection_callback_data, message=base_message)
     await app._handle_status_callback(selection_callback)
-    assert selection_callback.answers[-1]["text"] == "Selection created"
+    assert selection_callback.answers[-1]["text"] == "Выборка создана"
     selection = app.page_states[(10, 7)].selection
     assert selection is not None
 
@@ -724,11 +722,11 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     app._sleep = no_sleep  # type: ignore[assignment]
     gateway.get_run_status = fast_fail_run_status  # type: ignore[method-assign]
     await app._handle_status_callback(run_callback)
-    assert run_callback.answers[-1]["text"] == "Run failed"
+    assert run_callback.answers[-1]["text"] == "Запуск: ошибка"
     assert app.page_states[(10, 7)].selection is None
-    assert "Run failed:" in base_message.edits[-1]["text"]
-    assert "Completed runs:" in base_message.edits[-1]["text"]
-    assert "run-1: failed" in base_message.edits[-1]["text"]
+    assert "Запуск ошибка:" in base_message.edits[-1]["text"]
+    assert "Завершённые запуски:" in base_message.edits[-1]["text"]
+    assert "1. run-1 — ошибка" in base_message.edits[-1]["text"]
 
     api.runs[0]["status"] = "succeeded"
     api.artifacts.append(
@@ -764,10 +762,10 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     await app._handle_status_callback(artifacts_callback)
     await app._handle_status_callback(diagnostics_callback)
 
-    assert artifacts_callback.answers[-1]["text"] == "Artifacts loaded"
-    assert diagnostics_callback.answers[-1]["text"] == "Diagnostics loaded"
-    assert "Artifacts for run-1" in base_message.edits[-2]["text"]
-    assert "Diagnostics for run-1" in base_message.edits[-1]["text"]
+    assert artifacts_callback.answers[-1]["text"] == "Открыт список файлов"
+    assert diagnostics_callback.answers[-1]["text"] == "Открыта диагностика"
+    assert "Файлы запуска run-1" in base_message.edits[-2]["text"]
+    assert "Диагностика запуска run-1" in base_message.edits[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -847,7 +845,7 @@ async def test_handlers_return_early_and_error_helpers_cover_remaining_branches(
     scope_app.gateway.scope_for = raise_scope_error  # type: ignore[method-assign]
     scope_callback = FakeCallback(data="ib:rf", message=FakeMessage())
     assert await scope_app._ensure_callback_allowed(scope_callback) is False
-    assert "private-chat only" in scope_callback.answers[0]["text"]
+    assert "только в личном чате" in scope_callback.answers[0]["text"]
 
 
 def test_helper_functions_cover_remaining_callback_token_and_error_branches() -> None:
@@ -858,7 +856,7 @@ def test_helper_functions_cover_remaining_callback_token_and_error_branches() ->
     assert _decode_optional_callback_token("_") is None
     assert _encode_callback_version(0) == "0"
     assert str(TelegramUserError(TelegramUserErrorCode.STALE_ACTION)) == "stale_action"
-    assert rejected_reason_text(None).startswith("unsupported input:")
+    assert rejected_reason_text(None).startswith("неподдерживаемый ввод:")
 
     with pytest.raises(TelegramUserError):
         _decode_callback_version("not-base36")
@@ -900,11 +898,11 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
     assert _message_text(message) == "caption"
     assert [file.kind for file in files] == ["photo", "video", "document", "audio", "voice"]
     assert _chat_type(SimpleNamespace(type=SimpleNamespace(value="supergroup"))) == "supergroup"
-    assert _artifact_label({"artifact_id": "artifact-1234567890", "kind": "report", "status": "ready"}) == "artifact...7890: report [ready]"
+    assert _artifact_label({"artifact_id": "artifact-1234567890", "kind": "report", "status": "ready"}) == "artifact...7890: отчёт [готов]"
     assert _diagnostic_label({"severity": "warning"}) == "diagnostic: warning"
     assert _media_group_id({"metadata": "not-a-dict"}) is None
     assert _detail_prefix(title="Artifacts", lines=["- one"]) == "Artifacts\n- one\n\n"
-    assert _start_text().startswith("Send text, links")
+    assert _start_text().startswith("Отправь текст, ссылку")
     assert _help_text().startswith("/inbox")
 
     normalized_404 = _normalize_callback_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))

@@ -210,7 +210,7 @@ def test_backend_connection_failure_is_categorized_without_raw_exception_copy() 
     assert user_error.code == TelegramUserErrorCode.BACKEND_UNAVAILABLE
     assert "Connection refused" not in copy
     assert "127.0.0.1" not in copy
-    assert "Try again" in copy
+    assert "Попробуйте ещё раз" in copy
 
 
 def test_runtime_download_failures_map_to_specific_unsupported_input_copy() -> None:
@@ -218,7 +218,7 @@ def test_runtime_download_failures_map_to_specific_unsupported_input_copy() -> N
     copy = user_error_text(RuntimeError("telegram_file_download_failed"))
 
     assert user_error.code == TelegramUserErrorCode.UNSUPPORTED_INPUT
-    assert copy == "unsupported input: Telegram file content could not be downloaded."
+    assert copy == "неподдерживаемый ввод: не удалось скачать файл из Telegram."
 
 
 def test_runtime_rejection_reasons_map_to_unsupported_input_copy() -> None:
@@ -226,7 +226,7 @@ def test_runtime_rejection_reasons_map_to_unsupported_input_copy() -> None:
     copy = user_error_text(RuntimeError("missing_file_id"))
 
     assert user_error.code == TelegramUserErrorCode.UNSUPPORTED_INPUT
-    assert copy == "unsupported input: Telegram did not provide a file id."
+    assert copy == "неподдерживаемый ввод: Telegram не передал file id."
 
 
 def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surface() -> None:

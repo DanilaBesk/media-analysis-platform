@@ -171,7 +171,7 @@ class TelegramInboxApp:
                     selection=selection,
                 )
                 await self._edit_callback_status(callback, status)
-                await callback.answer("Refreshed")
+                await callback.answer("Состояние обновлено")
                 return
             if action == "pn":
                 if page_state is None:
@@ -190,7 +190,7 @@ class TelegramInboxApp:
                     selection=page_state.selection,
                 )
                 await self._edit_callback_status(callback, status)
-                await callback.answer("Page loaded")
+                await callback.answer("Открыта следующая страница")
                 return
             if action == "pp":
                 if page_state is None:
@@ -209,7 +209,7 @@ class TelegramInboxApp:
                     selection=page_state.selection,
                 )
                 await self._edit_callback_status(callback, status)
-                await callback.answer("Page loaded")
+                await callback.answer("Открыта предыдущая страница")
                 return
             if action == "rm":
                 collection_id = _decode_callback_token(tokens[0])
@@ -230,7 +230,7 @@ class TelegramInboxApp:
                     selection=page_state.selection if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
-                await callback.answer("Removed")
+                await callback.answer("Элемент убран из инбокса")
                 return
             if action == "cl":
                 collection_id = _decode_callback_token(tokens[0])
@@ -255,7 +255,7 @@ class TelegramInboxApp:
                     selection=page_state.selection if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
-                await callback.answer("Cleared")
+                await callback.answer("Видимые элементы убраны")
                 return
             if action == "sl":
                 collection_id = _decode_callback_token(tokens[0])
@@ -277,12 +277,12 @@ class TelegramInboxApp:
                     callback,
                     status,
                     prefix=(
-                        f"Selection ready: {_short_id(str(selection['selection_id']))} "
-                        f"({len(selection.get('items', []))} items)\n"
-                        "Use Run selection when you're ready.\n\n"
+                        f"Выборка подготовлена: {_short_id(str(selection['selection_id']))} "
+                        f"({len(selection.get('items', []))} шт.)\n"
+                        "Ниже можно сразу запустить анализ.\n\n"
                     ),
                 )
-                await callback.answer("Selection created")
+                await callback.answer("Выборка создана")
                 return
             if action == "rn":
                 selection_id = _decode_callback_token(tokens[0])
@@ -316,11 +316,11 @@ class TelegramInboxApp:
                     callback,
                     status,
                     prefix=_detail_prefix(
-                        title=f"Artifacts for {_short_id(analysis_run_id)}",
-                        lines=[f"- {_artifact_label(artifact)}" for artifact in artifacts] or ["- No artifacts yet."],
+                        title=f"Файлы запуска {_short_id(analysis_run_id)}",
+                        lines=[f"- {_artifact_label(artifact)}" for artifact in artifacts] or ["- Файлов пока нет."],
                     ),
                 )
-                await callback.answer("Artifacts loaded")
+                await callback.answer("Открыт список файлов")
                 return
             if action == "dg":
                 analysis_run_id = _decode_callback_token(tokens[0])
@@ -342,11 +342,11 @@ class TelegramInboxApp:
                     callback,
                     status,
                     prefix=_detail_prefix(
-                        title=f"Diagnostics for {_short_id(analysis_run_id)}",
-                        lines=[f"- {_diagnostic_label(diagnostic)}" for diagnostic in diagnostics] or ["- No diagnostics yet."],
+                        title=f"Диагностика запуска {_short_id(analysis_run_id)}",
+                        lines=[f"- {_diagnostic_label(diagnostic)}" for diagnostic in diagnostics] or ["- Диагностики пока нет."],
                     ),
                 )
-                await callback.answer("Diagnostics loaded")
+                await callback.answer("Открыта диагностика")
                 return
         except Exception as exc:
             normalized = _normalize_callback_error(exc)
@@ -400,16 +400,18 @@ class TelegramInboxApp:
                 status = self.gateway.restore_status(owner=owner)
                 return (
                     status,
-                    f"Run {status_name}: {_short_id(run_id)}\nOpen artifacts or diagnostics below, or refresh /inbox.\n\n",
-                    f"Run {status_name}",
+                    f"Запуск {_run_status_text(status_name)}: {_short_id(run_id)}\n"
+                    "Ниже можно открыть файлы результата и диагностику.\n\n",
+                    f"Запуск: {_run_status_text(status_name)}",
                 )
             if attempt + 1 < self.run_status_poll_attempts:
                 await self._sleep(self.run_status_poll_delay_seconds)
         status = self.gateway.restore_status(owner=owner)
         return (
             status,
-            f"Run queued: {_short_id(run_id)}\nResult will be available later; refresh /inbox any time.\n\n",
-            "Run queued",
+            f"Запуск поставлен в очередь: {_short_id(run_id)}\n"
+            "Результат появится позже. Состояние можно обновить этой же карточкой.\n\n",
+            "Запуск поставлен в очередь",
         )
 
     async def _edit_callback_status(
@@ -512,38 +514,39 @@ class TelegramInboxApp:
 
 
 def render_status_text(status: InboxStatus, *, selection: JsonObject | None = None) -> str:
-    lines = ["Inbox"]
+    lines = ["Входящие"]
     if status.collection:
-        lines.append(f"Items: {len(status.collection.get('items', []))} | version {status.collection.get('version', 0)}")
+        lines.append(
+            f"В инбоксе: {len(status.collection.get('items', []))} | версия {status.collection.get('version', 0)}"
+        )
     else:
-        lines.append("Items: 0")
+        lines.append("В инбоксе: 0")
 
     if status.items:
-        page_size = status.page.get("page_size") or len(status.items)
-        lines.append(f"Visible: {len(status.items)} of page size {page_size}")
+        lines.append(f"На экране: {len(status.items)}")
         lines.extend(_visible_item_lines(status.items))
 
     if not status.items:
-        lines.append("No inbox items yet.")
+        lines.append("Инбокс сейчас пуст.")
 
     for record in status.rejected:
-        lines.append(f"Rejected: {record.label} ({rejected_reason_text(record.reason)})")
+        lines.append(f"Отклонено: {record.label} ({rejected_reason_text(record.reason)})")
 
     if selection:
         lines.append("")
         lines.append(
-            f"Selection ready: {_short_id(str(selection.get('selection_id') or 'selection'))} "
-            f"({len(selection.get('items', []))} items)"
+            f"Выборка готова: {_short_id(str(selection.get('selection_id') or 'selection'))} "
+            f"({len(selection.get('items', []))} шт.)"
         )
-        lines.append("Use Run selection to start analysis.")
+        lines.append("Кнопка ниже запустит анализ этой выборки.")
 
     if status.active_runs:
         lines.append("")
-        lines.append("Active runs:")
+        lines.append("Активные запуски:")
         for run in status.active_runs[:3]:
             lines.append(
-                f"- {_short_id(run['analysis_run_id'])}: {run.get('status', 'unknown')} "
-                "(result available later; refresh /inbox)"
+                f"- {_short_id(run['analysis_run_id'])}: {_run_status_text(str(run.get('status') or 'unknown'))} "
+                "(результат появится позже)"
             )
 
     completed_runs = [
@@ -553,15 +556,15 @@ def render_status_text(status: InboxStatus, *, selection: JsonObject | None = No
     ]
     if completed_runs:
         lines.append("")
-        lines.append("Completed runs:")
-        for run in completed_runs[:3]:
+        lines.append("Завершённые запуски:")
+        for index, run in enumerate(completed_runs[:3], start=1):
             run_id = str(run["analysis_run_id"])
-            lines.append(f"- {_short_id(run_id)}: {run.get('status', 'unknown')}")
-        lines.append("Use the run buttons below for artifacts and diagnostics.")
+            lines.append(f"{index}. {_short_id(run_id)} — {_run_status_text(str(run.get('status') or 'unknown'))}")
+        lines.append("Кнопки ниже открывают файлы результата и диагностику по каждому запуску.")
 
     if status.page.get("has_more"):
         lines.append("")
-        lines.append("More items are available.")
+        lines.append("Есть ещё элементы. Открой следующую страницу кнопкой ниже.")
     return "\n".join(lines)
 
 
@@ -573,13 +576,13 @@ def build_status_keyboard(
     selection: JsonObject | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text="Refresh", callback_data=_callback_payload("rf"))],
+        [InlineKeyboardButton(text="Обновить состояние", callback_data=_callback_payload("rf"))],
     ]
     collection_id = str(status.collection.get("collection_id") or "") if status.collection else ""
     collection_version = int(status.collection.get("version") or 0) if status.collection else 0
     remove_buttons = [
         InlineKeyboardButton(
-            text=f"Remove {index}",
+            text=f"Убрать {index}",
             callback_data=_callback_payload(
                 "rm",
                 _encode_callback_token(collection_id),
@@ -593,17 +596,17 @@ def build_status_keyboard(
     rows.extend([button] for button in remove_buttons)
     nav_row: list[InlineKeyboardButton] = []
     if can_go_back:
-        nav_row.append(InlineKeyboardButton(text="Previous page", callback_data=_callback_payload("pp")))
+        nav_row.append(InlineKeyboardButton(text="Назад", callback_data=_callback_payload("pp")))
     next_cursor = status.page.get("next_cursor")
     if next_cursor:
-        nav_row.append(InlineKeyboardButton(text="Next page", callback_data=_callback_payload("pn")))
+        nav_row.append(InlineKeyboardButton(text="Дальше", callback_data=_callback_payload("pn")))
     if nav_row:
         rows.append(nav_row)
     if status.items and collection_id:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Clear visible",
+                    text="Убрать видимое",
                     callback_data=_callback_payload(
                         "cl",
                         _encode_callback_token(collection_id),
@@ -617,7 +620,7 @@ def build_status_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Create selection",
+                    text="Подготовить запуск",
                     callback_data=_callback_payload(
                         "sl",
                         _encode_callback_token(collection_id),
@@ -630,7 +633,7 @@ def build_status_keyboard(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="Run selection",
+                    text="Запустить анализ",
                     callback_data=_callback_payload(
                         "rn",
                         _encode_callback_token(str(selection["selection_id"])),
@@ -638,13 +641,16 @@ def build_status_keyboard(
                 )
             ]
         )
-    for run in status.recent_runs:
-        if run.get("status") not in TERMINAL_RUN_STATUSES or not run.get("analysis_run_id"):
-            continue
+    completed_runs = [
+        run
+        for run in status.recent_runs
+        if run.get("status") in TERMINAL_RUN_STATUSES and run.get("analysis_run_id")
+    ]
+    for index, run in enumerate(completed_runs, start=1):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"Artifacts {_short_id(str(run['analysis_run_id']))}",
+                    text=f"Файлы {index}",
                     callback_data=_callback_payload(
                         "ar",
                         _encode_callback_token(str(run["analysis_run_id"])),
@@ -652,7 +658,7 @@ def build_status_keyboard(
                     ),
                 ),
                 InlineKeyboardButton(
-                    text=f"Diagnostics {_short_id(str(run['analysis_run_id']))}",
+                    text=f"Диагностика {index}",
                     callback_data=_callback_payload(
                         "dg",
                         _encode_callback_token(str(run["analysis_run_id"])),
@@ -888,13 +894,13 @@ def _message_files(message: Message) -> Iterable[TelegramFileInput]:
 
 
 def _item_label(item: JsonObject) -> str:
-    display_name = str(item.get("display_name") or item.get("media_item_id") or "media")
+    display_name = _display_name_text(str(item.get("display_name") or item.get("media_item_id") or "media"))
     kind = item.get("kind", "media")
     status = item.get("status", "unknown")
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
     message_id = metadata.get("message_id")
-    message_suffix = f", message {message_id}" if message_id is not None else ""
-    return f"{display_name} [{kind}, {status}{message_suffix}]"
+    message_suffix = f", сообщение {message_id}" if message_id is not None else ""
+    return f"{display_name} [{_kind_text(str(kind))}, {_media_status_text(str(status))}{message_suffix}]"
 
 
 def _artifact_label(artifact: JsonObject) -> str:
@@ -903,7 +909,7 @@ def _artifact_label(artifact: JsonObject) -> str:
     status = str(artifact.get("status") or "unknown")
     content_type = artifact.get("content_type")
     content_suffix = f", {content_type}" if content_type else ""
-    return f"{_short_id(artifact_id)}: {kind} [{status}{content_suffix}]"
+    return f"{_short_id(artifact_id)}: {_artifact_kind_text(kind)} [{_artifact_status_text(status)}{content_suffix}]"
 
 
 def _diagnostic_label(diagnostic: JsonObject) -> str:
@@ -930,7 +936,7 @@ def _visible_item_lines(items: list[JsonObject]) -> list[str]:
             continue
         emitted_groups.add(media_group_id)
         album_items = grouped_slots[media_group_id]
-        lines.append(f"Album {media_group_id} ({len(album_items)} items)")
+        lines.append(f"Альбом {media_group_id} ({len(album_items)} шт.)")
         for album_slot, album_item in album_items:
             lines.append(f"{album_slot}. {_item_label(album_item)}")
     return lines
@@ -949,11 +955,86 @@ def _short_id(value: str) -> str:
 
 
 def _start_text() -> str:
-    return "Send text, links, photos, videos, or documents. Everything accepted goes to your inbox first."
+    return "Отправь текст, ссылку, фото, видео, документ или голосовое. Всё сначала попадает во входящие."
 
 
 def _help_text() -> str:
     return (
-        "/inbox - restore the current inbox status\n"
-        "Use the inline buttons to refresh, page, remove items, create a selection, and run it."
+        "/inbox - показать текущее состояние входящих\n"
+        "Кнопки ниже обновляют состояние, листают страницы, убирают элементы из входящих, готовят запуск и открывают файлы или диагностику по завершённым запускам."
     )
+
+
+def _kind_text(kind: str) -> str:
+    return {
+        "text": "текст",
+        "url": "ссылка",
+        "photo": "фото",
+        "image": "изображение",
+        "video": "видео",
+        "document": "документ",
+        "audio": "аудио",
+        "voice": "голосовое",
+        "file": "файл",
+        "media": "медиа",
+    }.get(kind, kind)
+
+
+def _media_status_text(status: str) -> str:
+    return {
+        "ready": "готов",
+        "validating": "проверяется",
+        "quarantined": "карантин",
+        "deleted": "удалён",
+        "unknown": "неизвестно",
+    }.get(status, status)
+
+
+def _run_status_text(status: str) -> str:
+    return {
+        "queued": "в очереди",
+        "running": "в работе",
+        "cancel_requested": "отмена запрошена",
+        "partially_succeeded": "частично готов",
+        "succeeded": "успешно",
+        "failed": "ошибка",
+        "canceled": "отменён",
+        "expired": "истёк",
+        "unknown": "неизвестно",
+    }.get(status, status)
+
+
+def _artifact_status_text(status: str) -> str:
+    return {
+        "available": "готов",
+        "ready": "готов",
+        "pending": "готовится",
+        "failed": "ошибка",
+        "expired": "истёк",
+        "deleted": "удалён",
+        "unknown": "неизвестно",
+    }.get(status, status)
+
+
+def _artifact_kind_text(kind: str) -> str:
+    return {
+        "transcript": "транскрипт",
+        "summary": "сводка",
+        "report": "отчёт",
+        "run_manifest": "манифест запуска",
+        "run_diagnostics": "диагностика запуска",
+        "artifact": "файл",
+    }.get(kind, kind)
+
+
+def _display_name_text(value: str) -> str:
+    return {
+        "Telegram photo": "Фото из Telegram",
+        "Telegram image": "Изображение из Telegram",
+        "Telegram video": "Видео из Telegram",
+        "Telegram document": "Документ из Telegram",
+        "Telegram audio": "Аудио из Telegram",
+        "Telegram voice": "Голосовое из Telegram",
+        "Telegram file": "Файл из Telegram",
+        "Telegram media": "Медиа из Telegram",
+    }.get(value, value)

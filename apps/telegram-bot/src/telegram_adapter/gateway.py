@@ -485,15 +485,15 @@ def _display_name(text: str, *, fallback: str) -> str:
 
 def _kind_label(kind: str) -> str:
     labels = {
-        "photo": "Telegram photo",
-        "image": "Telegram image",
-        "video": "Telegram video",
-        "document": "Telegram document",
-        "audio": "Telegram audio",
-        "voice": "Telegram voice",
-        "file": "Telegram file",
+        "photo": "Фото из Telegram",
+        "image": "Изображение из Telegram",
+        "video": "Видео из Telegram",
+        "document": "Документ из Telegram",
+        "audio": "Аудио из Telegram",
+        "voice": "Голосовое из Telegram",
+        "file": "Файл из Telegram",
     }
-    return labels.get(kind, "Telegram media")
+    return labels.get(kind, "Медиа из Telegram")
 
 
 def _default_upload_filename(kind: str, content_type: str | None) -> str:

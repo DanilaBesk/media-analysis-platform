@@ -27,26 +27,26 @@ class TelegramUserError(RuntimeError):
 
 USER_ERROR_COPY: dict[TelegramUserErrorCode, str] = {
     TelegramUserErrorCode.BACKEND_UNAVAILABLE: (
-        "Service is temporarily unavailable. Try again in a minute; your inbox is stored on the server."
+        "Сервис временно недоступен. Попробуйте ещё раз через минуту; содержимое inbox уже сохранено на сервере."
     ),
-    TelegramUserErrorCode.STALE_ACTION: "This button is stale. Open /inbox and try again.",
+    TelegramUserErrorCode.STALE_ACTION: "Эта кнопка устарела. Откройте /inbox ещё раз и повторите действие.",
     TelegramUserErrorCode.UNSUPPORTED_INPUT: (
-        "Unsupported input. Send text, links, photos, videos, documents, audio, or voice."
+        "Неподдерживаемый ввод. Отправьте текст, ссылку, фото, видео, документ, аудио или голосовое."
     ),
     TelegramUserErrorCode.GROUP_NOT_SUPPORTED: (
-        "This bot is private-chat only. Open a direct chat with the bot and send the media there."
+        "Этот бот работает только в личном чате. Откройте диалог с ботом и отправьте медиа туда."
     ),
-    TelegramUserErrorCode.ACCESS_DENIED: "Access to this bot is restricted.",
-    TelegramUserErrorCode.UNKNOWN_ACTION: "This action is not available. Open /inbox and use the latest buttons.",
+    TelegramUserErrorCode.ACCESS_DENIED: "Доступ к этому боту ограничен.",
+    TelegramUserErrorCode.UNKNOWN_ACTION: "Это действие сейчас недоступно. Откройте /inbox и используйте актуальные кнопки.",
 }
 
 REJECTION_COPY: dict[str, str] = {
-    "empty_text": "unsupported input: send non-empty text.",
-    "unsupported_url_scheme": "unsupported input: send http or https links.",
-    "invalid_url": "unsupported input: send a complete link.",
-    "missing_file_id": "unsupported input: Telegram did not provide a file id.",
-    "missing_file_content": "unsupported input: Telegram file content could not be downloaded.",
-    "unsupported_message": "unsupported input: send text, links, photos, videos, documents, audio, or voice.",
+    "empty_text": "неподдерживаемый ввод: отправьте непустой текст.",
+    "unsupported_url_scheme": "неподдерживаемый ввод: отправьте ссылку http или https.",
+    "invalid_url": "неподдерживаемый ввод: отправьте полную ссылку.",
+    "missing_file_id": "неподдерживаемый ввод: Telegram не передал file id.",
+    "missing_file_content": "неподдерживаемый ввод: не удалось скачать файл из Telegram.",
+    "unsupported_message": "неподдерживаемый ввод: отправьте текст, ссылку, фото, видео, документ, аудио или голосовое.",
 }
 
 STALE_RUNTIME_REASONS = {
