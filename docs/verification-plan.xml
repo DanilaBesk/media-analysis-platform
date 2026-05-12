@@ -62,6 +62,7 @@
       <Telegram>
         <item>Accepted message, file, URL, photo, image, voice, audio, video, and document inputs call add_media and update inbox state.</item>
         <item>Inline actions manage API-owned inbox or collection items, create selections, start analysis_run records, view diagnostics, and fetch artifacts.</item>
+        <item>Inbox visible items, remove actions, and clear-visible actions follow collection membership rather than the owner-wide media list.</item>
         <item>Callbacks use API ids and versions and cannot mutate another owner state.</item>
         <item>No user-facing execution mode is required to accumulate multiple items.</item>
       </Telegram>

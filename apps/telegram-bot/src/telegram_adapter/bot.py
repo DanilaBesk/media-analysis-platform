@@ -21,6 +21,7 @@ from typing import Any
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -422,15 +423,19 @@ class TelegramInboxApp:
             return
         key = self._state_key_from_callback(callback)
         state = self.page_states.get(key, _PageState())
-        await callback.message.edit_text(
-            prefix + render_status_text(status, selection=state.selection),
-            reply_markup=build_status_keyboard(
-                status,
-                can_go_back=bool(state.previous_cursors),
-                current_cursor=state.current_cursor,
-                selection=state.selection,
-            ),
-        )
+        try:
+            await callback.message.edit_text(
+                prefix + render_status_text(status, selection=state.selection),
+                reply_markup=build_status_keyboard(
+                    status,
+                    can_go_back=bool(state.previous_cursors),
+                    current_cursor=state.current_cursor,
+                    selection=state.selection,
+                ),
+            )
+        except TelegramBadRequest as error:
+            if "message is not modified" not in str(error).lower():
+                raise
         self.status_message_ids[key] = callback.message.message_id
 
     def _state_key_from_callback(self, callback: CallbackQuery) -> tuple[int, int | None]:

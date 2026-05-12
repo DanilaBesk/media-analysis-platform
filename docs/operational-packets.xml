@@ -11,6 +11,7 @@
     <completed-packet>media-xgf-sql-collection-append</completed-packet>
     <completed-packet>media-fwx-paged-empty-array</completed-packet>
     <completed-packet>media-722-collection-empty-array</completed-packet>
+    <completed-packet>media-9gx-telegram-inbox-collection-view</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
     <remaining-closure-gate>none</remaining-closure-gate>
@@ -237,6 +238,27 @@ Collection envelopes must expose items as an array even when the collection is e
       <check>Focused storage regression proves GetCollection returns an empty items slice instead of nil.</check>
       <check>Focused API regression proves GET /v1/collections/inbox encodes items: [] for an empty inbox collection.</check>
       <check>Live restore_status against the affected Telegram owner renders after the empty inbox collection response without callback-handler errors.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-9gx-telegram-inbox-collection-view" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-RUNTIME">
+    <purpose>Fix Telegram inbox callback UX so the visible surface follows inbox collection membership.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/gateway.py</file-1>
+      <file-2>apps/telegram-bot/src/telegram_adapter/bot.py</file-2>
+      <file-3>apps/telegram-bot/tests/test_gateway.py</file-3>
+      <file-4>apps/telegram-bot/tests/test_bot_runtime.py</file-4>
+      <file-5>docs/requirements.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+      <file-7>docs/operational-packets.xml</file-7>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram inbox pagination, remove, and clear-visible actions must render the API-owned inbox collection membership, not the broader owner media inventory. Refresh actions may no-op safely when Telegram reports the message is not modified.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused gateway regression proves collection-only removal changes the visible inbox surface even when owner-wide media inventory still contains the removed items.</check>
+      <check>Focused runtime regression proves refresh tolerates Telegram message-not-modified responses.</check>
+      <check>Live restore_status for the affected owner shows zero visible inbox items when the inbox collection is empty.</check>
     </verification>
   </HotfixPacket>
 </OperationalPackets>

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 
 from telegram_adapter import __main__ as telegram_main
 from telegram_adapter.api_client import TelegramApiClientError
@@ -609,6 +610,7 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     gateway.add_text(owner=owner(), text="one")
     gateway.add_text(owner=owner(), text="two")
     base_message = FakeMessage()
+    original_edit_text = base_message.edit_text
 
     refresh_status = status_for(gateway)
     app._set_page_state((10, 7), refresh_status, current_cursor=None, previous_cursors=[], selection=None)
@@ -621,7 +623,7 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     next_callback = FakeCallback(data="ib:pn", message=base_message)
     await app._handle_status_callback(next_callback)
     assert next_callback.answers[-1]["text"] == "Page loaded"
-    assert app.page_states[(10, 7)].current_cursor == "1"
+    assert app.page_states[(10, 7)].current_cursor == "media-1"
 
     previous_callback = FakeCallback(data="ib:pp", message=base_message)
     await app._handle_status_callback(previous_callback)
@@ -642,21 +644,45 @@ async def test_callback_actions_cover_refresh_paging_remove_selection_run_and_de
     assert remove_callback.answers[-1]["text"] == "Removed"
     assert api.remove_requests[-1]["media_item_id"] == "media-1"
 
-    page_two_status = status_for(gateway, cursor="0")
+    page_two_status = status_for(gateway, cursor="media-1")
     gateway.add_text(owner=owner(), text="three")
-    next_page_status = status_for(gateway, cursor="1")
-    clear_keyboard = build_status_keyboard(next_page_status, current_cursor="1")
+    next_page_status = status_for(gateway, cursor="media-2")
+    clear_keyboard = build_status_keyboard(next_page_status, current_cursor="media-2")
     clear_callback_data = next(
         button.callback_data
         for row in clear_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith("ib:cl:")
     )
-    app._set_page_state((10, 7), next_page_status, current_cursor="1", previous_cursors=[None], selection=None)
+    app._set_page_state((10, 7), next_page_status, current_cursor="media-2", previous_cursors=[None], selection=None)
     clear_callback = FakeCallback(data=clear_callback_data, message=base_message)
     await app._handle_status_callback(clear_callback)
     assert clear_callback.answers[-1]["text"] == "Cleared"
     assert app.page_states[(10, 7)].current_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_callback_tolerates_message_not_modified() -> None:
+    api, gateway, app = make_app(page_size=1)
+    gateway.add_text(owner=owner(), text="one")
+    base_message = FakeMessage()
+    original_edit_text = base_message.edit_text
+
+    async def raise_not_modified(text: str, **kwargs: Any) -> None:
+        raise TelegramBadRequest(
+            method=SimpleNamespace(__api_method__="editMessageText"),
+            message="message is not modified: specified new message content and reply markup are exactly the same",
+        )
+
+    base_message.edit_text = raise_not_modified  # type: ignore[method-assign]
+    refresh_status = status_for(gateway)
+    app._set_page_state((10, 7), refresh_status, current_cursor=None, previous_cursors=[], selection=None)
+
+    refresh_callback = FakeCallback(data="ib:rf", message=base_message)
+    await app._handle_status_callback(refresh_callback)
+
+    assert refresh_callback.answers[-1]["text"] == "Refreshed"
+    base_message.edit_text = original_edit_text  # type: ignore[method-assign]
 
     gateway.add_text(owner=owner(), text="selection item 1")
     gateway.add_text(owner=owner(), text="selection item 2")

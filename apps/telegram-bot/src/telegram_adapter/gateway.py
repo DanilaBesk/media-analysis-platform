@@ -196,7 +196,14 @@ class TelegramInboxGateway:
             collection = self.api_client.get_inbox_collection(owner=owner)
         except Exception:
             collection = None
-        page = self.api_client.list_media_items(owner=owner, cursor=cursor, page_size=self.page_size)
+        items: list[JsonObject]
+        page_meta: JsonObject
+        if collection is not None:
+            items, page_meta = self._restore_collection_items(owner=owner, collection=collection, cursor=cursor)
+        else:
+            page = self.api_client.list_media_items(owner=owner, cursor=cursor, page_size=self.page_size)
+            items = list(page.get("items", []))
+            page_meta = dict(page.get("page", {}))
         runs_page = self.api_client.list_analysis_runs(owner=owner, page_size=10)
         recent_runs = [
             run
@@ -231,8 +238,8 @@ class TelegramInboxGateway:
         return InboxStatus(
             owner=owner,
             collection=collection,
-            items=list(page.get("items", [])),
-            page=dict(page.get("page", {})),
+            items=items,
+            page=page_meta,
             active_runs=active_runs,
             recent_runs=recent_runs,
             artifacts_by_run=artifacts_by_run,
@@ -402,6 +409,69 @@ class TelegramInboxGateway:
         if int(run.get("version") or 0) != expected_version:
             raise RuntimeError("slot_not_visible")
         return run
+
+    def _restore_collection_items(
+        self,
+        *,
+        owner: JsonObject,
+        collection: JsonObject,
+        cursor: str | None,
+    ) -> tuple[list[JsonObject], JsonObject]:
+        collection_items = list(collection.get("items", []) or [])
+        visible_collection_items, page_meta = self._page_collection_items(collection_items, cursor=cursor)
+        visible_ids = [
+            str(item.get("media_item_id") or "")
+            for item in visible_collection_items
+            if item.get("media_item_id")
+        ]
+        if not visible_ids:
+            return [], page_meta
+        return self._load_media_items_by_id(owner=owner, media_item_ids=visible_ids), page_meta
+
+    def _page_collection_items(
+        self,
+        collection_items: list[JsonObject],
+        *,
+        cursor: str | None,
+    ) -> tuple[list[JsonObject], JsonObject]:
+        start = 0
+        if cursor:
+            for idx, item in enumerate(collection_items):
+                if str(item.get("media_item_id") or "") == cursor:
+                    start = idx + 1
+                    break
+        end = start + self.page_size
+        has_more = end < len(collection_items)
+        visible = collection_items[start:end]
+        page: JsonObject = {"page_size": self.page_size, "has_more": has_more}
+        if has_more and visible:
+            page["next_cursor"] = str(visible[-1].get("media_item_id") or "")
+        return visible, page
+
+    def _load_media_items_by_id(
+        self,
+        *,
+        owner: JsonObject,
+        media_item_ids: list[str],
+    ) -> list[JsonObject]:
+        wanted = {media_item_id for media_item_id in media_item_ids if media_item_id}
+        if not wanted:
+            return []
+        found: dict[str, JsonObject] = {}
+        cursor: str | None = None
+        page_size = max(self.page_size, len(media_item_ids), 50)
+        while wanted - found.keys():
+            page = self.api_client.list_media_items(owner=owner, cursor=cursor, page_size=page_size)
+            page_items = list(page.get("items", []))
+            for item in page_items:
+                media_item_id = str(item.get("media_item_id") or "")
+                if media_item_id in wanted:
+                    found[media_item_id] = item
+            next_cursor = page.get("page", {}).get("next_cursor") or None
+            if not page.get("page", {}).get("has_more") or next_cursor is None:
+                break
+            cursor = str(next_cursor)
+        return [found[media_item_id] for media_item_id in media_item_ids if media_item_id in found]
 
 
 def extract_links(text: str) -> tuple[str, ...]:

@@ -410,8 +410,8 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
         media_item_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
-    page_two_status = gateway.restore_status(owner=owner(), cursor="5")
-    page_two_keyboard = build_status_keyboard(page_two_status, current_cursor="5")
+    page_two_status = gateway.restore_status(owner=owner(), cursor="media-6")
+    page_two_keyboard = build_status_keyboard(page_two_status, current_cursor="media-6")
     clear_callback = next(
         button.callback_data
         for row in page_two_keyboard.inline_keyboard
@@ -450,6 +450,50 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
         "media-6",
         "media-12",
     ]
+
+
+def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_list() -> None:
+    class CollectionOnlyRemovalApiClient(FakeFinalApiClient):
+        def remove_collection_item(self, **kwargs) -> dict[str, Any]:
+            media_item_id = kwargs["media_item_id"]
+            self.remove_requests.append(kwargs)
+            self.collection["items"] = [
+                item for item in self.collection["items"] if item["media_item_id"] != media_item_id
+            ]
+            self.collection["version"] += 1
+            return self.collection
+
+    api = CollectionOnlyRemovalApiClient()
+    gateway = TelegramInboxGateway(api, page_size=5)
+    for index in range(5):
+        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status)
+    remove_callback = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rm:")
+    )
+    _, remove_tokens = _parse_callback_payload(remove_callback)
+    updated = gateway.remove_collection_item(
+        owner=owner(),
+        collection_id=_decode_callback_token(remove_tokens[0]),
+        media_item_id=_decode_callback_token(remove_tokens[2]),
+        expected_version=_decode_callback_version(remove_tokens[1]),
+    )
+    updated_text = render_status_text(updated)
+
+    assert [item["media_item_id"] for item in updated.items] == [
+        "media-2",
+        "media-3",
+        "media-4",
+        "media-5",
+    ]
+    assert "1. item 1 [text, ready]" not in updated_text
+    assert "1. item 2 [text, ready]" in updated_text
+    assert "Items: 4 | version 2" in updated_text
 
 
 def test_uuid_callbacks_stay_within_telegram_limit() -> None:
