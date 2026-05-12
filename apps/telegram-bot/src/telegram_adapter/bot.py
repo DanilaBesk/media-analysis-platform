@@ -134,7 +134,11 @@ class TelegramInboxApp:
             _log_handler_exception("message_ingest", exc, normalized=normalized, message=message)
             await self._answer_message_error(message, normalized)
             return
-        await self._send_or_edit_status(message, rejected=[record for record in records if record.status == "rejected"])
+        await self._send_or_edit_status(
+            message,
+            rejected=[record for record in records if record.status == "rejected"],
+            prefer_edit=False,
+        )
 
     async def _download_message_files(self, message: Message) -> list[TelegramFileInput]:
         hydrated: list[TelegramFileInput] = []
@@ -360,6 +364,7 @@ class TelegramInboxApp:
         message: Message,
         *,
         rejected: list[IngressRecord] | None = None,
+        prefer_edit: bool = True,
     ) -> bool:
         owner = self._owner_from_message(message)
         try:
@@ -376,7 +381,7 @@ class TelegramInboxApp:
         self._set_page_state(key, status, current_cursor=None, previous_cursors=[], selection=selection)
         markup = build_status_keyboard(status, can_go_back=False, current_cursor=None, selection=selection)
         previous_message_id = self.status_message_ids.get(key)
-        if previous_message_id is not None:
+        if prefer_edit and previous_message_id is not None:
             try:
                 await self.bot.edit_message_text(
                     text,

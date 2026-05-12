@@ -551,6 +551,22 @@ async def test_send_or_edit_status_prefers_edit_then_falls_back_to_new_message()
 
 
 @pytest.mark.asyncio
+async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message() -> None:
+    edit_bot = FakeBot()
+    _, gateway, app = make_app(bot=edit_bot)
+    gateway.add_text(owner=owner(), text="fresh inbound item")
+    message = FakeMessage()
+    app.status_message_ids[(10, 7)] = 5001
+
+    sent = await app._send_or_edit_status(message, prefer_edit=False)
+
+    assert sent is True
+    assert edit_bot.edit_calls == []
+    assert app.status_message_ids[(10, 7)] == 9001
+    assert "fresh inbound item" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_active() -> None:
     api, gateway, app = make_app()
     gateway.add_text(owner=owner(), text="queued run")
