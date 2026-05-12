@@ -9,6 +9,7 @@ x-runtime-infra-depends: &runtime-infra-depends
     condition: service_completed_successfully
 
 x-platform-no-proxy: &platform-no-proxy "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,worker-transcription,worker-agent-runner,web,telegram-bot,mcp-server,0.250.250.0/24,fd07:b51a:cc66:f0::/64,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
+x-platform-no-proxy-httpx-safe: &platform-no-proxy-httpx-safe "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,worker-transcription,worker-agent-runner,web,telegram-bot,mcp-server,0.250.250.0/24,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
 
 services:
   postgres:
@@ -139,8 +140,8 @@ services:
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
       UV_HTTP_TIMEOUT: "600"
       WHISPER_MODEL_CACHE_DIR: /var/cache/whisper
-      NO_PROXY: *platform-no-proxy
-      no_proxy: *platform-no-proxy
+      NO_PROXY: *platform-no-proxy-httpx-safe
+      no_proxy: *platform-no-proxy-httpx-safe
     env_file:
       - ./env/shared.env.example
       - ./env/worker-transcription.env.example
@@ -174,8 +175,8 @@ services:
       PYTHONPATH: /workspace/workers/agent-runner/src:/workspace/workers/common/src
       WORKER_WORKSPACE_ROOT: /tmp/runtime/agent-runner
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
-      NO_PROXY: *platform-no-proxy
-      no_proxy: *platform-no-proxy
+      NO_PROXY: *platform-no-proxy-httpx-safe
+      no_proxy: *platform-no-proxy-httpx-safe
     env_file:
       - ./env/shared.env.example
       - ./env/worker-agent-runner.env.example
@@ -235,8 +236,8 @@ services:
       PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/workers/common/src:/workspace/src
       DATA_DIR: /tmp/runtime/telegram-bot
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
-      NO_PROXY: *platform-no-proxy
-      no_proxy: *platform-no-proxy
+      NO_PROXY: *platform-no-proxy-httpx-safe
+      no_proxy: *platform-no-proxy-httpx-safe
     env_file:
       - ./env/telegram-bot.env.example
       - ../.env
