@@ -33,7 +33,7 @@ PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest \
 
 echo
 echo "[CoverageInventory] Python telegram adapter"
-PYTHONPATH=apps/telegram-bot/src uv run pytest \
+PYTHONPATH=apps/telegram-bot/src uv run --with aiogram --with python-dotenv pytest \
   --cov=apps/telegram-bot/src/telegram_adapter \
   --cov-report=term \
   apps/telegram-bot/tests

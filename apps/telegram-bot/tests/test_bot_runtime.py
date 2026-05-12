@@ -431,6 +431,15 @@ def test_polling_monitor_classifies_upstream_failures_and_recovery(caplog: pytes
         args=(),
         exc_info=None,
     )
+    record_other_logger = logging.LogRecord(
+        name="telegram_adapter.other",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="Failed to fetch updates - TelegramNetworkError: Request timeout error",
+        args=(),
+        exc_info=None,
+    )
 
     with caplog.at_level(logging.INFO):
         aiogram_logger.addHandler(monitor)
@@ -438,6 +447,7 @@ def test_polling_monitor_classifies_upstream_failures_and_recovery(caplog: pytes
             monitor.emit(record_failure)
             monitor.emit(record_recovered)
             monitor.emit(record_unrelated)
+            monitor.emit(record_other_logger)
         finally:
             aiogram_logger.removeHandler(monitor)
 
@@ -873,6 +883,7 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
 
     normalized_404 = _normalize_callback_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))
     normalized_message_404 = _normalize_message_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))
+    normalized_message_runtime = _normalize_message_error(RuntimeError("inbox_empty"))
     normalized_key_error = _normalize_callback_error(KeyError("selection_id"))
     passthrough = _normalize_callback_error(RuntimeError("boom"))
 
@@ -880,6 +891,8 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
     assert normalized_404.code == TelegramUserErrorCode.STALE_ACTION
     assert isinstance(normalized_message_404, TelegramUserError)
     assert normalized_message_404.code == TelegramUserErrorCode.STALE_ACTION
+    assert isinstance(normalized_message_runtime, TelegramUserError)
+    assert normalized_message_runtime.code == TelegramUserErrorCode.STALE_ACTION
     assert isinstance(normalized_key_error, TelegramUserError)
     assert isinstance(passthrough, RuntimeError)
     assert _classify_polling_log_message("Failed to fetch updates - TelegramNetworkError: timeout") == "telegram_upstream_failure"

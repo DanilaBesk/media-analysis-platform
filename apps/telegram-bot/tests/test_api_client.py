@@ -221,6 +221,14 @@ def test_runtime_download_failures_map_to_specific_unsupported_input_copy() -> N
     assert copy == "unsupported input: Telegram file content could not be downloaded."
 
 
+def test_runtime_rejection_reasons_map_to_unsupported_input_copy() -> None:
+    user_error = classify_user_error(RuntimeError("missing_file_id"))
+    copy = user_error_text(RuntimeError("missing_file_id"))
+
+    assert user_error.code == TelegramUserErrorCode.UNSUPPORTED_INPUT
+    assert copy == "unsupported input: Telegram did not provide a file id."
+
+
 def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surface() -> None:
     captured_urls: list[str] = []
     captured_requests = []
