@@ -153,6 +153,10 @@ class FakeFinalApiClient:
             "page": {"page_size": 10, "has_more": False},
         }
 
+    def get_artifact(self, **kwargs) -> dict[str, Any]:
+        artifact_id = kwargs["artifact_id"]
+        return next(artifact for artifact in self.artifacts if artifact["artifact_id"] == artifact_id)
+
     def list_diagnostics(self, **kwargs) -> dict[str, Any]:
         subject_type = kwargs.get("subject_type")
         subject_id = kwargs.get("subject_id")
@@ -228,11 +232,16 @@ class FakeMessage:
         self.voice = voice
         self.media_group_id = media_group_id
         self.answers: list[dict[str, Any]] = []
+        self.documents: list[dict[str, Any]] = []
         self.edits: list[dict[str, Any]] = []
 
     async def answer(self, text: str, **kwargs) -> SimpleNamespace:
         self.answers.append({"text": text, **kwargs})
         return SimpleNamespace(message_id=9001)
+
+    async def answer_document(self, document: Any, **kwargs) -> SimpleNamespace:
+        self.documents.append({"document": document, **kwargs})
+        return SimpleNamespace(message_id=9002)
 
     async def edit_text(self, text: str, **kwargs) -> None:
         self.edits.append({"text": text, **kwargs})
@@ -759,6 +768,8 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "download": {"url": "https://download.test/transcript.txt"},
         }
     )
     api.diagnostics.append(
@@ -791,15 +802,73 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     app._set_page_state((10, 7), completed_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
     artifacts_callback = FakeCallback(data=details["ar"], message=base_message)
     diagnostics_callback = FakeCallback(data=details["dg"], message=base_message)
+    app._download_artifact_bytes = lambda _url: b"Completed transcript."  # type: ignore[method-assign]
     await app._handle_status_callback(artifacts_callback)
     await app._handle_status_callback(diagnostics_callback)
 
-    assert artifacts_callback.answers[-1]["text"] == "Открыт результат"
+    assert artifacts_callback.answers[-1]["text"] == "Транскрипт отправлен в чат"
     assert diagnostics_callback.answers[-1]["text"] == "Открыта диагностика"
-    assert "Результат" in base_message.edits[-2]["text"]
+    assert base_message.answers[-1]["text"] == "Completed transcript."
     assert "run-1" not in base_message.edits[-2]["text"]
     assert "Диагностика" in base_message.edits[-1]["text"]
     assert "run-1" not in base_message.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_result_callback_sends_transcript_document_when_plain_text_is_too_large() -> None:
+    api, gateway, app = make_app()
+    base_message = FakeMessage()
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    api.artifacts.extend(
+        [
+            {
+                "artifact_id": "artifact-docx",
+                "analysis_run_id": "run-1",
+                "kind": "transcript",
+                "status": "available",
+                "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "object_key": "artifacts/run-1/transcript/docx/transcript.docx",
+                "download": {"url": "https://download.test/transcript.docx"},
+            },
+            {
+                "artifact_id": "artifact-plain",
+                "analysis_run_id": "run-1",
+                "kind": "transcript",
+                "status": "available",
+                "content_type": "text/plain; charset=utf-8",
+                "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+                "download": {"url": "https://download.test/transcript.txt"},
+            },
+        ]
+    )
+
+    completed_status = status_for(gateway)
+    completed_keyboard = build_status_keyboard(completed_status)
+    result_callback_data = next(
+        button.callback_data
+        for row in completed_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:ar:")
+    )
+    app._set_page_state((10, 7), completed_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    app._download_artifact_bytes = lambda _url: ("line\n" * 2000).encode("utf-8")  # type: ignore[method-assign]
+
+    result_callback = FakeCallback(data=result_callback_data, message=base_message)
+    await app._handle_status_callback(result_callback)
+
+    assert result_callback.answers[-1]["text"] == "Транскрипт отправлен файлом"
+    assert base_message.answers == []
+    assert len(base_message.documents) == 1
+    assert base_message.documents[0]["document"].filename == "transcript.txt"
+    assert base_message.documents[0]["document"].data.startswith(b"line\nline\n")
 
 
 @pytest.mark.asyncio

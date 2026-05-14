@@ -17,13 +17,16 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from io import BytesIO
+from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import unquote, urlparse
+from urllib.request import urlopen
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from telegram_adapter.api_client import TelegramApiClientError
 from telegram_adapter.errors import (
@@ -48,6 +51,7 @@ JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_TELEGRAM_HANDLER_ERROR = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]"
 _LOG_MARKER_TELEGRAM_POLLING_STATE = "[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE]"
+_INLINE_TRANSCRIPT_LIMIT = 3800
 
 
 @dataclass(slots=True)
@@ -380,10 +384,11 @@ class TelegramInboxApp:
             if action == "ar":
                 analysis_run_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
-                artifacts = self.gateway.list_run_artifacts(
+                result_notice, show_alert = await self._deliver_run_result(
                     owner=owner,
                     analysis_run_id=analysis_run_id,
                     expected_version=expected_version,
+                    message=callback.message,
                 )
                 status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor if page_state else None)
                 self._set_page_state(
@@ -394,15 +399,8 @@ class TelegramInboxApp:
                     selection=page_state.selection if page_state else None,
                     screen=page_state.screen if page_state else "main",
                 )
-                await self._edit_callback_status(
-                    callback,
-                    status,
-                    prefix=_detail_prefix(
-                        title="Результат",
-                        lines=[f"- {_artifact_label(artifact)}" for artifact in artifacts] or ["- Файлов пока нет."],
-                    ),
-                )
-                await callback.answer("Открыт результат")
+                await self._edit_callback_status(callback, status)
+                await callback.answer(result_notice, show_alert=show_alert)
                 return
             if action == "dg":
                 analysis_run_id = _decode_callback_token(tokens[0])
@@ -472,6 +470,42 @@ class TelegramInboxApp:
         sent = await message.answer(text, reply_markup=markup)
         self.status_message_ids[key] = sent.message_id
         return True
+
+    async def _deliver_run_result(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        expected_version: int,
+        message: Message | None = None,
+    ) -> tuple[str, bool]:
+        if message is None:
+            return ("Готовый транскрипт пока недоступен.", True)
+        artifacts = self.gateway.list_run_artifacts(
+            owner=owner,
+            analysis_run_id=analysis_run_id,
+            expected_version=expected_version,
+        )
+        selected = _select_transcript_artifact(artifacts)
+        if selected is None:
+            return ("Готовый транскрипт пока недоступен.", True)
+        artifact = self.gateway.api_client.get_artifact(owner=owner, artifact_id=str(selected["artifact_id"]))
+        download_url = _artifact_download_url(artifact)
+        if not download_url:
+            return ("Готовый транскрипт пока недоступен.", True)
+        content = self._download_artifact_bytes(download_url)
+        if _should_send_transcript_as_text(artifact, content):
+            await message.answer(_decode_transcript_text(content))
+            return ("Транскрипт отправлен в чат", False)
+        await message.answer_document(BufferedInputFile(content, filename=_artifact_filename(artifact)))
+        return ("Транскрипт отправлен файлом", False)
+
+    def _download_artifact_bytes(self, download_url: str) -> bytes:
+        with urlopen(download_url, timeout=30) as response:
+            content = response.read()
+        if not content:
+            raise RuntimeError("artifact_download_failed")
+        return content
 
     async def _start_analysis_from_collection(
         self,
@@ -1256,3 +1290,73 @@ def _display_name_text(value: str) -> str:
         "Telegram file": "Файл из Telegram",
         "Telegram media": "Медиа из Telegram",
     }.get(value, value)
+
+
+def _select_transcript_artifact(artifacts: list[JsonObject]) -> JsonObject | None:
+    candidates: list[tuple[int, int, JsonObject]] = []
+    for index, artifact in enumerate(artifacts):
+        if str(artifact.get("kind") or "") != "transcript":
+            continue
+        if str(artifact.get("status") or "") not in {"available", "ready"}:
+            continue
+        artifact_id = str(artifact.get("artifact_id") or "").strip()
+        if not artifact_id:
+            continue
+        candidates.append((_transcript_artifact_rank(str(artifact.get("content_type") or "")), index, artifact))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _transcript_artifact_rank(content_type: str) -> int:
+    normalized = content_type.split(";", 1)[0].strip().lower()
+    if normalized == "text/plain":
+        return 0
+    if normalized == "text/markdown":
+        return 1
+    if normalized == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return 2
+    if normalized.startswith("text/"):
+        return 3
+    return 4
+
+
+def _artifact_download_url(artifact: JsonObject) -> str | None:
+    download = artifact.get("download")
+    if not isinstance(download, dict):
+        return None
+    url = str(download.get("url") or "").strip()
+    return url or None
+
+
+def _artifact_filename(artifact: JsonObject) -> str:
+    object_key = str(artifact.get("object_key") or "").strip()
+    if object_key:
+        name = PurePosixPath(object_key).name
+        if name:
+            return name
+    download_url = _artifact_download_url(artifact)
+    if download_url:
+        path = unquote(urlparse(download_url).path)
+        name = PurePosixPath(path).name
+        if name:
+            return name
+    content_type = str(artifact.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type == "text/plain":
+        return "transcript.txt"
+    if content_type == "text/markdown":
+        return "transcript.md"
+    if content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        return "transcript.docx"
+    return "transcript.bin"
+
+
+def _should_send_transcript_as_text(artifact: JsonObject, content: bytes) -> bool:
+    content_type = str(artifact.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type != "text/plain":
+        return False
+    return len(_decode_transcript_text(content)) <= _INLINE_TRANSCRIPT_LIMIT
+
+
+def _decode_transcript_text(content: bytes) -> str:
+    return content.decode("utf-8", errors="replace").strip()
