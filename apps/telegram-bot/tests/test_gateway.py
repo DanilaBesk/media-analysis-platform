@@ -462,6 +462,24 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     ]
 
 
+def test_clear_collection_removes_all_items_across_pages() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api, page_size=1)
+    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(owner=owner(), text="two")
+
+    cleared = gateway.clear_collection(
+        owner=owner(),
+        collection_id="inbox-1",
+        expected_version=api.collection["version"],
+    )
+
+    assert cleared.items == []
+    assert cleared.collection is not None
+    assert cleared.collection["items"] == []
+    assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+
+
 def test_remove_latest_collection_item_removes_last_item_from_full_collection() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api, page_size=2)

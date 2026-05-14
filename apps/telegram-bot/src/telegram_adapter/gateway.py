@@ -287,19 +287,32 @@ class TelegramInboxGateway:
         status = self.restore_status(owner=owner, cursor=cursor)
         if not status.items:
             return status
-        version = int(collection["version"])
-        for item in status.items:
-            media_item_id = item.get("media_item_id")
-            if not media_item_id:
-                continue
-            collection = self.api_client.remove_collection_item(
-                owner=owner,
-                collection_id=collection["collection_id"],
-                media_item_id=media_item_id,
-                expected_version=version,
-            )
-            version = int(collection["version"])
-        return self.restore_status(owner=owner, cursor=cursor)
+        return self._clear_collection_items(
+            owner=owner,
+            collection=collection,
+            media_item_ids=[str(item.get("media_item_id") or "") for item in status.items],
+            cursor=cursor,
+        )
+
+    def clear_collection(
+        self,
+        *,
+        owner: JsonObject,
+        collection_id: str,
+        expected_version: int,
+        cursor: str | None = None,
+    ) -> InboxStatus:
+        collection = self._get_verified_inbox_collection(
+            owner=owner,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        return self._clear_collection_items(
+            owner=owner,
+            collection=collection,
+            media_item_ids=[str(item.get("media_item_id") or "") for item in collection.get("items", [])],
+            cursor=cursor,
+        )
 
     def remove_latest_collection_item(
         self,
@@ -504,6 +517,30 @@ class TelegramInboxGateway:
                 break
             cursor = str(next_cursor)
         return [found[media_item_id] for media_item_id in media_item_ids if media_item_id in found]
+
+    def _clear_collection_items(
+        self,
+        *,
+        owner: JsonObject,
+        collection: JsonObject,
+        media_item_ids: list[str],
+        cursor: str | None,
+    ) -> InboxStatus:
+        version = int(collection["version"])
+        seen: set[str] = set()
+        for media_item_id in media_item_ids:
+            clean_id = media_item_id.strip()
+            if not clean_id or clean_id in seen:
+                continue
+            seen.add(clean_id)
+            collection = self.api_client.remove_collection_item(
+                owner=owner,
+                collection_id=collection["collection_id"],
+                media_item_id=clean_id,
+                expected_version=version,
+            )
+            version = int(collection["version"])
+        return self.restore_status(owner=owner, cursor=cursor)
 
 
 def extract_links(text: str) -> tuple[str, ...]:

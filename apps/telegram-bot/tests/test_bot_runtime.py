@@ -179,6 +179,8 @@ class FakeBot:
         self.get_file_calls: list[str] = []
         self.download_calls: list[str] = []
         self.edit_calls: list[dict[str, Any]] = []
+        self.send_message_calls: list[dict[str, Any]] = []
+        self.send_document_calls: list[dict[str, Any]] = []
 
     async def set_my_commands(self, commands: list[Any], *, language_code: str) -> None:
         self.set_commands_calls.append((commands, language_code))
@@ -202,6 +204,14 @@ class FakeBot:
                 "reply_markup": reply_markup,
             }
         )
+
+    async def send_message(self, chat_id: int, text: str, **kwargs) -> SimpleNamespace:
+        self.send_message_calls.append({"chat_id": chat_id, "text": text, **kwargs})
+        return SimpleNamespace(message_id=9003)
+
+    async def send_document(self, chat_id: int, document: Any, **kwargs) -> SimpleNamespace:
+        self.send_document_calls.append({"chat_id": chat_id, "document": document, **kwargs})
+        return SimpleNamespace(message_id=9004)
 
 
 class FakeMessage:
@@ -591,13 +601,17 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
         return None
 
     app._sleep = no_sleep  # type: ignore[assignment]
-    status, prefix, answer_text, track_run_id = await app._resolve_run_start_status(owner=owner(), run=run)
+    status, prefix, answer_text, track_run_id, terminal_status = await app._resolve_run_start_status(
+        owner=owner(),
+        run=run,
+    )
 
     assert api.runs[0]["status"] == "queued"
     assert answer_text == "Транскрибация запущена"
     assert prefix.startswith("Транскрибация запущена.")
     assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
     assert track_run_id == run["analysis_run_id"]
+    assert terminal_status is None
 
 
 @pytest.mark.asyncio
@@ -923,6 +937,118 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
     assert app.run_watch_tasks == {}
     assert app.page_states[(10, 7)].screen == "materials"
     assert app.bot.edit_calls[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
+
+
+@pytest.mark.asyncio
+async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_after_success() -> None:
+    api, gateway, app = make_app(page_size=1, bot=FakeBot())
+    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(owner=owner(), text="two")
+    base_message = FakeMessage()
+
+    run_status = status_for(gateway)
+    run_keyboard = build_status_keyboard(run_status)
+    run_callback_data = next(
+        button.callback_data
+        for row in run_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rn:")
+    )
+    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+
+    tick = asyncio.Event()
+    original_get_run_status = gateway.get_run_status
+    statuses = iter(("queued", "succeeded"))
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = next(statuses, "succeeded")
+        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app._download_artifact_bytes = lambda _url: b"transcript ready"  # type: ignore[method-assign]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 1
+    app.run_status_follow_delay_seconds = 0
+    gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "download": {"url": "https://download.test/transcript.txt"},
+        }
+    )
+
+    run_callback = FakeCallback(data=run_callback_data, message=base_message)
+    await app._handle_status_callback(run_callback)
+
+    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+
+    tick.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert app.run_watch_tasks == {}
+    assert app.bot.send_message_calls == [{"chat_id": 10, "text": "transcript ready"}]
+    assert api.collection["items"] == []
+    assert api.items == []
+    assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+    assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
+    api, gateway, app = make_app(bot=FakeBot())
+    gateway.add_text(owner=owner(), text="one")
+    base_message = FakeMessage()
+
+    run_status = status_for(gateway)
+    run_keyboard = build_status_keyboard(run_status)
+    run_callback_data = next(
+        button.callback_data
+        for row in run_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rn:")
+    )
+    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+
+    tick = asyncio.Event()
+    original_get_run_status = gateway.get_run_status
+    statuses = iter(("queued", "failed"))
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = next(statuses, "failed")
+        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 1
+    app.run_status_follow_delay_seconds = 0
+    gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
+
+    run_callback = FakeCallback(data=run_callback_data, message=base_message)
+    await app._handle_status_callback(run_callback)
+
+    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+
+    tick.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert app.run_watch_tasks == {}
+    assert app.bot.send_message_calls == []
+    assert api.collection["items"] == [{"media_item_id": "media-1", "position": 0}]
+    assert api.remove_requests == []
+    assert "Материалов: 1" in app.bot.edit_calls[-1]["text"]
 
 
 @pytest.mark.asyncio

@@ -52,6 +52,7 @@ _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_TELEGRAM_HANDLER_ERROR = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]"
 _LOG_MARKER_TELEGRAM_POLLING_STATE = "[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE]"
 _INLINE_TRANSCRIPT_LIMIT = 3800
+_AUTO_DELIVER_RUN_STATUSES = {"succeeded", "partially_succeeded"}
 
 
 @dataclass(slots=True)
@@ -325,11 +326,21 @@ class TelegramInboxApp:
             if action == "sl":
                 collection_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
-                status, prefix, answer_text, track_run_id = await self._start_analysis_from_collection(
+                status, prefix, answer_text, run_id, terminal_status = await self._start_analysis_from_collection(
                     owner=owner,
                     collection_id=collection_id,
                     expected_version=expected_version,
                 )
+                if terminal_status in _AUTO_DELIVER_RUN_STATUSES and run_id:
+                    run_version = _analysis_run_version(status, run_id)
+                    if run_version is not None:
+                        status = await self._auto_deliver_and_maybe_clear_collection(
+                            owner=owner,
+                            analysis_run_id=run_id,
+                            expected_version=run_version,
+                            chat_id=callback.message.chat.id,
+                            message=callback.message,
+                        )
                 self._set_page_state(
                     key,
                     status,
@@ -339,11 +350,11 @@ class TelegramInboxApp:
                     screen="main",
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
-                if track_run_id:
+                if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
                         owner=owner,
-                        analysis_run_id=track_run_id,
+                        analysis_run_id=run_id,
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
                     )
@@ -353,7 +364,7 @@ class TelegramInboxApp:
                 if len(tokens) >= 2:
                     collection_id = _decode_callback_token(tokens[0])
                     expected_version = _decode_callback_version(tokens[1])
-                    status, prefix, answer_text, track_run_id = await self._start_analysis_from_collection(
+                    status, prefix, answer_text, run_id, terminal_status = await self._start_analysis_from_collection(
                         owner=owner,
                         collection_id=collection_id,
                         expected_version=expected_version,
@@ -361,7 +372,20 @@ class TelegramInboxApp:
                 else:
                     selection_id = _decode_callback_token(tokens[0])
                     run = self.gateway.start_analysis(owner=owner, selection_id=selection_id)
-                    status, prefix, answer_text, track_run_id = await self._resolve_run_start_status(owner=owner, run=run)
+                    status, prefix, answer_text, run_id, terminal_status = await self._resolve_run_start_status(
+                        owner=owner,
+                        run=run,
+                    )
+                if terminal_status in _AUTO_DELIVER_RUN_STATUSES and run_id:
+                    run_version = _analysis_run_version(status, run_id)
+                    if run_version is not None:
+                        status = await self._auto_deliver_and_maybe_clear_collection(
+                            owner=owner,
+                            analysis_run_id=run_id,
+                            expected_version=run_version,
+                            chat_id=callback.message.chat.id,
+                            message=callback.message,
+                        )
                 self._set_page_state(
                     key,
                     status,
@@ -371,11 +395,11 @@ class TelegramInboxApp:
                     screen="main",
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
-                if track_run_id:
+                if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
                         owner=owner,
-                        analysis_run_id=track_run_id,
+                        analysis_run_id=run_id,
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
                     )
@@ -478,8 +502,9 @@ class TelegramInboxApp:
         analysis_run_id: str,
         expected_version: int,
         message: Message | None = None,
+        chat_id: int | None = None,
     ) -> tuple[str, bool]:
-        if message is None:
+        if message is None and chat_id is None:
             return ("Готовый транскрипт пока недоступен.", True)
         artifacts = self.gateway.list_run_artifacts(
             owner=owner,
@@ -495,9 +520,17 @@ class TelegramInboxApp:
             return ("Готовый транскрипт пока недоступен.", True)
         content = self._download_artifact_bytes(download_url)
         if _should_send_transcript_as_text(artifact, content):
-            await message.answer(_decode_transcript_text(content))
+            text = _decode_transcript_text(content)
+            if message is not None:
+                await message.answer(text)
+            else:
+                await self.bot.send_message(chat_id=chat_id, text=text)
             return ("Транскрипт отправлен в чат", False)
-        await message.answer_document(BufferedInputFile(content, filename=_artifact_filename(artifact)))
+        document = BufferedInputFile(content, filename=_artifact_filename(artifact))
+        if message is not None:
+            await message.answer_document(document)
+        else:
+            await self.bot.send_document(chat_id=chat_id, document=document)
         return ("Транскрипт отправлен файлом", False)
 
     def _download_artifact_bytes(self, download_url: str) -> bytes:
@@ -513,7 +546,7 @@ class TelegramInboxApp:
         owner: JsonObject,
         collection_id: str,
         expected_version: int,
-    ) -> tuple[InboxStatus, str, str, str | None]:
+    ) -> tuple[InboxStatus, str, str, str | None, str | None]:
         selection = self.gateway.create_selection(
             owner=owner,
             collection_id=collection_id,
@@ -522,7 +555,12 @@ class TelegramInboxApp:
         run = self.gateway.start_analysis(owner=owner, selection_id=str(selection["selection_id"]))
         return await self._resolve_run_start_status(owner=owner, run=run)
 
-    async def _resolve_run_start_status(self, *, owner: JsonObject, run: JsonObject) -> tuple[InboxStatus, str, str, str | None]:
+    async def _resolve_run_start_status(
+        self,
+        *,
+        owner: JsonObject,
+        run: JsonObject,
+    ) -> tuple[InboxStatus, str, str, str | None, str | None]:
         run_id = str(run.get("analysis_run_id") or "")
         for attempt in range(self.run_status_poll_attempts):
             latest = self.gateway.get_run_status(owner=owner, analysis_run_id=run_id)
@@ -533,7 +571,8 @@ class TelegramInboxApp:
                     status,
                     f"Транскрибация: {_run_status_text(status_name)}\n\n",
                     f"Транскрибация: {_run_status_text(status_name)}",
-                    None,
+                    run_id or None,
+                    status_name,
                 )
             if attempt + 1 < self.run_status_poll_attempts:
                 await self._sleep(self.run_status_poll_delay_seconds)
@@ -544,6 +583,34 @@ class TelegramInboxApp:
             "Карточка обновится автоматически.\n\n",
             "Транскрибация запущена",
             run_id or None,
+            None,
+        )
+
+    async def _auto_deliver_and_maybe_clear_collection(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        expected_version: int,
+        chat_id: int,
+        message: Message | None = None,
+        cursor: str | None = None,
+    ) -> InboxStatus:
+        status = self.gateway.restore_status(owner=owner, cursor=cursor)
+        _result_notice, show_alert = await self._deliver_run_result(
+            owner=owner,
+            analysis_run_id=analysis_run_id,
+            expected_version=expected_version,
+            message=message,
+            chat_id=chat_id,
+        )
+        if show_alert or status.collection is None:
+            return status
+        return self.gateway.clear_collection(
+            owner=owner,
+            collection_id=str(status.collection["collection_id"]),
+            expected_version=int(status.collection["version"]),
+            cursor=cursor,
         )
 
     def _schedule_run_status_tracking(
@@ -576,7 +643,7 @@ class TelegramInboxApp:
         analysis_run_id: str,
         chat_id: int,
         message_id: int,
-    ) -> None:
+        ) -> None:
         try:
             for _ in range(self.run_status_follow_attempts):
                 await self._sleep(self.run_status_follow_delay_seconds)
@@ -584,7 +651,17 @@ class TelegramInboxApp:
                 page_state = self.page_states.get(key, _PageState())
                 current_cursor = page_state.current_cursor if page_state.screen == "materials" else None
                 previous_cursors = page_state.previous_cursors if page_state.screen == "materials" else []
-                status = self.gateway.restore_status(owner=owner, cursor=current_cursor)
+                latest_status = str(latest.get("status") or "")
+                if latest_status in _AUTO_DELIVER_RUN_STATUSES:
+                    status = await self._auto_deliver_and_maybe_clear_collection(
+                        owner=owner,
+                        analysis_run_id=analysis_run_id,
+                        expected_version=int(latest.get("version") or 0),
+                        chat_id=chat_id,
+                        cursor=current_cursor,
+                    )
+                else:
+                    status = self.gateway.restore_status(owner=owner, cursor=current_cursor)
                 self._set_page_state(
                     key,
                     status,
@@ -600,7 +677,7 @@ class TelegramInboxApp:
                     status=status,
                     state=updated_state,
                 )
-                if str(latest.get("status") or "") in TERMINAL_RUN_STATUSES:
+                if latest_status in TERMINAL_RUN_STATUSES:
                     return
         except asyncio.CancelledError:
             raise
@@ -1194,6 +1271,15 @@ def _latest_terminal_run_with_payload(
         run_id = str(run["analysis_run_id"])
         if payloads_by_run.get(run_id):
             return run
+    return None
+
+
+def _analysis_run_version(status: InboxStatus, analysis_run_id: str) -> int | None:
+    for run in reversed(status.recent_runs):
+        if str(run.get("analysis_run_id") or "") != analysis_run_id:
+            continue
+        version = int(run.get("version") or 0)
+        return version if version > 0 else None
     return None
 
 
