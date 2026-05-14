@@ -41,6 +41,7 @@ from transcriber_workers_common.api import (
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
 from transcriber_workers_common.documents import build_transcript_markdown, write_transcript_docx
 from transcriber_workers_common.domain import SourceCandidate, TranscriptArtifacts, TranscriptResult
+from transcriber_workers_common.source_extractor import extract_youtube_video_id
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -278,11 +279,15 @@ def _materialize_execution_source(
     source_store: SourceObjectStore,
 ) -> tuple[SourceCandidate, tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
     items = tuple(sorted(execution.selection.items, key=lambda item: item.position))
+    supports_direct_url = len(items) == 1
     materialized_inputs: list[tuple[SelectionItemMaterialization, Path]] = []
     diagnostics: list[Mapping[str, object]] = []
     item_outcomes: list[Mapping[str, object]] = []
     for item in items:
         descriptor = SelectionItemMaterialization.from_selection_item(item)
+        if supports_direct_url and _is_supported_direct_youtube_descriptor(descriptor):
+            item_outcomes.append(_item_outcome(execution, descriptor, "succeeded"))
+            return _source_candidate_from_supported_url(descriptor), tuple(diagnostics), tuple(item_outcomes)
         if descriptor.is_object_backed and _is_transcribable_descriptor(descriptor):
             input_dir = workspace_dir / "inputs" / f"{descriptor.position:02d}-{descriptor.source_id}"
             input_dir.mkdir(parents=True, exist_ok=True)
@@ -494,6 +499,20 @@ def _source_candidate_from_materialized_path(
     )
 
 
+def _source_candidate_from_supported_url(materialization: SelectionItemMaterialization) -> SourceCandidate:
+    return SourceCandidate(
+        source_id=materialization.source_id,
+        kind="youtube_url",
+        display_name=materialization.labels.source_display_label(),
+        url=materialization.external_uri,
+        telegram_file_id=None,
+        mime_type=materialization.mime_type,
+        file_name=None,
+        file_unique_id=None,
+        local_path=None,
+    )
+
+
 def _materialize_unsupported_object_descriptor(
     materialization: SelectionItemMaterialization,
     workspace_dir: Path,
@@ -536,6 +555,14 @@ def _source_candidate_kind(materialization: SelectionItemMaterialization) -> str
     if materialization.media_kind == "video" or mime_type.startswith("video/"):
         return "telegram_video"
     return "telegram_audio"
+
+
+def _is_supported_direct_youtube_descriptor(materialization: SelectionItemMaterialization) -> bool:
+    if materialization.origin_type != "url":
+        return False
+    if not materialization.external_uri:
+        return False
+    return extract_youtube_video_id(materialization.external_uri) is not None
 
 
 def _concatenate_media_inputs(input_paths: list[Path], output_path: Path) -> None:

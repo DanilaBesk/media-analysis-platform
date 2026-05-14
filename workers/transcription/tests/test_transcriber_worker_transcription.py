@@ -426,7 +426,7 @@ def test_run_transcription_uses_selection_metadata_source_label_for_video_object
     assert result.transcript.source_label == "video_b"
 
 
-def test_run_transcription_rejects_url_only_selection_with_item_diagnostic(tmp_path: Path) -> None:
+def test_run_transcription_supports_single_youtube_url_only_selection(tmp_path: Path) -> None:
     execution = _build_execution(
         OrderedWorkerInput(
             position=0,
@@ -435,6 +435,61 @@ def test_run_transcription_rejects_url_only_selection_with_item_diagnostic(tmp_p
             source_kind="youtube_url",
             display_name="Demo video",
             source_url="https://youtu.be/demo123",
+        )
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert source_store.calls == []
+    assert len(transcriber.calls) == 1
+    transcribed_source, workspace_dir = transcriber.calls[0]
+    assert workspace_dir == tmp_path / execution.analysis_run_id
+    assert transcribed_source.source_id == "source-youtube"
+    assert transcribed_source.kind == "youtube_url"
+    assert transcribed_source.display_name == "youtube_c"
+    assert transcribed_source.url == "https://youtu.be/demo123"
+    assert transcribed_source.local_path is None
+    assert result.source == transcribed_source
+    assert result.diagnostics == ()
+    assert not any(call[0] == "register_diagnostics" for call in api_client.calls)
+    assert api_client.calls[-1][0] == "finalize_analysis_run"
+    assert api_client.calls[-1][1]["outcome"] == "succeeded"
+    assert api_client.calls[-1][1]["error_message"] is None
+    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
+    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
+        "transcript_plain",
+        "transcript_segmented_markdown",
+        "transcript_docx",
+        "run_manifest",
+        "run_diagnostics",
+    ]
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["summary"] == {"included_count": 1, "skipped_count": 0, "failed_count": 0}
+    assert manifest["items"][0]["outcome"] == "succeeded"
+    assert manifest["items"][0]["diagnostic_ids"] == []
+    assert manifest["items"][0]["lineage"]["origin_type"] == "url"
+    assert manifest["items"][0]["lineage"]["selection_item_id"] == "selection-item-0"
+
+
+def test_run_transcription_rejects_single_non_youtube_url_selection(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-external",
+            source_kind="external_url",
+            display_name="Reference URL",
+            source_url="https://example.test/reference",
         )
     )
     api_client = RecordingApiClient(execution)
@@ -453,24 +508,13 @@ def test_run_transcription_rejects_url_only_selection_with_item_diagnostic(tmp_p
         )
 
     assert source_store.calls == []
+    assert transcriber.calls == []
     diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
     diagnostics = diagnostics_call[1]["diagnostics"]
-    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == ["media-source-youtube"]
+    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == ["media-source-external"]
     assert diagnostics[0]["context"]["origin_type"] == "url"
-    assert api_client.calls[-1][0] == "finalize_analysis_run"
+    assert diagnostics[0]["context"]["external_uri"] == "https://example.test/reference"
     assert api_client.calls[-1][1]["outcome"] == "failed"
-    assert "no object-backed media items" in api_client.calls[-1][1]["error_message"]
-    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
-    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
-        "run_manifest",
-        "run_diagnostics",
-    ]
-    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
-    assert manifest["summary"] == {"included_count": 0, "skipped_count": 1, "failed_count": 0}
-    assert manifest["items"][0]["outcome"] == "skipped"
-    assert manifest["items"][0]["diagnostic_ids"] == [diagnostics[0]["diagnostic_id"]]
-    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
-    assert diagnostics_bundle["diagnostics"] == list(diagnostics)
 
 
 def test_run_transcription_mixed_selection_records_item_diagnostics_and_partial_outcome(
