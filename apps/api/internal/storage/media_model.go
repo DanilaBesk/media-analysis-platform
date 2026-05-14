@@ -749,7 +749,16 @@ func (r *Repository) GetInternalArtifactDownloadAccess(ctx context.Context, arti
 		return ArtifactRecord{}, err
 	}
 	if artifact.Status == "available" && artifact.ObjectKey != "" {
-		url, expiresAt, err := r.objects.PresignGetObject(ctx, ArtifactsBucket, artifactObjectStoreKey(artifact.ObjectKey), r.presignTTL)
+		internalPresigner, ok := r.objects.(internalObjectPresigner)
+		if !ok {
+			return ArtifactRecord{}, fmt.Errorf("%w: object store does not support internal artifact download access", ErrContractViolation)
+		}
+		url, expiresAt, err := internalPresigner.PresignInternalGetObject(
+			ctx,
+			ArtifactsBucket,
+			artifactObjectStoreKey(artifact.ObjectKey),
+			r.presignTTL,
+		)
 		if err != nil {
 			_, _ = r.RecordDiagnostics(ctx, artifact.Owner, artifact.AnalysisRunID, []DiagnosticRecord{{
 				SubjectType: "artifact",

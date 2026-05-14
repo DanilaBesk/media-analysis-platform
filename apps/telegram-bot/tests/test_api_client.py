@@ -195,6 +195,30 @@ def test_get_analysis_run_uses_owner_query_and_extracts_wrapped_object() -> None
     assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7"
 
 
+def test_get_internal_artifact_download_access_uses_internal_endpoint_without_owner_query() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["url"] = request.full_url
+        return FakeHttpResponse(
+            json.dumps(
+                {
+                    "artifact_id": "artifact-1",
+                    "filename": "transcript.txt",
+                    "mime_type": "text/plain",
+                    "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+                }
+            ).encode("utf-8")
+        )
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    access = client.get_internal_artifact_download_access(artifact_id="artifact-1")
+
+    assert access["artifact_id"] == "artifact-1"
+    assert access["download"]["url"] == "http://minio:9000/artifacts/run-1/transcript.txt"
+    assert captured["url"] == "http://api:8080/internal/v1/artifacts/artifact-1/download-access"
+
+
 def test_backend_connection_failure_is_categorized_without_raw_exception_copy() -> None:
     def fake_urlopen(request):
         raise URLError("Connection refused at 127.0.0.1:8080")

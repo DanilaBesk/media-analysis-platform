@@ -57,6 +57,9 @@ class FakeFinalApiClient:
         self.add_requests: list[dict[str, Any]] = []
         self.upload_requests: list[dict[str, Any]] = []
         self.remove_requests: list[dict[str, Any]] = []
+        self.get_artifact_requests: list[str] = []
+        self.internal_artifact_download_access_requests: list[str] = []
+        self.internal_artifact_download_access: dict[str, dict[str, Any]] = {}
 
     def add_media_item(self, **kwargs) -> dict[str, Any]:
         media_item = {
@@ -155,7 +158,15 @@ class FakeFinalApiClient:
 
     def get_artifact(self, **kwargs) -> dict[str, Any]:
         artifact_id = kwargs["artifact_id"]
+        self.get_artifact_requests.append(artifact_id)
         return next(artifact for artifact in self.artifacts if artifact["artifact_id"] == artifact_id)
+
+    def get_internal_artifact_download_access(self, **kwargs) -> dict[str, Any]:
+        artifact_id = kwargs["artifact_id"]
+        self.internal_artifact_download_access_requests.append(artifact_id)
+        if artifact_id in self.internal_artifact_download_access:
+            return self.internal_artifact_download_access[artifact_id]
+        return self.get_artifact(artifact_id=artifact_id)
 
     def list_diagnostics(self, **kwargs) -> dict[str, Any]:
         subject_type = kwargs.get("subject_type")
@@ -786,6 +797,12 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
             "download": {"url": "https://download.test/transcript.txt"},
         }
     )
+    api.internal_artifact_download_access["artifact-1"] = {
+        "artifact_id": "artifact-1",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
     api.diagnostics.append(
         {
             "diagnostic_id": "diagnostic-1",
@@ -821,6 +838,8 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     await app._handle_status_callback(diagnostics_callback)
 
     assert artifacts_callback.answers[-1]["text"] == "Транскрипт отправлен в чат"
+    assert api.internal_artifact_download_access_requests == ["artifact-1"]
+    assert api.get_artifact_requests == []
     assert diagnostics_callback.answers[-1]["text"] == "Открыта диагностика"
     assert base_message.answers[-1]["text"] == "Completed transcript."
     assert "run-1" not in base_message.edits[-2]["text"]
@@ -863,6 +882,12 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
             },
         ]
     )
+    api.internal_artifact_download_access["artifact-plain"] = {
+        "artifact_id": "artifact-plain",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain; charset=utf-8",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
 
     completed_status = status_for(gateway)
     completed_keyboard = build_status_keyboard(completed_status)
@@ -879,6 +904,8 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
     await app._handle_status_callback(result_callback)
 
     assert result_callback.answers[-1]["text"] == "Транскрипт отправлен файлом"
+    assert api.internal_artifact_download_access_requests == ["artifact-plain"]
+    assert api.get_artifact_requests == []
     assert base_message.answers == []
     assert len(base_message.documents) == 1
     assert base_message.documents[0]["document"].filename == "transcript.txt"
@@ -984,6 +1011,12 @@ async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_a
             "download": {"url": "https://download.test/transcript.txt"},
         }
     )
+    api.internal_artifact_download_access["artifact-1"] = {
+        "artifact_id": "artifact-1",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
 
     run_callback = FakeCallback(data=run_callback_data, message=base_message)
     await app._handle_status_callback(run_callback)
@@ -996,6 +1029,8 @@ async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_a
 
     assert app.run_watch_tasks == {}
     assert app.bot.send_message_calls == [{"chat_id": 10, "text": "transcript ready"}]
+    assert api.internal_artifact_download_access_requests == ["artifact-1"]
+    assert api.get_artifact_requests == []
     assert api.collection["items"] == []
     assert api.items == []
     assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]

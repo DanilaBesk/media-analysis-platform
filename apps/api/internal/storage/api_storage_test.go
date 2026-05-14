@@ -1223,7 +1223,7 @@ func TestApiStorageRepositoryReadQueueAndArtifactWrappers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInternalArtifactDownloadAccess() error = %v", err)
 	}
-	if internalArtifact.Download == nil || internalArtifact.Download.URL == "" {
+	if internalArtifact.Download == nil || internalArtifact.Download.URL != "http://minio:9000/internal-presigned" {
 		t.Fatalf("internal artifact download = %#v", internalArtifact.Download)
 	}
 	refreshedArtifact, err := repo.RefreshArtifactLink(context.Background(), owner, "artifact-1")
@@ -1233,8 +1233,11 @@ func TestApiStorageRepositoryReadQueueAndArtifactWrappers(t *testing.T) {
 	if refreshedArtifact.Download == nil || refreshedArtifact.Download.URL == "" {
 		t.Fatalf("refreshed artifact = %#v", refreshedArtifact)
 	}
-	if len(objectStore.presigns) != 2 {
-		t.Fatalf("presigns = %#v, want two presign calls", objectStore.presigns)
+	if len(objectStore.presigns) != 1 {
+		t.Fatalf("public presigns = %#v, want one public presign call", objectStore.presigns)
+	}
+	if len(objectStore.internalPresigns) != 1 {
+		t.Fatalf("internal presigns = %#v, want one internal presign call", objectStore.internalPresigns)
 	}
 }
 
@@ -2109,8 +2112,9 @@ func due(expiresAt *time.Time, now time.Time) bool {
 }
 
 type fakeObjectStore struct {
-	puts     []objectPutRecord
-	presigns []objectPresignRecord
+	puts             []objectPutRecord
+	presigns         []objectPresignRecord
+	internalPresigns []objectPresignRecord
 }
 
 type captureLogger struct {
@@ -2155,6 +2159,14 @@ func (f *fakeObjectStore) PresignGetObject(_ context.Context, bucket, objectKey 
 	return "https://minio.local/presigned", time.Now().UTC().Add(time.Minute), nil
 }
 
+func (f *fakeObjectStore) PresignInternalGetObject(_ context.Context, bucket, objectKey string, _ time.Duration) (string, time.Time, error) {
+	f.internalPresigns = append(f.internalPresigns, objectPresignRecord{
+		bucket:    bucket,
+		objectKey: objectKey,
+	})
+	return "http://minio:9000/internal-presigned", time.Now().UTC().Add(time.Minute), nil
+}
+
 type failingObjectStore struct{}
 
 func (f *failingObjectStore) PutObject(context.Context, string, string, string, []byte) error {
@@ -2162,6 +2174,10 @@ func (f *failingObjectStore) PutObject(context.Context, string, string, string, 
 }
 
 func (f *failingObjectStore) PresignGetObject(context.Context, string, string, time.Duration) (string, time.Time, error) {
+	return "", time.Time{}, errors.New("presign failed")
+}
+
+func (f *failingObjectStore) PresignInternalGetObject(context.Context, string, string, time.Duration) (string, time.Time, error) {
 	return "", time.Time{}, errors.New("presign failed")
 }
 

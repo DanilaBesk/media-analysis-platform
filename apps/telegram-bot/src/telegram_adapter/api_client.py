@@ -231,6 +231,9 @@ class TelegramApiClient:
         payload = self._request_json(f"/v1/artifacts/{artifact_id}?{urlencode(_owner_query(owner))}")
         return self._extract(payload, "artifact")
 
+    def get_internal_artifact_download_access(self, *, artifact_id: str) -> JsonObject:
+        return self._request_json(f"/internal/v1/artifacts/{artifact_id}/download-access")
+
     def list_diagnostics(
         self,
         *,

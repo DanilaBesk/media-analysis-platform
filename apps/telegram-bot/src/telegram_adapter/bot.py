@@ -514,10 +514,16 @@ class TelegramInboxApp:
         selected = _select_transcript_artifact(artifacts)
         if selected is None:
             return ("Готовый транскрипт пока недоступен.", True)
-        artifact = self.gateway.api_client.get_artifact(owner=owner, artifact_id=str(selected["artifact_id"]))
-        download_url = _artifact_download_url(artifact)
+        access = self.gateway.api_client.get_internal_artifact_download_access(artifact_id=str(selected["artifact_id"]))
+        download_url = _artifact_download_url(access)
         if not download_url:
             return ("Готовый транскрипт пока недоступен.", True)
+        artifact = dict(selected)
+        artifact["download"] = access.get("download")
+        if access.get("mime_type"):
+            artifact["content_type"] = access["mime_type"]
+        if access.get("filename"):
+            artifact["filename"] = access["filename"]
         content = self._download_artifact_bytes(download_url)
         if _should_send_transcript_as_text(artifact, content):
             text = _decode_transcript_text(content)
@@ -1416,6 +1422,9 @@ def _artifact_download_url(artifact: JsonObject) -> str | None:
 
 
 def _artifact_filename(artifact: JsonObject) -> str:
+    filename = str(artifact.get("filename") or "").strip()
+    if filename:
+        return PurePosixPath(filename).name or filename
     object_key = str(artifact.get("object_key") or "").strip()
     if object_key:
         name = PurePosixPath(object_key).name
