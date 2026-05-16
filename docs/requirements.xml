@@ -91,6 +91,10 @@
       <Action>Create analysis_run records only from selections.</Action>
       <AcceptanceCriteria>analysis_run creation records selection id, owner, run type, delivery preference, initial queued status, idempotency key, evidence-gate status, and diagnostics channel; execution rows may exist behind the run but must not become the public product surface.</AcceptanceCriteria>
     </Requirement>
+    <Requirement id="REQ-RUN-002">
+      <Action>Cancel analysis_run records through a cooperative API-owned lifecycle.</Action>
+      <AcceptanceCriteria>Canceling an unclaimed queued run terminally records canceled and stops queued tasks. Canceling a claimed run records cancel_requested, preserves the claimed task for worker observation, stops unclaimed queued tasks, exposes cancel_requested through worker cancel-check, and forces late worker finalization to resolve as canceled rather than succeeded or failed.</AcceptanceCriteria>
+    </Requirement>
     <Requirement id="REQ-ARTIFACT-001">
       <Action>Expose artifacts as analysis_run outputs with API-governed preview and download metadata.</Action>
       <AcceptanceCriteria>Artifacts include transcript, summary, report, extracted structured data, source manifest, execution log, and diagnostic bundles as applicable; each artifact records owner, run id, kind, content type, size, checksum, storage object key, visibility, retention state, and preview metadata.</AcceptanceCriteria>
@@ -154,6 +158,7 @@
     <bead id="media-omt" status="completed">Executable coverage inventory is documented and runnable, with remaining measurement gaps explicit.</bead>
     <bead id="media-gna" status="completed">GRACE packet truth now matches the actual closed state of the repo.</bead>
     <bead id="media-i7m" status="completed">The final ordered closure matrix is published and synchronized with the current verification truth.</bead>
+    <bead id="media-n48" status="completed">analysis_run cancellation now uses cooperative cancel_requested semantics before terminal worker finalization.</bead>
   </BeadsTrace>
 
   <NonGoals>

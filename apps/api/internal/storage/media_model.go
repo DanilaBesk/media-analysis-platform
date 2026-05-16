@@ -340,6 +340,7 @@ type MediaStateStore interface {
 	RecordDiagnostics(ctx context.Context, owner OwnerScope, analysisRunID string, diagnostics []DiagnosticRecord, createdAt time.Time) ([]DiagnosticRecord, error)
 	ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error)
 	RecordAnalysisRunProgress(ctx context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, recordedAt time.Time) (AnalysisRunRecord, error)
+	RequestAnalysisRunCancellation(ctx context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, requestedAt time.Time) (AnalysisRunRecord, error)
 	FinalizeAnalysisRunTask(ctx context.Context, owner OwnerScope, analysisRunID, status string, event RunEventRecord, finalizedAt time.Time) (AnalysisRunRecord, error)
 	ApplyRetentionPolicies(ctx context.Context, now time.Time) (RetentionSweepResult, error)
 	DetectOrphanObjects(ctx context.Context) ([]OrphanObjectRecord, error)
@@ -502,7 +503,24 @@ func (r *Repository) RemoveMediaItem(ctx context.Context, owner OwnerScope, medi
 }
 
 func (r *Repository) CancelAnalysisRun(ctx context.Context, owner OwnerScope, analysisRunID, message string) (AnalysisRunRecord, error) {
-	return r.FinalizeAnalysisRunTask(ctx, owner, analysisRunID, AnalysisRunStatusCanceled, message)
+	owner = owner.normalized()
+	analysisRunID = strings.TrimSpace(analysisRunID)
+	if owner.Empty() || analysisRunID == "" {
+		return AnalysisRunRecord{}, fmt.Errorf("%w: owner and analysis_run_id are required", ErrContractViolation)
+	}
+	now := r.now()
+	data, _ := json.Marshal(map[string]any{
+		"message": strings.TrimSpace(message),
+	})
+	event := RunEventRecord{
+		ID:            r.nextID(),
+		AnalysisRunID: analysisRunID,
+		EventType:     "analysis_run.cancel_requested",
+		PayloadJSON:   data,
+		Status:        AnalysisRunStatusCancelRequested,
+		CreatedAt:     now,
+	}
+	return r.state.RequestAnalysisRunCancellation(ctx, owner, analysisRunID, event, now)
 }
 
 func (r *Repository) RetryAnalysisRun(ctx context.Context, owner OwnerScope, analysisRunID, idempotencyKey string) (AnalysisRunRecord, error) {

@@ -41,7 +41,7 @@
         <item>Create sealed selections from ordered media_item references and option snapshots.</item>
         <item>Create analysis_run from selection with idempotency behavior.</item>
         <item>Poll analysis_run events and diagnostics.</item>
-        <item>Cancel analysis_run cooperatively.</item>
+        <item>Cancel analysis_run cooperatively, including queued terminal cancel, claimed cancel_requested, worker cancel-check visibility, and late worker finalization resolving as canceled.</item>
         <item>Resolve artifact preview and download metadata through owner-scoped API access.</item>
         <item>Query diagnostics by subject, severity, code, and correlation id.</item>
         <item>Empty collection and paginated list results encode items as [] rather than null.</item>

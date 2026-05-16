@@ -557,22 +557,90 @@ WHERE analysis_run_id=$1::uuid AND status='claimed'`, analysisRunID, recordedAt)
 	return run, nil
 }
 
-func (s *SQLStateStore) FinalizeAnalysisRunTask(ctx context.Context, owner OwnerScope, analysisRunID, status string, event RunEventRecord, finalizedAt time.Time) (AnalysisRunRecord, error) {
+func (s *SQLStateStore) RequestAnalysisRunCancellation(ctx context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, requestedAt time.Time) (AnalysisRunRecord, error) {
 	var run AnalysisRunRecord
 	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+		existing, err := selectAnalysisRunByIDForUpdate(ctx, tx, analysisRunID)
+		if err != nil {
+			return err
+		}
+		if !SameOwner(existing.Owner, owner) {
+			return ErrOwnerMismatch
+		}
+		if terminalRunStatus(existing.Status) || existing.Status == AnalysisRunStatusCancelRequested {
+			run = existing
+			return nil
+		}
+
+		var claimed bool
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM analysis_run_tasks
+  WHERE analysis_run_id=$1::uuid AND status='claimed'
+)`, analysisRunID).Scan(&claimed); err != nil {
+			return err
+		}
+		targetStatus := AnalysisRunStatusCanceled
+		if claimed {
+			targetStatus = AnalysisRunStatusCancelRequested
+		}
 		row := tx.QueryRowContext(ctx, `
 UPDATE analysis_runs
 SET status=$5,
-    completed_at=$6,
-    canceled_at=CASE WHEN $5='canceled' THEN $6 ELSE canceled_at END,
+    completed_at=CASE WHEN $5='canceled' THEN $6 ELSE completed_at END,
+    canceled_at=COALESCE(canceled_at, $6),
     version=version+1
 WHERE id=$1::uuid
   AND owner_type=$2
   AND owner_id=$3
   AND COALESCE(tenant_id,'')=COALESCE(NULLIF($4,''),'')
   AND status NOT IN ('succeeded','partially_succeeded','failed','canceled','expired')
-RETURNING version`, analysisRunID, owner.OwnerType, owner.OwnerID, owner.TenantID, status, finalizedAt)
+RETURNING version`, analysisRunID, owner.OwnerType, owner.OwnerID, owner.TenantID, targetStatus, requestedAt)
 		if err := row.Scan(&event.Version); err != nil {
+			return err
+		}
+		event.Status = targetStatus
+		event.EventType = "analysis_run." + targetStatus
+		if _, err := tx.ExecContext(ctx, `
+UPDATE analysis_run_tasks
+SET status='canceled', finalized_at=$2, heartbeat_at=$2
+WHERE analysis_run_id=$1::uuid
+  AND (status IN ('queued','pending_enqueue') OR ($3='canceled' AND status='claimed'))`, analysisRunID, requestedAt, targetStatus); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO analysis_run_events (id, analysis_run_id, event_type, version, payload, status, created_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
+`, event.ID, event.AnalysisRunID, event.EventType, event.Version, event.PayloadJSON, event.Status, firstNonZeroTime(event.CreatedAt, requestedAt)); err != nil {
+			return err
+		}
+		run, err = selectAnalysisRunByID(ctx, tx, analysisRunID)
+		return err
+	})
+	if err != nil {
+		return AnalysisRunRecord{}, err
+	}
+	run.Selection, _ = s.GetSelection(ctx, run.Owner, run.SelectionID)
+	return run, nil
+}
+
+func (s *SQLStateStore) FinalizeAnalysisRunTask(ctx context.Context, owner OwnerScope, analysisRunID, status string, event RunEventRecord, finalizedAt time.Time) (AnalysisRunRecord, error) {
+	var run AnalysisRunRecord
+	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+		var finalStatus string
+		row := tx.QueryRowContext(ctx, `
+UPDATE analysis_runs
+SET status=CASE WHEN status='cancel_requested' THEN 'canceled' ELSE $5 END,
+    completed_at=$6,
+    canceled_at=CASE WHEN status='cancel_requested' OR $5='canceled' THEN COALESCE(canceled_at, $6) ELSE canceled_at END,
+    version=version+1
+WHERE id=$1::uuid
+  AND owner_type=$2
+  AND owner_id=$3
+  AND COALESCE(tenant_id,'')=COALESCE(NULLIF($4,''),'')
+  AND status NOT IN ('succeeded','partially_succeeded','failed','canceled','expired')
+RETURNING version, status`, analysisRunID, owner.OwnerType, owner.OwnerID, owner.TenantID, status, finalizedAt)
+		if err := row.Scan(&event.Version, &finalStatus); err != nil {
 			if err == sql.ErrNoRows {
 				existing, lookupErr := selectAnalysisRunByID(ctx, tx, analysisRunID)
 				if lookupErr != nil {
@@ -586,10 +654,12 @@ RETURNING version`, analysisRunID, owner.OwnerType, owner.OwnerID, owner.TenantI
 			}
 			return err
 		}
+		event.Status = finalStatus
+		event.EventType = "analysis_run." + finalStatus
 		if _, err := tx.ExecContext(ctx, `
 UPDATE analysis_run_tasks
 SET status=$2, finalized_at=$3, heartbeat_at=$3
-WHERE analysis_run_id=$1::uuid AND status IN ('claimed','queued','pending_enqueue')`, analysisRunID, status, finalizedAt); err != nil {
+WHERE analysis_run_id=$1::uuid AND status IN ('claimed','queued','pending_enqueue')`, analysisRunID, finalStatus, finalizedAt); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -873,9 +943,14 @@ ORDER BY created_at DESC`, args...)
 
 func (s *SQLStateStore) MarkAnalysisRunTaskQueued(ctx context.Context, analysisRunID, taskType string, queuedAt time.Time) error {
 	result, err := s.db.ExecContext(ctx, `
-UPDATE analysis_run_tasks
+UPDATE analysis_run_tasks t
 SET status='queued', heartbeat_at=$1
-WHERE analysis_run_id=$2::uuid AND task_type=$3 AND status='pending_enqueue'`, queuedAt, analysisRunID, taskType)
+FROM analysis_runs ar
+WHERE t.analysis_run_id=ar.id
+  AND t.analysis_run_id=$2::uuid
+  AND t.task_type=$3
+  AND t.status='pending_enqueue'
+  AND ar.status IN ('queued','running')`, queuedAt, analysisRunID, taskType)
 	if err != nil {
 		return err
 	}
@@ -989,6 +1064,19 @@ func selectAnalysisRunByID(ctx context.Context, tx *sql.Tx, analysisRunID string
 SELECT id, owner_type, owner_id, COALESCE(tenant_id,''), selection_id, run_type, status, version, params, delivery, evidence_gate_state, created_at, started_at, completed_at, canceled_at, expires_at
 FROM analysis_runs
 WHERE id=$1::uuid`, analysisRunID)
+	run, err := scanAnalysisRun(row)
+	if err == sql.ErrNoRows {
+		return AnalysisRunRecord{}, ErrAnalysisRunNotFound
+	}
+	return run, err
+}
+
+func selectAnalysisRunByIDForUpdate(ctx context.Context, tx *sql.Tx, analysisRunID string) (AnalysisRunRecord, error) {
+	row := tx.QueryRowContext(ctx, `
+SELECT id, owner_type, owner_id, COALESCE(tenant_id,''), selection_id, run_type, status, version, params, delivery, evidence_gate_state, created_at, started_at, completed_at, canceled_at, expires_at
+FROM analysis_runs
+WHERE id=$1::uuid
+FOR UPDATE`, analysisRunID)
 	run, err := scanAnalysisRun(row)
 	if err == sql.ErrNoRows {
 		return AnalysisRunRecord{}, ErrAnalysisRunNotFound

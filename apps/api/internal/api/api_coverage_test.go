@@ -464,17 +464,17 @@ func TestApiWorkerRuntimeServiceDirectBranches(t *testing.T) {
 		t.Fatalf("RecordExecutionProgress() stored stage=%q message=%q", store.recordedProgressStage, store.recordedProgressMsg)
 	}
 
-		if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
-			Artifacts: []workerArtifactDescriptor{{ArtifactKind: "summary_markdown", MIMEType: "text/markdown", ObjectKey: "artifacts/run-1/summary.md", SizeBytes: 7, Filename: "summary.md"}},
-		}); err != nil {
-			t.Fatalf("RecordExecutionArtifacts() error = %v", err)
-		}
-		if len(store.recordedArtifacts) != 1 || store.recordedArtifacts[0].Kind != "summary" {
-			t.Fatalf("RecordExecutionArtifacts() artifacts=%#v", store.recordedArtifacts)
-		}
-		if store.recordedArtifacts[0].ObjectKey != "run-1/summary.md" {
-			t.Fatalf("RecordExecutionArtifacts() object key=%q, want normalized relative key", store.recordedArtifacts[0].ObjectKey)
-		}
+	if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
+		Artifacts: []workerArtifactDescriptor{{ArtifactKind: "summary_markdown", MIMEType: "text/markdown", ObjectKey: "artifacts/run-1/summary.md", SizeBytes: 7, Filename: "summary.md"}},
+	}); err != nil {
+		t.Fatalf("RecordExecutionArtifacts() error = %v", err)
+	}
+	if len(store.recordedArtifacts) != 1 || store.recordedArtifacts[0].Kind != "summary" {
+		t.Fatalf("RecordExecutionArtifacts() artifacts=%#v", store.recordedArtifacts)
+	}
+	if store.recordedArtifacts[0].ObjectKey != "run-1/summary.md" {
+		t.Fatalf("RecordExecutionArtifacts() object key=%q, want normalized relative key", store.recordedArtifacts[0].ObjectKey)
+	}
 	if err := service.RecordExecutionArtifacts(context.Background(), "run-1", ExecutionArtifactsRequest{
 		Artifacts: []workerArtifactDescriptor{{ArtifactKind: "unknown_kind"}},
 	}); !errors.Is(err, storage.ErrContractViolation) {
@@ -508,6 +508,10 @@ func TestApiWorkerRuntimeServiceDirectBranches(t *testing.T) {
 	}
 	if finalized, err := service.FinalizeExecution(context.Background(), "run-1", ExecutionFinalizeRequest{Status: "canceled", Message: "stop"}); err != nil || finalized.Status != storage.AnalysisRunStatusCanceled {
 		t.Fatalf("FinalizeExecution() run=%#v err=%v", finalized, err)
+	}
+	store.run.Status = storage.AnalysisRunStatusCancelRequested
+	if finalized, err := service.FinalizeExecution(context.Background(), "run-1", ExecutionFinalizeRequest{Outcome: "succeeded", Message: "late success"}); err != nil || finalized.Status != storage.AnalysisRunStatusCanceled || store.finalizedStatus != storage.AnalysisRunStatusCanceled {
+		t.Fatalf("FinalizeExecution(cancel requested) run=%#v status=%q err=%v", finalized, store.finalizedStatus, err)
 	}
 
 	if got := accessInt64(map[string]any{"n": 5}, "n"); got != 5 {
@@ -825,21 +829,21 @@ func TestApiRuntimeRemainingDirectBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewPublisher() error = %v", err)
 		}
-			markErrStore := &markQueuedErrorStore{fakePublicService: &fakePublicService{
-				run: storage.AnalysisRunRecord{ID: "run-1", RunType: "report", Version: 1, CreatedAt: now},
-				pendingTasks: []storage.AnalysisRunTaskRecord{{
-					ID:            "task-1",
+		markErrStore := &markQueuedErrorStore{fakePublicService: &fakePublicService{
+			run: storage.AnalysisRunRecord{ID: "run-1", RunType: "report", Version: 1, CreatedAt: now},
+			pendingTasks: []storage.AnalysisRunTaskRecord{{
+				ID:            "task-1",
 				AnalysisRunID: "run-1",
 				WorkerKind:    "analysis",
 				TaskType:      "selection.analysis",
-					Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
-					AttemptNo:     1,
-					CreatedAt:     now,
-				}},
-			}, markErr: storage.ErrAnalysisRunNotFound}
-			if _, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
-				t.Fatalf("ReconcileAnalysisRunQueue(mark error) = %v, want ErrAnalysisRunNotFound", err)
-			}
+				Status:        storage.AnalysisRunTaskStatusPendingEnqueue,
+				AttemptNo:     1,
+				CreatedAt:     now,
+			}},
+		}, markErr: storage.ErrAnalysisRunNotFound}
+		if _, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+			t.Fatalf("ReconcileAnalysisRunQueue(mark error) = %v, want ErrAnalysisRunNotFound", err)
+		}
 
 		createErrStore := &fakePublicService{err: storage.ErrContractViolation}
 		if _, err := (&publicRuntimeService{store: createErrStore, queue: publisher}).CreateAnalysisRun(context.Background(), storage.CreateAnalysisRunRequest{Owner: storage.OwnerScope{OwnerType: "web", OwnerID: "u-1"}}); !errors.Is(err, storage.ErrContractViolation) {
@@ -1132,9 +1136,9 @@ func TestApiPublicRuntimeQueueEdgeBranches(t *testing.T) {
 			t.Fatalf("NewPublisher() error = %v", err)
 		}
 		markErrStore := &fakePublicService{
-			run: store.run,
+			run:          store.run,
 			pendingTasks: append([]storage.AnalysisRunTaskRecord(nil), store.pendingTasks...),
-			err: storage.ErrAnalysisRunNotFound,
+			err:          storage.ErrAnalysisRunNotFound,
 		}
 		recovered, err := (&publicRuntimeService{store: markErrStore, queue: publisher}).ReconcileAnalysisRunQueue(context.Background(), 10)
 		if !errors.Is(err, storage.ErrAnalysisRunNotFound) || recovered != 0 {

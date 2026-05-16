@@ -391,6 +391,9 @@ func (s *workerRuntimeService) FinalizeExecution(ctx context.Context, analysisRu
 	if status == "" {
 		return storage.AnalysisRunRecord{}, fmt.Errorf("%w: invalid worker outcome", storage.ErrContractViolation)
 	}
+	if run.Status == storage.AnalysisRunStatusCancelRequested || run.Status == storage.AnalysisRunStatusCanceled {
+		status = storage.AnalysisRunStatusCanceled
+	}
 	return s.store.FinalizeAnalysisRunTask(ctx, run.Owner, run.ID, status, req.Message)
 }
 

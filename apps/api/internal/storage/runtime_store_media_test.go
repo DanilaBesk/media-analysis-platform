@@ -1596,8 +1596,8 @@ func TestSQLStateStoreRunTransitionIdempotentBranches(t *testing.T) {
 		config := &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{
 				{
-					match:   "UPDATE analysis_runs\nSET status=$5",
-					columns: []string{"version"},
+					match:   "UPDATE analysis_runs\nSET status=CASE",
+					columns: []string{"version", "status"},
 				},
 				{
 					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
@@ -1646,8 +1646,8 @@ func TestSQLStateStoreRunTransitionIdempotentBranches(t *testing.T) {
 		config := &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{
 				{
-					match:   "UPDATE analysis_runs\nSET status=$5",
-					columns: []string{"version"},
+					match:   "UPDATE analysis_runs\nSET status=CASE",
+					columns: []string{"version", "status"},
 				},
 				{
 					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
@@ -1772,8 +1772,8 @@ func TestSQLStateStoreOperationalQueriesAndCleanup(t *testing.T) {
 			},
 		},
 		execResponses: []scriptedExecResponse{
-			{match: "UPDATE analysis_run_tasks\nSET status='queued'", affected: 1},
-			{match: "UPDATE analysis_run_tasks\nSET status='queued'", affected: 0},
+			{match: "UPDATE analysis_run_tasks t\nSET status='queued'", affected: 1},
+			{match: "UPDATE analysis_run_tasks t\nSET status='queued'", affected: 0},
 			{match: "UPDATE media_items mi", affected: 2},
 			{match: "UPDATE collection_items ci", affected: 3},
 			{match: "UPDATE collections c", affected: 1},
@@ -2095,9 +2095,9 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 				}},
 			},
 			{
-				match:   "RETURNING version",
-				columns: []string{"version"},
-				rows:    [][]driver.Value{{int64(4)}},
+				match:   "RETURNING version, status",
+				columns: []string{"version", "status"},
+				rows:    [][]driver.Value{{int64(4), AnalysisRunStatusSucceeded}},
 			},
 			{
 				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
@@ -2302,6 +2302,88 @@ func TestSQLStateStoreMutationAndExecutionLifecycle(t *testing.T) {
 	}
 
 	config.assertExhausted(t)
+}
+
+func TestSQLStateStoreRequestAnalysisRunCancellation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 16, 14, 30, 0, 0, time.UTC)
+	startedAt := now.Add(-5 * time.Minute)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+
+	for _, tc := range []struct {
+		name       string
+		claimed    bool
+		wantStatus string
+		completed  *time.Time
+	}{
+		{name: "claimed run becomes cancel requested", claimed: true, wantStatus: AnalysisRunStatusCancelRequested},
+		{name: "unclaimed run is canceled terminally", claimed: false, wantStatus: AnalysisRunStatusCanceled, completed: &now},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			config := &scriptedRuntimeStoreConfig{
+				execResponses: []scriptedExecResponse{
+					{match: "UPDATE analysis_run_tasks\nSET status='canceled'", affected: 1},
+					{match: "INSERT INTO analysis_run_events", affected: 1},
+				},
+				queryResponses: []scriptedQueryResponse{
+					{
+						match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+						columns: analysisRunColumns(),
+						rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, &startedAt, nil, nil)},
+					},
+					{
+						match:   "SELECT EXISTS",
+						columns: []string{"exists"},
+						rows:    [][]driver.Value{{tc.claimed}},
+					},
+					{
+						match:   "UPDATE analysis_runs\nSET status=$5",
+						columns: []string{"version"},
+						rows:    [][]driver.Value{{int64(3)}},
+					},
+					{
+						match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+						columns: analysisRunColumns(),
+						rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, tc.wantStatus, 3, &startedAt, tc.completed, &now)},
+					},
+					{
+						match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+						columns: selectionColumns(),
+						rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+					},
+					{
+						match:   "FROM selection_items WHERE selection_id=$1",
+						columns: selectionItemColumns(),
+						rows:    [][]driver.Value{selectionItemDriverRow(now)},
+					},
+				},
+			}
+			store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+			if err != nil {
+				t.Fatalf("NewSQLStateStore() error = %v", err)
+			}
+
+			run, err := store.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", RunEventRecord{
+				ID:            "event-cancel",
+				AnalysisRunID: "run-1",
+				EventType:     "analysis_run.cancel_requested",
+				Status:        AnalysisRunStatusCancelRequested,
+				CreatedAt:     now,
+			}, now)
+			if err != nil {
+				t.Fatalf("RequestAnalysisRunCancellation() error = %v", err)
+			}
+			if run.Status != tc.wantStatus || run.CanceledAt == nil {
+				t.Fatalf("run = %#v, want status %q with cancellation timestamp", run, tc.wantStatus)
+			}
+			config.assertExhausted(t)
+		})
+	}
 }
 
 func TestSQLStateStoreExecutionErrorMappings(t *testing.T) {
@@ -2716,7 +2798,7 @@ func TestRuntimeStoreQueryAndQueueEdgeBranches(t *testing.T) {
 
 		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			execResponses: []scriptedExecResponse{{
-				match: "UPDATE analysis_run_tasks\nSET status='queued'",
+				match: "UPDATE analysis_run_tasks t\nSET status='queued'",
 				err:   stepErr,
 			}},
 		}))
@@ -3057,8 +3139,8 @@ func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
 		storeLookupErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{
 				{
-					match:   "UPDATE analysis_runs\nSET status=$5",
-					columns: []string{"version"},
+					match:   "UPDATE analysis_runs\nSET status=CASE",
+					columns: []string{"version", "status"},
 				},
 				{
 					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
@@ -3082,9 +3164,9 @@ func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
 
 		storeScanErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{{
-				match:   "UPDATE analysis_runs\nSET status=$5",
-				columns: []string{"version"},
-				rows:    [][]driver.Value{{"bad-version"}},
+				match:   "UPDATE analysis_runs\nSET status=CASE",
+				columns: []string{"version", "status"},
+				rows:    [][]driver.Value{{"bad-version", AnalysisRunStatusSucceeded}},
 			}},
 		}))
 		if err != nil {
@@ -3102,9 +3184,9 @@ func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
 
 		storeTaskErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{{
-				match:   "UPDATE analysis_runs\nSET status=$5",
-				columns: []string{"version"},
-				rows:    [][]driver.Value{{int64(3)}},
+				match:   "UPDATE analysis_runs\nSET status=CASE",
+				columns: []string{"version", "status"},
+				rows:    [][]driver.Value{{int64(3), AnalysisRunStatusSucceeded}},
 			}},
 			execResponses: []scriptedExecResponse{{
 				match: "UPDATE analysis_run_tasks\nSET status=$2, finalized_at=$3, heartbeat_at=$3",
@@ -3126,9 +3208,9 @@ func TestRuntimeStoreRunLookupAndFinalizeErrorBranches(t *testing.T) {
 
 		storeEventErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{{
-				match:   "UPDATE analysis_runs\nSET status=$5",
-				columns: []string{"version"},
-				rows:    [][]driver.Value{{int64(3)}},
+				match:   "UPDATE analysis_runs\nSET status=CASE",
+				columns: []string{"version", "status"},
+				rows:    [][]driver.Value{{int64(3), AnalysisRunStatusSucceeded}},
 			}},
 			execResponses: []scriptedExecResponse{
 				{match: "UPDATE analysis_run_tasks\nSET status=$2, finalized_at=$3, heartbeat_at=$3", affected: 1},

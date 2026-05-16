@@ -179,6 +179,85 @@ func TestApiStorageSelectionSnapshotIsImmutableAndRunCreatesExecutionGraph(t *te
 	}
 }
 
+func TestApiStorageCancelClaimedRunIsCooperativeUntilWorkerFinalizes(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 16, 14, 0, 0, 0, time.UTC)
+	state := newMemoryStateStore()
+	repo, err := NewRepository(state, newFakeObjectStore(),
+		WithClock(func() time.Time { return now }),
+		WithIDGenerator(sequenceIDs(
+			"source-1", "media-1", "inbox-1",
+			"collection-1",
+			"selection-1",
+			"run-1", "task-1", "event-1",
+			"event-cancel", "event-finalize",
+		)),
+	)
+	if err != nil {
+		t.Fatalf("NewRepository() error = %v", err)
+	}
+	owner := OwnerScope{OwnerType: "telegram", OwnerID: "chat-1"}
+	if _, err := repo.AddMediaItem(context.Background(), AddMediaItemRequest{
+		Owner: owner,
+		Kind:  "voice",
+		Source: AddMediaSource{
+			OriginType:  "object",
+			ObjectRef:   "sources/voice.ogg",
+			ContentType: "audio/ogg",
+			SizeBytes:   123,
+		},
+		DisplayName: "voice.ogg",
+	}); err != nil {
+		t.Fatalf("AddMediaItem() error = %v", err)
+	}
+	collection, err := repo.CreateCollection(context.Background(), CreateCollectionRequest{Owner: owner, Name: "voices", Items: []string{"media-1"}})
+	if err != nil {
+		t.Fatalf("CreateCollection() error = %v", err)
+	}
+	selection, err := repo.CreateSelection(context.Background(), CreateSelectionRequest{
+		Owner:              owner,
+		SourceCollectionID: collection.ID,
+		Items:              []CollectionItemRecord{{MediaItemID: "media-1", Position: 0}},
+		CreatedBy:          "chat-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateSelection() error = %v", err)
+	}
+	run, err := repo.CreateAnalysisRun(context.Background(), CreateAnalysisRunRequest{Owner: owner, SelectionID: selection.ID, RunType: "transcription"})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun() error = %v", err)
+	}
+	if err := repo.MarkAnalysisRunTaskQueued(context.Background(), run.ID, "selection.transcription"); err != nil {
+		t.Fatalf("MarkAnalysisRunTaskQueued() error = %v", err)
+	}
+	if _, claimed, err := repo.ClaimAnalysisRunTask(context.Background(), run.ID, "transcription", "selection.transcription", "worker-1"); err != nil || !claimed {
+		t.Fatalf("ClaimAnalysisRunTask() claimed=%v err=%v", claimed, err)
+	}
+
+	cancelRequested, err := repo.CancelAnalysisRun(context.Background(), owner, run.ID, "operator canceled")
+	if err != nil {
+		t.Fatalf("CancelAnalysisRun() error = %v", err)
+	}
+	if cancelRequested.Status != AnalysisRunStatusCancelRequested || cancelRequested.CompletedAt != nil || cancelRequested.CanceledAt == nil {
+		t.Fatalf("cancelRequested = %#v, want cancel_requested without terminal completion", cancelRequested)
+	}
+	if state.runTasks[0].Status != AnalysisRunTaskStatusClaimed {
+		t.Fatalf("claimed task status = %q, want claimed until worker finalizes", state.runTasks[0].Status)
+	}
+
+	finalized, err := repo.FinalizeAnalysisRunTask(context.Background(), owner, run.ID, AnalysisRunStatusSucceeded, "late success")
+	if err != nil {
+		t.Fatalf("FinalizeAnalysisRunTask() error = %v", err)
+	}
+	if finalized.Status != AnalysisRunStatusCanceled || finalized.CompletedAt == nil {
+		t.Fatalf("finalized = %#v, want cancellation to win over late success", finalized)
+	}
+	if got := state.runEvents[run.ID][len(state.runEvents[run.ID])-1]; got.Status != AnalysisRunStatusCanceled || got.EventType != "analysis_run.canceled" {
+		t.Fatalf("final event = %#v, want canceled event", got)
+	}
+}
+
 func TestApiStorageUploadedBodyPersistsSourceObjectBeforeSelectionSnapshot(t *testing.T) {
 	t.Parallel()
 
@@ -1806,6 +1885,50 @@ func (m *memoryStateStore) RecordAnalysisRunProgress(_ context.Context, owner Ow
 	return run, nil
 }
 
+func (m *memoryStateStore) RequestAnalysisRunCancellation(_ context.Context, owner OwnerScope, analysisRunID string, event RunEventRecord, requestedAt time.Time) (AnalysisRunRecord, error) {
+	run, err := m.GetAnalysisRun(context.Background(), owner, analysisRunID)
+	if err != nil {
+		return AnalysisRunRecord{}, err
+	}
+	if terminalRunStatus(run.Status) || run.Status == AnalysisRunStatusCancelRequested {
+		return run, nil
+	}
+	hasClaimedTask := false
+	for _, task := range m.runTasks {
+		if task.AnalysisRunID == analysisRunID && task.Status == AnalysisRunTaskStatusClaimed {
+			hasClaimedTask = true
+			break
+		}
+	}
+	targetStatus := AnalysisRunStatusCanceled
+	if hasClaimedTask {
+		targetStatus = AnalysisRunStatusCancelRequested
+	}
+	run.Status = targetStatus
+	run.CanceledAt = &requestedAt
+	if targetStatus == AnalysisRunStatusCanceled {
+		run.CompletedAt = &requestedAt
+	}
+	run.Version++
+	event.Version = run.Version
+	event.Status = targetStatus
+	event.EventType = "analysis_run." + targetStatus
+	m.runEvents[analysisRunID] = append(m.runEvents[analysisRunID], event)
+	m.analysisRuns[analysisRunID] = run
+	for i, task := range m.runTasks {
+		if task.AnalysisRunID != analysisRunID {
+			continue
+		}
+		if task.Status == AnalysisRunTaskStatusQueued || task.Status == AnalysisRunTaskStatusPendingEnqueue || (targetStatus == AnalysisRunStatusCanceled && task.Status == AnalysisRunTaskStatusClaimed) {
+			task.Status = AnalysisRunTaskStatusCanceled
+			task.FinalizedAt = &requestedAt
+			task.HeartbeatAt = &requestedAt
+			m.runTasks[i] = task
+		}
+	}
+	return run, nil
+}
+
 func (m *memoryStateStore) FinalizeAnalysisRunTask(_ context.Context, owner OwnerScope, analysisRunID, status string, event RunEventRecord, finalizedAt time.Time) (AnalysisRunRecord, error) {
 	run, err := m.GetAnalysisRun(context.Background(), owner, analysisRunID)
 	if err != nil {
@@ -1814,13 +1937,20 @@ func (m *memoryStateStore) FinalizeAnalysisRunTask(_ context.Context, owner Owne
 	if terminalRunStatus(run.Status) {
 		return run, nil
 	}
+	if run.Status == AnalysisRunStatusCancelRequested {
+		status = AnalysisRunStatusCanceled
+	}
 	run.Status = status
 	run.CompletedAt = &finalizedAt
 	if status == AnalysisRunStatusCanceled {
-		run.CanceledAt = &finalizedAt
+		if run.CanceledAt == nil {
+			run.CanceledAt = &finalizedAt
+		}
 	}
 	run.Version++
 	event.Version = run.Version
+	event.Status = status
+	event.EventType = "analysis_run." + status
 	m.runEvents[analysisRunID] = append(m.runEvents[analysisRunID], event)
 	m.analysisRuns[analysisRunID] = run
 	for i, task := range m.runTasks {
@@ -2051,7 +2181,8 @@ func (m *memoryStateStore) ListAnalysisRunQueue(_ context.Context, status, runTy
 
 func (m *memoryStateStore) MarkAnalysisRunTaskQueued(_ context.Context, analysisRunID, taskType string, queuedAt time.Time) error {
 	for i, task := range m.runTasks {
-		if task.AnalysisRunID == analysisRunID && task.TaskType == taskType && task.Status == AnalysisRunTaskStatusPendingEnqueue {
+		run := m.analysisRuns[task.AnalysisRunID]
+		if task.AnalysisRunID == analysisRunID && task.TaskType == taskType && task.Status == AnalysisRunTaskStatusPendingEnqueue && (run.Status == AnalysisRunStatusQueued || run.Status == AnalysisRunStatusRunning) {
 			task.Status = AnalysisRunTaskStatusQueued
 			task.HeartbeatAt = &queuedAt
 			m.runTasks[i] = task

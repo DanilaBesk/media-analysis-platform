@@ -354,4 +354,25 @@ Telegram main-card keyboards must not expose a new transcription launch action w
       <check>Runtime cancel regression proves the launch callback stays absent during active run handling and only returns after terminal refresh state permits it.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="analysis-run-cooperative-cancellation" status="completed" bead="media-n48">
+    <purpose>Make public analysis_run cancellation cooperative before terminal worker completion.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/storage/media_model.go</file-1>
+      <file-2>apps/api/internal/storage/runtime_store_media.go</file-2>
+      <file-3>apps/api/internal/api/runtime_services.go</file-3>
+      <file-4>apps/api/internal/storage/api_storage_test.go</file-4>
+      <file-5>apps/api/internal/storage/runtime_store_media_test.go</file-5>
+      <file-6>apps/api/internal/api/api_coverage_test.go</file-6>
+      <file-7>docs/requirements.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+      <file-9>docs/verification-plan.xml</file-9>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Public cancel requests terminally cancel unclaimed queued analysis_run records, but claimed runs first move to cancel_requested so the worker can observe cancellation and finalize. If worker finalization races with cancel_requested, cancellation wins and the run resolves as canceled.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Storage regressions prove unclaimed cancel, claimed cancel_requested, and late worker success resolving as canceled.</check>
+      <check>API runtime regression proves FinalizeExecution coerces cancel_requested or canceled runs to canceled.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>
