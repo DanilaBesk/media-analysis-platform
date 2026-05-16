@@ -48,7 +48,7 @@ Product name: `Подборка`.
 
 This is the always-current control panel for materials the user is preparing now. It is mutable. It can be empty, have materials, show recent transcriptions, and launch a new transcription.
 
-Implementation name can be `selection_buffer` or `current_selection_projection`, but user copy must say `Подборка`.
+Implementation names should align with the API contract, for example `current_materials_panel` or `current_materials_surface`. User copy must say `Подборка`.
 
 ### 2. Transcription Task Card
 
@@ -65,7 +65,7 @@ Telegram does not provide a real fixed-bottom panel. The application must emulat
 - after accepted user input, render or update the current selection card as the latest visible bot message;
 - after starting a transcription, create a separate transcription task card, clear the current selection, then render the current selection card again as the latest bot message;
 - after task updates, edit the task card in place when possible and avoid stealing the bottom position from the current selection card unless the user explicitly opens that task;
-- if the stored current selection card message cannot be edited, send a new current selection card and mark the old projection as superseded.
+- if the stored current selection card message cannot be edited, send a new current selection card and mark the old interaction surface as superseded.
 
 ## Card: Current Selection Empty
 
@@ -412,11 +412,11 @@ Do not add this complexity in the first implementation slice unless users ask fo
 - Destructive actions such as `Очистить` should be separated from the primary action and may require confirmation in a later stage.
 - Avoid decorative emoji. The `🎙` marker is reserved for the primary transcription launch action.
 
-## Persistent Telegram Projection State
+## Persistent Interaction Surface State
 
-The adapter needs durable presentation state to survive restarts.
+Telegram needs durable interaction surface records to survive restarts.
 
-Recommended projection records:
+Recommended interaction surface records:
 
 - current selection card:
   - owner scope;
@@ -425,7 +425,7 @@ Recommended projection records:
   - message id;
   - collection id;
   - version;
-  - superseded flag;
+  - lifecycle status;
   - updated_at.
 
 - transcription task card:
@@ -438,7 +438,7 @@ Recommended projection records:
   - result file message id when available;
   - updated_at.
 
-The API remains the source of truth for media, collections, selections, runs, artifacts, and diagnostics. Telegram projection state is only the display mapping.
+The API remains the source of truth for media, collections, selections, runs, artifacts, and diagnostics. Interaction surface state is only the display mapping.
 
 ## Implementation Stages
 
@@ -462,7 +462,7 @@ Verification:
 - Telegram tests prove a running task does not block a new current selection transcription.
 - Runtime smoke proves a completed task sends its transcript file and leaves current selection usable.
 
-### Stage 2: Durable Projection Store
+### Stage 2: Durable Interaction Surfaces
 
 Goal: survive bot restarts without losing which Telegram messages should be edited.
 

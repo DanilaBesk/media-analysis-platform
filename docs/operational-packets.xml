@@ -393,20 +393,21 @@ Public cancel requests terminally cancel unclaimed queued analysis_run records, 
       <check>API runtime regression proves FinalizeExecution coerces cancel_requested or canceled runs to canceled.</check>
     </verification>
   </HotfixPacket>
-  <PlanningPacket id="adapter-projection-api-contract" status="completed" bead="media-cgr">
-    <purpose>Define a generic API-owned adapter projection layer for durable external presentation mappings without consumer-specific domain coupling.</purpose>
+  <PlanningPacket id="interaction-surfaces-api-contract" status="completed" bead="media-fal">
+    <purpose>Define a generic API-owned Interaction Surfaces boundary for durable external presentation mappings without consumer-specific domain coupling.</purpose>
     <write-scope>
-      <file-1>docs/architecture/adapter-projection-contract.md</file-1>
+      <file-1>docs/architecture/interaction-surfaces-contract.md</file-1>
       <file-2>docs/requirements.xml</file-2>
       <file-3>docs/knowledge-graph.xml</file-3>
       <file-4>docs/operational-packets.xml</file-4>
+      <file-5>docs/architecture/telegram-selection-transcription-cards.md</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-Adapter projections persist owner-scoped adapter, projection type, domain subject, opaque external reference, opaque adapter state, status, version, and timestamps through an internal API. Domain entities do not gain Telegram-specific message fields, and projection state does not drive domain lifecycle.
+Interaction surfaces persist owner-scoped channel, surface type, domain subject, opaque address, opaque display state, lifecycle status, version, and timestamps through an internal API. Domain entities do not gain Telegram-specific message fields, and interaction surface display state does not drive domain lifecycle.
     ]]></contract-excerpt>
     <verification>
       <check>Architecture document defines boundaries, schema, internal endpoints, Telegram usage, owner-scope rules, retention, observability, and staged implementation.</check>
-      <check>GRACE requirements and knowledge graph link the projection layer without moving it into public product vocabulary.</check>
+      <check>GRACE requirements and knowledge graph link the Interaction Surfaces boundary without moving it into public product vocabulary.</check>
     </verification>
   </PlanningPacket>
 </OperationalPackets>
