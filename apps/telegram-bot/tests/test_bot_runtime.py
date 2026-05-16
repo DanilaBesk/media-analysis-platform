@@ -823,14 +823,22 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     assert "Обновить состояние" not in [button.text for row in app.bot.edit_calls[-1]["reply_markup"].inline_keyboard for button in row]
 
     completed_status = status_for(gateway)
-    completed_keyboard = build_status_keyboard(completed_status)
+    completed_keyboard = build_status_keyboard(completed_status, focused_run_id="run-1")
     details = {
         button.callback_data.split(":")[1]: button.callback_data
         for row in completed_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith(("ib:ar:", "ib:dg:"))
     }
-    app._set_page_state((10, 7), completed_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    app._set_page_state(
+        (10, 7),
+        completed_status,
+        current_cursor=None,
+        previous_cursors=[],
+        selection=None,
+        screen="main",
+        focused_run_id="run-1",
+    )
     artifacts_callback = FakeCallback(data=details["ar"], message=base_message)
     diagnostics_callback = FakeCallback(data=details["dg"], message=base_message)
     app._download_artifact_bytes = lambda _url: b"Completed transcript."  # type: ignore[method-assign]
@@ -845,6 +853,69 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     assert "run-1" not in base_message.edits[-2]["text"]
     assert "Диагностика" in base_message.edits[-1]["text"]
     assert "run-1" not in base_message.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_result_callback_sends_transcript_and_clears_collection_after_success() -> None:
+    api, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(owner=owner(), text="two")
+    base_message = FakeMessage()
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-plain",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain; charset=utf-8",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "download": {"url": "https://download.test/transcript.txt"},
+        }
+    )
+    api.internal_artifact_download_access["artifact-plain"] = {
+        "artifact_id": "artifact-plain",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain; charset=utf-8",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
+
+    completed_status = status_for(gateway)
+    completed_keyboard = build_status_keyboard(completed_status, focused_run_id="run-1")
+    result_callback_data = next(
+        button.callback_data
+        for row in completed_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:ar:")
+    )
+    app._set_page_state(
+        (10, 7),
+        completed_status,
+        current_cursor=None,
+        previous_cursors=[],
+        selection=None,
+        screen="main",
+        focused_run_id="run-1",
+    )
+    app._download_artifact_bytes = lambda _url: b"manual transcript"  # type: ignore[method-assign]
+
+    result_callback = FakeCallback(data=result_callback_data, message=base_message)
+    await app._handle_status_callback(result_callback)
+
+    assert result_callback.answers[-1] == {"text": "Транскрипт отправлен в чат", "show_alert": False}
+    assert base_message.answers[-1]["text"] == "manual transcript"
+    assert api.collection["items"] == []
+    assert api.items == []
+    assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+    assert "Материалов: 0" in base_message.edits[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -890,14 +961,22 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
     }
 
     completed_status = status_for(gateway)
-    completed_keyboard = build_status_keyboard(completed_status)
+    completed_keyboard = build_status_keyboard(completed_status, focused_run_id="run-1")
     result_callback_data = next(
         button.callback_data
         for row in completed_keyboard.inline_keyboard
         for button in row
         if button.callback_data.startswith("ib:ar:")
     )
-    app._set_page_state((10, 7), completed_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    app._set_page_state(
+        (10, 7),
+        completed_status,
+        current_cursor=None,
+        previous_cursors=[],
+        selection=None,
+        screen="main",
+        focused_run_id="run-1",
+    )
     app._download_artifact_bytes = lambda _url: ("line\n" * 2000).encode("utf-8")  # type: ignore[method-assign]
 
     result_callback = FakeCallback(data=result_callback_data, message=base_message)

@@ -597,6 +597,7 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
             "selection_id": "55555555-5555-5555-5555-555555555555",
             "items": [{"media_item_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
         },
+        focused_run_id="33333333-3333-3333-3333-333333333333",
     )
     materials_keyboard = build_status_keyboard(
         status,
@@ -620,7 +621,7 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
 
 
-def test_main_card_keeps_latest_useful_result_when_newer_terminal_run_failed() -> None:
+def test_main_card_hides_historical_result_without_focused_run() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     gateway.add_text(owner=owner(), text="transcript candidate")
@@ -661,6 +662,92 @@ def test_main_card_keeps_latest_useful_result_when_newer_terminal_run_failed() -
 
     status = gateway.restore_status(owner=owner())
     keyboard = build_status_keyboard(status)
+    button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
+
+    assert "Результат" not in button_texts
+    assert "Диагностика" not in button_texts
+
+
+def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="new transcript candidate")
+    api.runs.extend(
+        [
+            {"analysis_run_id": "run-old", "status": "succeeded", "version": 1},
+            {"analysis_run_id": "run-current", "status": "running", "version": 2},
+        ]
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-old",
+            "analysis_run_id": "run-old",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+        }
+    )
+
+    status = gateway.restore_status(owner=owner())
+    text = render_status_text(status)
+    keyboard = build_status_keyboard(status, focused_run_id="run-current")
+    callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+    button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
+
+    assert "Сейчас в работе: в работе" in text
+    assert "Результат" not in button_texts
+    assert all("run-old" not in callback for callback in callbacks)
+
+
+def test_main_card_result_is_scoped_to_focused_terminal_run() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="transcript candidate")
+    api.runs.extend(
+        [
+            {"analysis_run_id": "run-old", "status": "succeeded", "version": 1},
+            {"analysis_run_id": "run-current", "status": "succeeded", "version": 2},
+        ]
+    )
+    api.artifacts.extend(
+        [
+            {
+                "artifact_id": "artifact-old",
+                "analysis_run_id": "run-old",
+                "kind": "transcript",
+                "status": "available",
+                "content_type": "text/plain",
+            },
+            {
+                "artifact_id": "artifact-current",
+                "analysis_run_id": "run-current",
+                "kind": "transcript",
+                "status": "available",
+                "content_type": "text/plain",
+            },
+        ]
+    )
+    api.diagnostics.extend(
+        [
+            {
+                "diagnostic_id": "diagnostic-old",
+                "subject_type": "analysis_run",
+                "subject_id": "run-old",
+                "severity": "info",
+                "message": "Old note.",
+            },
+            {
+                "diagnostic_id": "diagnostic-current",
+                "subject_type": "analysis_run",
+                "subject_id": "run-current",
+                "severity": "info",
+                "message": "Current note.",
+            },
+        ]
+    )
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status, focused_run_id="run-current")
     callbacks_by_text = {
         button.text: button.callback_data
         for row in keyboard.inline_keyboard
@@ -672,10 +759,10 @@ def test_main_card_keeps_latest_useful_result_when_newer_terminal_run_failed() -
     diagnostics_action, diagnostics_tokens = _parse_callback_payload(callbacks_by_text["Диагностика"])
 
     assert result_action == "ar"
-    assert _decode_callback_token(result_tokens[0]) == "run-succeeded"
-    assert _decode_callback_version(result_tokens[1]) == 1
+    assert _decode_callback_token(result_tokens[0]) == "run-current"
+    assert _decode_callback_version(result_tokens[1]) == 2
     assert diagnostics_action == "dg"
-    assert _decode_callback_token(diagnostics_tokens[0]) == "run-failed"
+    assert _decode_callback_token(diagnostics_tokens[0]) == "run-current"
     assert _decode_callback_version(diagnostics_tokens[1]) == 2
 
 
@@ -713,7 +800,11 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     )
 
     status = gateway.restore_status(owner=owner())
-    keyboard = build_status_keyboard(status, selection={"selection_id": "selection-1", "items": status.collection["items"]})
+    keyboard = build_status_keyboard(
+        status,
+        selection={"selection_id": "selection-1", "items": status.collection["items"]},
+        focused_run_id="run-1",
+    )
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
 
     assert any(callback.startswith("ib:rn:") for callback in callbacks)
@@ -914,7 +1005,7 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
     restarted_gateway = TelegramInboxGateway(api)
     completed = restarted_gateway.restore_status(owner=owner())
     completed_text = render_status_text(completed)
-    completed_keyboard = build_status_keyboard(completed)
+    completed_keyboard = build_status_keyboard(completed, focused_run_id=run["analysis_run_id"])
     completed_callbacks = [button.callback_data for row in completed_keyboard.inline_keyboard for button in row]
 
     assert completed.active_runs == []

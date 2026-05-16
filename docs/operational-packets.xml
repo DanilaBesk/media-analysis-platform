@@ -277,11 +277,29 @@ Telegram inbox pagination, remove, and clear-visible actions must render the API
       <file-9>docs/operational-packets.xml</file-9>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram status text and button labels must explain refresh, collection mutations, and per-run files or diagnostics in Russian. When multiple completed runs are shown, the user must be able to match each pair of result buttons to a numbered run in the status text.
+Telegram status text and button labels must explain refresh, collection mutations, and focused-run files or diagnostics in Russian. Completed historical runs must not appear as generic main-card result actions for a new or unstarted inbox selection.
     ]]></contract-excerpt>
     <verification>
       <check>Focused telegram-bot tests prove Russian-first callback copy, status text, and button semantics.</check>
       <check>Live restored status text for the affected Telegram owner is Russian-first and renders the current inbox state clearly.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-uyc-telegram-focused-result" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS">
+    <purpose>Scope Telegram result and diagnostics buttons to the current analysis_run focus and clear active collection membership after successful result delivery.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
+      <file-3>apps/telegram-bot/tests/test_bot_runtime.py</file-3>
+      <file-4>docs/requirements.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram main-card result and diagnostics buttons are shown only for the analysis_run launched from the current card focus. Successful manual or automatic result delivery clears active inbox or collection membership through the collection mutation API and preserves immutable historical selections, runs, artifacts, and diagnostics.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused gateway regressions prove historical terminal runs do not create generic result buttons and focused terminal runs produce callbacks for their own analysis_run_id.</check>
+      <check>Focused runtime regression proves manual result delivery sends the transcript and clears the active collection membership.</check>
     </verification>
   </HotfixPacket>
 </OperationalPackets>

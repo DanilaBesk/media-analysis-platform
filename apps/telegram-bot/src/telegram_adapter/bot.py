@@ -62,6 +62,7 @@ class _PageState:
     next_cursor: str | None = None
     selection: JsonObject | None = None
     screen: str = "main"
+    focused_run_id: str | None = None
 
 
 CALLBACK_NAMESPACE = "ib"
@@ -178,6 +179,7 @@ class TelegramInboxApp:
                 status = self.gateway.restore_status(owner=owner)
                 selection = page_state.selection if page_state else None
                 screen = page_state.screen if page_state else "main"
+                focused_run_id = page_state.focused_run_id if page_state else None
                 self._set_page_state(
                     key,
                     status,
@@ -185,6 +187,7 @@ class TelegramInboxApp:
                     previous_cursors=[],
                     selection=selection,
                     screen=screen,
+                    focused_run_id=focused_run_id,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Состояние обновлено")
@@ -198,6 +201,7 @@ class TelegramInboxApp:
                     previous_cursors=[],
                     selection=None,
                     screen="materials",
+                    focused_run_id=page_state.focused_run_id if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Открыт список материалов")
@@ -211,6 +215,7 @@ class TelegramInboxApp:
                     previous_cursors=[],
                     selection=None,
                     screen="main",
+                    focused_run_id=page_state.focused_run_id if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Открыта главная карточка")
@@ -231,6 +236,7 @@ class TelegramInboxApp:
                     previous_cursors=[*page_state.previous_cursors, page_state.current_cursor],
                     selection=page_state.selection,
                     screen=page_state.screen,
+                    focused_run_id=page_state.focused_run_id,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Открыта следующая страница")
@@ -251,6 +257,7 @@ class TelegramInboxApp:
                     previous_cursors=page_state.previous_cursors[:-1],
                     selection=page_state.selection,
                     screen=page_state.screen,
+                    focused_run_id=page_state.focused_run_id,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Открыта предыдущая страница")
@@ -273,6 +280,7 @@ class TelegramInboxApp:
                     previous_cursors=page_state.previous_cursors if page_state else [],
                     selection=page_state.selection if page_state else None,
                     screen=page_state.screen if page_state else "materials",
+                    focused_run_id=page_state.focused_run_id if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Материал убран")
@@ -299,6 +307,7 @@ class TelegramInboxApp:
                     previous_cursors=previous_cursors,
                     selection=page_state.selection if page_state else None,
                     screen=page_state.screen if page_state else "materials",
+                    focused_run_id=page_state.focused_run_id if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Видимые материалы убраны")
@@ -319,6 +328,7 @@ class TelegramInboxApp:
                     previous_cursors=page_state.previous_cursors if page_state else [],
                     selection=page_state.selection if page_state else None,
                     screen=page_state.screen if page_state else "materials",
+                    focused_run_id=page_state.focused_run_id if page_state else None,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Последний материал убран")
@@ -348,6 +358,7 @@ class TelegramInboxApp:
                     previous_cursors=[],
                     selection=None,
                     screen="main",
+                    focused_run_id=run_id,
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
                 if terminal_status is None and run_id:
@@ -393,6 +404,7 @@ class TelegramInboxApp:
                     previous_cursors=[],
                     selection=None,
                     screen="main",
+                    focused_run_id=run_id,
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
                 if terminal_status is None and run_id:
@@ -408,20 +420,32 @@ class TelegramInboxApp:
             if action == "ar":
                 analysis_run_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
+                if page_state is None or page_state.focused_run_id != analysis_run_id:
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
                 result_notice, show_alert = await self._deliver_run_result(
                     owner=owner,
                     analysis_run_id=analysis_run_id,
                     expected_version=expected_version,
                     message=callback.message,
                 )
-                status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor if page_state else None)
+                cursor = page_state.current_cursor if page_state else None
+                status = self.gateway.restore_status(owner=owner, cursor=cursor)
+                if not show_alert and status.collection is not None:
+                    status = self.gateway.clear_collection(
+                        owner=owner,
+                        collection_id=str(status.collection["collection_id"]),
+                        expected_version=int(status.collection["version"]),
+                        cursor=cursor,
+                    )
                 self._set_page_state(
                     key,
                     status,
-                    current_cursor=page_state.current_cursor if page_state else None,
-                    previous_cursors=page_state.previous_cursors if page_state else [],
-                    selection=page_state.selection if page_state else None,
-                    screen=page_state.screen if page_state else "main",
+                    current_cursor=cursor,
+                    previous_cursors=page_state.previous_cursors,
+                    selection=page_state.selection,
+                    screen=page_state.screen,
+                    focused_run_id=page_state.focused_run_id,
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer(result_notice, show_alert=show_alert)
@@ -429,6 +453,9 @@ class TelegramInboxApp:
             if action == "dg":
                 analysis_run_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
+                if page_state is None or page_state.focused_run_id != analysis_run_id:
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
                 diagnostics = self.gateway.list_run_diagnostics(
                     owner=owner,
                     analysis_run_id=analysis_run_id,
@@ -442,6 +469,7 @@ class TelegramInboxApp:
                     previous_cursors=page_state.previous_cursors if page_state else [],
                     selection=page_state.selection if page_state else None,
                     screen=page_state.screen if page_state else "main",
+                    focused_run_id=page_state.focused_run_id if page_state else None,
                 )
                 await self._edit_callback_status(
                     callback,
@@ -477,8 +505,23 @@ class TelegramInboxApp:
             return False
         key = self._scope_from_message(message).state_key
         text = render_status_text(status)
-        self._set_page_state(key, status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
-        markup = build_status_keyboard(status, can_go_back=False, current_cursor=None, selection=None, screen="main")
+        self._set_page_state(
+            key,
+            status,
+            current_cursor=None,
+            previous_cursors=[],
+            selection=None,
+            screen="main",
+            focused_run_id=None,
+        )
+        markup = build_status_keyboard(
+            status,
+            can_go_back=False,
+            current_cursor=None,
+            selection=None,
+            screen="main",
+            focused_run_id=None,
+        )
         previous_message_id = self.status_message_ids.get(key)
         if prefer_edit and previous_message_id is not None:
             try:
@@ -675,6 +718,7 @@ class TelegramInboxApp:
                     previous_cursors=previous_cursors,
                     selection=page_state.selection,
                     screen=page_state.screen,
+                    focused_run_id=page_state.focused_run_id or analysis_run_id,
                 )
                 updated_state = self.page_states.get(key, _PageState())
                 await self._edit_status_message_via_bot(
@@ -714,6 +758,7 @@ class TelegramInboxApp:
                     current_cursor=state.current_cursor,
                     selection=state.selection,
                     screen=state.screen,
+                    focused_run_id=state.focused_run_id,
                 ),
             )
         except TelegramBadRequest as error:
@@ -741,6 +786,7 @@ class TelegramInboxApp:
                     current_cursor=page_state.current_cursor,
                     selection=page_state.selection,
                     screen=page_state.screen,
+                    focused_run_id=page_state.focused_run_id,
                 ),
             )
         except TelegramBadRequest as error:
@@ -759,6 +805,7 @@ class TelegramInboxApp:
         previous_cursors: list[str | None],
         selection: JsonObject | None,
         screen: str = "main",
+        focused_run_id: str | None = None,
     ) -> None:
         self.page_states[key] = _PageState(
             current_cursor=current_cursor,
@@ -766,6 +813,7 @@ class TelegramInboxApp:
             next_cursor=status.page.get("next_cursor") or None,
             selection=selection,
             screen=screen,
+            focused_run_id=focused_run_id,
         )
 
     def _owner_from_message(self, message: Message) -> JsonObject:
@@ -859,6 +907,7 @@ def build_status_keyboard(
     current_cursor: str | None = None,
     selection: JsonObject | None = None,
     screen: str = "main",
+    focused_run_id: str | None = None,
 ) -> InlineKeyboardMarkup:
     del selection
     rows: list[list[InlineKeyboardButton]] = []
@@ -927,8 +976,8 @@ def build_status_keyboard(
             )
         rows.append([InlineKeyboardButton(text="К карточке", callback_data=_callback_payload("mn"))])
     if screen == "main":
-        latest_result_run = _latest_terminal_run_with_payload(status, status.artifacts_by_run)
-        latest_diagnostics_run = _latest_terminal_run_with_payload(status, status.diagnostics_by_run)
+        latest_result_run = _terminal_run_with_payload(status, status.artifacts_by_run, focused_run_id)
+        latest_diagnostics_run = _terminal_run_with_payload(status, status.diagnostics_by_run, focused_run_id)
         result_row: list[InlineKeyboardButton] = []
         if latest_result_run is not None:
             run_id = str(latest_result_run["analysis_run_id"])
@@ -1267,14 +1316,19 @@ def _latest_active_run(status: InboxStatus) -> JsonObject | None:
     return status.active_runs[-1] if status.active_runs else None
 
 
-def _latest_terminal_run_with_payload(
+def _terminal_run_with_payload(
     status: InboxStatus,
     payloads_by_run: dict[str, list[JsonObject]],
+    analysis_run_id: str | None,
 ) -> JsonObject | None:
+    if not analysis_run_id:
+        return None
     for run in reversed(status.recent_runs):
         if run.get("status") not in TERMINAL_RUN_STATUSES or not run.get("analysis_run_id"):
             continue
         run_id = str(run["analysis_run_id"])
+        if run_id != analysis_run_id:
+            continue
         if payloads_by_run.get(run_id):
             return run
     return None
