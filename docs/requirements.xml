@@ -160,6 +160,7 @@
     <bead id="media-i7m" status="completed">The final ordered closure matrix is published and synchronized with the current verification truth.</bead>
     <bead id="media-n48" status="completed">analysis_run cancellation now uses cooperative cancel_requested semantics before terminal worker finalization.</bead>
     <bead id="media-ktn" status="completed">Telegram active-run cards no longer dead-end new selections or background cancellation.</bead>
+    <bead id="media-lgf" status="completed">Telegram selection and transcription card UX contracts are documented as a durable architecture plan.</bead>
   </BeadsTrace>
 
   <NonGoals>

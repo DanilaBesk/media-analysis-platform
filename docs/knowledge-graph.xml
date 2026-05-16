@@ -133,6 +133,7 @@
         <export-addMediaFromUpdate PURPOSE="Convert Telegram updates into API add_media requests." />
         <export-renderInboxStatus PURPOSE="Show accepted inputs and available management actions." />
         <export-runAnalysisAction PURPOSE="Create a selection and analysis_run from explicit user action." />
+        <contract-selectionTranscriptionCards PATH="docs/architecture/telegram-selection-transcription-cards.md" PURPOSE="Define Telegram user-facing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and projection-state requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>
 
