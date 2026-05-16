@@ -981,6 +981,11 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
     assert api.runs[0]["status"] == "canceled"
     assert "Сейчас в работе" not in base_message.edits[-1]["text"]
     assert "Отмена" not in [button.text for row in base_message.edits[-1]["reply_markup"].inline_keyboard for button in row]
+    assert not any(
+        button.callback_data.startswith("ib:rn:")
+        for row in base_message.edits[-1]["reply_markup"].inline_keyboard
+        for button in row
+    )
 
 
 @pytest.mark.asyncio

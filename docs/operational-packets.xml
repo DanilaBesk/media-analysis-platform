@@ -338,4 +338,20 @@ Telegram main-card keyboards show management actions first and the emphasized �
       <check>Focused Telegram keyboard regressions prove Материалы remains first and the accented transcription launch button is the last row.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="telegram-hide-launch-during-active-run" status="completed" bead="media-x2l">
+    <purpose>Hide the Telegram transcription launch action while an owner already has an active transcription run.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
+      <file-3>apps/telegram-bot/tests/test_bot_runtime.py</file-3>
+      <file-4>docs/operational-packets.xml</file-4>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram main-card keyboards must not expose a new transcription launch action while any active analysis_run is still queued, running, or awaiting cancellation for the owner. Active-run controls remain available through the focused run path.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused Telegram keyboard regressions prove active runs remove the transcription launch callback in focused and unfocused main-card states.</check>
+      <check>Runtime cancel regression proves the launch callback stays absent during active run handling and only returns after terminal refresh state permits it.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

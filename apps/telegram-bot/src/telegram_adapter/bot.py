@@ -947,7 +947,7 @@ def build_status_keyboard(
     transcription_button: InlineKeyboardButton | None = None
     if screen == "main":
         material_count = _material_count(status)
-        if material_count and collection_id:
+        if material_count and collection_id and not status.active_runs:
             transcription_button = InlineKeyboardButton(
                 text=f"🎙 Транскрибация ({material_count})",
                 callback_data=_callback_payload(

@@ -707,6 +707,8 @@ def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
 
     assert "Сейчас в работе: в работе" in text
     assert "Результат" not in button_texts
+    assert "🎙 Транскрибация (1)" not in button_texts
+    assert not any(callback.startswith("ib:rn:") for callback in callbacks)
     assert all("run-old" not in callback for callback in callbacks)
 
 
@@ -730,10 +732,13 @@ def test_main_card_cancel_action_is_scoped_to_focused_active_run() -> None:
         for button in row
     }
     unfocused_texts = [button.text for row in unfocused_keyboard.inline_keyboard for button in row]
+    focused_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
     action, tokens = _parse_callback_payload(callbacks_by_text["Отмена"])
 
     assert "Отмена" not in unfocused_texts
+    assert "🎙 Транскрибация (1)" not in focused_texts
+    assert "🎙 Транскрибация (1)" not in unfocused_texts
     assert action == "cn"
     assert _decode_callback_token(tokens[0]) == "run-current"
     assert _decode_callback_version(tokens[1]) == 4
