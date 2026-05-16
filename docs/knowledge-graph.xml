@@ -89,6 +89,20 @@
       </annotations>
     </M-API-EVENTS>
 
+    <M-ADAPTER-PROJECTIONS NAME="AdapterProjections" TYPE="UTILITY" STATUS="planned" OWNER="media-cgr">
+      <purpose>Persist owner-scoped adapter-rendered external surface mappings without adding consumer-specific fields to domain entities.</purpose>
+      <path>apps/api/internal/projections</path>
+      <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE</depends>
+      <verification-ref>EV-API</verification-ref>
+      <annotations>
+        <contract-adapterProjection PATH="docs/architecture/adapter-projection-contract.md" PURPOSE="Define generic projection storage, internal API endpoints, field semantics, owner-scope rules, Telegram usage, and implementation stages." />
+        <table-adapterProjections PURPOSE="Store adapter, projection type, domain subject, opaque external reference, opaque adapter state, status, version, idempotency, and lifecycle timestamps." />
+        <internal-upsertProjection PURPOSE="Allow adapters to create or update durable external presentation mappings idempotently." />
+        <internal-listProjections PURPOSE="Allow adapters to recover active mappings after restart." />
+        <internal-supersedeProjection PURPOSE="Allow adapters to retire stale or uneditable external surfaces without deleting domain history." />
+      </annotations>
+    </M-ADAPTER-PROJECTIONS>
+
     <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="WORKER" STATUS="planned" OWNER="media-sfx">
       <purpose>Execute transcription steps from sealed selection material and publish artifacts through analysis_run.</purpose>
       <path>workers/transcription</path>
@@ -154,6 +168,8 @@
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />
       <CrossLink from="M-API-DOMAIN" to="M-API-STORAGE" relation="persists-product-state-through" />
       <CrossLink from="M-API-DOMAIN" to="M-API-QUEUE" relation="schedules-internal-execution-through" />
+      <CrossLink from="M-ADAPTER-PROJECTIONS" to="M-API-DOMAIN" relation="validates-owner-scoped-subjects-through" />
+      <CrossLink from="M-TELEGRAM-ADAPTER" to="M-ADAPTER-PROJECTIONS" relation="persists-external-card-mappings-through" />
       <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-API-HTTP" relation="publishes-run-artifacts-through" />
       <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-API-HTTP" relation="publishes-run-artifacts-through" />
       <CrossLink from="M-WEB" to="M-API-HTTP" relation="manages-api-owned-state-through" />

@@ -111,6 +111,10 @@
       <Action>Keep Telegram, Web, and MCP as thin adapters over the same API-owned state.</Action>
       <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the owner-wide media list. Telegram status copy and action labels are Russian-first and make collection actions plus run-specific result buttons explicit to the user.</AcceptanceCriteria>
     </Requirement>
+    <Requirement id="REQ-ADAPTER-PROJECTION-001">
+      <Action>Persist adapter-rendered presentation mappings without coupling domain entities to consumer-specific UI.</Action>
+      <AcceptanceCriteria>Adapter projections store owner-scoped adapter, projection type, domain subject, opaque external reference, opaque adapter state, status, version, and timestamps through an internal API. Domain tables must not gain Telegram-specific or consumer-specific message fields, and projection state must not alter media, collection, selection, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
+    </Requirement>
   </FunctionalRequirements>
 
   <DeletedArchitecture>
@@ -128,6 +132,7 @@
       <rule>Telegram shows background active analysis_run state separately from the current material selection. The current selection can start a new transcription unless the card is focused on an active run. Cancel actions target either the focused active run or, when there is no focus, the latest visible active run by run id plus version.</rule>
       <rule>Telegram main-card result and diagnostics actions are scoped to the analysis_run launched from the current card focus; historical terminal runs do not create generic result actions for a new or unstarted inbox selection.</rule>
       <rule>After a successful Telegram result delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selections, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
+      <rule>Telegram may persist message mappings through the internal adapter projection API, but the API treats those mappings as opaque adapter projections rather than Telegram-specific domain fields.</rule>
     </Telegram>
     <Web>
       <rule>Web is the full management surface for browsing inbox, creating collections, curating selections, launching analysis_run records, and reviewing artifacts and diagnostics.</rule>
@@ -161,6 +166,7 @@
     <bead id="media-n48" status="completed">analysis_run cancellation now uses cooperative cancel_requested semantics before terminal worker finalization.</bead>
     <bead id="media-ktn" status="completed">Telegram active-run cards no longer dead-end new selections or background cancellation.</bead>
     <bead id="media-lgf" status="completed">Telegram selection and transcription card UX contracts are documented as a durable architecture plan.</bead>
+    <bead id="media-cgr" status="completed">Generic adapter projection API contracts are documented without coupling domain state to Telegram-specific UI needs.</bead>
   </BeadsTrace>
 
   <NonGoals>
