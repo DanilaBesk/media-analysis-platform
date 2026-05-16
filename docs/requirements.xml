@@ -121,6 +121,7 @@
       <rule>Telegram accepts messages, files, URLs, media groups, and inline commands as input capture and management gestures over the owner inbox.</rule>
       <rule>Telegram shows the current inbox or collection status after accepted input and offers explicit actions to create a selection and run analysis.</rule>
       <rule>Telegram callback payloads address API-owned media_item, collection, selection, and analysis_run identifiers with versions where mutation is allowed.</rule>
+      <rule>Telegram shows a cancel action only for the current focused queued or running analysis_run, and the callback must include the run id plus version so stale buttons cannot cancel a different run.</rule>
       <rule>Telegram main-card result and diagnostics actions are scoped to the analysis_run launched from the current card focus; historical terminal runs do not create generic result actions for a new or unstarted inbox selection.</rule>
       <rule>After a successful Telegram result delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selections, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
     </Telegram>

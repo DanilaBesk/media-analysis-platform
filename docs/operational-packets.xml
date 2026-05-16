@@ -302,4 +302,25 @@ Telegram main-card result and diagnostics buttons are shown only for the analysi
       <check>Focused runtime regression proves manual result delivery sends the transcript and clears the active collection membership.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="telegram-focused-run-cancel" status="completed" bead="media-dph">
+    <purpose>Add a Telegram cancel action for the focused active transcription run.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/api_client.py</file-1>
+      <file-2>apps/telegram-bot/src/telegram_adapter/gateway.py</file-2>
+      <file-3>apps/telegram-bot/src/telegram_adapter/bot.py</file-3>
+      <file-4>apps/telegram-bot/tests/test_api_client.py</file-4>
+      <file-5>apps/telegram-bot/tests/test_gateway.py</file-5>
+      <file-6>apps/telegram-bot/tests/test_bot_runtime.py</file-6>
+      <file-7>docs/requirements.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+      <file-9>docs/verification-plan.xml</file-9>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram shows Отмена only for the current focused queued or running analysis_run. The cancel callback carries the analysis_run id and version, verifies the focused card state, calls the API-owned cancel route, and then refreshes the card without exposing stale cancellation against another run.
+    ]]></contract-excerpt>
+    <verification>
+      <check>API client regression proves the Telegram adapter posts to /v1/analysis-runs/{analysis_run_id}/cancel with owner query and cancellation message.</check>
+      <check>Gateway and runtime regressions prove cancel is shown only for a focused active run, rejects stale focus, calls the API cancel path, and removes the cancel action after refresh.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

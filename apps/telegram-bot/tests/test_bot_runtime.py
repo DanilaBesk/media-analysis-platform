@@ -57,6 +57,7 @@ class FakeFinalApiClient:
         self.add_requests: list[dict[str, Any]] = []
         self.upload_requests: list[dict[str, Any]] = []
         self.remove_requests: list[dict[str, Any]] = []
+        self.cancel_requests: list[dict[str, Any]] = []
         self.get_artifact_requests: list[str] = []
         self.internal_artifact_download_access_requests: list[str] = []
         self.internal_artifact_download_access: dict[str, dict[str, Any]] = {}
@@ -144,6 +145,14 @@ class FakeFinalApiClient:
     def get_analysis_run(self, **kwargs) -> dict[str, Any]:
         analysis_run_id = kwargs["analysis_run_id"]
         return next(run for run in self.runs if run["analysis_run_id"] == analysis_run_id)
+
+    def cancel_analysis_run(self, **kwargs) -> dict[str, Any]:
+        analysis_run_id = kwargs["analysis_run_id"]
+        self.cancel_requests.append(kwargs)
+        run = next(run for run in self.runs if run["analysis_run_id"] == analysis_run_id)
+        run["status"] = "canceled"
+        run["version"] = int(run.get("version") or 0) + 1
+        return run
 
     def list_artifacts(self, **kwargs) -> dict[str, Any]:
         analysis_run_id = kwargs.get("analysis_run_id")
@@ -916,6 +925,113 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
     assert api.items == []
     assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
     assert "Материалов: 0" in base_message.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -> None:
+    api, gateway, app = make_app()
+    base_message = FakeMessage()
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_id": "selection-1",
+            "run_type": "transcription",
+            "status": "running",
+            "version": 2,
+        }
+    )
+
+    active_status = status_for(gateway)
+    keyboard = build_status_keyboard(active_status, focused_run_id="run-1")
+    cancel_callback_data = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:cn:")
+    )
+    app._set_page_state(
+        (10, 7),
+        active_status,
+        current_cursor=None,
+        previous_cursors=[],
+        selection=None,
+        screen="main",
+        focused_run_id="run-1",
+    )
+
+    cancel_callback = FakeCallback(data=cancel_callback_data, message=base_message)
+    await app._handle_status_callback(cancel_callback)
+
+    assert cancel_callback.answers[-1] == {"text": "Транскрибация отменена", "show_alert": False}
+    assert api.cancel_requests == [
+        {
+            "owner": {
+                **owner(),
+                "adapter_identity": {
+                    "telegram_chat_id": "10",
+                    "telegram_user_id": "7",
+                    "telegram_chat_type": "private",
+                },
+            },
+            "analysis_run_id": "run-1",
+            "message": "Canceled from Telegram inline button",
+        }
+    ]
+    assert api.runs[0]["status"] == "canceled"
+    assert "Сейчас в работе" not in base_message.edits[-1]["text"]
+    assert "Отмена" not in [button.text for row in base_message.edits[-1]["reply_markup"].inline_keyboard for button in row]
+
+
+@pytest.mark.asyncio
+async def test_cancel_callback_rejects_stale_focus_without_canceling_other_run() -> None:
+    api, gateway, app = make_app()
+    base_message = FakeMessage()
+    api.runs.extend(
+        [
+            {
+                "analysis_run_id": "run-old",
+                "selection_id": "selection-old",
+                "run_type": "transcription",
+                "status": "running",
+                "version": 1,
+            },
+            {
+                "analysis_run_id": "run-current",
+                "selection_id": "selection-current",
+                "run_type": "transcription",
+                "status": "running",
+                "version": 2,
+            },
+        ]
+    )
+
+    active_status = status_for(gateway)
+    old_keyboard = build_status_keyboard(active_status, focused_run_id="run-old")
+    stale_cancel_data = next(
+        button.callback_data
+        for row in old_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:cn:")
+    )
+    app._set_page_state(
+        (10, 7),
+        active_status,
+        current_cursor=None,
+        previous_cursors=[],
+        selection=None,
+        screen="main",
+        focused_run_id="run-current",
+    )
+
+    cancel_callback = FakeCallback(data=stale_cancel_data, message=base_message)
+    await app._handle_status_callback(cancel_callback)
+
+    assert cancel_callback.answers[-1] == {
+        "text": "Эта кнопка устарела. Откройте /inbox ещё раз и повторите действие.",
+        "show_alert": True,
+    }
+    assert api.cancel_requests == []
+    assert [run["status"] for run in api.runs] == ["running", "running"]
 
 
 @pytest.mark.asyncio

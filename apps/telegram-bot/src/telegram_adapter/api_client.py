@@ -210,6 +210,20 @@ class TelegramApiClient:
         payload = self._request_json(f"/v1/analysis-runs/{analysis_run_id}?{urlencode(_owner_query(owner))}")
         return self._extract(payload, "analysis_run")
 
+    def cancel_analysis_run(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        message: str = "Canceled from Telegram",
+    ) -> JsonObject:
+        payload = self._request_json(
+            f"/v1/analysis-runs/{analysis_run_id}/cancel?{urlencode(_owner_query(owner))}",
+            method="POST",
+            json_body={"message": message},
+        )
+        return self._extract(payload, "analysis_run")
+
     def list_artifacts(
         self,
         *,

@@ -45,6 +45,7 @@ class FakeFinalApiClient:
         self.add_requests: list[dict[str, Any]] = []
         self.upload_requests: list[dict[str, Any]] = []
         self.remove_requests: list[dict[str, Any]] = []
+        self.cancel_requests: list[dict[str, Any]] = []
 
     def add_media_item(self, **kwargs) -> dict[str, Any]:
         media_item = {
@@ -129,6 +130,14 @@ class FakeFinalApiClient:
     def get_analysis_run(self, **kwargs) -> dict[str, Any]:
         analysis_run_id = kwargs["analysis_run_id"]
         return next(run for run in self.runs if run["analysis_run_id"] == analysis_run_id)
+
+    def cancel_analysis_run(self, **kwargs) -> dict[str, Any]:
+        analysis_run_id = kwargs["analysis_run_id"]
+        self.cancel_requests.append(kwargs)
+        run = next(run for run in self.runs if run["analysis_run_id"] == analysis_run_id)
+        run["status"] = "canceled"
+        run["version"] = int(run.get("version") or 0) + 1
+        return run
 
     def list_artifacts(self, **kwargs) -> dict[str, Any]:
         analysis_run_id = kwargs.get("analysis_run_id")
@@ -697,6 +706,55 @@ def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
     assert "Сейчас в работе: в работе" in text
     assert "Результат" not in button_texts
     assert all("run-old" not in callback for callback in callbacks)
+
+
+def test_main_card_cancel_action_is_scoped_to_focused_active_run() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.add_text(owner=owner(), text="cancelable transcript candidate")
+    api.runs.extend(
+        [
+            {"analysis_run_id": "run-other", "status": "queued", "version": 1},
+            {"analysis_run_id": "run-current", "status": "running", "version": 4},
+        ]
+    )
+
+    status = gateway.restore_status(owner=owner())
+    keyboard = build_status_keyboard(status, focused_run_id="run-current")
+    unfocused_keyboard = build_status_keyboard(status)
+    callbacks_by_text = {
+        button.text: button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+    }
+    unfocused_texts = [button.text for row in unfocused_keyboard.inline_keyboard for button in row]
+
+    action, tokens = _parse_callback_payload(callbacks_by_text["Отмена"])
+
+    assert "Отмена" not in unfocused_texts
+    assert action == "cn"
+    assert _decode_callback_token(tokens[0]) == "run-current"
+    assert _decode_callback_version(tokens[1]) == 4
+
+
+def test_gateway_cancel_analysis_run_verifies_version_and_active_status() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    api.runs.append({"analysis_run_id": "run-1", "status": "running", "version": 3})
+
+    status = gateway.cancel_analysis_run(
+        owner=owner(),
+        analysis_run_id="run-1",
+        expected_version=3,
+        message="stop",
+    )
+
+    assert api.cancel_requests == [{"owner": owner(), "analysis_run_id": "run-1", "message": "stop"}]
+    assert status.active_runs == []
+    assert api.runs[0]["status"] == "canceled"
+
+    with pytest.raises(RuntimeError, match="slot_not_visible"):
+        gateway.cancel_analysis_run(owner=owner(), analysis_run_id="run-1", expected_version=4)
 
 
 def test_main_card_result_is_scoped_to_focused_terminal_run() -> None:

@@ -195,6 +195,27 @@ def test_get_analysis_run_uses_owner_query_and_extracts_wrapped_object() -> None
     assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7"
 
 
+def test_cancel_analysis_run_posts_owner_query_and_message() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1", "status": "canceled"}}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    run = client.cancel_analysis_run(owner=OWNER, analysis_run_id="run-1", message="stop from Telegram")
+
+    request = captured["request"]
+    payload = json.loads(request.data.decode("utf-8"))
+    assert request.get_method() == "POST"
+    assert request.full_url == (
+        "http://api:8080/v1/analysis-runs/run-1/cancel"
+        "?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7"
+    )
+    assert payload == {"message": "stop from Telegram"}
+    assert run == {"analysis_run_id": "run-1", "status": "canceled"}
+
+
 def test_get_internal_artifact_download_access_uses_internal_endpoint_without_owner_query() -> None:
     captured = {}
 

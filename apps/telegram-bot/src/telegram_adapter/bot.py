@@ -37,6 +37,7 @@ from telegram_adapter.errors import (
     user_error_text,
 )
 from telegram_adapter.gateway import (
+    CANCELABLE_RUN_STATUSES,
     InboxStatus,
     IngressRecord,
     TERMINAL_RUN_STATUSES,
@@ -450,6 +451,31 @@ class TelegramInboxApp:
                 await self._edit_callback_status(callback, status)
                 await callback.answer(result_notice, show_alert=show_alert)
                 return
+            if action == "cn":
+                analysis_run_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                if page_state is None or page_state.focused_run_id != analysis_run_id:
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
+                status = self.gateway.cancel_analysis_run(
+                    owner=owner,
+                    analysis_run_id=analysis_run_id,
+                    expected_version=expected_version,
+                    message="Canceled from Telegram inline button",
+                )
+                self._cancel_run_status_tracking(key)
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=page_state.current_cursor,
+                    previous_cursors=page_state.previous_cursors,
+                    selection=page_state.selection,
+                    screen=page_state.screen,
+                    focused_run_id=analysis_run_id,
+                )
+                await self._edit_callback_status(callback, status)
+                await callback.answer("Транскрибация отменена")
+                return
             if action == "dg":
                 analysis_run_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
@@ -683,6 +709,11 @@ class TelegramInboxApp:
                 message_id=message_id,
             )
         )
+
+    def _cancel_run_status_tracking(self, key: tuple[int, int | None]) -> None:
+        existing = self.run_watch_tasks.pop(key, None)
+        if existing is not None:
+            existing.cancel()
 
     async def _track_run_status_until_terminal(
         self,
@@ -976,8 +1007,22 @@ def build_status_keyboard(
             )
         rows.append([InlineKeyboardButton(text="К карточке", callback_data=_callback_payload("mn"))])
     if screen == "main":
+        focused_active_run = _active_run_for_focus(status, focused_run_id)
         latest_result_run = _terminal_run_with_payload(status, status.artifacts_by_run, focused_run_id)
         latest_diagnostics_run = _terminal_run_with_payload(status, status.diagnostics_by_run, focused_run_id)
+        if focused_active_run is not None and str(focused_active_run.get("status") or "") in CANCELABLE_RUN_STATUSES:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="Отмена",
+                        callback_data=_callback_payload(
+                            "cn",
+                            _encode_callback_token(str(focused_active_run["analysis_run_id"])),
+                            _encode_callback_version(int(focused_active_run.get("version") or 0)),
+                        ),
+                    )
+                ]
+            )
         result_row: list[InlineKeyboardButton] = []
         if latest_result_run is not None:
             run_id = str(latest_result_run["analysis_run_id"])
@@ -1314,6 +1359,19 @@ def _media_group_id(item: JsonObject) -> str | None:
 
 def _latest_active_run(status: InboxStatus) -> JsonObject | None:
     return status.active_runs[-1] if status.active_runs else None
+
+
+def _active_run_for_focus(status: InboxStatus, focused_run_id: str | None) -> JsonObject | None:
+    if not focused_run_id:
+        return None
+    return next(
+        (
+            run
+            for run in status.active_runs
+            if str(run.get("analysis_run_id") or "") == focused_run_id
+        ),
+        None,
+    )
 
 
 def _terminal_run_with_payload(

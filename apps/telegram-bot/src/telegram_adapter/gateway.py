@@ -22,6 +22,7 @@ from telegram_adapter.policy import TelegramChatPolicy, TelegramChatScope
 JsonObject = dict[str, Any]
 IngressStatus = Literal["accepted", "rejected"]
 ACTIVE_RUN_STATUSES = {"queued", "running", "cancel_requested"}
+CANCELABLE_RUN_STATUSES = {"queued", "running"}
 TERMINAL_RUN_STATUSES = {"partially_succeeded", "succeeded", "failed", "canceled", "expired"}
 VISIBLE_RUN_STATUSES = ACTIVE_RUN_STATUSES | TERMINAL_RUN_STATUSES
 URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s<>]+", re.IGNORECASE)
@@ -394,6 +395,24 @@ class TelegramInboxGateway:
 
     def get_run_status(self, *, owner: JsonObject, analysis_run_id: str) -> JsonObject:
         return self.api_client.get_analysis_run(owner=owner, analysis_run_id=analysis_run_id)
+
+    def cancel_analysis_run(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run_id: str,
+        expected_version: int,
+        message: str = "Canceled from Telegram",
+    ) -> InboxStatus:
+        run = self._get_verified_run(owner=owner, analysis_run_id=analysis_run_id, expected_version=expected_version)
+        if str(run.get("status") or "") not in CANCELABLE_RUN_STATUSES:
+            raise RuntimeError("slot_not_visible")
+        self.api_client.cancel_analysis_run(
+            owner=owner,
+            analysis_run_id=analysis_run_id,
+            message=message,
+        )
+        return self.restore_status(owner=owner)
 
     def list_run_artifacts(
         self,
