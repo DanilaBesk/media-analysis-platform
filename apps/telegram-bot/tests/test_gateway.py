@@ -378,7 +378,8 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
 
     assert text.startswith("Транскрибация\nМатериалов: 2\n")
-    assert [button.text for button in keyboard.inline_keyboard[0]] == ["Транскрибация (2)", "Материалы"]
+    assert [button.text for button in keyboard.inline_keyboard[0]] == ["Материалы"]
+    assert [button.text for button in keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (2)"]
     assert run_action == "rn"
     assert _decode_callback_token(run_tokens[0]) == "inbox-1"
     assert _decode_callback_version(run_tokens[1]) == 1
@@ -412,7 +413,8 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
 
     status = gateway.restore_status(owner=owner())
     main_keyboard = build_status_keyboard(status, current_cursor=None)
-    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибация (12)", "Материалы"]
+    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Материалы"]
+    assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (12)"]
 
     keyboard = build_status_keyboard(status, current_cursor=None, screen="materials")
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]

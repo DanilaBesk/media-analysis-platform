@@ -944,22 +944,19 @@ def build_status_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     collection_id = str(status.collection.get("collection_id") or "") if status.collection else ""
     collection_version = int(status.collection.get("version") or 0) if status.collection else 0
+    transcription_button: InlineKeyboardButton | None = None
     if screen == "main":
-        primary_row: list[InlineKeyboardButton] = []
         material_count = _material_count(status)
         if material_count and collection_id:
-            primary_row.append(
-                InlineKeyboardButton(
-                    text=f"Транскрибация ({material_count})",
-                    callback_data=_callback_payload(
-                        "rn",
-                        _encode_callback_token(collection_id),
-                        _encode_callback_version(collection_version),
-                    ),
-                )
+            transcription_button = InlineKeyboardButton(
+                text=f"🎙 Транскрибация ({material_count})",
+                callback_data=_callback_payload(
+                    "rn",
+                    _encode_callback_token(collection_id),
+                    _encode_callback_version(collection_version),
+                ),
             )
-        primary_row.append(InlineKeyboardButton(text="Материалы", callback_data=_callback_payload("mt")))
-        rows.append(primary_row)
+        rows.append([InlineKeyboardButton(text="Материалы", callback_data=_callback_payload("mt"))])
     else:
         remove_buttons = [
             InlineKeyboardButton(
@@ -1050,6 +1047,8 @@ def build_status_keyboard(
             )
         if result_row:
             rows.append(result_row)
+        if transcription_button is not None:
+            rows.append([transcription_button])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

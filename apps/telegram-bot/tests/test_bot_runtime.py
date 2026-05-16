@@ -678,7 +678,8 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     assert "версия" not in base_message.edits[-1]["text"]
 
     main_keyboard = build_status_keyboard(refresh_status)
-    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Транскрибация (2)", "Материалы"]
+    assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Материалы"]
+    assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (2)"]
 
     materials_callback = FakeCallback(data="ib:mt", message=base_message)
     await app._handle_status_callback(materials_callback)

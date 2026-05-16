@@ -323,4 +323,19 @@ Telegram shows Отмена only for the current focused queued or running analy
       <check>Gateway and runtime regressions prove cancel is shown only for a focused active run, rejects stale focus, calls the API cancel path, and removes the cancel action after refresh.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="telegram-transcription-button-emphasis" status="completed" bead="media-ffd">
+    <purpose>Make the Telegram transcription launch action visually emphasized and last in the main-card keyboard.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
+      <file-3>apps/telegram-bot/tests/test_bot_runtime.py</file-3>
+      <file-4>docs/operational-packets.xml</file-4>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram main-card keyboards show management actions first and the emphasized 🎙 Транскрибация launch action as the final row, while preserving the existing run callback payload and API-owned collection/version semantics.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused Telegram keyboard regressions prove Материалы remains first and the accented transcription launch button is the last row.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>
