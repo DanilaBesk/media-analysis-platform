@@ -705,14 +705,14 @@ def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
     button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
-    assert "Сейчас в работе: в работе" in text
+    assert "Активная задача: в работе" in text
     assert "Результат" not in button_texts
     assert "🎙 Транскрибация (1)" not in button_texts
     assert not any(callback.startswith("ib:rn:") for callback in callbacks)
     assert all("run-old" not in callback for callback in callbacks)
 
 
-def test_main_card_cancel_action_is_scoped_to_focused_active_run() -> None:
+def test_main_card_separates_background_active_run_from_new_transcription_action() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     gateway.add_text(owner=owner(), text="cancelable transcript candidate")
@@ -731,17 +731,25 @@ def test_main_card_cancel_action_is_scoped_to_focused_active_run() -> None:
         for row in keyboard.inline_keyboard
         for button in row
     }
+    unfocused_callbacks_by_text = {
+        button.text: button.callback_data
+        for row in unfocused_keyboard.inline_keyboard
+        for button in row
+    }
     unfocused_texts = [button.text for row in unfocused_keyboard.inline_keyboard for button in row]
     focused_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
     action, tokens = _parse_callback_payload(callbacks_by_text["Отмена"])
+    unfocused_action, unfocused_tokens = _parse_callback_payload(unfocused_callbacks_by_text["Отмена"])
 
-    assert "Отмена" not in unfocused_texts
     assert "🎙 Транскрибация (1)" not in focused_texts
-    assert "🎙 Транскрибация (1)" not in unfocused_texts
+    assert "🎙 Транскрибация (1)" in unfocused_texts
     assert action == "cn"
     assert _decode_callback_token(tokens[0]) == "run-current"
     assert _decode_callback_version(tokens[1]) == 4
+    assert unfocused_action == "cn"
+    assert _decode_callback_token(unfocused_tokens[0]) == "run-current"
+    assert _decode_callback_version(unfocused_tokens[1]) == 4
 
 
 def test_gateway_cancel_analysis_run_verifies_version_and_active_status() -> None:
@@ -1042,7 +1050,7 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
 
     queued_text = render_status_text(gateway.restore_status(owner=owner()))
 
-    assert "Сейчас в работе: в очереди" in queued_text
+    assert "Активная задача: в очереди" in queued_text
     assert "failed" not in queued_text
     assert "Последние результаты:" not in queued_text
 
@@ -1103,7 +1111,7 @@ def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() 
     assert app.status_message_ids == {(10, 7): 9001}
     assert app.page_states[(10, 7)].current_cursor is None
     assert "restore after reconnect" in message.answers[0]["text"]
-    assert "Сейчас в работе: в очереди" in message.answers[0]["text"]
+    assert "Активная задача: в очереди" in message.answers[0]["text"]
     assert "Последние результаты:" not in message.answers[0]["text"]
 
 

@@ -339,7 +339,7 @@ Telegram main-card keyboards show management actions first and the emphasized ðŸ
     </verification>
   </HotfixPacket>
   <HotfixPacket id="telegram-hide-launch-during-active-run" status="completed" bead="media-x2l">
-    <purpose>Hide the Telegram transcription launch action while an owner already has an active transcription run.</purpose>
+    <purpose>Hide duplicate Telegram transcription launch while the card is focused on an active transcription run.</purpose>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
       <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
@@ -347,11 +347,29 @@ Telegram main-card keyboards show management actions first and the emphasized ðŸ
       <file-4>docs/operational-packets.xml</file-4>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram main-card keyboards must not expose a new transcription launch action while any active analysis_run is still queued, running, or awaiting cancellation for the owner. Active-run controls remain available through the focused run path.
+Telegram main-card keyboards must not expose a duplicate transcription launch action while the current card is focused on an active analysis_run. Background active runs are tracked separately and do not block launching a new current selection.
     ]]></contract-excerpt>
     <verification>
-      <check>Focused Telegram keyboard regressions prove active runs remove the transcription launch callback in focused and unfocused main-card states.</check>
-      <check>Runtime cancel regression proves the launch callback stays absent during active run handling and only returns after terminal refresh state permits it.</check>
+      <check>Focused Telegram keyboard regressions prove focused active runs remove the transcription launch callback.</check>
+      <check>Runtime regressions prove background active runs remain cancelable while new material selections can still launch.</check>
+    </verification>
+  </HotfixPacket>
+  <HotfixPacket id="telegram-active-run-dead-end" status="completed" bead="media-ktn">
+    <purpose>Remove the Telegram dead-end state where an active run is visible but neither cancel nor new transcription actions are available.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
+      <file-3>apps/telegram-bot/tests/test_bot_runtime.py</file-3>
+      <file-4>docs/requirements.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram separates background active tasks from the current material selection. If the card is not focused on an active run, the latest visible active run remains cancelable and the current materials can launch a new transcription as an independent analysis_run.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Gateway regressions prove unfocused active runs show both cancellation and the emphasized transcription launch action.</check>
+      <check>Runtime regressions prove an unfocused active run can be canceled and a new transcription can still be launched from the current material selection.</check>
     </verification>
   </HotfixPacket>
   <HotfixPacket id="analysis-run-cooperative-cancellation" status="completed" bead="media-n48">

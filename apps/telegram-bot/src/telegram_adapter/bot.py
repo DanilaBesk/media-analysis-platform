@@ -454,9 +454,17 @@ class TelegramInboxApp:
             if action == "cn":
                 analysis_run_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
-                if page_state is None or page_state.focused_run_id != analysis_run_id:
+                if page_state is None:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
+                if page_state.focused_run_id and page_state.focused_run_id != analysis_run_id:
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
+                if not page_state.focused_run_id:
+                    current_status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor)
+                    if _active_run_for_focus(current_status, analysis_run_id) is None:
+                        await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                        return
                 status = self.gateway.cancel_analysis_run(
                     owner=owner,
                     analysis_run_id=analysis_run_id,
@@ -924,10 +932,16 @@ def render_status_text(
     for record in status.rejected:
         lines.append(f"Отклонено: {record.label} ({rejected_reason_text(record.reason)})")
 
+    active_runs_count = len(status.active_runs)
     active_run = _latest_active_run(status)
     if active_run is not None:
         lines.append("")
-        lines.append(f"Сейчас в работе: {_run_status_text(str(active_run.get('status') or 'unknown'))}")
+        if active_runs_count == 1:
+            lines.append(f"Активная задача: {_run_status_text(str(active_run.get('status') or 'unknown'))}")
+        else:
+            lines.append(
+                f"Активные задачи: {active_runs_count}; последняя: {_run_status_text(str(active_run.get('status') or 'unknown'))}"
+            )
     return "\n".join(lines)
 
 
@@ -945,9 +959,10 @@ def build_status_keyboard(
     collection_id = str(status.collection.get("collection_id") or "") if status.collection else ""
     collection_version = int(status.collection.get("version") or 0) if status.collection else 0
     transcription_button: InlineKeyboardButton | None = None
+    focused_active_run = _active_run_for_focus(status, focused_run_id)
     if screen == "main":
         material_count = _material_count(status)
-        if material_count and collection_id and not status.active_runs:
+        if material_count and collection_id and focused_active_run is None:
             transcription_button = InlineKeyboardButton(
                 text=f"🎙 Транскрибация ({material_count})",
                 callback_data=_callback_payload(
@@ -1004,18 +1019,18 @@ def build_status_keyboard(
             )
         rows.append([InlineKeyboardButton(text="К карточке", callback_data=_callback_payload("mn"))])
     if screen == "main":
-        focused_active_run = _active_run_for_focus(status, focused_run_id)
+        cancelable_active_run = focused_active_run or _latest_active_run(status)
         latest_result_run = _terminal_run_with_payload(status, status.artifacts_by_run, focused_run_id)
         latest_diagnostics_run = _terminal_run_with_payload(status, status.diagnostics_by_run, focused_run_id)
-        if focused_active_run is not None and str(focused_active_run.get("status") or "") in CANCELABLE_RUN_STATUSES:
+        if cancelable_active_run is not None and str(cancelable_active_run.get("status") or "") in CANCELABLE_RUN_STATUSES:
             rows.append(
                 [
                     InlineKeyboardButton(
                         text="Отмена",
                         callback_data=_callback_payload(
                             "cn",
-                            _encode_callback_token(str(focused_active_run["analysis_run_id"])),
-                            _encode_callback_version(int(focused_active_run.get("version") or 0)),
+                            _encode_callback_token(str(cancelable_active_run["analysis_run_id"])),
+                            _encode_callback_version(int(cancelable_active_run.get("version") or 0)),
                         ),
                     )
                 ]

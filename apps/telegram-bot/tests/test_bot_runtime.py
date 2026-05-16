@@ -979,13 +979,65 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
         }
     ]
     assert api.runs[0]["status"] == "canceled"
-    assert "Сейчас в работе" not in base_message.edits[-1]["text"]
+    assert "Активная задача" not in base_message.edits[-1]["text"]
     assert "Отмена" not in [button.text for row in base_message.edits[-1]["reply_markup"].inline_keyboard for button in row]
     assert not any(
         button.callback_data.startswith("ib:rn:")
         for row in base_message.edits[-1]["reply_markup"].inline_keyboard
         for button in row
     )
+
+
+@pytest.mark.asyncio
+async def test_unfocused_active_run_can_be_canceled_while_new_transcription_can_start() -> None:
+    api, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="new independent material")
+    base_message = FakeMessage()
+    api.runs.append(
+        {
+            "analysis_run_id": "run-old",
+            "selection_id": "selection-old",
+            "run_type": "transcription",
+            "status": "running",
+            "version": 3,
+        }
+    )
+
+    status = status_for(gateway)
+    keyboard = build_status_keyboard(status)
+    button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
+    cancel_callback_data = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:cn:")
+    )
+    run_callback_data = next(
+        button.callback_data
+        for row in keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rn:")
+    )
+
+    assert "Отмена" in button_texts
+    assert "🎙 Транскрибация (1)" in button_texts
+
+    app._set_page_state((10, 7), status, current_cursor=None, previous_cursors=[], selection=None, screen="main", focused_run_id=None)
+    cancel_callback = FakeCallback(data=cancel_callback_data, message=base_message)
+    await app._handle_status_callback(cancel_callback)
+
+    assert cancel_callback.answers[-1] == {"text": "Транскрибация отменена", "show_alert": False}
+    assert api.cancel_requests[-1]["analysis_run_id"] == "run-old"
+    assert api.runs[0]["status"] == "canceled"
+
+    refreshed_status = status_for(gateway)
+    app._set_page_state((10, 7), refreshed_status, current_cursor=None, previous_cursors=[], selection=None, screen="main", focused_run_id=None)
+    app.run_status_poll_attempts = 1
+    run_callback = FakeCallback(data=run_callback_data, message=base_message)
+    await app._handle_status_callback(run_callback)
+
+    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert [run["analysis_run_id"] for run in api.runs] == ["run-old", "run-2"]
 
 
 @pytest.mark.asyncio
