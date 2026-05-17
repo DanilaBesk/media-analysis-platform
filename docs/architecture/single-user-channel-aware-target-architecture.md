@@ -894,6 +894,8 @@ Operations:
 
 - workers only consume sealed `selection_snapshots`;
 - workers never read mutable collections as execution input;
+- transcription workers turn source media snapshots into transcript artifacts;
+- report/research workers consume transcript or prepared text-corpus artifacts, not raw audio/video media, whenever a transcription prerequisite exists;
 - finalization respects `cancel_requested`.
 
 ## DTO And Type Naming
@@ -1011,12 +1013,13 @@ Does not own:
 
 Owns:
 
-- management UI;
-- browsing media assets;
-- editing collections;
-- creating selection snapshots;
-- launching and reviewing runs;
-- reviewing artifacts and diagnostics.
+- simple human-facing management UI;
+- browsing materials in plain user terms;
+- editing named groups and current selections through API calls;
+- launching analysis from the current selection;
+- reviewing results, progress, errors, and downloads in user language.
+
+Web is intentionally "dumb": it renders understandable state and actions over public API contracts, but it does not own business semantics, durable workflow state, worker orchestration, or product vocabulary decisions. Internal terms such as `media_asset`, `selection_snapshot`, `analysis_run_step`, `channel_surface`, opaque ids, and diagnostic internals are not load-bearing UI copy outside explicit admin/debug views.
 
 Does not need channel surfaces for MVP unless a Web-specific server-side surface recovery feature is introduced.
 
@@ -1051,9 +1054,11 @@ Owns:
 Owns:
 
 - report/research steps;
-- reading sealed snapshot material;
+- reading transcript artifacts or prepared text-corpus artifacts produced for a sealed snapshot;
 - producing report artifacts;
 - recording diagnostics and partial success.
+
+Does not own transcription. For audio, video, voice, or other media that requires speech-to-text, the API orchestration must provide a completed transcript/text input first or schedule the transcription prerequisite before the agent-runner step. If the required transcript artifact is missing, the worker records or receives a prerequisite diagnostic instead of trying to process raw media itself.
 
 ### workers/common
 
@@ -1099,6 +1104,15 @@ Owns:
 6. Worker finalizes step and run.
 7. Telegram watcher sees run completion.
 8. Telegram sends document and upserts `channel_surface` with `surface_type=result_artifact_surface`.
+
+### Report Or Research From Transcript
+
+1. API creates or finds a sealed `selection_snapshot`.
+2. API ensures required transcript/text-corpus artifacts exist for audio, video, and voice materials.
+3. Agent-runner claims the report or research step.
+4. Agent-runner reads only ready transcript/text-corpus artifact inputs and safe metadata.
+5. Agent-runner records progress events, diagnostics, and report/research artifacts.
+6. API exposes the produced artifacts to Telegram, Web, and MCP through the same run detail contract.
 
 ### Restart Recovery
 
@@ -1220,6 +1234,8 @@ Work:
 
 - claim steps, not tasks;
 - read snapshots, not collections;
+- make transcription the only worker path that converts raw speech media into transcript artifacts;
+- make agent-runner consume ready transcript/text-corpus artifacts for report and research work;
 - publish artifacts through API;
 - record diagnostics through API;
 - observe cancellation.
@@ -1234,11 +1250,12 @@ Verification:
 
 ### Stage 6: Web And MCP Migration
 
-Goal: Web and MCP use target API names and operations.
+Goal: Web and MCP use target API operations while Web keeps user-facing language simple and non-technical.
 
 Work:
 
-- Web uses media assets, collections, snapshots, runs, artifacts, diagnostics;
+- Web uses API-owned media assets, collections, snapshots, runs, artifacts, and diagnostics without exposing those names as normal UI labels;
+- Web copy prefers clear Russian product words such as `Материалы`, `Подборка`, `Результаты`, `Отчет`, `Ошибка`, and `Скачать`;
 - MCP tools expose target vocabulary;
 - old names removed from user-visible contract.
 
@@ -1247,7 +1264,7 @@ Verification:
 - route tests;
 - tool schema tests;
 - UI tests for empty states and run detail;
-- no stale vocabulary in visible text.
+- no stale or internal vocabulary in visible Web text outside admin/debug surfaces.
 
 ### Stage 7: Runtime And Coverage Closure
 
@@ -1278,9 +1295,9 @@ Verification:
 | Storage | CRUD, owner/single-user scope, idempotency, version conflicts. |
 | API | Route success, validation errors, conflict errors, pagination, empty arrays. |
 | Telegram | User flows, callback parsing, restart recovery, surface supersede, result delivery. |
-| Web | Main flows, empty states, diagnostics, artifacts. |
+| Web | Main flows, empty states, diagnostics, artifacts, plain human copy without internal technical terms. |
 | MCP | Tool schema, error mapping, idempotency. |
-| Workers | Claim, progress, cancel, artifact, diagnostic, finalize. |
+| Workers | Claim, progress, cancel, artifact, diagnostic, finalize, agent-runner transcript/text-corpus input contract. |
 | Diagnostics | Every rejection and partial failure has code/message/remediation. |
 | Retention | Media, artifacts, surfaces, events, and orphan cleanup. |
 | Vocabulary | Public docs and UI avoid deleted terms. |

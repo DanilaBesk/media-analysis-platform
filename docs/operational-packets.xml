@@ -150,9 +150,11 @@ Persist sources, media_items, collections, collection_items, immutable selection
     </write-scope>
     <contract-excerpt><![CDATA[
 Workers claim internal execution rows by analysis_run_id, load sealed selection material through internal API contracts, publish artifacts and diagnostics, and never read mutable collection state as execution input.
+Transcription converts speech media into transcript artifacts. Agent-runner report and research steps consume ready transcript or prepared text-corpus artifacts plus safe metadata; they do not transcribe or process raw speech media directly.
     ]]></contract-excerpt>
     <verification>
       <check>Worker tests prove sealed selection consumption, artifact publication, partial success diagnostics, cancellation phase recording, and no mutation of selections.</check>
+      <check>Agent-runner tests prove transcript/text-corpus prerequisites are consumed and missing prerequisites become diagnostics.</check>
     </verification>
   </ExecutionPacket>
 
@@ -179,10 +181,11 @@ Telegram turns messages, files, URLs, media groups, voice, audio, video, photos,
       <file-2>Web tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-Web manages inbox, collections, media details, selection builder, analysis_run list and detail, artifacts, diagnostics, owner-scoped search, and retention actions over the public API.
+Web manages materials, groups, current selection, progress, results, errors, downloads, owner-scoped search, and retention actions over the public API. Normal Web UI copy is intentionally simple and human-facing; internal API terms, raw ids, channel surface concepts, step names, and diagnostic internals are reserved for explicit admin/debug views.
     ]]></contract-excerpt>
     <verification>
       <check>Web tests prove collection edits after run creation do not alter run selection snapshots.</check>
+      <check>Web copy tests or review prove normal UI labels avoid load-bearing internal technical vocabulary.</check>
     </verification>
   </ExecutionPacket>
 

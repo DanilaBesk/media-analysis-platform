@@ -137,6 +137,7 @@
     <step id="media-sfx-2">Transcription, report, and research execution produce artifact records and diagnostics through control-plane APIs.</step>
     <step id="media-sfx-3">Partial success records per-item diagnostics while allowing analysis_run to finish with partially_succeeded when policy allows.</step>
     <step id="media-sfx-4">Worker logs and raw evidence become private artifacts or diagnostics, not public product entities.</step>
+    <step id="media-sfx-5">Agent-runner consumes ready transcript or prepared text-corpus artifacts for report and research work; it does not transcribe raw speech media.</step>
   </WorkerPlan>
 
   <AdapterPlan>
@@ -147,8 +148,9 @@
       <step>Display analysis_run status and artifacts returned by the API.</step>
     </Telegram>
     <Web bead="media-7wo">
-      <step>Build management-first views for inbox, collections, media details, selection builder, run list, run detail, artifacts, diagnostics, and retention actions.</step>
+      <step>Build simple human-facing views for materials, groups, current selection, progress, results, downloads, errors, and retention actions over the public API.</step>
       <step>Do not expose execution-only submission screens as the primary product surface.</step>
+      <step>Do not use internal API names, opaque ids, channel surface terms, step names, or diagnostic internals as normal UI copy outside explicit admin/debug views.</step>
     </Web>
     <MCP bead="media-uhi">
       <step>Expose tools add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, get_diagnostics, and apply_retention_action.</step>
@@ -161,8 +163,8 @@
     <gate id="contracts">Schema and OpenAPI tests prove canonical vocabulary and removed old public vocabulary.</gate>
     <gate id="storage">Storage tests prove owner scope, collection versioning, immutable selections, run lifecycle, artifacts, retention, and diagnostics.</gate>
     <gate id="api">API tests prove complete media_item to artifact flow and rejected input diagnostics.</gate>
-    <gate id="workers">Worker tests prove sealed selection consumption and analysis_run artifact reporting.</gate>
-    <gate id="adapters">Adapter tests prove Telegram, Web, and MCP share API-owned state.</gate>
+    <gate id="workers">Worker tests prove sealed selection consumption, agent-runner transcript/text-corpus input behavior, and analysis_run artifact reporting.</gate>
+    <gate id="adapters">Adapter tests prove Telegram, Web, and MCP share API-owned state, with Web keeping normal UI language simple and non-technical.</gate>
     <gate id="runtime">Runtime smoke proves ingestion, selection, run, artifact, diagnostics, and retention behavior across services.</gate>
   </EvidencePlan>
 

@@ -53,6 +53,8 @@
     <WorkerTests>
       <required>
         <item>Worker claim loads sealed selection material through internal control-plane contracts.</item>
+        <item>Agent-runner report and research steps consume ready transcript or prepared text-corpus artifacts and do not transcribe raw speech media.</item>
+        <item>Missing transcript or text-corpus prerequisites produce diagnostics instead of silent failure or raw media processing in agent-runner.</item>
         <item>Per-item execution diagnostics are recorded without mutating the selection snapshot.</item>
         <item>Successful execution publishes artifacts under analysis_run.</item>
         <item>Partial execution can finish as partially_succeeded when policy allows and diagnostics explain the skipped or failed items.</item>
@@ -73,6 +75,8 @@
       <Web>
         <item>Inbox, collection, selection builder, run list, run detail, artifact, diagnostics, and retention views use the same public API contract.</item>
         <item>Collection edits after run creation do not change the run detail selection snapshot.</item>
+        <item>Normal Web UI labels use clear human wording for materials, groups, selection, progress, results, errors, and downloads instead of internal API vocabulary.</item>
+        <item>Internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, raw ids, and diagnostic internals appear only in explicit admin/debug contexts.</item>
       </Web>
       <MCP>
         <item>Tools add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, and get_diagnostics share API behavior with Web and Telegram.</item>

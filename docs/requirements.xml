@@ -120,7 +120,11 @@
     </Requirement>
     <Requirement id="REQ-ADAPTER-001">
       <Action>Keep Telegram, Web, and MCP as thin adapters over the same API-owned state.</Action>
-      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the owner-wide media list. Telegram status copy and action labels are Russian-first and make collection actions plus run-specific result buttons explicit to the user.</AcceptanceCriteria>
+      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the owner-wide media list. Telegram status copy and action labels are Russian-first and make collection actions plus run-specific result buttons explicit to the user. Web presents simple human wording and must not make internal names such as media_asset, selection_snapshot, analysis_run_step, channel_surface, opaque ids, or diagnostic internals load-bearing UI terms outside explicit admin/debug views.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-WORKER-AGENT-RUNNER-001">
+      <Action>Run report and research analysis from prepared transcript or text-corpus artifacts.</Action>
+      <AcceptanceCriteria>For audio, video, voice, or other speech media, transcription produces transcript artifacts before report or research execution. Agent-runner consumes ready transcript or text-corpus artifact inputs plus safe metadata, publishes report or research artifacts through analysis_run, and records a prerequisite diagnostic instead of transcribing or processing raw speech media itself when required text input is missing.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-INTERACTION-SURFACE-001">
       <Action>Persist external interaction surfaces without coupling domain entities to consumer-specific UI.</Action>
@@ -146,7 +150,8 @@
       <rule>Telegram may persist message mappings through the internal interaction surfaces API, but the API treats those mappings as opaque interaction surfaces rather than Telegram-specific domain fields.</rule>
     </Telegram>
     <Web>
-      <rule>Web is the full management surface for browsing inbox, creating collections, curating selections, launching analysis_run records, and reviewing artifacts and diagnostics.</rule>
+      <rule>Web is a simple human-facing management surface for browsing materials, creating groups, curating the current selection, launching analysis, and reviewing results, progress, errors, and downloads.</rule>
+      <rule>Web calls the public API but normal UI copy must avoid load-bearing internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, raw ids, and diagnostic internals outside explicit admin/debug views.</rule>
     </Web>
     <MCP>
       <rule>MCP exposes tool calls for add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</rule>
@@ -158,8 +163,8 @@
     <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses the target names media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, artifact, diagnostic, channel_account where needed, and channel_surface only for internal channel runtime APIs.</gate>
     <gate id="GATE-STORAGE">Storage tests prove single-user scope, channel identity boundaries, immutable selection snapshots, lifecycle transitions, idempotency, retention, diagnostics persistence, and channel surface recovery.</gate>
     <gate id="GATE-API">API tests prove adapters share the same state and old public product routes are absent from the target contract.</gate>
-    <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed selections and reports results through analysis_run artifacts and diagnostics.</gate>
-    <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions.</gate>
+    <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed selections, agent-runner consumes ready transcript/text-corpus artifacts for report and research work, and results are reported through analysis_run artifacts and diagnostics.</gate>
+    <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions; Web tests also prove normal UI copy stays human and avoids internal technical vocabulary.</gate>
     <gate id="GATE-RUNTIME">Compose or equivalent runtime proof verifies end-to-end ingestion, selection, run, artifact, diagnostics, and retention behavior.</gate>
   </EvidenceGates>
 

@@ -133,25 +133,26 @@
     </M-WORKER-TRANSCRIPTION>
 
     <M-WORKER-AGENT-RUNNER NAME="WorkerAgentRunner" TYPE="WORKER" STATUS="planned" OWNER="media-sfx">
-      <purpose>Execute report and research analysis from sealed selection material and publish artifacts plus diagnostics through analysis_run.</purpose>
+      <purpose>Execute report and research analysis from ready transcript or text-corpus artifacts and publish artifacts plus diagnostics through analysis_run.</purpose>
       <path>workers/agent-runner</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
         <export-runAnalysisHarness PURPOSE="Dispatch configured analysis harnesses behind analysis_run." />
+        <export-consumePreparedText PURPOSE="Consume transcript or prepared text-corpus artifacts instead of transcribing raw speech media." />
         <export-publishAnalysisArtifacts PURPOSE="Publish report, research, log, and diagnostic artifacts." />
       </annotations>
     </M-WORKER-AGENT-RUNNER>
 
     <M-WEB NAME="Web" TYPE="ADAPTER" STATUS="planned" OWNER="media-7wo">
-      <purpose>Provide the richest management UI over API-owned inbox, collections, selections, runs, artifacts, diagnostics, and retention.</purpose>
+      <purpose>Provide a simple human-facing management UI over API-owned materials, groups, current selection, progress, results, errors, downloads, and retention.</purpose>
       <path>apps/web</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-ADAPTERS</verification-ref>
       <annotations>
-        <view-inbox PURPOSE="Browse and filter owner media_item records." />
-        <view-selectionBuilder PURPOSE="Create immutable selections from ordered items." />
-        <view-runDetail PURPOSE="Show analysis_run lifecycle, artifacts, diagnostics, and source snapshot." />
+        <view-materials PURPOSE="Browse and filter user materials with clear human labels." />
+        <view-selectionBuilder PURPOSE="Create immutable selections from ordered items while hiding internal snapshot terminology." />
+        <view-runDetail PURPOSE="Show progress, results, errors, and downloads without load-bearing internal vocabulary." />
       </annotations>
     </M-WEB>
 
