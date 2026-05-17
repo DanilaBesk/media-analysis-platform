@@ -1,7 +1,21 @@
 <KnowledgeGraph VERSION="1.0.0">
   <Project NAME="media-analysis-platform">
-    <keywords>media_item, collection, inbox, selection, analysis_run, source, artifact, diagnostics, retention, telegram, web, mcp</keywords>
-    <annotation>Canonical GRACE graph for the final inbox-first media analysis architecture.</annotation>
+    <keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, operation_request, telegram, web, mcp</keywords>
+    <annotation>Canonical GRACE graph for the single-user channel-aware media analysis target architecture.</annotation>
+
+    <M-TARGET-ARCHITECTURE NAME="TargetArchitecture" TYPE="PLANNING" STATUS="completed" OWNER="media-7f3">
+      <purpose>Own the from-scratch target product model, table set, API operation groups, DTO/type names, app boundaries, user flows, migration stages, and verification matrix.</purpose>
+      <path>docs/architecture/single-user-channel-aware-target-architecture.md</path>
+      <depends>none</depends>
+      <verification-ref>EV-TARGET-ARCHITECTURE</verification-ref>
+      <annotations>
+        <contract-singleUserChannelAwareTarget PATH="docs/architecture/single-user-channel-aware-target-architecture.md" PURPOSE="Defines the target single-user, channel-aware architecture and supersedes older migration-era names when conflicts appear." />
+        <target-product-domain PURPOSE="media_assets, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, and retention are API-owned product state." />
+        <target-execution-domain PURPOSE="analysis_run_steps and worker internal APIs coordinate execution behind analysis_run." />
+        <target-channel-domain PURPOSE="channel_accounts, channel_surfaces, channel_surface_subjects, and channel_surface_events persist external presentation and recovery state without mutating product lifecycle." />
+        <target-operations-domain PURPOSE="operation_requests records idempotency and accepted mutation attempts for safe retries." />
+      </annotations>
+    </M-TARGET-ARCHITECTURE>
 
     <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" STATUS="planned" OWNER="media-49h">
       <purpose>Own OpenAPI and shared schemas for the public inbox-first product vocabulary.</purpose>
@@ -89,14 +103,16 @@
       </annotations>
     </M-API-EVENTS>
 
-    <M-INTERACTION-SURFACES NAME="InteractionSurfaces" TYPE="UTILITY" STATUS="planned" OWNER="media-fal">
+    <M-INTERACTION-SURFACES NAME="InteractionSurfaces" TYPE="UTILITY" STATUS="planned" OWNER="media-w9y">
       <purpose>Persist owner-scoped external interaction surfaces without adding consumer-specific fields to domain entities.</purpose>
       <path>apps/api/internal/interaction_surfaces</path>
       <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
         <contract-interactionSurfaces PATH="docs/architecture/interaction-surfaces-contract.md" PURPOSE="Define generic interaction surface storage, internal API endpoints, field semantics, owner-scope rules, Telegram usage, and implementation stages." />
-        <table-interactionSurfaces PURPOSE="Store channel, surface type, domain subject, opaque address, opaque display state, lifecycle status, version, idempotency, and lifecycle timestamps." />
+        <table-interactionSurfaces PURPOSE="Store owner, channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, idempotency, and lifecycle timestamps." />
+        <table-interactionSurfaceSubjects PURPOSE="Store surface-to-domain-subject links with subject type, subject id, and subject role while enforcing one primary subject per surface." />
+        <table-interactionSurfaceEvents PURPOSE="Store append-only operational history for created, upserted, address changed, display state replaced, superseded, deleted, failed, and recovered events." />
         <internal-upsertSurface PURPOSE="Allow channel runtimes to create or update durable external interaction surfaces idempotently." />
         <internal-listSurfaces PURPOSE="Allow channel runtimes to recover active external surfaces after restart." />
         <internal-supersedeSurface PURPOSE="Allow channel runtimes to retire stale or uneditable external surfaces without deleting domain history." />
@@ -165,6 +181,15 @@
     </M-MCP-ADAPTER>
 
     <CrossLinks>
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-CONTRACTS" relation="defines-target-contract-vocabulary-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-API-STORAGE" relation="defines-target-table-set-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-API-DOMAIN" relation="defines-product-boundaries-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-INTERACTION-SURFACES" relation="renames-and-generalizes-channel-surface-boundary-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-TELEGRAM-ADAPTER" relation="defines-channel-runtime-responsibility-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WEB" relation="defines-management-ui-responsibility-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-MCP-ADAPTER" relation="defines-tool-contract-responsibility-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-TRANSCRIPTION" relation="defines-step-and-snapshot-execution-contract-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-AGENT-RUNNER" relation="defines-step-and-snapshot-execution-contract-for" />
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />
       <CrossLink from="M-API-DOMAIN" to="M-API-STORAGE" relation="persists-product-state-through" />
       <CrossLink from="M-API-DOMAIN" to="M-API-QUEUE" relation="schedules-internal-execution-through" />

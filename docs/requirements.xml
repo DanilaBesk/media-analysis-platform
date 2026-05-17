@@ -1,15 +1,25 @@
 <RequirementsAnalysis VERSION="1.0.0">
   <Project>
     <name>media-analysis-platform</name>
-    <annotation>GRACE requirements source of truth for the final inbox-first media analysis product model.</annotation>
-    <keywords>media_item, collection, inbox, selection, analysis_run, source, artifact, telegram, web, mcp, postgres, minio, redis, workers</keywords>
+    <annotation>GRACE requirements source of truth for the single-user channel-aware target media analysis product model.</annotation>
+    <keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, operation_request, telegram, web, mcp, postgres, minio, redis, workers</keywords>
   </Project>
 
   <Purpose>
-    <purpose-1>Define the canonical product architecture for accumulating media first and running analysis only from an explicit immutable selection.</purpose-1>
-    <purpose-2>Replace the former public product wording centered on immediate execution requests and grouped pre-run submission state.</purpose-2>
-    <purpose-3>Give later Beads a stable requirements target for contracts, storage, orchestration, workers, Web, Telegram, MCP, diagnostics, retention, and evidence gates.</purpose-3>
+    <purpose-1>Define the target product architecture for a single human user who can work through Telegram, Web, MCP, and future channels.</purpose-1>
+    <purpose-2>Keep API-owned product state separate from channel presentation state and worker execution state.</purpose-2>
+    <purpose-3>Give later Beads a stable requirements target for contracts, storage, orchestration, workers, Web, Telegram, MCP, diagnostics, retention, channel recovery, and evidence gates.</purpose-3>
   </Purpose>
+
+  <TargetArchitectureReset>
+    <document>docs/architecture/single-user-channel-aware-target-architecture.md</document>
+    <bead id="media-7f3">Defines the from-scratch target architecture, table set, API operation groups, DTO/type naming, app boundaries, user flows, migration stages, and verification matrix.</bead>
+    <rule>The product currently has one human user. Do not introduce owners, workspaces, workspace members, or team authorization until a real multi-user requirement exists.</rule>
+    <rule>Channel identity is modeled through channel_accounts and channel_surfaces; channels can store presentation and recovery state but cannot own product lifecycle.</rule>
+    <rule>The target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, and operation_request.</rule>
+    <rule>Existing implementation-era names such as media_item, source, selection, analysis_run_task, owner, and interaction_surface remain migration context only when they appear below. New target work must prefer the target vocabulary unless a compatibility packet explicitly says otherwise.</rule>
+    <rule>If any older GRACE section conflicts with the target architecture document, the target architecture document wins until the corresponding migration packet rewrites the older section.</rule>
+  </TargetArchitectureReset>
 
   <CanonicalVocabulary>
     <term name="media_item">A durable API-owned record for one user-provided input such as text, URL, file, photo, image, audio, voice, video, or document.</term>
@@ -113,7 +123,7 @@
     </Requirement>
     <Requirement id="REQ-INTERACTION-SURFACE-001">
       <Action>Persist external interaction surfaces without coupling domain entities to consumer-specific UI.</Action>
-      <AcceptanceCriteria>Interaction surfaces store owner-scoped channel, surface type, domain subject, opaque address, opaque display state, lifecycle status, version, and timestamps through an internal API. Domain tables must not gain Telegram-specific or consumer-specific message fields, and interaction surface display state must not alter media, collection, selection, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
+      <AcceptanceCriteria>Interaction surfaces store owner-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. Subject links are stored separately with subject type, subject id, and subject role; event history is append-only. Domain tables must not gain Telegram-specific or consumer-specific message fields, and interaction surface display state must not alter media, collection, selection, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
     </Requirement>
   </FunctionalRequirements>
 
@@ -143,8 +153,9 @@
   </AdapterBoundaries>
 
   <EvidenceGates>
-    <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses media_item, collection/inbox, selection, analysis_run, source, and artifact only.</gate>
-    <gate id="GATE-STORAGE">Storage tests prove owner scope, immutable selections, lifecycle transitions, retention, and diagnostics persistence.</gate>
+    <gate id="GATE-TARGET-ARCHITECTURE">Planning proof shows the target table set, API operations, DTO/type names, app boundaries, user flows, implementation stages, and test matrix are all covered by docs/architecture/single-user-channel-aware-target-architecture.md.</gate>
+    <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses the target names media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, artifact, diagnostic, channel_account where needed, and channel_surface only for internal channel runtime APIs.</gate>
+    <gate id="GATE-STORAGE">Storage tests prove single-user scope, channel identity boundaries, immutable selection snapshots, lifecycle transitions, idempotency, retention, diagnostics persistence, and channel surface recovery.</gate>
     <gate id="GATE-API">API tests prove adapters share the same state and old public product routes are absent from the target contract.</gate>
     <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed selections and reports results through analysis_run artifacts and diagnostics.</gate>
     <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions.</gate>
@@ -168,6 +179,8 @@
     <bead id="media-lgf" status="completed">Telegram selection and transcription card UX contracts are documented as a durable architecture plan.</bead>
     <bead id="media-cgr" status="completed">Generic external surface API contracts are documented without coupling domain state to Telegram-specific UI needs.</bead>
     <bead id="media-fal" status="completed">Interaction Surfaces terminology refines the external surface contract around channel, surface type, address, display state, and lifecycle status.</bead>
+    <bead id="media-w9y" status="completed">Interaction Surfaces table design is finalized as surfaces, subject links, and append-only events.</bead>
+    <bead id="media-7f3" status="completed">Single-user channel-aware target architecture is fixed as the new from-scratch product plan, with child Beads for implementation execution.</bead>
   </BeadsTrace>
 
   <NonGoals>

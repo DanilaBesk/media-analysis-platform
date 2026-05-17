@@ -22,7 +22,7 @@ The design goal is:
 
 An interaction surface is a durable record saying:
 
-> Channel X rendered subject Y as external surface Z.
+> Channel X rendered one or more API-owned subjects as external surface Z.
 
 The API stores the mapping. The channel owns the meaning of the external reference and the visual rendering.
 
@@ -32,17 +32,23 @@ Example:
 {
   "channel": "telegram",
   "surface_type": "analysis_task_surface",
-  "subject_type": "analysis_run",
-  "subject_id": "run-123",
+  "surface_key": "analysis_run:run-123",
   "address": {
     "chat_id": "10",
     "thread_id": null,
     "message_id": "9010"
-  }
+  },
+  "subjects": [
+    {
+      "subject_type": "analysis_run",
+      "subject_id": "run-123",
+      "subject_role": "primary"
+    }
+  ]
 }
 ```
 
-The API does not need to know that this is a Telegram message. It only knows that an external interaction surface exists for a subject and owner.
+The API does not need to know that this is a Telegram message. It only knows that an external interaction surface exists for owner-scoped subjects.
 
 ## Naming Rationale
 
@@ -84,7 +90,7 @@ Product domain state is valid even when no external interaction surface exists.
 Owns only the durable representation link:
 
 ```text
-domain subject -> channel surface address
+domain subject set -> channel surface address
 ```
 
 It can validate owner scope and lifecycle, but it must not interpret the rendered text, buttons, Telegram callback payloads, or product lifecycle decisions.
@@ -169,32 +175,47 @@ They can share one database and one API service, but their contracts must remain
 
 ## Data Model
 
-Recommended table:
+The API provides durable intermediate storage for channel runtimes through three tables:
+
+1. `interaction_surfaces` stores the external surface record.
+2. `interaction_surface_subjects` links a surface to API-owned domain subjects.
+3. `interaction_surface_events` keeps an append-only operational history for recovery and diagnostics.
+
+Do not add Telegram-specific tables or fields to domain entities. The surface layer is generic storage for consumers, but the API still owns validation, lifecycle, versioning, and owner-scope consistency.
+
+### interaction_surfaces
+
+One row represents one external surface: a Telegram message, Slack message, email, Web panel, or future channel surface.
 
 ```sql
 CREATE TABLE interaction_surfaces (
-  id TEXT PRIMARY KEY,
+  id uuid PRIMARY KEY,
   owner_type TEXT NOT NULL,
   owner_id TEXT NOT NULL,
   tenant_id TEXT,
 
   channel TEXT NOT NULL,
   surface_type TEXT NOT NULL,
-
-  subject_type TEXT NOT NULL,
-  subject_id TEXT NOT NULL,
+  surface_key TEXT NOT NULL,
 
   address JSONB NOT NULL DEFAULT '{}'::jsonb,
+  address_fingerprint TEXT,
   display_state JSONB NOT NULL DEFAULT '{}'::jsonb,
 
   lifecycle_status TEXT NOT NULL,
   version BIGINT NOT NULL DEFAULT 1,
   idempotency_key TEXT,
 
-  created_at TIMESTAMPTZ NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_rendered_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
-  deleted_at TIMESTAMPTZ
+  deleted_at TIMESTAMPTZ,
+
+  CONSTRAINT interaction_surfaces_status_chk CHECK (
+    lifecycle_status IN ('active', 'superseded', 'deleted', 'failed')
+  ),
+  CONSTRAINT interaction_surfaces_version_positive_chk CHECK (version >= 1)
 );
 ```
 
@@ -210,33 +231,133 @@ failed
 Recommended uniqueness:
 
 ```sql
-CREATE UNIQUE INDEX interaction_surfaces_identity_idx
+CREATE UNIQUE INDEX interaction_surfaces_active_key_idx
 ON interaction_surfaces (
   owner_type,
   owner_id,
   COALESCE(tenant_id, ''),
   channel,
   surface_type,
-  subject_type,
-  subject_id,
-  COALESCE(idempotency_key, '')
+  surface_key
 )
+WHERE lifecycle_status = 'active' AND deleted_at IS NULL;
+```
+
+Recommended duplicate-address protection:
+
+```sql
+CREATE UNIQUE INDEX interaction_surfaces_active_address_idx
+ON interaction_surfaces (
+  owner_type,
+  owner_id,
+  COALESCE(tenant_id, ''),
+  channel,
+  address_fingerprint
+)
+WHERE address_fingerprint IS NOT NULL
+  AND lifecycle_status = 'active'
+  AND deleted_at IS NULL;
 ```
 
 Recommended active lookup index:
 
 ```sql
-CREATE INDEX interaction_surfaces_active_idx
+CREATE INDEX interaction_surfaces_owner_channel_idx
 ON interaction_surfaces (
   owner_type,
   owner_id,
-  COALESCE(tenant_id, ''),
+  tenant_id,
   channel,
-  surface_type,
+  lifecycle_status,
+  updated_at DESC
+);
+```
+
+### interaction_surface_subjects
+
+This table links an external surface to the domain subjects it represents. It is separate because one visible surface can involve multiple subjects. For example, a task card primarily represents an `analysis_run`, but it also refers to a `selection`; a result file message primarily represents an `artifact`, but it also belongs to an `analysis_run`.
+
+```sql
+CREATE TABLE interaction_surface_subjects (
+  surface_id uuid NOT NULL REFERENCES interaction_surfaces(id) ON DELETE CASCADE,
+
+  subject_type TEXT NOT NULL,
+  subject_id uuid NOT NULL,
+  subject_role TEXT NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  PRIMARY KEY (surface_id, subject_role, subject_type, subject_id),
+  CONSTRAINT interaction_surface_subjects_type_chk CHECK (
+    subject_type IN ('collection', 'selection', 'analysis_run', 'artifact', 'diagnostic')
+  ),
+  CONSTRAINT interaction_surface_subjects_role_chk CHECK (
+    subject_role IN ('primary', 'context', 'result', 'diagnostic', 'navigation_target')
+  )
+);
+```
+
+Recommended lookup index:
+
+```sql
+CREATE INDEX interaction_surface_subject_lookup_idx
+ON interaction_surface_subjects (
   subject_type,
-  subject_id
-)
-WHERE lifecycle_status='active' AND deleted_at IS NULL;
+  subject_id,
+  subject_role
+);
+```
+
+Recommended one-primary-subject rule:
+
+```sql
+CREATE UNIQUE INDEX interaction_surface_one_primary_subject_idx
+ON interaction_surface_subjects (surface_id)
+WHERE subject_role = 'primary';
+```
+
+### interaction_surface_events
+
+This table is append-only operational history. It is not required to render the UI, but it is valuable for restart recovery, debugging, duplicate-send investigations, and future observability.
+
+```sql
+CREATE TABLE interaction_surface_events (
+  id uuid PRIMARY KEY,
+  surface_id uuid REFERENCES interaction_surfaces(id) ON DELETE SET NULL,
+
+  event_type TEXT NOT NULL,
+  reason TEXT,
+
+  previous_version BIGINT,
+  next_version BIGINT,
+
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CONSTRAINT interaction_surface_events_type_chk CHECK (
+    event_type IN (
+      'created',
+      'upserted',
+      'address_changed',
+      'display_state_replaced',
+      'superseded',
+      'deleted',
+      'failed',
+      'recovered'
+    )
+  )
+);
+```
+
+Recommended event index:
+
+```sql
+CREATE INDEX interaction_surface_events_surface_created_idx
+ON interaction_surface_events (surface_id, created_at ASC);
 ```
 
 ## Field Semantics
@@ -273,22 +394,19 @@ subject_artifact_surface
 
 Values may be channel-specific when needed, but they must not require API branching.
 
-### subject_type / subject_id
+### surface_key
 
-Points at the domain subject being represented.
+Stable key within owner, channel, and surface type. It prevents duplicate active surfaces for the same logical purpose while allowing the external address to change after a resend.
 
-Recommended subject types:
+Recommended shapes:
 
 ```text
-collection
-selection
-analysis_run
-artifact
-diagnostic
-owner
+current_materials
+analysis_run:{analysis_run_id}
+artifact:{artifact_id}:result
 ```
 
-The API validates owner scope where it can. For example, an `analysis_run` subject must belong to the owner.
+The API treats `surface_key` as a string, but channel runtimes should keep it deterministic and idempotent.
 
 ### address
 
@@ -324,6 +442,22 @@ Email example:
 
 The API stores this JSON but does not interpret transport-specific fields.
 
+### address_fingerprint
+
+Normalized fingerprint of `address`, computed either by the API or supplied by a trusted channel runtime according to the API contract.
+
+Purpose:
+
+- prevent two active surfaces from claiming the same external message;
+- allow address lookup without indexing arbitrary JSON shape;
+- avoid leaking channel-specific logic into domain entities.
+
+Telegram fingerprint example:
+
+```text
+telegram:chat:10:thread:none:message:9010
+```
+
 ### display_state
 
 Opaque channel-owned metadata for recovery and optimistic rendering.
@@ -338,7 +472,85 @@ Telegram example:
 }
 ```
 
-The API may enforce that `display_state` is valid JSON, but not its internal schema.
+The API may enforce that `display_state` is valid JSON, but not its internal schema. MVP update semantics are replace-only with `expected_version`; merge semantics can be added later if there is a real need.
+
+### subjects
+
+Subjects point at API-owned domain records represented by a surface.
+
+Recommended subject types:
+
+```text
+collection
+selection
+analysis_run
+artifact
+diagnostic
+```
+
+Recommended subject roles:
+
+```text
+primary
+context
+result
+diagnostic
+navigation_target
+```
+
+The API validates owner scope for every known subject. For example, an `analysis_run` subject must belong to the same owner as the surface. A surface must have exactly one `primary` subject.
+
+Examples:
+
+Current materials card:
+
+```text
+surface_type = current_materials_panel
+surface_key = current_materials
+subjects:
+  collection / inbox_collection_id / primary
+```
+
+Task card:
+
+```text
+surface_type = analysis_task_surface
+surface_key = analysis_run:{analysis_run_id}
+subjects:
+  analysis_run / analysis_run_id / primary
+  selection / selection_id / context
+```
+
+Result file message:
+
+```text
+surface_type = result_artifact_surface
+surface_key = artifact:{artifact_id}:result
+subjects:
+  artifact / artifact_id / primary
+  analysis_run / analysis_run_id / context
+```
+
+### lifecycle_status
+
+The lifecycle of the surface record itself, not the lifecycle of the represented domain subject.
+
+Allowed values:
+
+```text
+active
+superseded
+deleted
+failed
+```
+
+`active` means the channel runtime may try to edit or use the address.
+
+`superseded` means the surface was replaced by another surface, usually because the external message could no longer be edited.
+
+`deleted` means the API should not use this record for active recovery.
+
+`failed` means the surface exists as an attempted representation, but the channel runtime could not create or refresh it.
 
 ## Internal API Contract
 
@@ -367,12 +579,23 @@ Request:
   },
   "channel": "telegram",
   "surface_type": "analysis_task_surface",
-  "subject_type": "analysis_run",
-  "subject_id": "run-123",
+  "surface_key": "analysis_run:run-123",
   "address": {
     "chat_id": "10",
     "message_id": "9010"
   },
+  "subjects": [
+    {
+      "subject_type": "analysis_run",
+      "subject_id": "run-123",
+      "subject_role": "primary"
+    },
+    {
+      "subject_type": "selection",
+      "subject_id": "selection-777",
+      "subject_role": "context"
+    }
+  ],
   "display_state": {
     "last_rendered_status": "queued"
   },
@@ -388,12 +611,23 @@ Response:
     "surface_id": "surface-1",
     "channel": "telegram",
     "surface_type": "analysis_task_surface",
-    "subject_type": "analysis_run",
-    "subject_id": "run-123",
+    "surface_key": "analysis_run:run-123",
     "address": {
       "chat_id": "10",
       "message_id": "9010"
     },
+    "subjects": [
+      {
+        "subject_type": "analysis_run",
+        "subject_id": "run-123",
+        "subject_role": "primary"
+      },
+      {
+        "subject_type": "selection",
+        "subject_id": "selection-777",
+        "subject_role": "context"
+      }
+    ],
     "display_state": {
       "last_rendered_status": "queued"
     },
@@ -406,10 +640,10 @@ Response:
 ### Get Active Surface
 
 ```http
-GET /internal/v1/interaction-surfaces/active?channel=telegram&surface_type=analysis_task_surface&subject_type=analysis_run&subject_id=run-123&owner_type=telegram&owner_id=chat%3A10%3Auser%3A7
+GET /internal/v1/interaction-surfaces/active?channel=telegram&surface_type=analysis_task_surface&surface_key=analysis_run%3Arun-123&owner_type=telegram&owner_id=chat%3A10%3Auser%3A7
 ```
 
-Returns the latest active surface for that owner, channel, surface type, and subject.
+Returns the active surface for that owner, channel, surface type, and surface key.
 
 ### List Surfaces
 
@@ -418,6 +652,12 @@ GET /internal/v1/interaction-surfaces?channel=telegram&owner_type=telegram&owner
 ```
 
 Useful for channel restart recovery.
+
+Subject-scoped lookup:
+
+```http
+GET /internal/v1/interaction-surfaces?subject_type=analysis_run&subject_id=run-123&subject_role=primary&owner_type=telegram&owner_id=chat%3A10%3Auser%3A7
+```
 
 ### Supersede Surface
 
@@ -454,7 +694,7 @@ Request:
 }
 ```
 
-The patch can either replace `display_state` or merge it. MVP should choose replacement for simpler deterministic tests.
+This replaces `display_state` when `expected_version` matches. Merge semantics are deferred until a concrete channel runtime needs them.
 
 ## Telegram Usage
 
@@ -467,8 +707,9 @@ Surface:
 ```text
 channel = telegram
 surface_type = current_materials_panel
-subject_type = collection
-subject_id = inbox collection id
+surface_key = current_materials
+subjects:
+  collection / inbox_collection_id / primary
 address = { chat_id, thread_id, message_id }
 ```
 
@@ -485,8 +726,10 @@ Surface:
 ```text
 channel = telegram
 surface_type = analysis_task_surface
-subject_type = analysis_run
-subject_id = analysis_run_id
+surface_key = analysis_run:{analysis_run_id}
+subjects:
+  analysis_run / analysis_run_id / primary
+  selection / selection_id / context
 address = { chat_id, thread_id, message_id }
 ```
 
@@ -503,8 +746,10 @@ Surface:
 ```text
 channel = telegram
 surface_type = result_artifact_surface
-subject_type = artifact
-subject_id = transcript artifact id
+surface_key = artifact:{artifact_id}:result
+subjects:
+  artifact / artifact_id / primary
+  analysis_run / analysis_run_id / context
 address = { chat_id, thread_id, message_id }
 display_state = { analysis_run_id }
 ```
@@ -522,7 +767,11 @@ Every interaction surface is owner-scoped.
 Rules:
 
 - channels can only create surfaces for owners they are authorized to act as;
-- subject owner must match surface owner when subject type is owner-scoped;
+- every known subject must match surface owner scope;
+- a surface must have exactly one `primary` subject;
+- the API stores `display_state`, but does not interpret channel button layout, rendered copy, or callback payloads;
+- `surface_type` is stored as `TEXT` with API validation; do not use a database enum for MVP;
+- `display_state` updates are replace-only and version-guarded for MVP;
 - surface addresses are not public user-facing data;
 - surface addresses may contain chat or provider identifiers and must be treated as operational metadata;
 - public APIs must not expose interaction surface records to unrelated clients.
@@ -536,7 +785,8 @@ Initial policy:
 - active current-materials surfaces live until superseded or deleted;
 - task-card surfaces live as long as their `analysis_run` history is retained;
 - result-file surfaces live as long as their artifact history is retained;
-- superseded surfaces can be pruned after an operational retention window.
+- superseded surfaces can be pruned after an operational retention window;
+- surface events follow the same retention as their parent surface unless audit policy requires longer diagnostic retention.
 
 The exact retention window should be configured later with the rest of retention policy.
 
@@ -550,7 +800,10 @@ The interaction surface layer should emit stable diagnostics or logs for:
 - channel recovery list;
 - stale expected version;
 - invalid subject type;
-- invalid surface lifecycle_status.
+- invalid surface lifecycle_status;
+- duplicate active surface key;
+- duplicate active address fingerprint;
+- display state version conflict.
 
 Diagnostics should not include full secret URLs, bot tokens, or large opaque payloads.
 
@@ -570,9 +823,12 @@ Files likely affected:
 
 Verification:
 
-- owner-scoped upsert/get/list/supersede tests;
+- owner-scoped upsert/get/list/supersede/display-state tests;
 - subject owner mismatch tests;
 - idempotency tests;
+- duplicate active surface key tests;
+- duplicate active address fingerprint tests;
+- event append tests;
 - XML docs validation.
 
 Non-goals:
@@ -640,10 +896,15 @@ Together:
 - interaction surface contract = durable channel mapping;
 - domain API = product state and execution lifecycle.
 
-## Open Questions
+## Fixed Design Decisions
 
-- Should `surface_type` be a controlled enum or channel-defined string with validation only for length and characters?
-- Should `display_state` replacement or merge semantics be used for PATCH?
-- Should interaction surface records be stored in the main API database only, or can channel runtimes use this API while internal storage is still Postgres-owned?
-- Which retention window should apply to superseded surfaces?
-- Should Web use interaction surfaces later, or should Web keep UI state purely client-side until a concrete need appears?
+- `surface_type` is stored as `TEXT`; the API validates known core values and string shape, but the database does not use a PostgreSQL enum.
+- `display_state` updates replace the full JSON document and require `expected_version`.
+- Interaction surface records live in the main API database. Channel runtimes must not keep a separate durable store for these mappings.
+- Superseded surfaces remain queryable for operational history and are pruned by retention policy later.
+- Web does not use interaction surfaces until there is a concrete server-side recovery or sharing need; client-only UI state remains outside this contract.
+
+## Remaining Open Questions
+
+- What exact retention window should apply to superseded surfaces and surface events?
+- Should address fingerprints be computed only by the API, or can trusted channel runtimes submit them when the API cannot normalize a future channel address?

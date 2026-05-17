@@ -1,12 +1,31 @@
 <DevelopmentPlan VERSION="1.0.0">
   <ArchitectureNotes>
-    <objective>Converge the platform on the final inbox-first product model: media_item to collection/inbox to immutable selection to analysis_run to artifacts.</objective>
+    <objective>Converge the platform on the single-user channel-aware target model: media_asset to collection/inbox to immutable selection_snapshot to analysis_run to artifacts, with channel surfaces kept outside product lifecycle.</objective>
     <document-role>GRACE execution backbone for bottom-up implementation after media-36a.</document-role>
     <non-goal>Do not preserve old public product architecture, grouped submission modes, or route alias layers as the target state.</non-goal>
     <risk-1>Contract drift can reintroduce immediate-execution wording and split adapters away from one API-owned product model.</risk-1>
     <risk-2>Mutable collections can accidentally leak into already started analysis unless selections are immutable snapshots.</risk-2>
     <risk-3>Rejected media can disappear unless diagnostics are modeled before adapter work.</risk-3>
   </ArchitectureNotes>
+
+  <TargetArchitectureReset bead="media-7f3">
+    <document>docs/architecture/single-user-channel-aware-target-architecture.md</document>
+    <decision>The product is single-user at this stage. Workspaces, workspace members, owners tables, and team authorization are deferred until a real product requirement appears.</decision>
+    <decision>Channels are durable integration identities and presentation surfaces, not product owners. API tables store channel_accounts and channel_surfaces so Telegram, Web, and MCP can recover UI state after restarts without owning business state.</decision>
+    <decision>The target storage model uses channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_events, artifacts, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</decision>
+    <decision>Existing current implementation names may survive only inside explicit compatibility or migration stages. Target contracts and new code should use the target names.</decision>
+  </TargetArchitectureReset>
+
+  <TargetRebuildStages>
+    <stage order="0" name="Architecture Freeze">Make docs, Beads, and GRACE agree on the target model.</stage>
+    <stage order="1" name="Contract And Type Rename">Introduce target DTO names and compatibility policy before runtime changes.</stage>
+    <stage order="2" name="Storage Migration">Add or rebuild target tables and backfill existing records.</stage>
+    <stage order="3" name="API Orchestration">Make API the only owner of product state, channel surfaces, idempotency, diagnostics, and retention.</stage>
+    <stage order="4" name="Telegram Migration">Move Telegram to channel_accounts, channel_surfaces, target callbacks, and restart recovery.</stage>
+    <stage order="5" name="Workers Migration">Move workers to analysis_run_steps and sealed selection_snapshots.</stage>
+    <stage order="6" name="Web And MCP Migration">Move Web and MCP to target vocabulary and operations.</stage>
+    <stage order="7" name="Runtime And Coverage Closure">Prove every user flow, table invariant, API operation, worker path, and channel recovery path.</stage>
+  </TargetRebuildStages>
 
   <GuidingArchitecture>
     <principle>API owns durable product state and all owner-scoped authorization.</principle>
@@ -137,6 +156,7 @@
   </AdapterPlan>
 
   <EvidencePlan>
+    <gate id="target-architecture">Docs prove from-scratch architecture coverage for tables, operations, schemas, types, all apps, and verification.</gate>
     <gate id="contracts">Schema and OpenAPI tests prove canonical vocabulary and removed old public vocabulary.</gate>
     <gate id="storage">Storage tests prove owner scope, collection versioning, immutable selections, run lifecycle, artifacts, retention, and diagnostics.</gate>
     <gate id="api">API tests prove complete media_item to artifact flow and rejected input diagnostics.</gate>
