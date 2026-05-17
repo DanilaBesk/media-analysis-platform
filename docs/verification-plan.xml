@@ -7,6 +7,7 @@
     <retention-policy>Retention checks must prove metadata, source bodies, artifacts, diagnostics, and selection snapshots follow their separate lifecycle rules.</retention-policy>
     <coverage-policy>Coverage closure is reported per surface with the metric each tool can actually emit; missing metrics remain explicit gaps and do not collapse into a fake repo-wide 100% claim.</coverage-policy>
     <target-coverage-policy>For the target rebuild, 100% means every declared table invariant, API operation, DTO compatibility rule, user flow, worker step, channel surface recovery path, and diagnostic failure mode has explicit automated or runtime proof.</target-coverage-policy>
+    <data-reset-policy>The current local database is disposable. Verification should prove clean schema reset/recreate, deterministic seed fixtures, and target behavior from fresh data; it must not require preserving or backfilling current local rows.</data-reset-policy>
     <redaction>Never assert on raw secrets, raw bot tokens, private object URLs, or full prompt payloads.</redaction>
   </GlobalPolicy>
 

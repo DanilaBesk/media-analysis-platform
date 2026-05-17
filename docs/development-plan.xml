@@ -13,13 +13,14 @@
     <decision>The product is single-user at this stage. Workspaces, workspace members, owners tables, and team authorization are deferred until a real product requirement appears.</decision>
     <decision>Channels are durable integration identities and presentation surfaces, not product owners. API tables store channel_accounts and channel_surfaces so Telegram, Web, and MCP can recover UI state after restarts without owning business state.</decision>
     <decision>The target storage model uses channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_events, artifacts, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</decision>
+    <decision>The current local database is disposable for this rebuild. Do not preserve rows, backfill current records, or prove no data loss for current local data unless a future production-data requirement is explicitly approved.</decision>
     <decision>Existing current implementation names may survive only inside explicit compatibility or migration stages. Target contracts and new code should use the target names.</decision>
   </TargetArchitectureReset>
 
   <TargetRebuildStages>
     <stage order="0" name="Architecture Freeze">Make docs, Beads, and GRACE agree on the target model.</stage>
     <stage order="1" name="Contract And Type Rename">Introduce target DTO names and compatibility policy before runtime changes.</stage>
-    <stage order="2" name="Storage Migration">Add or rebuild target tables and backfill existing records.</stage>
+    <stage order="2" name="Storage Reset And Rebuild">Delete/recreate or rebuild target tables from an empty local database; provide deterministic seed/fixture setup instead of preserving current rows.</stage>
     <stage order="3" name="API Orchestration">Make API the only owner of product state, channel surfaces, idempotency, diagnostics, and retention.</stage>
     <stage order="4" name="Telegram Migration">Move Telegram to channel_accounts, channel_surfaces, target callbacks, and restart recovery.</stage>
     <stage order="5" name="Workers Migration">Move workers to analysis_run_steps and sealed selection_snapshots.</stage>

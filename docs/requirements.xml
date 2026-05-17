@@ -17,6 +17,7 @@
     <rule>The product currently has one human user. Do not introduce owners, workspaces, workspace members, or team authorization until a real multi-user requirement exists.</rule>
     <rule>Channel identity is modeled through channel_accounts and channel_surfaces; channels can store presentation and recovery state but cannot own product lifecycle.</rule>
     <rule>The target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, and operation_request.</rule>
+    <rule>The current local database is disposable for the target rebuild. Implementations may delete, recreate, truncate, or rebuild current schema/data and must not spend effort preserving or backfilling existing local rows unless a future production-data requirement is approved.</rule>
     <rule>Existing implementation-era names such as media_item, source, selection, analysis_run_task, owner, and interaction_surface remain migration context only when they appear below. New target work must prefer the target vocabulary unless a compatibility packet explicitly says otherwise.</rule>
     <rule>If any older GRACE section conflicts with the target architecture document, the target architecture document wins until the corresponding migration packet rewrites the older section.</rule>
   </TargetArchitectureReset>

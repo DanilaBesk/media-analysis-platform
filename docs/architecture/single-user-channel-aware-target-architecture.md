@@ -18,6 +18,23 @@ The product assumption is deliberately simple:
 
 The goal is to minimize bad architectural decisions before implementation. This plan is intentionally broader than the current code state and should guide a staged rebuild of all apps, operations, schemas, types, workers, and tests.
 
+## Data Reset Policy
+
+The current local database is not a product source of truth and does not need to be preserved.
+
+Implementation may delete, recreate, truncate, or fully rebuild the current database schema and data while moving to the target architecture. Do not spend implementation effort on preserving existing rows, backfilling historical local records, or proving no data loss for the current database.
+
+What must be preserved is the product contract, not the current local data:
+
+- target table semantics;
+- clean schema initialization from an empty database;
+- deterministic seed or fixture data for tests;
+- restart-safe channel recovery after the new schema exists;
+- artifact/object storage behavior for new runs created under the target model;
+- clear reset/bootstrap instructions for local development.
+
+If future production data preservation becomes a real requirement, it must be planned as a separate migration packet with its own acceptance criteria. It is explicitly out of scope for this target rebuild.
+
 ## FPF Framing
 
 The architecture uses explicit bounded contexts. A word is valid only inside its context.
@@ -1130,9 +1147,9 @@ Verification:
 - stale public vocabulary tests;
 - adapters still pass with compatibility layer until migrated.
 
-### Stage 2: Storage Migration
+### Stage 2: Storage Reset And Rebuild
 
-Goal: migrate database toward target tables.
+Goal: rebuild the database toward target tables without preserving current local data.
 
 Work:
 
@@ -1140,18 +1157,18 @@ Work:
 - add `operation_requests`;
 - add `stored_objects`;
 - add `media_assets`;
-- rename or rebuild `selections` to `selection_snapshots`;
-- rename or rebuild `analysis_run_tasks` to `analysis_run_steps`;
+- rebuild `selections` as `selection_snapshots` or replace the table entirely;
+- rebuild `analysis_run_tasks` as `analysis_run_steps` or replace the table entirely;
 - add `channel_surfaces`, `channel_surface_subjects`, `channel_surface_events`;
-- backfill from current records.
+- provide reset/bootstrap instructions for an empty local database.
 
 Verification:
 
-- migration up/down or forward-only rollback plan;
+- schema reset/recreate proof;
 - storage owner/single-user invariants;
 - snapshot immutability tests;
 - channel surface uniqueness tests;
-- no data loss for existing media/runs/artifacts.
+- deterministic seed/fixture proof for tests.
 
 ### Stage 3: API Orchestration
 
@@ -1257,7 +1274,7 @@ Verification:
 
 | Area | Required Proof |
 | --- | --- |
-| Database | Migration tests, constraints, indexes, backfill proof. |
+| Database | Schema reset/recreate proof, constraints, indexes, deterministic seed fixtures. |
 | Storage | CRUD, owner/single-user scope, idempotency, version conflicts. |
 | API | Route success, validation errors, conflict errors, pagination, empty arrays. |
 | Telegram | User flows, callback parsing, restart recovery, surface supersede, result delivery. |
@@ -1272,34 +1289,55 @@ Verification:
 
 ## Beads Execution Decomposition
 
-Created Beads after this planning packet:
+The executable Beads graph follows the `plan-to-beads` three-stage shape. The source plan remains this document; Beads are execution handles, not a second source of truth.
 
-1. `media-7f3.1`: Target contract vocabulary and DTO compatibility
-   - update contracts and DTO names;
-   - define compatibility policy.
+### Implementation Epic
 
-2. `media-7f3.2`: Target storage migration for media assets and channels
-   - create target migrations;
-   - backfill old tables;
-   - prove constraints.
+`media-7f3.9`: Implementation Epic: single-user channel-aware target architecture.
 
-3. `media-7f3.3`: Target API services and operation boundaries
-   - implement services and routes for target operations.
+Tasks:
 
-4. `media-7f3.4`: Implement channel surfaces and restart recovery
-   - implement channel surface storage/API and Telegram recovery.
+1. `media-7f3.9.1`: Implement target contracts and compatibility policy.
+2. `media-7f3.9.2`: Implement target storage reset/rebuild and repositories.
+3. `media-7f3.9.3`: Implement target API domain services and operations.
+4. `media-7f3.9.4`: Implement channel surfaces and restart recovery.
+5. `media-7f3.9.5`: Migrate Telegram bot to target materials and run-card flow.
+6. `media-7f3.9.6`: Migrate workers to analysis_run_steps over selection_snapshots.
+7. `media-7f3.9.7`: Migrate Web and MCP to target vocabulary and API operations.
+8. `media-7f3.9.8`: Implementation cleanup and GRACE artifact refresh.
 
-5. `media-7f3.5`: Migrate Telegram to target materials and run cards
-   - move Telegram bot to target API and surfaces.
+### Full Test Coverage Epic
 
-6. `media-7f3.6`: Migrate workers to analysis run steps
-   - replace task language with step contracts.
+`media-7f3.10`: Full Test Coverage Epic: target architecture proof.
 
-7. `media-7f3.7`: Migrate Web and MCP to target vocabulary
-   - migrate Web and MCP to target vocabulary.
+Tasks:
 
-8. `media-7f3.8`: Target runtime and coverage closure
-   - full runtime proof and coverage closure.
+1. `media-7f3.10.1`: Build target coverage matrix and deterministic test environment.
+2. `media-7f3.10.2`: Add storage and API coverage for target contracts.
+3. `media-7f3.10.3`: Add Telegram, worker, Web, and MCP E2E coverage.
+4. `media-7f3.10.4`: Wire coverage inventory and no-legacy regression gates.
+
+### Pre-MR QA Epic
+
+`media-7f3.11`: Pre-MR QA Epic: target architecture readiness.
+
+Tasks:
+
+1. `media-7f3.11.1`: QA traceability audit against source plan and Beads graph.
+2. `media-7f3.11.2`: QA backend, storage, security, and worker review.
+3. `media-7f3.11.3`: QA channel UX, Web, MCP, and runtime behavior.
+4. `media-7f3.11.4`: Prepare final MR readiness packet for target rebuild.
+
+Superseded flat tasks:
+
+- `media-7f3.1` -> `media-7f3.9.1`
+- `media-7f3.2` -> `media-7f3.9.2`
+- `media-7f3.3` -> `media-7f3.9.3`
+- `media-7f3.4` -> `media-7f3.9.4`
+- `media-7f3.5` -> `media-7f3.9.5`
+- `media-7f3.6` -> `media-7f3.9.6`
+- `media-7f3.7` -> `media-7f3.9.7`
+- `media-7f3.8` -> `media-7f3.10`
 
 ## Non-Goals
 

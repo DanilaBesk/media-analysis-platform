@@ -14,6 +14,7 @@
         <target-execution-domain PURPOSE="analysis_run_steps and worker internal APIs coordinate execution behind analysis_run." />
         <target-channel-domain PURPOSE="channel_accounts, channel_surfaces, channel_surface_subjects, and channel_surface_events persist external presentation and recovery state without mutating product lifecycle." />
         <target-operations-domain PURPOSE="operation_requests records idempotency and accepted mutation attempts for safe retries." />
+        <target-data-reset-policy PURPOSE="Current local database contents are disposable; target implementation should prove clean reset/recreate and deterministic fixtures, not preservation of current rows." />
       </annotations>
     </M-TARGET-ARCHITECTURE>
 

@@ -81,6 +81,7 @@ Target vocabulary is media_asset, stored_object, collection, inbox, selection_sn
 The API owns product state, channel surface persistence, operation idempotency, diagnostics, and retention.
 Telegram, Web, and MCP are channels over API-owned state; workers consume selection_snapshots through analysis_run_steps.
 The product is single-user now: do not introduce owners, workspaces, workspace_members, or team authorization until a real requirement appears.
+The current local database is disposable for this rebuild: do not preserve rows, backfill current records, or prove no data loss for current local data.
     ]]></contract-excerpt>
     <verification>
       <check>Target architecture document covers table contracts, API operations, DTO/type naming, app responsibilities, user flows, migration stages, and verification matrix.</check>
