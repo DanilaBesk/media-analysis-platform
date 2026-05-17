@@ -10,8 +10,8 @@
       <verification-ref>EV-TARGET-ARCHITECTURE</verification-ref>
       <annotations>
         <contract-singleUserChannelAwareTarget PATH="docs/architecture/single-user-channel-aware-target-architecture.md" PURPOSE="Defines the target single-user, channel-aware architecture and supersedes older migration-era names when conflicts appear." />
-        <target-product-domain PURPOSE="media_assets, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, and retention are API-owned product state." />
-        <target-execution-domain PURPOSE="analysis_run_steps and worker internal APIs coordinate execution behind analysis_run." />
+        <target-product-domain PURPOSE="media_assets, stored_objects, collections, selection_snapshots, analysis_runs, artifacts, artifact_subjects, diagnostics, and retention are API-owned product state." />
+        <target-execution-domain PURPOSE="analysis_run_steps, analysis_run_step_inputs, prerequisite planning, and worker internal APIs coordinate execution behind analysis_run." />
         <target-channel-domain PURPOSE="channel_accounts, channel_surfaces, channel_surface_subjects, and channel_surface_events persist external presentation and recovery state without mutating product lifecycle." />
         <target-operations-domain PURPOSE="operation_requests records idempotency and accepted mutation attempts for safe retries." />
         <target-data-reset-policy PURPOSE="Current local database contents are disposable; target implementation should prove clean reset/recreate and deterministic fixtures, not preservation of current rows." />
@@ -19,82 +19,91 @@
     </M-TARGET-ARCHITECTURE>
 
     <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" STATUS="planned" OWNER="media-49h">
-      <purpose>Own OpenAPI and shared schemas for the public inbox-first product vocabulary.</purpose>
+      <purpose>Own OpenAPI and shared schemas for the target product vocabulary plus explicit deprecated compatibility contracts.</purpose>
       <path>packages/contracts</path>
       <depends>none</depends>
       <verification-ref>EV-CONTRACTS</verification-ref>
       <annotations>
-        <export-mediaItemSchemas PURPOSE="Define media_item create, read, list, delete, source metadata, status, retention, and diagnostics envelopes." />
+        <export-mediaAssetSchemas PURPOSE="Define media_asset create, read, list, delete, stored_object/origin metadata, status, retention, and diagnostics envelopes." />
+        <export-compatibilitySchemas PURPOSE="Define deprecated media_item, source, selection, owner, and analysis_run_task compatibility mappings without adding target behavior." />
         <export-collectionSchemas PURPOSE="Define inbox, collection, collection item, version conflict, archive, restore, and membership mutation envelopes." />
-        <export-selectionSchemas PURPOSE="Define immutable selection snapshots, option snapshots, validation diagnostics, and sealed status." />
+        <export-selectionSnapshotSchemas PURPOSE="Define immutable selection snapshots, option snapshots, validation diagnostics, and sealed status." />
         <export-analysisRunSchemas PURPOSE="Define analysis_run creation, status, event, cancel, artifact summary, diagnostics summary, and idempotency envelopes." />
-        <export-artifactSchemas PURPOSE="Define artifact metadata, preview, download resolution, retention status, and unavailable artifact diagnostics." />
+        <export-stepInputSchemas PURPOSE="Define analysis_run_step_input payloads for worker internal APIs." />
+        <export-artifactSchemas PURPOSE="Define artifact metadata, preview, download resolution, retention status, artifact_subject lineage, and unavailable artifact diagnostics." />
         <export-diagnosticSchemas PURPOSE="Define stable diagnostic code, severity, subject, correlation, and safe context envelopes." />
       </annotations>
     </M-CONTRACTS>
 
     <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="planned" OWNER="media-5cj">
-      <purpose>Expose the public API for media_item ingestion, collection management, selection sealing, analysis_run lifecycle, artifact access, and diagnostics.</purpose>
+      <purpose>Expose the public API for media_asset ingestion, collection management, selection_snapshot sealing, analysis_run lifecycle, artifact access, and diagnostics.</purpose>
       <path>apps/api/internal/api</path>
       <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
-        <export-registerMediaRoutes PURPOSE="Bind add, list, get, and delete media_item routes." />
+        <export-registerMediaAssetRoutes PURPOSE="Bind add, list, get, and delete media_asset routes." />
+        <export-registerCompatibilityRoutes PURPOSE="Bind deprecated media_items and selections routes only where transitional clients still require them." />
         <export-registerCollectionRoutes PURPOSE="Bind inbox and collection management routes." />
-        <export-registerSelectionRoutes PURPOSE="Bind immutable selection creation and read routes." />
+        <export-registerSelectionSnapshotRoutes PURPOSE="Bind immutable selection snapshot creation and read routes." />
         <export-registerAnalysisRunRoutes PURPOSE="Bind analysis_run create, read, list, events, and cancel routes." />
-        <export-registerArtifactRoutes PURPOSE="Bind owner-scoped artifact preview and download-resolution routes." />
-        <export-registerDiagnosticRoutes PURPOSE="Bind owner-scoped diagnostics query routes." />
+        <export-registerArtifactRoutes PURPOSE="Bind channel-account-scoped artifact preview and download-resolution routes." />
+        <export-registerDiagnosticRoutes PURPOSE="Bind channel-account-scoped diagnostics query routes." />
       </annotations>
     </M-API-HTTP>
 
     <M-API-DOMAIN NAME="ApiDomain" TYPE="CORE_LOGIC" STATUS="planned" OWNER="media-5cj">
-      <purpose>Own product rules for owner scope, ingestion, inbox membership, collection mutation, selection immutability, analysis_run lifecycle, retention, and diagnostics.</purpose>
+      <purpose>Own product rules for channel-account access, ingestion, inbox membership, collection mutation, selection snapshot immutability, analysis_run lifecycle, prerequisite planning, retention, and diagnostics.</purpose>
       <path>apps/api/internal/api/media_runtime.go</path>
       <depends>M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
-        <export-addMedia PURPOSE="Normalize source input and create media_item plus inbox membership." />
+        <export-addMedia PURPOSE="Normalize input into stored_object/media_asset records plus inbox membership." />
         <export-manageCollection PURPOSE="Apply versioned collection mutations and archive/delete rules." />
-        <export-createSelection PURPOSE="Validate media_item references and seal immutable selection snapshots." />
-        <export-createAnalysisRun PURPOSE="Create analysis_run from selection and schedule internal execution rows." />
+        <export-createSelectionSnapshot PURPOSE="Validate media_asset references and seal immutable selection snapshots." />
+        <export-createAnalysisRun PURPOSE="Create analysis_run from selection_snapshot, plan analysis_run_steps, and declare analysis_run_step_inputs." />
+        <export-planPrerequisites PURPOSE="Create prerequisite transcription steps or diagnostics for report and research work that needs transcript/text-corpus artifacts." />
         <export-cancelAnalysisRun PURPOSE="Apply cooperative cancellation against analysis_run and internal execution rows." />
-        <export-applyRetention PURPOSE="Evaluate source, media_item, selection, run, artifact, and diagnostics retention actions." />
+        <export-applyRetention PURPOSE="Evaluate stored_object, media_asset, selection_snapshot, run, artifact, and diagnostics retention actions." />
         <export-recordDiagnostic PURPOSE="Persist safe diagnostic evidence for rejected and partial flows." />
       </annotations>
     </M-API-DOMAIN>
 
     <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="planned" OWNER="media-5cj">
-      <purpose>Persist sources, media_items, collections, collection_items, selections, analysis_runs, artifacts, diagnostics, and internal execution rows.</purpose>
+      <purpose>Persist channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</purpose>
       <path>apps/api/internal/storage</path>
       <depends>M-CONTRACTS</depends>
       <verification-ref>EV-STORAGE</verification-ref>
       <annotations>
-        <table-sources PURPOSE="Store normalized source body and origin metadata." />
-        <table-mediaItems PURPOSE="Store durable owner-scoped media_item records." />
+        <table-channelAccounts PURPOSE="Store durable channel identity and access scope for the single-user product." />
+        <table-operationRequests PURPOSE="Store idempotency and accepted mutation attempts for safe retries." />
+        <table-storedObjects PURPOSE="Store object body and origin metadata." />
+        <table-mediaAssets PURPOSE="Store durable channel-account-scoped media_asset records." />
         <table-collections PURPOSE="Store inbox and named collection metadata with optimistic versions." />
         <table-collectionItems PURPOSE="Store ordered collection membership." />
-        <table-selections PURPOSE="Store immutable item and option snapshots." />
+        <table-selectionSnapshots PURPOSE="Store immutable item and option snapshots." />
+        <table-selectionSnapshotItems PURPOSE="Store ordered copied media_asset item snapshots." />
         <table-analysisRuns PURPOSE="Store public run lifecycle and evidence gate state." />
+        <table-analysisRunSteps PURPOSE="Store internal execution steps behind analysis_run." />
+        <table-analysisRunStepInputs PURPOSE="Store explicit selection item or artifact inputs for each worker step." />
         <table-artifacts PURPOSE="Store output metadata and retention state." />
+        <table-artifactSubjects PURPOSE="Store artifact lineage links to runs, steps, snapshots, selected items, media assets, and diagnostics." />
         <table-diagnostics PURPOSE="Store structured warnings, errors, and operator evidence." />
-        <table-executionRows PURPOSE="Store internal worker attempts behind analysis_run." />
       </annotations>
     </M-API-STORAGE>
 
     <M-API-QUEUE NAME="ApiQueue" TYPE="INFRASTRUCTURE" STATUS="planned" OWNER="media-5cj">
-      <purpose>Schedule internal execution tasks keyed by analysis_run_id without defining public product vocabulary.</purpose>
+      <purpose>Schedule internal analysis_run_steps keyed by analysis_run_id without defining public product vocabulary.</purpose>
       <path>apps/api/internal/queue</path>
       <depends>M-API-DOMAIN</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
-        <export-enqueueAnalysisRun PURPOSE="Create queue tasks for sealed selection execution." />
-        <export-enqueueRetentionWork PURPOSE="Schedule source and artifact cleanup when retention policy allows it." />
+        <export-enqueueAnalysisRunSteps PURPOSE="Create queue messages for planned analysis_run_steps." />
+        <export-enqueueRetentionWork PURPOSE="Schedule stored object and artifact cleanup when retention policy allows it." />
       </annotations>
     </M-API-QUEUE>
 
     <M-API-EVENTS NAME="ApiEvents" TYPE="INFRASTRUCTURE" STATUS="planned" OWNER="media-5cj">
-      <purpose>Publish polling and live-update events for media_item, collection, selection, analysis_run, artifact, and diagnostic changes.</purpose>
+      <purpose>Publish polling and live-update events for media_asset, collection, selection_snapshot, analysis_run, artifact, and diagnostic changes.</purpose>
       <path>apps/api/internal/ws</path>
       <depends>M-CONTRACTS, M-API-DOMAIN</depends>
       <verification-ref>EV-API</verification-ref>
@@ -104,17 +113,17 @@
       </annotations>
     </M-API-EVENTS>
 
-    <M-INTERACTION-SURFACES NAME="InteractionSurfaces" TYPE="UTILITY" STATUS="planned" OWNER="media-w9y">
-      <purpose>Persist owner-scoped external interaction surfaces without adding consumer-specific fields to domain entities.</purpose>
+    <M-INTERACTION-SURFACES NAME="ChannelSurfaces" TYPE="UTILITY" STATUS="planned" OWNER="media-w9y">
+      <purpose>Persist channel-account-scoped external channel surfaces without adding consumer-specific fields to domain entities.</purpose>
       <path>apps/api/internal/interaction_surfaces</path>
       <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
-        <contract-interactionSurfaces PATH="docs/architecture/interaction-surfaces-contract.md" PURPOSE="Define generic interaction surface storage, internal API endpoints, field semantics, owner-scope rules, Telegram usage, and implementation stages." />
-        <table-interactionSurfaces PURPOSE="Store owner, channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, idempotency, and lifecycle timestamps." />
-        <table-interactionSurfaceSubjects PURPOSE="Store surface-to-domain-subject links with subject type, subject id, and subject role while enforcing one primary subject per surface." />
-        <table-interactionSurfaceEvents PURPOSE="Store append-only operational history for created, upserted, address changed, display state replaced, superseded, deleted, failed, and recovered events." />
-        <internal-upsertSurface PURPOSE="Allow channel runtimes to create or update durable external interaction surfaces idempotently." />
+        <contract-interactionSurfaces PATH="docs/architecture/interaction-surfaces-contract.md" PURPOSE="Historical interaction-surface contract being generalized into channel_surfaces, channel_surface_subjects, and channel_surface_events." />
+        <table-channelSurfaces PURPOSE="Store channel_account, channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, idempotency, and lifecycle timestamps." />
+        <table-channelSurfaceSubjects PURPOSE="Store surface-to-domain-subject links with subject type, subject id, and subject role while enforcing one primary subject per surface." />
+        <table-channelSurfaceEvents PURPOSE="Store append-only operational history for created, upserted, address changed, display state replaced, superseded, deleted, failed, and recovered events." />
+        <internal-upsertSurface PURPOSE="Allow channel runtimes to create or update durable external channel surfaces idempotently." />
         <internal-listSurfaces PURPOSE="Allow channel runtimes to recover active external surfaces after restart." />
         <internal-supersedeSurface PURPOSE="Allow channel runtimes to retire stale or uneditable external surfaces without deleting domain history." />
       </annotations>
@@ -126,9 +135,9 @@
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
-        <export-claimRun PURPOSE="Claim internal execution rows by analysis_run_id." />
-        <export-processSelectionItems PURPOSE="Process ordered selection item snapshots without reading mutable collection state." />
-        <export-publishArtifacts PURPOSE="Publish transcript and diagnostic artifacts through API-owned artifact contracts." />
+        <export-claimRunStep PURPOSE="Claim analysis_run_steps by analysis_run_id." />
+        <export-processStepInputs PURPOSE="Process declared selection_snapshot_item inputs without reading mutable collection state." />
+        <export-publishArtifacts PURPOSE="Publish transcript artifacts and artifact_subject lineage through API-owned artifact contracts." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
 
@@ -139,7 +148,7 @@
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
         <export-runAnalysisHarness PURPOSE="Dispatch configured analysis harnesses behind analysis_run." />
-        <export-consumePreparedText PURPOSE="Consume transcript or prepared text-corpus artifacts instead of transcribing raw speech media." />
+        <export-consumePreparedText PURPOSE="Consume declared transcript_artifact or text_corpus_artifact step inputs instead of transcribing or discovering raw speech media." />
         <export-publishAnalysisArtifacts PURPOSE="Publish report, research, log, and diagnostic artifacts." />
       </annotations>
     </M-WORKER-AGENT-RUNNER>
@@ -175,10 +184,10 @@
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-ADAPTERS</verification-ref>
       <annotations>
-        <tool-addMedia PURPOSE="Create media_item records." />
-        <tool-createSelection PURPOSE="Seal selections." />
+        <tool-addMedia PURPOSE="Create media_asset records." />
+        <tool-createSelection PURPOSE="Seal selection_snapshots." />
         <tool-runAnalysis PURPOSE="Create analysis_run records." />
-        <tool-getDiagnostics PURPOSE="Read diagnostics for media, selection, run, and artifact subjects." />
+        <tool-getDiagnostics PURPOSE="Read diagnostics for media_asset, selection_snapshot, run, and artifact subjects." />
       </annotations>
     </M-MCP-ADAPTER>
 

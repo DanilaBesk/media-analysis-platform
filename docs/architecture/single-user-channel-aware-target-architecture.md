@@ -115,7 +115,7 @@ Avoid in target public contracts:
 
 ## Target Table Set
 
-The target starts with 16 tables. This is not minimal in raw count, but it is small for the responsibilities it separates.
+The target starts with 18 tables. This is not minimal in raw count, but it is small for the responsibilities it separates.
 
 ```text
 channel_accounts
@@ -132,9 +132,11 @@ selection_snapshot_items
 
 analysis_runs
 analysis_run_steps
+analysis_run_step_inputs
 analysis_run_events
 
 artifacts
+artifact_subjects
 diagnostics
 
 channel_surfaces
@@ -154,6 +156,60 @@ retention_policies
 ```
 
 Do not add `owners` or `workspaces` for the current product stage. The product has one human user. Channel identity is enough.
+
+## FPF Boundary Decisions
+
+The target model is split into explicit bounded contexts. Same-looking words must not be treated as globally equivalent across these contexts.
+
+### API Product Context
+
+Owns durable product state and public product contracts:
+
+- `media_asset`;
+- `stored_object`;
+- `collection` and `inbox`;
+- `selection_snapshot`;
+- `analysis_run`;
+- `artifact`;
+- `diagnostic`.
+
+This context does not know Telegram card layouts, Web copy, or MCP client ergonomics.
+
+### API Execution Context
+
+Owns internal execution coordination behind `analysis_run`:
+
+- `analysis_run_step`;
+- `analysis_run_step_input`;
+- worker claim/progress/finalize;
+- prerequisite diagnostics.
+
+This context may use worker-facing terms, but those terms do not become public product vocabulary.
+
+### Channel Surface Context
+
+Owns external presentation and recovery addresses:
+
+- `channel_account`;
+- `channel_surface`;
+- `channel_surface_subject`;
+- `channel_surface_event`.
+
+Channel surfaces can point at product subjects, but they cannot drive product lifecycle.
+
+### Web Human UI Context
+
+Owns only human presentation. Normal Web UI copy uses simple product words such as `Материалы`, `Подборка`, `Результаты`, `Отчет`, `Ошибка`, `Скачать`, and `В работе`.
+
+Normal Web UI must not make `media_asset`, `selection_snapshot`, `analysis_run_step`, `channel_surface`, raw ids, run manifests, or diagnostic internals load-bearing terms. Those names may appear only in explicit admin/debug views.
+
+### MCP Tool Context
+
+Owns technical tool contracts. MCP may expose target API vocabulary because its users are tools/agents, not casual human UI users.
+
+### Compatibility Context
+
+Current implementation-era names such as `media_item`, `source`, `selection`, `analysis_run_task`, `owner`, and `interaction_surface` are compatibility or migration terms only. If retained temporarily, they must be marked deprecated, mapped to target terms, tested as transitional, and excluded from new target contracts and normal adapter UX.
 
 ## Table Contracts
 
@@ -521,6 +577,42 @@ Responsibility:
 - retry attempts;
 - cooperative cancellation observation.
 
+### analysis_run_step_inputs
+
+Purpose: explicit immutable inputs consumed by an execution step.
+
+Recommended fields:
+
+```sql
+CREATE TABLE analysis_run_step_inputs (
+  id uuid PRIMARY KEY,
+  analysis_run_step_id uuid NOT NULL REFERENCES analysis_run_steps(id) ON DELETE CASCADE,
+  input_kind text NOT NULL,
+  selection_snapshot_item_id uuid REFERENCES selection_snapshot_items(id),
+  artifact_id uuid REFERENCES artifacts(id),
+  position int NOT NULL DEFAULT 0,
+  required boolean NOT NULL DEFAULT true,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT analysis_run_step_inputs_kind_chk CHECK (
+    input_kind IN ('selection_snapshot_item', 'transcript_artifact', 'text_corpus_artifact', 'metadata_artifact')
+  ),
+  CONSTRAINT analysis_run_step_inputs_subject_chk CHECK (
+    (input_kind = 'selection_snapshot_item' AND selection_snapshot_item_id IS NOT NULL AND artifact_id IS NULL) OR
+    (input_kind IN ('transcript_artifact', 'text_corpus_artifact', 'metadata_artifact') AND artifact_id IS NOT NULL)
+  )
+);
+```
+
+Responsibility:
+
+- records exactly what a worker step may read;
+- allows report/research steps to depend on transcript or text-corpus artifacts;
+- prevents agent-runner from implicitly discovering raw speech media.
+
+Migration note: because this table can reference `artifacts`, create it after `artifacts` or add the artifact foreign key in a later migration statement.
+
 ### analysis_run_events
 
 Purpose: append-only user-visible and operational run history.
@@ -586,6 +678,43 @@ Responsibility:
 - result metadata;
 - object access through API;
 - not tied to any Telegram message.
+
+### artifact_subjects
+
+Purpose: link artifacts to the concrete product or execution subjects they describe.
+
+Recommended fields:
+
+```sql
+CREATE TABLE artifact_subjects (
+  id uuid PRIMARY KEY,
+  artifact_id uuid NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE,
+  subject_type text NOT NULL,
+  subject_id uuid NOT NULL,
+  subject_role text NOT NULL DEFAULT 'primary',
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT artifact_subjects_type_chk CHECK (
+    subject_type IN (
+      'analysis_run',
+      'analysis_run_step',
+      'selection_snapshot',
+      'selection_snapshot_item',
+      'media_asset',
+      'diagnostic'
+    )
+  ),
+  CONSTRAINT artifact_subjects_role_chk CHECK (
+    subject_role IN ('primary', 'source', 'result', 'diagnostic', 'manifest_entry')
+  )
+);
+```
+
+Responsibility:
+
+- tells API which transcript belongs to which selected material or step;
+- lets agent-runner receive ordered transcript/text-corpus inputs without guessing;
+- supports artifact detail, diagnostics, and lineage views across Telegram, Web, and MCP.
 
 ### diagnostics
 
@@ -822,7 +951,9 @@ GET  /v1/analysis-runs/{analysis_run_id}/events
 Operations:
 
 - create run from selection snapshot;
-- schedule initial steps;
+- schedule initial steps and prerequisite steps;
+- for `report` or `deep_research`, require ready transcript/text-corpus artifacts or create transcription prerequisite steps before agent-runner steps;
+- when prerequisites cannot be planned or satisfied, record diagnostics with stable codes `analysis_prerequisite_missing`, `analysis_prerequisite_failed`, or `analysis_prerequisite_unavailable`;
 - expose status and progress;
 - cooperative cancel;
 - retry from immutable snapshot.
@@ -841,6 +972,7 @@ Operations:
 - list run outputs;
 - resolve safe access;
 - refresh temporary links;
+- expose artifact subjects and lineage;
 - keep output independent of channel delivery.
 
 ### Diagnostics
@@ -893,10 +1025,31 @@ POST /internal/v1/analysis-runs/{analysis_run_id}/steps/finalize
 Operations:
 
 - workers only consume sealed `selection_snapshots`;
+- worker claim responses include declared `analysis_run_step_inputs`;
 - workers never read mutable collections as execution input;
-- transcription workers turn source media snapshots into transcript artifacts;
+- transcription workers turn selected media snapshots into transcript artifacts;
 - report/research workers consume transcript or prepared text-corpus artifacts, not raw audio/video media, whenever a transcription prerequisite exists;
+- agent-runner steps fail through prerequisite diagnostics rather than attempting speech-to-text or raw media discovery;
 - finalization respects `cancel_requested`.
+
+### Compatibility Routes
+
+Compatibility routes are transitional only:
+
+```text
+/v1/media-items          -> /v1/media-assets
+/v1/selections           -> /v1/selection-snapshots
+analysis_run_tasks table -> analysis_run_steps
+source fields            -> stored_object or media_asset origin metadata
+owner query/body fields  -> channel_account/single-user caller scope
+```
+
+Rules:
+
+- compatibility routes must be documented as deprecated;
+- compatibility DTOs must map one-to-one into target DTOs without adding target behavior;
+- no new adapter or worker code should be authored against compatibility names;
+- tests must prove compatibility does not leak into target OpenAPI, Web copy, Telegram copy, MCP tool names, or worker DTO names.
 
 ## DTO And Type Naming
 
@@ -915,8 +1068,10 @@ SelectionSnapshotRecord
 SelectionSnapshotItemRecord
 AnalysisRunRecord
 AnalysisRunStepRecord
+AnalysisRunStepInputRecord
 AnalysisRunEventRecord
 ArtifactRecord
+ArtifactSubjectRecord
 DiagnosticRecord
 ChannelSurfaceRecord
 ChannelSurfaceSubjectRecord
@@ -1029,7 +1184,7 @@ Owns:
 
 - tool schema;
 - tool-to-API mapping;
-- deterministic owner/channel account identity;
+- deterministic channel account identity;
 - returning structured results, diagnostics, and artifact references.
 
 Does not own:
@@ -1109,10 +1264,12 @@ Owns:
 
 1. API creates or finds a sealed `selection_snapshot`.
 2. API ensures required transcript/text-corpus artifacts exist for audio, video, and voice materials.
-3. Agent-runner claims the report or research step.
-4. Agent-runner reads only ready transcript/text-corpus artifact inputs and safe metadata.
-5. Agent-runner records progress events, diagnostics, and report/research artifacts.
-6. API exposes the produced artifacts to Telegram, Web, and MCP through the same run detail contract.
+3. If text prerequisites are missing but schedulable, API creates transcription prerequisite steps and declares downstream artifact inputs.
+4. If text prerequisites are not schedulable or fail, API records `analysis_prerequisite_missing`, `analysis_prerequisite_failed`, or `analysis_prerequisite_unavailable` diagnostics on the run.
+5. Agent-runner claims the report or research step only after declared artifact inputs are ready.
+6. Agent-runner reads only ready transcript/text-corpus artifact inputs and safe metadata.
+7. Agent-runner records progress events, diagnostics, and report/research artifacts.
+8. API exposes the produced artifacts to Telegram, Web, and MCP through the same run detail contract.
 
 ### Restart Recovery
 
@@ -1151,7 +1308,7 @@ Goal: introduce target DTO names without changing runtime behavior first.
 Work:
 
 - define target schemas;
-- decide compatibility policy for existing `/v1/media-items` and `/v1/selections`;
+- implement the compatibility policy for `/v1/media-items`, `/v1/selections`, `analysis_run_tasks`, `source`, and `owner` as deprecated migration surfaces only;
 - add new route names behind feature flag or v2 namespace if needed;
 - update generated client types if any.
 
@@ -1173,13 +1330,15 @@ Work:
 - add `media_assets`;
 - rebuild `selections` as `selection_snapshots` or replace the table entirely;
 - rebuild `analysis_run_tasks` as `analysis_run_steps` or replace the table entirely;
+- add `analysis_run_step_inputs`;
+- add `artifact_subjects`;
 - add `channel_surfaces`, `channel_surface_subjects`, `channel_surface_events`;
 - provide reset/bootstrap instructions for an empty local database.
 
 Verification:
 
 - schema reset/recreate proof;
-- storage owner/single-user invariants;
+- storage channel-account/single-user invariants;
 - snapshot immutability tests;
 - channel surface uniqueness tests;
 - deterministic seed/fixture proof for tests.
@@ -1194,6 +1353,9 @@ Work:
 - implement collection service;
 - implement snapshot service;
 - implement run service;
+- implement prerequisite planning for run steps;
+- implement step input resolution from selection snapshot items and artifact subjects;
+- implement prerequisite diagnostic codes: `analysis_prerequisite_missing`, `analysis_prerequisite_failed`, and `analysis_prerequisite_unavailable`;
 - implement artifact service;
 - implement diagnostics service;
 - implement channel surface service;
@@ -1234,8 +1396,9 @@ Work:
 
 - claim steps, not tasks;
 - read snapshots, not collections;
+- read declared step inputs, not ad hoc raw media discovery;
 - make transcription the only worker path that converts raw speech media into transcript artifacts;
-- make agent-runner consume ready transcript/text-corpus artifacts for report and research work;
+- make agent-runner consume an ordered manifest of ready transcript/text-corpus artifacts for report and research work;
 - publish artifacts through API;
 - record diagnostics through API;
 - observe cancellation.
@@ -1243,6 +1406,8 @@ Work:
 Verification:
 
 - sealed snapshot consumption;
+- declared step input consumption;
+- missing prerequisite diagnostics;
 - cancellation race tests;
 - partial success diagnostics;
 - artifact publication;
@@ -1256,7 +1421,8 @@ Work:
 
 - Web uses API-owned media assets, collections, snapshots, runs, artifacts, and diagnostics without exposing those names as normal UI labels;
 - Web copy prefers clear Russian product words such as `Материалы`, `Подборка`, `Результаты`, `Отчет`, `Ошибка`, and `Скачать`;
-- MCP tools expose target vocabulary;
+- Web normal UI must avoid `Run builder`, `Artifacts`, `Diagnostics`, `Run manifest`, `Selection snapshot`, `Analysis run`, `Media item`, raw ids, and diagnostic internals unless inside explicit admin/debug surfaces;
+- MCP tools expose target vocabulary and may stay technical because MCP is a tool contract context;
 - old names removed from user-visible contract.
 
 Verification:
@@ -1292,7 +1458,7 @@ Verification:
 | Area | Required Proof |
 | --- | --- |
 | Database | Schema reset/recreate proof, constraints, indexes, deterministic seed fixtures. |
-| Storage | CRUD, owner/single-user scope, idempotency, version conflicts. |
+| Storage | CRUD, channel-account/single-user scope, idempotency, version conflicts. |
 | API | Route success, validation errors, conflict errors, pagination, empty arrays. |
 | Telegram | User flows, callback parsing, restart recovery, surface supersede, result delivery. |
 | Web | Main flows, empty states, diagnostics, artifacts, plain human copy without internal technical terms. |

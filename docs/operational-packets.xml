@@ -16,7 +16,7 @@
     <completed-packet>media-vim-telegram-russian-status-ux</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
-    <remaining-closure-gate>none</remaining-closure-gate>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.9, media-7f3.10, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -27,7 +27,7 @@
         <file-1>owned/module/file.ext</file-1>
       </write-scope>
       <contract-excerpt><![CDATA[
-Use media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, operation_request, and retention as the target vocabulary.
+Use media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, operation_request, and retention as the target vocabulary.
       ]]></contract-excerpt>
       <verification-excerpt><![CDATA[
 Run the focused checks assigned to the packet and prove stale public product vocabulary did not return.
@@ -46,14 +46,15 @@ Run the focused checks assigned to the packet and prove stale public product voc
       <file-6>docs/operational-packets.xml</file-6>
     </write-scope>
     <contract-excerpt><![CDATA[
-The final product model is media_item -> collection/inbox -> immutable selection -> analysis_run -> artifacts.
-Canonical vocabulary is media_item, collection/inbox, selection, analysis_run, source, artifact.
-Jobs, queue tasks, and execution attempts may exist only as internal backend execution details behind analysis_run.
+The target product model is media_asset -> collection/inbox -> immutable selection_snapshot -> analysis_run -> artifacts, with analysis_run_step_inputs and artifact_subjects carrying execution input and lineage.
+Canonical target vocabulary is media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, and operation_request.
+Deprecated compatibility names such as media_item, source, selection, analysis_run_task, owner, and interaction_surface may appear only in migration notes, historical packets, or explicit compatibility contracts.
+Jobs, queue messages, and worker attempts may exist only as internal backend execution details behind analysis_run.
 Old public product architecture centered on immediate execution requests, grouped submission state, public source grouping, and user-facing mode toggles is deleted rather than wrapped.
     ]]></contract-excerpt>
     <acceptance-criteria>
       <criterion>GRACE docs define only the final inbox-first model.</criterion>
-      <criterion>media_item, collection/inbox, immutable selection, analysis_run, lifecycle statuses, owner scope, retention, diagnostics, and evidence gates are specified.</criterion>
+      <criterion>media_asset, stored_object, collection/inbox, immutable selection_snapshot, analysis_run, analysis_run_step_input, artifact_subject, lifecycle statuses, channel-account access scope, retention, diagnostics, and evidence gates are specified.</criterion>
       <criterion>Old batch-oriented and immediate-execution public product wording is removed instead of preserved as target architecture.</criterion>
       <criterion>Adapter boundaries for Telegram, Web, and MCP stay thin over API-owned state.</criterion>
       <criterion>Bottom-up sequencing is recorded for later Beads.</criterion>
@@ -77,7 +78,7 @@ Old public product architecture centered on immediate execution requests, groupe
       <file-7>docs/operational-packets.xml</file-7>
     </write-scope>
     <contract-excerpt><![CDATA[
-Target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, and operation_request.
+Target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, and operation_request.
 The API owns product state, channel surface persistence, operation idempotency, diagnostics, and retention.
 Telegram, Web, and MCP are channels over API-owned state; workers consume selection_snapshots through analysis_run_steps.
 The product is single-user now: do not introduce owners, workspaces, workspace_members, or team authorization until a real requirement appears.
@@ -100,12 +101,13 @@ The current local database is disposable for this rebuild: do not preserve rows,
       <file-3>contract tests</file-3>
     </write-scope>
     <contract-excerpt><![CDATA[
-Define public DTOs and routes for media_item, source, collection, inbox, selection, analysis_run, artifact, diagnostic, owner scope, lifecycle, retention, idempotency, pagination, optimistic version checks, and error envelopes.
+Define target public DTOs and routes for media_asset, stored_object metadata, collection, inbox, selection_snapshot, analysis_run, artifact, diagnostic, channel_account access scope, lifecycle, retention, idempotency, pagination, optimistic version checks, and error envelopes.
+Define /v1/media-items, /v1/selections, media_item, source, selection, owner, and analysis_run_task only as deprecated compatibility mappings while transitional clients require them.
     ]]></contract-excerpt>
     <implementation-notes>
-      <note>Public clients create analysis_run from a sealed selection only.</note>
+      <note>Public clients create analysis_run from a sealed selection_snapshot only.</note>
       <note>Contracts must include text, URL, generic file, photo/image, audio/voice, and video/document inputs.</note>
-      <note>Schema tests must fail if removed public product vocabulary reappears.</note>
+      <note>Schema tests must fail if removed public product vocabulary reappears outside deprecated compatibility contracts.</note>
     </implementation-notes>
     <verification>
       <check>OpenAPI parses and schema tests pass.</check>
@@ -125,17 +127,18 @@ Define public DTOs and routes for media_item, source, collection, inbox, selecti
       <file-6>server tests</file-6>
     </write-scope>
     <contract-excerpt><![CDATA[
-Persist sources, media_items, collections, collection_items, immutable selections, analysis_runs, artifacts, diagnostics, retention state, and internal execution rows. Enforce owner scope on every operation.
+Persist channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, retention state, channel_surfaces, channel_surface_subjects, and channel_surface_events. Enforce channel-account/single-user access scope on every operation.
     ]]></contract-excerpt>
     <implementation-notes>
-      <note>Create an inbox for each owner and put accepted media_item records there by default.</note>
+      <note>Create an inbox for each channel account and put accepted media_asset records there by default.</note>
       <note>Seal selection snapshots before scheduling execution.</note>
-      <note>Use diagnostics for invalid media, invalid selection, unavailable source, worker failure, artifact expiry, retention denial, and adapter conflict.</note>
+      <note>Plan analysis_run_steps and analysis_run_step_inputs before workers claim work.</note>
+      <note>Use diagnostics for invalid media, invalid selection snapshot, unavailable stored object, missing/failed/unavailable prerequisites, worker failure, artifact expiry, retention denial, and adapter conflict.</note>
       <note>Keep internal execution rows behind analysis_run and out of the public product contract.</note>
     </implementation-notes>
     <verification>
-      <check>Storage tests cover owner isolation, collection versioning, immutable selection, lifecycle, retention, diagnostics, and artifact linkage.</check>
-      <check>API tests cover media ingestion, inbox, collection mutation, selection creation, analysis_run creation, events, cancellation, artifact access, and diagnostics query.</check>
+      <check>Storage tests cover channel-account isolation, collection versioning, immutable selection snapshots, step input linkage, lifecycle, retention, diagnostics, and artifact subject linkage.</check>
+      <check>API tests cover media ingestion, inbox, collection mutation, selection snapshot creation, analysis_run creation, prerequisite planning, events, cancellation, artifact access, and diagnostics query.</check>
     </verification>
   </ExecutionPacket>
 
@@ -149,11 +152,11 @@ Persist sources, media_items, collections, collection_items, immutable selection
       <file-4>worker tests</file-4>
     </write-scope>
     <contract-excerpt><![CDATA[
-Workers claim internal execution rows by analysis_run_id, load sealed selection material through internal API contracts, publish artifacts and diagnostics, and never read mutable collection state as execution input.
+Workers claim analysis_run_steps by analysis_run_id, load declared analysis_run_step_inputs through internal API contracts, publish artifacts and diagnostics, and never read mutable collection state as execution input.
 Transcription converts speech media into transcript artifacts. Agent-runner report and research steps consume ready transcript or prepared text-corpus artifacts plus safe metadata; they do not transcribe or process raw speech media directly.
     ]]></contract-excerpt>
     <verification>
-      <check>Worker tests prove sealed selection consumption, artifact publication, partial success diagnostics, cancellation phase recording, and no mutation of selections.</check>
+      <check>Worker tests prove sealed snapshot plus declared step-input consumption, artifact publication, artifact subject linkage, partial success diagnostics, cancellation phase recording, and no mutation of selections.</check>
       <check>Agent-runner tests prove transcript/text-corpus prerequisites are consumed and missing prerequisites become diagnostics.</check>
     </verification>
   </ExecutionPacket>
@@ -181,7 +184,7 @@ Telegram turns messages, files, URLs, media groups, voice, audio, video, photos,
       <file-2>Web tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-Web manages materials, groups, current selection, progress, results, errors, downloads, owner-scoped search, and retention actions over the public API. Normal Web UI copy is intentionally simple and human-facing; internal API terms, raw ids, channel surface concepts, step names, and diagnostic internals are reserved for explicit admin/debug views.
+Web manages materials, groups, current selection, progress, results, errors, downloads, search, and retention actions over the public API. Normal Web UI copy is intentionally simple and human-facing; internal API terms, raw ids, channel surface concepts, step names, run manifests, and diagnostic internals are reserved for explicit admin/debug views. Current visible technical labels to remove from normal UI include Run builder, Artifacts, Diagnostics, Run manifest, Selection snapshot, Analysis run, and Media item.
     ]]></contract-excerpt>
     <verification>
       <check>Web tests prove collection edits after run creation do not alter run selection snapshots.</check>
@@ -197,10 +200,10 @@ Web manages materials, groups, current selection, progress, results, errors, dow
       <file-2>MCP tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-MCP tools: add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.
+MCP tools: add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. MCP may expose target technical vocabulary because it is a tool contract context, but it must not use deprecated compatibility names as new target tool semantics.
     ]]></contract-excerpt>
     <verification>
-      <check>MCP tests prove tool behavior matches API owner-scope, lifecycle, retention, and diagnostics envelopes.</check>
+      <check>MCP tests prove tool behavior matches API channel-account access, lifecycle, retention, and diagnostics envelopes.</check>
     </verification>
   </ExecutionPacket>
 
@@ -208,7 +211,7 @@ MCP tools: add_media, list_media, search_media, get_media, remove_media, get_inb
     <purpose>Prove the complete inbox-first flow after contracts, server, workers, and adapters converge.</purpose>
     <depends-on>media-7al-telegram-adapter, media-7wo-web-adapter, media-uhi-mcp-adapter, media-sfx-workers</depends-on>
     <verification>
-      <check>Runtime smoke ingests input, lists it in inbox, seals selection, starts analysis_run, observes events, retrieves artifacts, reads diagnostics, denies cross-owner access, and applies retention without corrupting run history.</check>
+      <check>Runtime smoke ingests input, lists it in inbox, seals selection_snapshot, starts analysis_run, observes events, retrieves artifacts, reads diagnostics, denies cross-channel-account access, and applies retention without corrupting run history.</check>
       <check>Focused stale vocabulary search passes across active docs and public contracts.</check>
     </verification>
   </RuntimePacket>

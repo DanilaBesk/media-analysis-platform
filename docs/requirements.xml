@@ -16,55 +16,59 @@
     <bead id="media-7f3">Defines the from-scratch target architecture, table set, API operation groups, DTO/type naming, app boundaries, user flows, migration stages, and verification matrix.</bead>
     <rule>The product currently has one human user. Do not introduce owners, workspaces, workspace members, or team authorization until a real multi-user requirement exists.</rule>
     <rule>Channel identity is modeled through channel_accounts and channel_surfaces; channels can store presentation and recovery state but cannot own product lifecycle.</rule>
-    <rule>The target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, and operation_request.</rule>
+    <rule>The target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, selection_snapshot_item, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, and operation_request.</rule>
     <rule>The current local database is disposable for the target rebuild. Implementations may delete, recreate, truncate, or rebuild current schema/data and must not spend effort preserving or backfilling existing local rows unless a future production-data requirement is approved.</rule>
     <rule>Existing implementation-era names such as media_item, source, selection, analysis_run_task, owner, and interaction_surface remain migration context only when they appear below. New target work must prefer the target vocabulary unless a compatibility packet explicitly says otherwise.</rule>
     <rule>If any older GRACE section conflicts with the target architecture document, the target architecture document wins until the corresponding migration packet rewrites the older section.</rule>
   </TargetArchitectureReset>
 
   <CanonicalVocabulary>
-    <term name="media_item">A durable API-owned record for one user-provided input such as text, URL, file, photo, image, audio, voice, video, or document.</term>
-    <term name="source">The normalized origin and stored body metadata behind a media_item; source is internal enough to hide adapter transport details from the product surface.</term>
-    <term name="collection">A durable owner-scoped grouping of media_item references used for user organization and later analysis.</term>
-    <term name="inbox">The default collection for each owner where new media_item records land unless the caller names another collection.</term>
-    <term name="selection">An immutable ordered snapshot of media_item references, options, and owner scope captured when a user decides what to analyze.</term>
-    <term name="analysis_run">A user-facing run created from one selection; it owns lifecycle, diagnostics, events, and artifact lineage.</term>
+    <term name="media_asset">A durable API-owned record for one user-provided material such as text, URL, file, photo, image, audio, voice, video, or document.</term>
+    <term name="stored_object">The API-owned stored bytes, external URI, text body, checksum, size, MIME type, and retention metadata behind a media_asset or artifact.</term>
+    <term name="collection">A durable channel-account-scoped grouping of media_asset references used for user organization and later analysis.</term>
+    <term name="inbox">The default collection for each channel account where new media_asset records land unless the caller names another collection.</term>
+    <term name="selection_snapshot">An immutable ordered snapshot of media_asset references, options, and access scope captured when a user decides what to analyze.</term>
+    <term name="analysis_run">A user-facing run created from one selection_snapshot; it owns lifecycle, diagnostics, events, and artifact lineage.</term>
+    <term name="analysis_run_step_input">An internal execution input declaration that says which selection_snapshot_item or artifact a worker step may read.</term>
     <term name="artifact">A durable result or diagnostic object produced by analysis_run execution and resolved through API-governed access rules.</term>
+    <term name="artifact_subject">A lineage link from an artifact to the run, step, selection snapshot, selected item, media asset, or diagnostic it represents.</term>
+    <term name="compatibility_names">media_item, source, selection, analysis_run_task, owner, and interaction_surface are implementation-era names allowed only in deprecated compatibility, migration notes, or historical evidence.</term>
   </CanonicalVocabulary>
 
   <ModelChain>
-    <chain>media_item -&gt; collection/inbox -&gt; immutable selection -&gt; analysis_run -&gt; artifacts</chain>
-    <rule>Adapters create and manage media_item and collection state before execution; they do not expose transient submission modes as the product model.</rule>
+    <chain>media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; analysis_run_step/artifact -&gt; artifact_subject lineage</chain>
+    <rule>Adapters create and manage media_asset and collection state before execution; they do not expose transient submission modes as the product model.</rule>
     <rule>analysis_run creation always references a selection snapshot, never mutable collection contents directly.</rule>
     <rule>Later edits to the inbox or any collection never mutate an existing selection or analysis_run.</rule>
   </ModelChain>
 
-  <OwnerScope>
-    <scope name="owner">All media_item, collection, selection, analysis_run, artifact, diagnostic, and retention decisions are scoped to an owner identity.</scope>
-    <scope name="adapter_identity">Telegram chat/user, Web account/session, and MCP caller identities are mapped into the same owner model at the API boundary.</scope>
-    <rule>Cross-owner reads, writes, selection reuse, run access, and artifact access are rejected before storage mutation.</rule>
-    <rule>Idempotency keys, pagination cursors, optimistic versions, and diagnostic queries are owner-scoped.</rule>
+  <AccessScope>
+    <scope name="channel_account">All media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, and retention decisions are scoped to a channel_account in the current single-user product.</scope>
+    <scope name="caller_identity">Telegram chat/user, Web account/session, and MCP caller identities are resolved into channel_account/caller scope at the API boundary.</scope>
+    <rule>Cross-channel-account reads, writes, selection reuse, run access, and artifact access are rejected before storage mutation.</rule>
+    <rule>Idempotency keys, pagination cursors, optimistic versions, and diagnostic queries are channel-account-scoped.</rule>
     <rule>Public collection and paginated list envelopes always encode items as an array, including empty collections and empty pages.</rule>
-  </OwnerScope>
+    <rule>owner is a deprecated compatibility label for caller/access scope, not a target product entity.</rule>
+  </AccessScope>
 
   <LifecycleStatuses>
-    <media-item>
+    <media-asset>
       <status>ingesting</status>
       <status>available</status>
       <status>invalid</status>
       <status>quarantined</status>
       <status>deleted</status>
-    </media-item>
+    </media-asset>
     <collection>
       <status>active</status>
       <status>archived</status>
       <status>deleted</status>
     </collection>
-    <selection>
+    <selection-snapshot>
       <status>created</status>
       <status>sealed</status>
       <status>invalidated</status>
-    </selection>
+    </selection-snapshot>
     <analysis-run>
       <status>queued</status>
       <status>claiming</status>
@@ -87,20 +91,24 @@
 
   <FunctionalRequirements>
     <Requirement id="REQ-MEDIA-001">
-      <Action>Create media_item records from Telegram, Web, MCP, and server-side import callers through one API-owned ingestion boundary.</Action>
-      <AcceptanceCriteria>Supported inputs include text, URL, generic file, photo/image, audio/voice, and video/document; each accepted item records owner, source metadata, content hash when available, size, MIME type, adapter origin, creation time, validation status, retention policy, and diagnostics pointer.</AcceptanceCriteria>
+      <Action>Create media_asset records from Telegram, Web, MCP, and server-side import callers through one API-owned ingestion boundary.</Action>
+      <AcceptanceCriteria>Supported inputs include text, URL, generic file, photo/image, audio/voice, and video/document; each accepted item records channel_account access scope, stored_object or origin metadata, content hash when available, size, MIME type, adapter origin, creation time, validation status, retention policy, and diagnostics pointer.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-COLLECTION-001">
       <Action>Maintain inbox and user collections independently of execution.</Action>
-      <AcceptanceCriteria>Every owner has a default inbox; callers can list, create, rename, archive, delete, and reorder collection items subject to owner scope and optimistic version checks. Accepted media appends to the next active collection position and must not create duplicate active positions in inbox or user collections.</AcceptanceCriteria>
+      <AcceptanceCriteria>Every channel_account has a default inbox; callers can list, create, rename, archive, delete, and reorder collection items subject to channel-account scope and optimistic version checks. Accepted media appends to the next active collection position and must not create duplicate active positions in inbox or user collections.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-SELECTION-001">
-      <Action>Create immutable selections from explicit ordered media_item references.</Action>
-      <AcceptanceCriteria>Selection creation validates owner access, media availability, requested analysis options, ordering, duplicate policy, and size limits; the stored snapshot captures item ids, source metadata needed for execution, option values, creator, timestamps, and validation diagnostics.</AcceptanceCriteria>
+      <Action>Create immutable selection_snapshots from explicit ordered media_asset references.</Action>
+      <AcceptanceCriteria>Selection snapshot creation validates channel-account access, media availability, requested analysis options, ordering, duplicate policy, and size limits; the stored snapshot captures item ids, stored_object/origin metadata needed for execution, option values, creator, timestamps, and validation diagnostics.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-RUN-001">
-      <Action>Create analysis_run records only from selections.</Action>
-      <AcceptanceCriteria>analysis_run creation records selection id, owner, run type, delivery preference, initial queued status, idempotency key, evidence-gate status, and diagnostics channel; execution rows may exist behind the run but must not become the public product surface.</AcceptanceCriteria>
+      <Action>Create analysis_run records only from selection_snapshots.</Action>
+      <AcceptanceCriteria>analysis_run creation records selection_snapshot id, channel_account scope, run type, delivery preference, initial queued status, idempotency key, evidence-gate status, diagnostics channel, planned analysis_run_steps, and analysis_run_step_inputs. Execution rows stay internal and must not become the public product surface.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-RUN-PLANNING-001">
+      <Action>Plan prerequisite execution inside the API before workers run.</Action>
+      <AcceptanceCriteria>For transcription runs, API maps selected speech media to transcription steps. For report or deep_research runs, API requires ready transcript/text-corpus artifacts or creates prerequisite transcription steps first. If a prerequisite cannot be planned or satisfied, API records diagnostics with codes analysis_prerequisite_missing, analysis_prerequisite_failed, or analysis_prerequisite_unavailable and does not leave the user without visible status.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-RUN-002">
       <Action>Cancel analysis_run records through a cooperative API-owned lifecycle.</Action>
@@ -108,27 +116,27 @@
     </Requirement>
     <Requirement id="REQ-ARTIFACT-001">
       <Action>Expose artifacts as analysis_run outputs with API-governed preview and download metadata.</Action>
-      <AcceptanceCriteria>Artifacts include transcript, summary, report, extracted structured data, source manifest, execution log, and diagnostic bundles as applicable; each artifact records owner, run id, kind, content type, size, checksum, storage object key, visibility, retention state, and preview metadata.</AcceptanceCriteria>
+      <AcceptanceCriteria>Artifacts include transcript, summary, report, extracted structured data, source manifest, execution log, and diagnostic bundles as applicable; each artifact records channel_account scope, run id, kind, content type, size, checksum, stored_object reference, visibility, retention state, preview metadata, and artifact_subject lineage where the artifact represents a selected item, step, prerequisite, or diagnostic.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-DIAGNOSTICS-001">
       <Action>Preserve rejected or partially processed records as diagnostics instead of silently dropping them.</Action>
       <AcceptanceCriteria>Ingestion, selection, run, adapter, worker, artifact, cancellation, retention, and permission failures expose stable diagnostic codes, human-readable messages, provider or adapter context when safe, correlation ids, timestamps, and remediation hints.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-RETENTION-001">
-      <Action>Apply retention policies consistently across sources, media_item records, selections, runs, artifacts, diagnostics, and deleted collection membership.</Action>
-      <AcceptanceCriteria>Retention rules define soft delete, hard delete eligibility, artifact expiry, source body expiry, owner export, and audit evidence preservation without orphaning run history.</AcceptanceCriteria>
+      <Action>Apply retention policies consistently across stored_objects, media_asset records, selection_snapshots, runs, artifacts, diagnostics, and deleted collection membership.</Action>
+      <AcceptanceCriteria>Retention rules define soft delete, hard delete eligibility, artifact expiry, stored object body expiry, export, and audit evidence preservation without orphaning run history.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-ADAPTER-001">
       <Action>Keep Telegram, Web, and MCP as thin adapters over the same API-owned state.</Action>
-      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection, analysis_run, artifact, owner, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the owner-wide media list. Telegram status copy and action labels are Russian-first and make collection actions plus run-specific result buttons explicit to the user. Web presents simple human wording and must not make internal names such as media_asset, selection_snapshot, analysis_run_step, channel_surface, opaque ids, or diagnostic internals load-bearing UI terms outside explicit admin/debug views.</AcceptanceCriteria>
+      <AcceptanceCriteria>Adapters may shape presentation and local transport acknowledgements, but durable inbox, collection, selection_snapshot, analysis_run, artifact, retention, and diagnostics semantics are owned by the API. Telegram inbox rendering and actions follow collection membership rather than the broad media inventory. Telegram status copy and action labels are Russian-first and make collection actions plus run-specific result buttons explicit to the user. Web presents simple human wording and must not make internal names such as media_asset, selection_snapshot, analysis_run_step, channel_surface, opaque ids, run manifests, or diagnostic internals load-bearing UI terms outside explicit admin/debug views. MCP may expose technical target vocabulary because it is a tool contract context.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-WORKER-AGENT-RUNNER-001">
       <Action>Run report and research analysis from prepared transcript or text-corpus artifacts.</Action>
-      <AcceptanceCriteria>For audio, video, voice, or other speech media, transcription produces transcript artifacts before report or research execution. Agent-runner consumes ready transcript or text-corpus artifact inputs plus safe metadata, publishes report or research artifacts through analysis_run, and records a prerequisite diagnostic instead of transcribing or processing raw speech media itself when required text input is missing.</AcceptanceCriteria>
+      <AcceptanceCriteria>For audio, video, voice, or other speech media, transcription produces transcript artifacts before report or research execution. Agent-runner receives declared analysis_run_step_inputs for ready transcript or text-corpus artifacts plus safe metadata, publishes report or research artifacts through analysis_run, and records or receives a prerequisite diagnostic instead of transcribing or processing raw speech media itself when required text input is missing.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-INTERACTION-SURFACE-001">
       <Action>Persist external interaction surfaces without coupling domain entities to consumer-specific UI.</Action>
-      <AcceptanceCriteria>Interaction surfaces store owner-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. Subject links are stored separately with subject type, subject id, and subject role; event history is append-only. Domain tables must not gain Telegram-specific or consumer-specific message fields, and interaction surface display state must not alter media, collection, selection, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
+      <AcceptanceCriteria>Channel surfaces store channel_account-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. Subject links are stored separately with subject type, subject id, and subject role; event history is append-only. Domain tables must not gain Telegram-specific or consumer-specific message fields, and channel surface display state must not alter media_asset, collection, selection_snapshot, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
     </Requirement>
   </FunctionalRequirements>
 
@@ -141,17 +149,17 @@
 
   <AdapterBoundaries>
     <Telegram>
-      <rule>Telegram accepts messages, files, URLs, media groups, and inline commands as input capture and management gestures over the owner inbox.</rule>
+      <rule>Telegram accepts messages, files, URLs, media groups, and inline commands as input capture and management gestures over the current materials/inbox collection.</rule>
       <rule>Telegram shows the current inbox or collection status after accepted input and offers explicit actions to create a selection and run analysis.</rule>
-      <rule>Telegram callback payloads address API-owned media_item, collection, selection, and analysis_run identifiers with versions where mutation is allowed.</rule>
+      <rule>Telegram callback payloads address API-owned media_asset, collection, selection_snapshot, and analysis_run identifiers with versions where mutation is allowed.</rule>
       <rule>Telegram shows background active analysis_run state separately from the current material selection. The current selection can start a new transcription unless the card is focused on an active run. Cancel actions target either the focused active run or, when there is no focus, the latest visible active run by run id plus version.</rule>
       <rule>Telegram main-card result and diagnostics actions are scoped to the analysis_run launched from the current card focus; historical terminal runs do not create generic result actions for a new or unstarted inbox selection.</rule>
-      <rule>After a successful Telegram result delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selections, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
-      <rule>Telegram may persist message mappings through the internal interaction surfaces API, but the API treats those mappings as opaque interaction surfaces rather than Telegram-specific domain fields.</rule>
+      <rule>After a successful Telegram result delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selection_snapshots, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
+      <rule>Telegram may persist message mappings through the internal channel surfaces API, but the API treats those mappings as opaque channel surfaces rather than Telegram-specific domain fields.</rule>
     </Telegram>
     <Web>
       <rule>Web is a simple human-facing management surface for browsing materials, creating groups, curating the current selection, launching analysis, and reviewing results, progress, errors, and downloads.</rule>
-      <rule>Web calls the public API but normal UI copy must avoid load-bearing internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, raw ids, and diagnostic internals outside explicit admin/debug views.</rule>
+      <rule>Web calls the public API but normal UI copy must avoid load-bearing internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals outside explicit admin/debug views.</rule>
     </Web>
     <MCP>
       <rule>MCP exposes tool calls for add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</rule>
@@ -160,10 +168,10 @@
 
   <EvidenceGates>
     <gate id="GATE-TARGET-ARCHITECTURE">Planning proof shows the target table set, API operations, DTO/type names, app boundaries, user flows, implementation stages, and test matrix are all covered by docs/architecture/single-user-channel-aware-target-architecture.md.</gate>
-    <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses the target names media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, artifact, diagnostic, channel_account where needed, and channel_surface only for internal channel runtime APIs.</gate>
-    <gate id="GATE-STORAGE">Storage tests prove single-user scope, channel identity boundaries, immutable selection snapshots, lifecycle transitions, idempotency, retention, diagnostics persistence, and channel surface recovery.</gate>
-    <gate id="GATE-API">API tests prove adapters share the same state and old public product routes are absent from the target contract.</gate>
-    <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed selections, agent-runner consumes ready transcript/text-corpus artifacts for report and research work, and results are reported through analysis_run artifacts and diagnostics.</gate>
+    <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses the target names media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account where needed, and channel_surface only for internal channel runtime APIs.</gate>
+    <gate id="GATE-STORAGE">Storage tests prove single-user/channel-account scope, channel identity boundaries, immutable selection snapshots, analysis_run_step_inputs, artifact_subject lineage, lifecycle transitions, idempotency, retention, diagnostics persistence, and channel surface recovery.</gate>
+    <gate id="GATE-API">API tests prove adapters share the same state, prerequisite planning is visible through runs/diagnostics, and old public product routes are absent from the target contract except explicitly deprecated compatibility paths.</gate>
+    <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed snapshots and declared step inputs, agent-runner consumes ready transcript/text-corpus artifacts for report and research work, and results are reported through analysis_run artifacts and diagnostics.</gate>
     <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions; Web tests also prove normal UI copy stays human and avoids internal technical vocabulary.</gate>
     <gate id="GATE-RUNTIME">Compose or equivalent runtime proof verifies end-to-end ingestion, selection, run, artifact, diagnostics, and retention behavior.</gate>
   </EvidenceGates>
@@ -187,6 +195,9 @@
     <bead id="media-fal" status="completed">Interaction Surfaces terminology refines the external surface contract around channel, surface type, address, display state, and lifecycle status.</bead>
     <bead id="media-w9y" status="completed">Interaction Surfaces table design is finalized as surfaces, subject links, and append-only events.</bead>
     <bead id="media-7f3" status="completed">Single-user channel-aware target architecture is fixed as the new from-scratch product plan, with child Beads for implementation execution.</bead>
+    <bead id="media-7f3.9" status="open">Implementation epic for target contracts, storage, API orchestration, workers, Telegram, Web, MCP, and GRACE refresh.</bead>
+    <bead id="media-7f3.10" status="open">Coverage epic for storage/API, worker, Telegram, Web, MCP, prerequisite, lineage, and no-legacy vocabulary proofs.</bead>
+    <bead id="media-7f3.11" status="open">Pre-MR QA epic for traceability, backend/security/worker, channel UX/Web/MCP/runtime, and final readiness.</bead>
   </BeadsTrace>
 
   <NonGoals>

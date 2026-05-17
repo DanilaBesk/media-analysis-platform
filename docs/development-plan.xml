@@ -12,7 +12,7 @@
     <document>docs/architecture/single-user-channel-aware-target-architecture.md</document>
     <decision>The product is single-user at this stage. Workspaces, workspace members, owners tables, and team authorization are deferred until a real product requirement appears.</decision>
     <decision>Channels are durable integration identities and presentation surfaces, not product owners. API tables store channel_accounts and channel_surfaces so Telegram, Web, and MCP can recover UI state after restarts without owning business state.</decision>
-    <decision>The target storage model uses channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_events, artifacts, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</decision>
+    <decision>The target storage model uses channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</decision>
     <decision>The current local database is disposable for this rebuild. Do not preserve rows, backfill current records, or prove no data loss for current local data unless a future production-data requirement is explicitly approved.</decision>
     <decision>Existing current implementation names may survive only inside explicit compatibility or migration stages. Target contracts and new code should use the target names.</decision>
   </TargetArchitectureReset>
@@ -29,68 +29,84 @@
   </TargetRebuildStages>
 
   <GuidingArchitecture>
-    <principle>API owns durable product state and all owner-scoped authorization.</principle>
-    <principle>media_item is created before analysis and can exist without any run.</principle>
+    <principle>API owns durable product state and all single-user/channel-account access checks.</principle>
+    <principle>media_asset is created before analysis and can exist without any run.</principle>
     <principle>collection and inbox are management surfaces, not execution requests.</principle>
-    <principle>selection is the only bridge from accumulated media into execution.</principle>
-    <principle>analysis_run is the public execution surface; backend execution rows are internal.</principle>
+    <principle>selection_snapshot is the only bridge from accumulated media into execution.</principle>
+    <principle>analysis_run is the public execution surface; analysis_run_steps and analysis_run_step_inputs are internal execution planning state.</principle>
     <principle>Artifacts, diagnostics, retention, and event history are first-class run outputs.</principle>
     <principle>Telegram, Web, and MCP are adapters over the same API state.</principle>
   </GuidingArchitecture>
 
   <DomainModel>
-    <Entity name="media_item">
-      <purpose>Durable owner-scoped input record.</purpose>
-      <fields>id, owner_id, source_id, kind, adapter_origin, display_name, status, metadata, diagnostics_id, retention_policy_id, created_at, updated_at, deleted_at</fields>
+    <Entity name="media_asset">
+      <purpose>Durable API-owned input record for one user-provided material.</purpose>
+      <fields>id, channel_account_id, stored_object_id, input_kind, origin, display_name, status, metadata, diagnostic_id, retention_policy_id, created_at, updated_at, deleted_at</fields>
       <invariants>
-        <rule>Belongs to exactly one owner.</rule>
-        <rule>Appears in the owner inbox by default after successful creation.</rule>
-        <rule>Invalid or quarantined items remain visible through diagnostics.</rule>
+        <rule>Belongs to exactly one channel account in the current single-user product.</rule>
+        <rule>Appears in the default inbox collection by default after successful creation.</rule>
+        <rule>Invalid or quarantined assets remain visible through diagnostics.</rule>
       </invariants>
     </Entity>
-    <Entity name="source">
-      <purpose>Normalized origin and stored body metadata for media_item.</purpose>
-      <fields>id, owner_id, origin_type, object_key, external_uri, text_ref, checksum, size_bytes, mime_type, metadata, expires_at</fields>
+    <Entity name="stored_object">
+      <purpose>API-owned object storage and origin metadata behind media assets and artifacts.</purpose>
+      <fields>id, channel_account_id, object_key, external_uri, text_ref, checksum, size_bytes, mime_type, metadata, expires_at, created_at</fields>
       <invariants>
-        <rule>Source bodies are written through API-owned ingestion paths.</rule>
-        <rule>Source retention can expire body access without deleting historical run metadata.</rule>
+        <rule>Object bodies are written through API-owned ingestion and artifact paths.</rule>
+        <rule>Object retention can expire body access without deleting historical run metadata.</rule>
       </invariants>
     </Entity>
     <Entity name="collection">
-      <purpose>Owner-scoped grouping of media_item records, including inbox.</purpose>
-      <fields>id, owner_id, kind, name, status, version, created_at, updated_at, archived_at, deleted_at</fields>
+      <purpose>Channel-account-scoped grouping of media_asset records, including inbox.</purpose>
+      <fields>id, channel_account_id, kind, name, status, version, created_at, updated_at, archived_at, deleted_at</fields>
       <invariants>
-        <rule>Each owner has exactly one active inbox.</rule>
+        <rule>Each channel account has exactly one active inbox.</rule>
         <rule>Collection membership is mutable and version checked.</rule>
       </invariants>
     </Entity>
-    <Entity name="selection">
+    <Entity name="selection_snapshot">
       <purpose>Immutable ordered snapshot prepared for analysis.</purpose>
-      <fields>id, owner_id, status, item_snapshot, option_snapshot, created_by, created_at, sealed_at, diagnostics_id</fields>
+      <fields>id, channel_account_id, status, option_snapshot, created_by, created_at, sealed_at, diagnostic_id</fields>
       <invariants>
-        <rule>Selections are never recomputed from later collection state.</rule>
-        <rule>Selections may be invalidated by diagnostics but not edited in place.</rule>
+        <rule>Selection snapshots are never recomputed from later collection state.</rule>
+        <rule>Selection snapshots may be invalidated by diagnostics but not edited in place.</rule>
       </invariants>
     </Entity>
     <Entity name="analysis_run">
-      <purpose>User-facing execution record created from a selection.</purpose>
-      <fields>id, owner_id, selection_id, run_type, status, idempotency_key, delivery_preference, evidence_gate_state, diagnostics_id, created_at, started_at, completed_at, canceled_at, expires_at</fields>
+      <purpose>User-facing execution record created from a selection_snapshot.</purpose>
+      <fields>id, channel_account_id, selection_snapshot_id, run_type, status, idempotency_key, delivery_preference, evidence_gate_state, diagnostic_id, created_at, started_at, completed_at, canceled_at, expires_at</fields>
       <invariants>
-        <rule>Every run references one sealed selection.</rule>
-        <rule>Worker attempts and queue tasks are internal details keyed by analysis_run_id.</rule>
+        <rule>Every run references one sealed selection_snapshot.</rule>
+        <rule>analysis_run_steps and queue messages are internal details keyed by analysis_run_id.</rule>
+      </invariants>
+    </Entity>
+    <Entity name="analysis_run_step_input">
+      <purpose>Explicitly declares the selection item or artifact a worker step may read.</purpose>
+      <fields>id, analysis_run_step_id, input_kind, selection_snapshot_item_id, artifact_id, position, required, metadata, created_at</fields>
+      <invariants>
+        <rule>Transcription steps consume selection_snapshot_item inputs.</rule>
+        <rule>Report and research steps consume transcript_artifact or text_corpus_artifact inputs and must not discover raw speech media ad hoc.</rule>
       </invariants>
     </Entity>
     <Entity name="artifact">
       <purpose>Run output, preview, or evidence object.</purpose>
-      <fields>id, owner_id, analysis_run_id, kind, status, object_key, content_type, checksum, size_bytes, preview, visibility, retention_state, created_at, expires_at, deleted_at</fields>
+      <fields>id, channel_account_id, stored_object_id, analysis_run_id, kind, status, content_type, checksum, size_bytes, preview, visibility, retention_state, created_at, expires_at, deleted_at</fields>
       <invariants>
-        <rule>Artifact access requires owner and run authorization.</rule>
+        <rule>Artifact access requires channel-account and run authorization.</rule>
         <rule>Unavailable artifacts are represented with status and diagnostics.</rule>
+      </invariants>
+    </Entity>
+    <Entity name="artifact_subject">
+      <purpose>Lineage link from artifacts to runs, steps, snapshots, selected items, media assets, or diagnostics.</purpose>
+      <fields>artifact_id, subject_type, subject_id, subject_role, created_at</fields>
+      <invariants>
+        <rule>Transcript artifacts link back to the selected item and step that produced them.</rule>
+        <rule>Report and research artifacts link to the text artifacts they consumed when lineage is needed.</rule>
       </invariants>
     </Entity>
     <Entity name="diagnostic">
       <purpose>Structured warning, rejection, failure, and operator evidence.</purpose>
-      <fields>id, owner_id, subject_type, subject_id, severity, code, message, context, correlation_id, created_at</fields>
+      <fields>id, channel_account_id, subject_type, subject_id, severity, code, message, context, correlation_id, created_at</fields>
       <invariants>
         <rule>Every validation rejection has a diagnostic record or inline diagnostic envelope.</rule>
         <rule>Diagnostics do not leak secrets, raw tokens, or private object links.</rule>
@@ -99,9 +115,9 @@
   </DomainModel>
 
   <LifecycleRules>
-    <media-item>ingesting -&gt; available | invalid | quarantined | deleted</media-item>
+    <media-asset>ingesting -&gt; available | invalid | quarantined | deleted</media-asset>
     <collection>active -&gt; archived | deleted</collection>
-    <selection>created -&gt; sealed | invalidated</selection>
+    <selection-snapshot>created -&gt; sealed | invalidated</selection-snapshot>
     <analysis-run>queued -&gt; claiming -&gt; running -&gt; succeeded | partially_succeeded | failed | cancel_requested | canceled | expired</analysis-run>
     <artifact>pending -&gt; available | failed | expired | deleted</artifact>
     <rule>Transitions must be stored with timestamps and diagnostic context for non-happy paths.</rule>
@@ -109,31 +125,32 @@
   </LifecycleRules>
 
   <PublicContractPlan>
-    <step id="media-49h-1">Replace public contract schemas with media_item, collection, selection, analysis_run, source, artifact, and diagnostic DTOs.</step>
+    <step id="media-49h-1">Replace public contract schemas with media_asset, stored_object, collection, selection_snapshot, analysis_run, artifact, diagnostic, channel_account, and channel_surface DTOs.</step>
     <step id="media-49h-2">Define API routes for adding media, listing media, managing collections, sealing selections, starting runs, polling events, canceling runs, resolving artifacts, and reading diagnostics.</step>
     <step id="media-49h-3">Add schema assertions that public OpenAPI no longer exposes old execution-request or grouped-submission product names.</step>
-    <step id="media-49h-4">Freeze owner scope, pagination, idempotency, optimistic version, validation error, and retention envelopes.</step>
+    <step id="media-49h-4">Freeze channel-account access scope, pagination, idempotency, optimistic version, validation error, and retention envelopes.</step>
+    <step id="media-49h-5">Document /v1/media-items, /v1/selections, source, owner, and analysis_run_tasks as deprecated compatibility names only while migration clients still need them.</step>
   </PublicContractPlan>
 
   <StoragePlan>
-    <step id="media-5cj-1">Create bottom-up migrations for sources, media_items, collections, collection_items, selections, analysis_runs, artifacts, diagnostics, and internal execution rows.</step>
-    <step id="media-5cj-2">Implement storage repositories with owner-scoped predicates on every read and mutation.</step>
+    <step id="media-5cj-1">Create bottom-up migrations for channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</step>
+    <step id="media-5cj-2">Implement storage repositories with channel-account/single-user predicates on every read and mutation.</step>
     <step id="media-5cj-3">Implement immutable selection snapshot writes and prove later collection edits do not affect sealed selections.</step>
-    <step id="media-5cj-4">Implement retention state transitions and source/artifact object cleanup scheduling.</step>
-    <step id="media-5cj-5">Implement diagnostics persistence for ingestion, selection, run, worker, artifact, adapter, and retention failures.</step>
+    <step id="media-5cj-4">Implement retention state transitions and stored object/artifact cleanup scheduling.</step>
+    <step id="media-5cj-5">Implement diagnostics persistence for ingestion, selection_snapshot, run, prerequisite, worker, artifact, adapter, and retention failures.</step>
   </StoragePlan>
 
   <ApiOrchestrationPlan>
-    <step id="api-1">Build ingestion service that normalizes adapter input into source and media_item records, then adds accepted items to inbox.</step>
+    <step id="api-1">Build ingestion service that normalizes adapter input into stored_object and media_asset records, then adds accepted items to inbox.</step>
     <step id="api-2">Build collection service for inbox reads, collection mutation, ordering, archive, delete, and version conflict handling.</step>
-    <step id="api-3">Build selection service that validates owner access, freezes item snapshots, freezes options, and emits diagnostics.</step>
-    <step id="api-4">Build analysis_run service that creates runs from selections, maps them to internal execution rows, schedules queue tasks, and exposes event polling.</step>
+    <step id="api-3">Build selection_snapshot service that validates channel-account access, freezes item snapshots, freezes options, and emits diagnostics.</step>
+    <step id="api-4">Build analysis_run service that creates runs from selection_snapshots, plans analysis_run_steps, resolves analysis_run_step_inputs, schedules prerequisite transcription for speech media, records prerequisite diagnostics, and exposes event polling.</step>
     <step id="api-5">Build artifact service that records outputs, previews, download access, expiry, and deletion.</step>
     <step id="api-6">Build diagnostics service with stable codes, subject filters, severity filters, and correlation lookup.</step>
   </ApiOrchestrationPlan>
 
   <WorkerPlan>
-    <step id="media-sfx-1">Workers claim internal execution rows by analysis_run_id and load sealed selection material through internal API contracts.</step>
+    <step id="media-sfx-1">Workers claim analysis_run_steps by analysis_run_id and load declared analysis_run_step_inputs through internal API contracts.</step>
     <step id="media-sfx-2">Transcription, report, and research execution produce artifact records and diagnostics through control-plane APIs.</step>
     <step id="media-sfx-3">Partial success records per-item diagnostics while allowing analysis_run to finish with partially_succeeded when policy allows.</step>
     <step id="media-sfx-4">Worker logs and raw evidence become private artifacts or diagnostics, not public product entities.</step>
@@ -154,24 +171,24 @@
     </Web>
     <MCP bead="media-uhi">
       <step>Expose tools add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, get_diagnostics, and apply_retention_action.</step>
-      <step>Use the same public contracts and owner-scope failures as Web and Telegram.</step>
+      <step>Use the same public contracts and channel-account access failures as Web and Telegram, while allowing technical target vocabulary in tool schemas.</step>
     </MCP>
   </AdapterPlan>
 
   <EvidencePlan>
     <gate id="target-architecture">Docs prove from-scratch architecture coverage for tables, operations, schemas, types, all apps, and verification.</gate>
-    <gate id="contracts">Schema and OpenAPI tests prove canonical vocabulary and removed old public vocabulary.</gate>
-    <gate id="storage">Storage tests prove owner scope, collection versioning, immutable selections, run lifecycle, artifacts, retention, and diagnostics.</gate>
-    <gate id="api">API tests prove complete media_item to artifact flow and rejected input diagnostics.</gate>
-    <gate id="workers">Worker tests prove sealed selection consumption, agent-runner transcript/text-corpus input behavior, and analysis_run artifact reporting.</gate>
+    <gate id="contracts">Schema and OpenAPI tests prove target vocabulary and isolate deprecated compatibility names.</gate>
+    <gate id="storage">Storage tests prove channel-account scope, collection versioning, immutable selection snapshots, step input linkage, artifact subjects, run lifecycle, artifacts, retention, and diagnostics.</gate>
+    <gate id="api">API tests prove complete media_asset to artifact flow, prerequisite planning, artifact lineage, and rejected input diagnostics.</gate>
+    <gate id="workers">Worker tests prove sealed snapshot and declared step-input consumption, agent-runner transcript/text-corpus input behavior, and analysis_run artifact reporting.</gate>
     <gate id="adapters">Adapter tests prove Telegram, Web, and MCP share API-owned state, with Web keeping normal UI language simple and non-technical.</gate>
-    <gate id="runtime">Runtime smoke proves ingestion, selection, run, artifact, diagnostics, and retention behavior across services.</gate>
+    <gate id="runtime">Runtime smoke proves ingestion, selection_snapshot, run, prerequisite planning, artifact lineage, diagnostics, and retention behavior across services.</gate>
   </EvidencePlan>
 
   <DeletedArchitecturePolicy>
     <rule>Old immediate-execution public endpoints, grouped submission records, public source grouping names, and user-visible mode toggles are deleted target architecture.</rule>
     <rule>Do not add dual-path wording that tells clients to use either the old product model or the new product model.</rule>
-    <rule>If internal database tables or queue rows retain names from earlier implementations during migration, they must be documented only as internal execution details and must not appear in public requirements, contracts, or adapter UX.</rule>
+    <rule>If internal database tables, queue rows, or HTTP compatibility routes retain names from earlier implementations during migration, they must be documented only as deprecated compatibility or internal execution details and must not appear in new target requirements, normal Web copy, Telegram copy, or worker DTO names.</rule>
   </DeletedArchitecturePolicy>
 
   <BottomUpSequencing>
@@ -186,15 +203,16 @@
   </BottomUpSequencing>
 
   <CurrentClosureState>
-    <completed>Implementation packets through contracts, server/storage, workers, Telegram, Web, MCP, runtime-final proof, coverage closure, and GRACE truth refresh are complete in the current tree.</completed>
-    <remaining>None.</remaining>
+    <completed>Earlier inbox-first packets remain historical implementation evidence, but they are superseded by the media-7f3 target rebuild plan where naming, table boundaries, API orchestration, Web copy, and worker input contracts are being redefined from first principles.</completed>
+    <remaining>Open work is tracked by media-7f3.9, media-7f3.10, and media-7f3.11. The current tree is not closed against the target rebuild until compatibility isolation, target storage, prerequisite orchestration, worker step inputs, Web/MCP split, and QA vocabulary gates pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>
-    <item>Public contracts expose only the canonical product model.</item>
-    <item>Owner scope is enforced for every entity and artifact access path.</item>
-    <item>Selections are immutable and verified against later collection mutation.</item>
+    <item>Public contracts expose only the target product model, with deprecated compatibility names isolated and tested.</item>
+    <item>Channel-account/single-user access scope is enforced for every entity and artifact access path.</item>
+    <item>Selection snapshots are immutable and verified against later collection mutation.</item>
     <item>analysis_run lifecycle, events, cancellation, partial success, failure, and expiry are verified.</item>
+    <item>analysis_run_step_inputs and artifact_subjects prove worker inputs and artifact lineage.</item>
     <item>Retention and diagnostics are not deferred behind UI-only behavior.</item>
     <item>Adapters remain thin and share API-owned state.</item>
   </DefinitionOfDone>
