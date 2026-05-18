@@ -259,6 +259,55 @@ func TestTargetRuntimeServiceMapsCrossChannelRunMissToNotFound(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceRejectsWorkerWritesForUnknownStep(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeTargetRuntimeStore{checkStepErr: sql.ErrNoRows}
+	service := NewTargetRuntimeService(store)
+	ctx := context.Background()
+
+	if err := service.RecordAnalysisRunStepProgress(ctx, "run-1", TargetRecordAnalysisRunStepProgressRequest{
+		AnalysisRunStepID: "missing-step",
+		ProgressStage:     "running",
+	}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+		t.Fatalf("RecordAnalysisRunStepProgress() error = %v, want ErrAnalysisRunNotFound", err)
+	}
+	if err := service.RecordAnalysisRunArtifacts(ctx, "run-1", TargetRecordAnalysisRunArtifactsRequest{
+		AnalysisRunStepID: "missing-step",
+		Artifacts: []workerArtifactDescriptor{{
+			ArtifactKind: "summary_markdown",
+			MIMEType:     "text/markdown",
+			ObjectKey:    "run-1/summary/markdown/summary.md",
+			SizeBytes:    10,
+			Filename:     "summary.md",
+		}},
+	}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+		t.Fatalf("RecordAnalysisRunArtifacts() error = %v, want ErrAnalysisRunNotFound", err)
+	}
+	if err := service.RecordAnalysisRunDiagnostics(ctx, "run-1", TargetRecordAnalysisRunDiagnosticsRequest{
+		AnalysisRunStepID: "missing-step",
+		Diagnostics: []workerDiagnosticDescriptor{{
+			DiagnosticID: "diagnostic-1",
+			SubjectType:  "analysis_run",
+			SubjectID:    "run-1",
+			Severity:     "warning",
+			Code:         "worker_warning",
+			Message:      "worker warning",
+		}},
+	}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+		t.Fatalf("RecordAnalysisRunDiagnostics() error = %v, want ErrAnalysisRunNotFound", err)
+	}
+	if _, err := service.FinalizeAnalysisRunStep(ctx, "run-1", TargetFinalizeAnalysisRunStepRequest{
+		AnalysisRunStepID: "missing-step",
+		Outcome:           "succeeded",
+	}); !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+		t.Fatalf("FinalizeAnalysisRunStep() error = %v, want ErrAnalysisRunNotFound", err)
+	}
+	if store.progressCalls != 0 || store.artifactCalls != 0 || store.diagnosticCalls != 0 || store.finalizeCalls != 0 {
+		t.Fatalf("worker write reached store after unknown step: progress=%d artifacts=%d diagnostics=%d finalize=%d", store.progressCalls, store.artifactCalls, store.diagnosticCalls, store.finalizeCalls)
+	}
+}
+
 type fakeTargetRuntimeStore struct {
 	channelAccount         targetstore.ChannelAccountRecord
 	operation              targetstore.OperationRequestRecord
@@ -270,6 +319,11 @@ type fakeTargetRuntimeStore struct {
 	snapshotItems          []targetstore.SelectionSnapshotItemRecord
 	analysisRunGraph       targetstore.AnalysisRunGraph
 	getAnalysisRunErr      error
+	checkStepErr           error
+	progressCalls          int
+	artifactCalls          int
+	diagnosticCalls        int
+	finalizeCalls          int
 	surface                targetstore.ChannelSurfaceRecord
 	surfaceSubjects        []targetstore.ChannelSurfaceSubjectRecord
 	supersede              targetstore.SupersedeChannelSurfaceParams
@@ -638,6 +692,9 @@ func (s *fakeTargetRuntimeStore) ClaimAnalysisRunStep(_ context.Context, analysi
 }
 
 func (s *fakeTargetRuntimeStore) CheckAnalysisRunStepCancel(_ context.Context, analysisRunID, analysisRunStepID string) (targetstore.AnalysisRunRecord, targetstore.AnalysisRunStepRecord, error) {
+	if s.checkStepErr != nil {
+		return targetstore.AnalysisRunRecord{}, targetstore.AnalysisRunStepRecord{}, s.checkStepErr
+	}
 	now := time.Date(2026, 5, 18, 13, 0, 0, 0, time.UTC)
 	return targetstore.AnalysisRunRecord{
 			ID:                analysisRunID,
@@ -662,18 +719,22 @@ func (s *fakeTargetRuntimeStore) CheckAnalysisRunStepCancel(_ context.Context, a
 }
 
 func (s *fakeTargetRuntimeStore) RecordAnalysisRunStepProgress(_ context.Context, _ targetstore.RecordAnalysisRunProgressParams) error {
+	s.progressCalls++
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) RecordArtifacts(_ context.Context, _ []targetstore.StoredObjectRecord, _ []targetstore.ArtifactRecord, _ []targetstore.ArtifactSubjectRecord) error {
+	s.artifactCalls++
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) RecordDiagnostics(_ context.Context, _ []targetstore.DiagnosticRecord) error {
+	s.diagnosticCalls++
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) FinalizeAnalysisRunStep(_ context.Context, params targetstore.FinalizeAnalysisRunStepParams) (targetstore.AnalysisRunRecord, error) {
+	s.finalizeCalls++
 	return targetstore.AnalysisRunRecord{
 		ID:                params.AnalysisRunID,
 		ChannelAccountID:  "channel-account-1",

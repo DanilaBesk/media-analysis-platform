@@ -299,6 +299,39 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
     assert _required_marker() in caplog.text
 
 
+def test_run_transcription_sanitizes_workspace_and_artifact_prefix_for_control_plane_ids(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-1",
+            source_kind="uploaded_file",
+            display_name="Audio: call.ogg",
+            original_filename="call.ogg",
+            object_key="uploads/call.ogg",
+        ),
+        analysis_run_id="../escape/run",
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/call.ogg": b"audio"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    workspace_dir = transcriber.calls[0][1].resolve()
+    assert workspace_dir.is_relative_to(tmp_path.resolve())
+    assert workspace_dir.name.startswith("escape-run-")
+    assert not (tmp_path.parent / "escape").exists()
+    assert all(not str(call["object_key"]).startswith("../") for call in artifact_store.calls)
+
+
 def test_run_transcription_combines_sorted_inputs_before_one_final_pass(tmp_path: Path, monkeypatch) -> None:
     execution = _build_execution(
         OrderedWorkerInput(

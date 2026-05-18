@@ -30,6 +30,11 @@ const (
 	defaultRetentionSweepInterval = time.Hour
 	defaultQueueReconcileInterval = 30 * time.Second
 	defaultQueueReconcileLimit    = 100
+	defaultReadHeaderTimeout      = 5 * time.Second
+	defaultReadTimeout            = 15 * time.Minute
+	defaultWriteTimeout           = 2 * time.Minute
+	defaultIdleTimeout            = 2 * time.Minute
+	defaultMaxHeaderBytes         = 1 << 20
 )
 
 type runtimeConfig struct {
@@ -144,7 +149,11 @@ func run(ctx context.Context) error {
 	httpServer := &http.Server{
 		Addr:              cfg.bindAddr,
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: defaultReadHeaderTimeout,
+		ReadTimeout:       defaultReadTimeout,
+		WriteTimeout:      defaultWriteTimeout,
+		IdleTimeout:       defaultIdleTimeout,
+		MaxHeaderBytes:    defaultMaxHeaderBytes,
 	}
 
 	logger.Printf("listening addr=%s", cfg.bindAddr)

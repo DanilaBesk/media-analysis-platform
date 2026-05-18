@@ -176,6 +176,17 @@ def test_fetch_file_rejects_blank_object_key(tmp_path: Path) -> None:
         store.fetch_file(object_key="   ", destination=tmp_path / "ignored.bin")
 
 
+@pytest.mark.parametrize("object_key", ["../escape.txt", "/absolute.txt", "dir/../escape.txt", "dir\\escape.txt", " key.txt "])
+def test_object_store_rejects_non_bucket_relative_keys(tmp_path: Path, object_key: str) -> None:
+    transport = RecordingObjectTransport()
+    store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
+
+    with pytest.raises(ValueError, match="object_key"):
+        store.fetch_file(object_key=object_key, destination=tmp_path / "ignored.bin")
+
+    assert transport.calls == []
+
+
 def _config() -> WorkerObjectStoreConfig:
     return WorkerObjectStoreConfig(
         endpoint="http://minio:9000",

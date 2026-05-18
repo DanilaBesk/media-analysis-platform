@@ -328,9 +328,53 @@ func TestDeterministicSeedFixturesAreStable(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsWorkerStepWritesWhenStepRowIsMissing(t *testing.T) {
+	t.Parallel()
+
+	db, recorder := openRecordingDB(t)
+	recorder.rowsAffected = 0
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	now := time.Date(2026, 5, 18, 9, 0, 0, 0, time.UTC)
+
+	if err := store.RecordAnalysisRunStepProgress(context.Background(), RecordAnalysisRunProgressParams{
+		AnalysisRunID:     "run-1",
+		AnalysisRunStepID: "missing-step",
+		HeartbeatAt:       now,
+		Event: AnalysisRunEventRecord{
+			ID:            "event-progress",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run_step.progress",
+			Version:       1,
+			CreatedAt:     now,
+		},
+	}); err != sql.ErrNoRows {
+		t.Fatalf("RecordAnalysisRunStepProgress(missing step) error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := store.FinalizeAnalysisRunStep(context.Background(), FinalizeAnalysisRunStepParams{
+		AnalysisRunID:     "run-1",
+		AnalysisRunStepID: "missing-step",
+		StepStatus:        "succeeded",
+		RunStatus:         "succeeded",
+		FinalizedAt:       now,
+		Event: AnalysisRunEventRecord{
+			ID:            "event-finalized",
+			AnalysisRunID: "run-1",
+			EventType:     "analysis_run_step.finalized",
+			Version:       2,
+			CreatedAt:     now,
+		},
+	}); err != sql.ErrNoRows {
+		t.Fatalf("FinalizeAnalysisRunStep(missing step) error = %v, want sql.ErrNoRows", err)
+	}
+}
+
 type recordingDriverState struct {
-	mu      sync.Mutex
-	queries []string
+	mu           sync.Mutex
+	queries      []string
+	rowsAffected int64
 }
 
 func (s *recordingDriverState) joinedQueries() string {
@@ -348,7 +392,7 @@ func (s *recordingDriverState) record(query string) {
 func openRecordingDB(t *testing.T) (*sql.DB, *recordingDriverState) {
 	t.Helper()
 
-	state := &recordingDriverState{}
+	state := &recordingDriverState{rowsAffected: 1}
 	name := fmt.Sprintf("target_storage_recording_%d", recordingDriverSeq.Add(1))
 	sql.Register(name, recordingDriver{state: state})
 	db, err := sql.Open(name, "")
@@ -395,12 +439,18 @@ func (c *recordingConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, e
 
 func (c *recordingConn) ExecContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Result, error) {
 	c.state.record(query)
-	return driver.RowsAffected(1), nil
+	return driver.RowsAffected(c.state.rowsAffected), nil
 }
 
 func (c *recordingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.state.record(query)
 	now := time.Date(2026, 5, 18, 9, 0, 0, 0, time.UTC)
+	if strings.Contains(query, "SELECT status FROM analysis_runs WHERE id=$1") {
+		return &recordingRows{
+			columns: []string{"status"},
+			values:  []driver.Value{"running"},
+		}, nil
+	}
 	return &recordingRows{
 		columns: []string{
 			"id",

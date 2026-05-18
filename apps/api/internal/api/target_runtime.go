@@ -924,12 +924,26 @@ func (s *TargetRuntimeService) CheckAnalysisRunStepCancel(ctx context.Context, a
 	}, nil
 }
 
+func (s *TargetRuntimeService) ensureAnalysisRunStep(ctx context.Context, analysisRunID, analysisRunStepID string) error {
+	if strings.TrimSpace(analysisRunStepID) == "" {
+		return fmt.Errorf("%w: analysis_run_step_id is required", storage.ErrContractViolation)
+	}
+	_, _, err := s.store.CheckAnalysisRunStepCancel(ctx, analysisRunID, analysisRunStepID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return storage.ErrAnalysisRunNotFound
+	}
+	return err
+}
+
 func (s *TargetRuntimeService) RecordAnalysisRunStepProgress(ctx context.Context, analysisRunID string, req TargetRecordAnalysisRunStepProgressRequest) error {
 	if s.store == nil {
 		return fmt.Errorf("target storage is required")
 	}
 	if req.AnalysisRunStepID == "" || req.ProgressStage == "" {
 		return fmt.Errorf("%w: analysis_run_step_id and progress_stage are required", storage.ErrContractViolation)
+	}
+	if err := s.ensureAnalysisRunStep(ctx, analysisRunID, req.AnalysisRunStepID); err != nil {
+		return err
 	}
 	now := s.now()
 	payload := jsonOrObject(req.Payload)
@@ -961,6 +975,9 @@ func (s *TargetRuntimeService) RecordAnalysisRunArtifacts(ctx context.Context, a
 	}
 	if req.AnalysisRunStepID == "" || len(req.Artifacts) == 0 {
 		return fmt.Errorf("%w: analysis_run_step_id and artifacts are required", storage.ErrContractViolation)
+	}
+	if err := s.ensureAnalysisRunStep(ctx, analysisRunID, req.AnalysisRunStepID); err != nil {
+		return err
 	}
 	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
 	if err != nil {
@@ -1043,6 +1060,9 @@ func (s *TargetRuntimeService) RecordAnalysisRunDiagnostics(ctx context.Context,
 	if req.AnalysisRunStepID == "" || len(req.Diagnostics) == 0 {
 		return fmt.Errorf("%w: analysis_run_step_id and diagnostics are required", storage.ErrContractViolation)
 	}
+	if err := s.ensureAnalysisRunStep(ctx, analysisRunID, req.AnalysisRunStepID); err != nil {
+		return err
+	}
 	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
 	if err != nil {
 		return err
@@ -1080,6 +1100,9 @@ func (s *TargetRuntimeService) FinalizeAnalysisRunStep(ctx context.Context, anal
 	}
 	if req.AnalysisRunStepID == "" {
 		return TargetAnalysisRun{}, fmt.Errorf("%w: analysis_run_step_id is required", storage.ErrContractViolation)
+	}
+	if err := s.ensureAnalysisRunStep(ctx, analysisRunID, req.AnalysisRunStepID); err != nil {
+		return TargetAnalysisRun{}, err
 	}
 	stepStatus, runStatus, err := targetOutcomeStatus(req.Outcome)
 	if err != nil {

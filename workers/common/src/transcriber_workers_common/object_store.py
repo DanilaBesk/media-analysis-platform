@@ -160,6 +160,7 @@ class WorkerObjectStore:
         content_type: str | None = None,
     ) -> bytes:
         _require(bool(object_key.strip()), "object_key must not be empty")
+        _validate_object_key(object_key)
         request_body = body or b""
         url, canonical_uri, host = self._object_url(bucket=bucket, object_key=object_key)
         headers = self._signed_headers(
@@ -245,3 +246,13 @@ def _signature_key(key: str, date_stamp: str, region_name: str, service_name: st
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def _validate_object_key(object_key: str) -> None:
+    stripped = object_key.strip()
+    _require(stripped == object_key, "object_key must not include surrounding whitespace")
+    _require(not stripped.startswith(("/", "\\")), "object_key must be bucket-relative")
+    _require("\\" not in stripped, "object_key must use POSIX separators")
+    parts = PurePosixPath(stripped).parts
+    _require(bool(parts), "object_key must not be empty")
+    _require(all(part not in {"", ".", ".."} for part in parts), "object_key must not include relative path segments")

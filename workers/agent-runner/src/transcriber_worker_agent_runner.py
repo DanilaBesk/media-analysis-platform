@@ -549,7 +549,7 @@ def runAgentHarness(
         worker_kind="agent_runner",
         step_kind=step_kind,
     )
-    workspace_dir = Path(workspace_root) / execution.analysis_run_id
+    workspace_dir = _workspace_dir_for_analysis_run(workspace_root, execution.analysis_run_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -1515,6 +1515,30 @@ def _check_cancellation(api_client: AnalysisRunControlClient, execution: Claimed
     cancel_state = api_client.check_cancel(execution.analysis_run_id, analysis_run_step_id=execution.analysis_run_step_id)
     if cancel_state.cancel_requested:
         raise WorkerCancellationRequested(f"analysis run {execution.analysis_run_id} was canceled")
+
+
+def _workspace_dir_for_analysis_run(workspace_root: Path, analysis_run_id: str) -> Path:
+    root = Path(workspace_root).resolve()
+    destination = (root / _safe_workspace_token(analysis_run_id)).resolve()
+    if not destination.is_relative_to(root):
+        raise ValueError("analysis_run_id resolved outside workspace_root")
+    return destination
+
+
+def _safe_workspace_token(value: str) -> str:
+    stripped = value.strip()
+    cleaned = "".join(character if character.isalnum() or character in {"-", "_", "."} else "-" for character in stripped)
+    cleaned = cleaned.strip("-_.")
+    if (
+        stripped
+        and cleaned == stripped
+        and "/" not in stripped
+        and "\\" not in stripped
+        and stripped not in {".", ".."}
+    ):
+        return stripped
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"{cleaned or 'analysis-run'}-{digest}"
 
 
 def _build_harness_cancellation_hook(*, api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunStep):

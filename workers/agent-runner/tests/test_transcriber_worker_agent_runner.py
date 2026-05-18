@@ -327,6 +327,27 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
     assert result.artifact_descriptors == register_call[1]["artifacts"]
 
 
+def test_run_agent_harness_sanitizes_workspace_and_artifact_prefix_for_control_plane_ids(tmp_path: Path) -> None:
+    execution = _execution({"harness_name": "fixture", "payload_hash": "abc123"}, analysis_run_id="../escape/run")
+    api_client = RecordingApiClient(execution)
+    artifact_store = InMemoryArtifactStore()
+    registry = FakeHarnessRegistry()
+
+    runAgentHarness(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+        harness_registry=registry,
+    )
+
+    workspace_dir = registry.requests[0][1].workspace_dir.resolve()
+    assert workspace_dir.is_relative_to(tmp_path.resolve())
+    assert workspace_dir.name.startswith("escape-run-")
+    assert not (tmp_path.parent / "escape").exists()
+    assert all(not str(call["object_key"]).startswith("../") for call in artifact_store.calls)
+
+
 def test_run_agent_harness_registers_non_fatal_diagnostics_without_partial_policy(tmp_path: Path) -> None:
     execution = _execution(
         {
@@ -1839,6 +1860,7 @@ def _execution(
     *,
     item_count: int = 1,
     step_inputs: tuple[AnalysisRunStepInput, ...] = (),
+    analysis_run_id: str = "job-agent",
 ) -> ClaimedAnalysisRunStep:
     items = []
     for position in range(item_count):
@@ -1868,7 +1890,7 @@ def _execution(
 
     return ClaimedAnalysisRunStep(
         analysis_run_step_id="exec-agent",
-        analysis_run_id="job-agent",
+        analysis_run_id=analysis_run_id,
         run_type="custom",
         selection_snapshot=SealedSelectionInput(
             selection_snapshot_id="selection-agent",

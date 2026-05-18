@@ -231,7 +231,8 @@
     <completed bead="media-7f3.10.4">Coverage inventory/no-legacy closure now includes native per-surface metric output, pass/fail-only gates, target vocabulary regression scans, target reset schema guards, and admin runtime no-op behavior for removed legacy tables after target reset.</completed>
     <completed bead="media-7f3.10">Coverage epic closure audit confirmed all four coverage children are closed with committed proof and the final proof commit is pushed.</completed>
     <completed bead="media-7f3.11.1">QA traceability audit is published in docs/architecture/target-qa-traceability-audit.md and fixes stale closure/coverage wording found during the audit.</completed>
-    <remaining>Open work is tracked by media-7f3.11.2, media-7f3.11.3, and media-7f3.11.4. The current tree is not closed against the target rebuild until QA readiness checks pass.</remaining>
+    <completed bead="media-7f3.11.2">Backend/storage/security/worker QA is published in docs/architecture/target-backend-storage-worker-qa.md and fixed worker workspace, object-key, worker-step write, and HTTP server hardening findings.</completed>
+    <remaining>Open work is tracked by media-7f3.11.3 and media-7f3.11.4. The current tree is not closed against the target rebuild until QA readiness checks pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>

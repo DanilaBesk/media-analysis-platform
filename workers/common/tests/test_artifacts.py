@@ -72,6 +72,14 @@ def test_build_artifact_object_key_uses_canonical_layout() -> None:
     )
 
 
+def test_build_artifact_object_key_sanitizes_path_segments() -> None:
+    object_key = build_artifact_object_key("../run/escape", "execution_log", "../execution.log")
+
+    assert object_key.startswith("run-escape-")
+    assert "/logs/execution.log-" in object_key
+    assert ".." not in object_key
+
+
 def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
     object_store = InMemoryObjectStore()
     writer = ArtifactWriter(analysis_run_id="job-2", object_store=object_store)

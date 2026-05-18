@@ -1303,12 +1303,18 @@ WHERE r.id=$1 AND s.id=$2`, analysisRunID, analysisRunStepID).Scan(
 
 func (s *Store) RecordAnalysisRunStepProgress(ctx context.Context, params RecordAnalysisRunProgressParams) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
+		result, err := tx.ExecContext(ctx, `
 UPDATE analysis_run_steps
 SET heartbeat_at=$3
 WHERE analysis_run_id=$1 AND id=$2`,
-			params.AnalysisRunID, params.AnalysisRunStepID, params.HeartbeatAt); err != nil {
+			params.AnalysisRunID, params.AnalysisRunStepID, params.HeartbeatAt)
+		if err != nil {
 			return err
+		}
+		if rows, err := result.RowsAffected(); err != nil {
+			return err
+		} else if rows != 1 {
+			return sql.ErrNoRows
 		}
 		var version int64
 		if err := tx.QueryRowContext(ctx, `
@@ -1322,7 +1328,7 @@ RETURNING version`, params.AnalysisRunID, params.HeartbeatAt).Scan(&version); er
 		}
 		event := params.Event
 		event.Version = version
-		_, err := tx.ExecContext(ctx, `
+		_, err = tx.ExecContext(ctx, `
 INSERT INTO analysis_run_events (
     id, analysis_run_id, event_type, version, status, payload, created_at
 )
@@ -1347,14 +1353,20 @@ func (s *Store) FinalizeAnalysisRunStep(ctx context.Context, params FinalizeAnal
 			stepStatus = "canceled"
 			runStatus = "canceled"
 		}
-		if _, err := tx.ExecContext(ctx, `
+		result, err := tx.ExecContext(ctx, `
 UPDATE analysis_run_steps
 SET status=$3, finalized_at=$4, heartbeat_at=$4
 WHERE analysis_run_id=$1 AND id=$2`,
-			params.AnalysisRunID, params.AnalysisRunStepID, stepStatus, params.FinalizedAt); err != nil {
+			params.AnalysisRunID, params.AnalysisRunStepID, stepStatus, params.FinalizedAt)
+		if err != nil {
 			return err
 		}
-		err := tx.QueryRowContext(ctx, `
+		if rows, err := result.RowsAffected(); err != nil {
+			return err
+		} else if rows != 1 {
+			return sql.ErrNoRows
+		}
+		err = tx.QueryRowContext(ctx, `
 UPDATE analysis_runs
 SET status=$2,
     completed_at=$3,

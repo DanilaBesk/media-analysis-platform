@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
@@ -121,7 +122,9 @@ def build_artifact_object_key(analysis_run_id: str, artifact_kind: str, filename
     _require(bool(analysis_run_id), "analysis_run_id must not be empty")
     _require(artifact_kind in _ARTIFACT_KEY_SEGMENTS, "invalid artifact_kind")
     _require(bool(filename), "filename must not be empty")
-    return str(PurePosixPath(analysis_run_id, *_ARTIFACT_KEY_SEGMENTS[artifact_kind], filename))
+    run_segment = _safe_object_key_segment(analysis_run_id, fallback="analysis-run")
+    filename_segment = _safe_object_key_segment(filename, fallback="artifact")
+    return str(PurePosixPath(run_segment, *_ARTIFACT_KEY_SEGMENTS[artifact_kind], filename_segment))
     # END_BLOCK_BLOCK_BUILD_CANONICAL_ARTIFACT_KEY
 
 
@@ -221,3 +224,19 @@ class ArtifactWriter:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def _safe_object_key_segment(value: str, *, fallback: str) -> str:
+    stripped = value.strip()
+    cleaned = "".join(character if character.isalnum() or character in {"-", "_", "."} else "-" for character in stripped)
+    cleaned = cleaned.strip("-_.")
+    if (
+        stripped
+        and cleaned == stripped
+        and "/" not in stripped
+        and "\\" not in stripped
+        and stripped not in {".", ".."}
+    ):
+        return stripped
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"{cleaned or fallback}-{digest}"
