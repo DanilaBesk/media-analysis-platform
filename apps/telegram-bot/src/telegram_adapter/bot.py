@@ -663,8 +663,22 @@ class TelegramInboxApp:
         selected = _select_transcript_artifact(artifacts)
         if selected is None:
             return ("Готовый транскрипт пока недоступен.", True)
-        if self.gateway.result_artifact_surface_exists(owner=owner, artifact_id=str(selected["artifact_id"])):
-            return ("Транскрипт уже отправлен в чат.", True)
+        existing_surface = self.gateway.find_result_artifact_surface(
+            owner=owner,
+            artifact_id=str(selected["artifact_id"]),
+        )
+        if existing_surface is not None:
+            if _surface_address(existing_surface) is not None:
+                return ("Транскрипт уже отправлен в чат.", True)
+            self._try_supersede_channel_surface(
+                surface=existing_surface,
+                reason="result_surface_missing_telegram_address",
+                actor_id="telegram_adapter",
+                metadata={
+                    "analysis_run_id": analysis_run_id,
+                    "artifact_id": str(selected["artifact_id"]),
+                },
+            )
         access = self.gateway.api_client.get_internal_artifact_download_access(artifact_id=str(selected["artifact_id"]))
         download_url = _artifact_download_url(access)
         if not download_url:

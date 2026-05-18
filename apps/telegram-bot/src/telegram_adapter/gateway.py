@@ -556,8 +556,11 @@ class TelegramInboxGateway:
         )
 
     def result_artifact_surface_exists(self, *, owner: JsonObject, artifact_id: str) -> bool:
+        return self.find_result_artifact_surface(owner=owner, artifact_id=artifact_id) is not None
+
+    def find_result_artifact_surface(self, *, owner: JsonObject, artifact_id: str) -> JsonObject | None:
         if not artifact_id.strip():
-            return False
+            return None
         account = self.resolve_channel_account(owner=owner)
         page = self.api_client.list_channel_surfaces(
             channel_account_id=str(account["channel_account_id"]),
@@ -566,7 +569,7 @@ class TelegramInboxGateway:
             active_only=True,
             page_size=1,
         )
-        return bool(page.get("items"))
+        return next(iter(page.get("items") or []), None)
 
     def replace_channel_surface_display_state(
         self,

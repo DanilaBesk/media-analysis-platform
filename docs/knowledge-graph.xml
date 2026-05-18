@@ -191,7 +191,7 @@
         <export-targetApiClient PURPOSE="Call target media_asset, selection_snapshot, analysis_run, artifact, and diagnostic routes with channel_account_id scope." />
         <view-materials PURPOSE="Browse and filter user materials with clear human labels." />
         <view-selectionBuilder PURPOSE="Create immutable selections from ordered items while hiding internal snapshot terminology." />
-        <view-runDetail PURPOSE="Show progress, results, errors, and downloads without load-bearing internal vocabulary." />
+        <view-runDetail PURPOSE="Show progress, results, errors, and downloads without load-bearing internal vocabulary or service ASR metadata." />
       </annotations>
     </M-WEB>
 
@@ -206,7 +206,7 @@
         <export-runAnalysisAction PURPOSE="Create a selection_snapshot and analysis_run from explicit user action." />
         <export-targetTelegramVocabulary PURPOSE="Use media_asset_id, selection_snapshot_id, and channel_account_id in active Telegram API request and callback paths." />
         <export-channelSurfaceRecovery PURPOSE="Persist current materials panels, active run cards, and result artifact deliveries through channel_surfaces and recover them after restart." />
-        <export-resultDeliveryDeduplication PURPOSE="Use result_artifact_surface records to avoid duplicate Telegram result delivery after restart without mutating product lifecycle." />
+        <export-resultDeliveryDeduplication PURPOSE="Use result_artifact_surface records with valid Telegram addresses to avoid duplicate result delivery after restart without mutating product lifecycle; supersede addressless stale result surfaces and retry delivery." />
         <contract-selectionTranscriptionCards PATH="docs/architecture/telegram-selection-transcription-cards.md" PURPOSE="Define Telegram user-facing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>
@@ -222,6 +222,7 @@
         <tool-createSelectionSnapshot PURPOSE="Seal selection_snapshots." />
         <tool-runAnalysis PURPOSE="Create analysis_run records." />
         <tool-getDiagnostics PURPOSE="Read diagnostics for media_asset, selection_snapshot, run, and artifact subjects." />
+        <tool-getArtifactPreview PURPOSE="Return explicit artifact previews, including CopperASR run_manifest metadata when a caller asks for service JSON artifacts." />
       </annotations>
     </M-MCP-ADAPTER>
 

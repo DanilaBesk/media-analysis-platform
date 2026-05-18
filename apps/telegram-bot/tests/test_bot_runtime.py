@@ -873,6 +873,73 @@ async def test_existing_result_surface_prevents_duplicate_delivery_after_restart
 
 
 @pytest.mark.asyncio
+async def test_stale_result_surface_without_address_does_not_block_delivery() -> None:
+    api, gateway, app = make_app(bot=FakeBot())
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_snapshot_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+        }
+    )
+    api.internal_artifact_download_access["artifact-1"] = {
+        "artifact_id": "artifact-1",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
+    account = api.resolve_channel_account(owner=owner())
+    api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="result_artifact_surface",
+        surface_key="artifact:artifact-1",
+        address={},
+        address_fingerprint="",
+        display_state={"delivery_mode": "text"},
+        subjects=[
+            {
+                "subject_type": "artifact",
+                "subject_id": "artifact-1",
+                "subject_role": "primary",
+            }
+        ],
+    )
+    app._download_artifact_bytes = lambda _url: b"Recovered transcript."  # type: ignore[method-assign]
+
+    notice, show_alert = await app._deliver_run_result(
+        owner=owner(),
+        analysis_run_id="run-1",
+        expected_version=1,
+        chat_id=10,
+    )
+
+    active_surfaces = [
+        surface
+        for surface in api.channel_surfaces
+        if surface["lifecycle_status"] == "active"
+    ]
+    assert notice == "Транскрипт отправлен в чат"
+    assert show_alert is False
+    assert api.supersede_surface_requests[-1]["reason"] == "result_surface_missing_telegram_address"
+    assert api.internal_artifact_download_access_requests == ["artifact-1"]
+    assert app.bot.send_message_calls == [{"chat_id": 10, "text": "Recovered transcript."}]
+    assert active_surfaces[-1]["surface_type"] == "result_artifact_surface"
+    assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9003}
+
+
+@pytest.mark.asyncio
 async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_active() -> None:
     api, gateway, app = make_app()
     gateway.add_text(owner=owner(), text="queued run")

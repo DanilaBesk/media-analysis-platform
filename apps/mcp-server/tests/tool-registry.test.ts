@@ -987,7 +987,8 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
             available: true,
             kind: "text",
             content_type: "application/json; charset=utf-8",
-            text_excerpt: "{\"segments\":[{\"speaker\":\"A\",\"text\":\"hello\"}]}",
+            text_excerpt:
+              "{\"transcription_backend\":{\"provider\":\"copperasr\",\"model\":\"Copperside/CoppersideASR\"},\"segments\":[{\"speaker\":\"A\",\"text\":\"hello\"}]}",
           },
         },
       },
@@ -1063,8 +1064,13 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
       content_type: "application/json; charset=utf-8",
       format: "json",
       available: true,
-      text: "{\"segments\":[{\"speaker\":\"A\",\"text\":\"hello\"}]}",
+      text:
+        "{\"transcription_backend\":{\"provider\":\"copperasr\",\"model\":\"Copperside/CoppersideASR\"},\"segments\":[{\"speaker\":\"A\",\"text\":\"hello\"}]}",
       json: {
+        transcription_backend: {
+          provider: "copperasr",
+          model: "Copperside/CoppersideASR",
+        },
         segments: [
           {
             speaker: "A",

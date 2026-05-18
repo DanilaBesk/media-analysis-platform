@@ -190,9 +190,9 @@
   </AsrRuntime>
 
   <AdapterContracts>
-    <telegram>Telegram captures input, resolves channel_account scope, creates media_assets, shows inbox or collection state, creates selection_snapshots, starts analysis_run records, persists current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces, recovers active surfaces after restart, and sends artifact previews or downloads returned by the API.</telegram>
-    <web>Web provides management UI for materials, groups, selections, progress, results, downloads, errors, and retention over target public API contracts.</web>
-    <mcp>MCP exposes stable tools over the same API and never maintains its own durable media store.</mcp>
+    <telegram>Telegram captures input, resolves channel_account scope, creates media_assets, shows inbox or collection state, creates selection_snapshots, starts analysis_run records, persists current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces, recovers active surfaces after restart, and sends artifact previews or downloads returned by the API. Result deduplication requires a valid Telegram surface address; stale addressless result surfaces are superseded and delivery is retried.</telegram>
+    <web>Web provides management UI for materials, groups, selections, progress, results, downloads, errors, and retention over target public API contracts. Service ASR metadata from run_manifest remains hidden from normal human result views.</web>
+    <mcp>MCP exposes stable tools over the same API and never maintains its own durable media store. MCP artifact preview tools can return CopperASR run_manifest metadata for explicit service artifact reads.</mcp>
   </AdapterContracts>
 
   <EvidenceContracts>

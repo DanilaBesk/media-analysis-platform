@@ -128,6 +128,11 @@ function analysisRun(overrides = {}) {
           format: "json",
           text_excerpt: JSON.stringify({
             schema_version: "analysis_run_manifest/v2",
+            transcription_backend: {
+              provider: "copperasr",
+              model: "Copperside/CoppersideASR",
+              duration_seconds: 42.5,
+            },
             summary: { included_count: 1, skipped_count: 0, failed_count: 0 },
             items: [
               {
@@ -545,6 +550,7 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findAllByText("Материал недоступен")).toHaveLength(2);
     expect((await screen.findAllByText("Готово")).length).toBeGreaterThan(0);
     expect(await screen.findByRole("link", { name: "Краткое содержание" })).toHaveAttribute("href", "/artifacts/artifact-1");
+    expect(screen.queryByText(/copperasr|Copperside|CopperASR|Whisper/i)).toBeNull();
   });
 
   it("opens markdown artifact previews from the artifact browser", async () => {
