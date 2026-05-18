@@ -160,6 +160,7 @@
       <rule>After accepted Telegram input, a status refresh or channel_surface persistence failure must not turn the saved inbox mutation into a user-facing backend failure; the adapter confirms the saved material and offers /inbox recovery while logging the presentation-layer failure.</rule>
       <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
       <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics; compatibility media item and selection routes are not part of the active Telegram path.</rule>
+      <rule>Repeated Telegram chat/user channel_account resolution must return the persisted channel_account row id from the API conflict path before media_asset create or upload requests reference that id.</rule>
     </Telegram>
     <Web>
       <rule>Web is a simple human-facing management surface for browsing materials, creating groups, curating the current selection, launching analysis, and reviewing results, progress, errors, and downloads.</rule>
@@ -219,7 +220,7 @@
     <bead id="media-7f3.11.2" status="completed">Backend, storage, security, object storage, diagnostics, cancellation, and worker review fixed worker workspace path sanitization, bucket-relative object-key validation, worker step write validation, and HTTP server timeout/header hardening.</bead>
     <bead id="media-7f3.11.3" status="completed">Channel UX, Web, MCP, Telegram, report/research prerequisite, and runtime review fixed Web runtime endpoint leaks, raw JSON launch parameters, and service artifact exposure in normal result views.</bead>
     <bead id="media-7f3.11.4" status="completed">Final readiness packet records source plan, implemented scope, branch and commit state, verification commands, coverage inventory, runtime evidence, GRACE docs, Beads closure state, no-regression proof, and accepted risks.</bead>
-    <bead id="media-b5z" status="completed">Telegram post-ingest refresh recovery now confirms saved inbox content instead of showing a misleading backend-unavailable message, and channel_surface persistence is best-effort for visible replies.</bead>
+    <bead id="media-b5z" status="completed">Telegram post-ingest refresh recovery now confirms saved inbox content only after accepted mutations, channel_surface persistence is best-effort for visible replies, generic backend errors no longer claim saved inbox content, and repeated channel_account resolution returns the persisted row id for later media uploads.</bead>
   </BeadsTrace>
 
   <NonGoals>

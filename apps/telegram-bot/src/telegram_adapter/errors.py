@@ -26,9 +26,7 @@ class TelegramUserError(RuntimeError):
 
 
 USER_ERROR_COPY: dict[TelegramUserErrorCode, str] = {
-    TelegramUserErrorCode.BACKEND_UNAVAILABLE: (
-        "Сервис временно недоступен. Попробуйте ещё раз через минуту; содержимое inbox уже сохранено на сервере."
-    ),
+    TelegramUserErrorCode.BACKEND_UNAVAILABLE: "Сервис временно недоступен. Попробуйте ещё раз через минуту.",
     TelegramUserErrorCode.STALE_ACTION: "Эта кнопка устарела. Откройте /inbox ещё раз и повторите действие.",
     TelegramUserErrorCode.UNSUPPORTED_INPUT: (
         "Неподдерживаемый ввод. Отправьте текст, ссылку, фото, видео, документ, аудио или голосовое."

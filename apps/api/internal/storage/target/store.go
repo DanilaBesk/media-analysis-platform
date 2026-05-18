@@ -18,8 +18,9 @@ func NewStore(db *sql.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-func (s *Store) UpsertChannelAccount(ctx context.Context, record ChannelAccountRecord) error {
-	_, err := s.db.ExecContext(ctx, `
+func (s *Store) UpsertChannelAccount(ctx context.Context, record ChannelAccountRecord) (ChannelAccountRecord, error) {
+	var account ChannelAccountRecord
+	err := scanChannelAccount(s.db.QueryRowContext(ctx, `
 INSERT INTO channel_accounts (
     id, channel, external_account_ref, display_name, status, metadata,
     created_at, updated_at, last_seen_at, disabled_at
@@ -31,11 +32,13 @@ SET display_name=EXCLUDED.display_name,
     metadata=EXCLUDED.metadata,
     updated_at=EXCLUDED.updated_at,
     last_seen_at=EXCLUDED.last_seen_at,
-    disabled_at=EXCLUDED.disabled_at`,
+    disabled_at=EXCLUDED.disabled_at
+RETURNING id, channel, external_account_ref, COALESCE(display_name,''), status,
+          metadata, created_at, updated_at, last_seen_at, disabled_at`,
 		record.ID, record.Channel, record.ExternalAccountRef, nullString(record.DisplayName),
 		withDefault(record.Status, "active"), jsonOrDefault(record.MetadataJSON, "{}"),
-		record.CreatedAt, record.UpdatedAt, record.LastSeenAt, record.DisabledAt)
-	return err
+		record.CreatedAt, record.UpdatedAt, record.LastSeenAt, record.DisabledAt), &account)
+	return account, err
 }
 
 func (s *Store) RecordOperationRequest(ctx context.Context, record OperationRequestRecord) (OperationRequestRecord, error) {

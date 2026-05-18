@@ -332,6 +332,8 @@ def test_backend_connection_failure_is_categorized_without_raw_exception_copy() 
     assert user_error.code == TelegramUserErrorCode.BACKEND_UNAVAILABLE
     assert "Connection refused" not in copy
     assert "127.0.0.1" not in copy
+    assert "inbox уже сохранено" not in copy
+    assert "уже сохранено" not in copy
     assert "Попробуйте ещё раз" in copy
 
 

@@ -24,7 +24,7 @@ func TestStoreWritesTargetStateWithoutLegacyTables(t *testing.T) {
 
 	now := time.Date(2026, 5, 18, 9, 0, 0, 0, time.UTC)
 	ctx := context.Background()
-	if err := store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+	account, err := store.UpsertChannelAccount(ctx, ChannelAccountRecord{
 		ID:                 "channel-account-1",
 		Channel:            "telegram",
 		ExternalAccountRef: "chat-1",
@@ -34,8 +34,12 @@ func TestStoreWritesTargetStateWithoutLegacyTables(t *testing.T) {
 		CreatedAt:          now,
 		UpdatedAt:          now,
 		LastSeenAt:         &now,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("UpsertChannelAccount() error = %v", err)
+	}
+	if account.ID != "channel-account-1" {
+		t.Fatalf("UpsertChannelAccount() id = %q", account.ID)
 	}
 	if _, err := store.RecordOperationRequest(ctx, OperationRequestRecord{
 		ID:               "operation-1",
@@ -445,6 +449,34 @@ func (c *recordingConn) ExecContext(_ context.Context, query string, _ []driver.
 func (c *recordingConn) QueryContext(_ context.Context, query string, _ []driver.NamedValue) (driver.Rows, error) {
 	c.state.record(query)
 	now := time.Date(2026, 5, 18, 9, 0, 0, 0, time.UTC)
+	if strings.Contains(query, "INSERT INTO channel_accounts") {
+		return &recordingRows{
+			columns: []string{
+				"id",
+				"channel",
+				"external_account_ref",
+				"display_name",
+				"status",
+				"metadata",
+				"created_at",
+				"updated_at",
+				"last_seen_at",
+				"disabled_at",
+			},
+			values: []driver.Value{
+				"channel-account-1",
+				"telegram",
+				"chat-1",
+				"Danila",
+				"active",
+				[]byte(`{"locale":"ru"}`),
+				now,
+				now,
+				now,
+				nil,
+			},
+		}, nil
+	}
 	if strings.Contains(query, "SELECT status FROM analysis_runs WHERE id=$1") {
 		return &recordingRows{
 			columns: []string{"status"},

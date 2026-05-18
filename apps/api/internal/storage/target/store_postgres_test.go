@@ -29,8 +29,14 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 
 	now := time.Date(2026, 5, 18, 15, 0, 0, 0, time.UTC)
 	seed := DeterministicSeedFixtures()
-	must(t, store.UpsertChannelAccount(ctx, seed.ChannelAccount), "upsert deterministic channel account")
-	must(t, store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+	seedAccount, err := store.UpsertChannelAccount(ctx, seed.ChannelAccount)
+	if err != nil {
+		t.Fatalf("upsert deterministic channel account: %v", err)
+	}
+	if seedAccount.ID != seed.ChannelAccount.ID {
+		t.Fatalf("seed channel account id = %q, want %q", seedAccount.ID, seed.ChannelAccount.ID)
+	}
+	telegramAccount, err := store.UpsertChannelAccount(ctx, ChannelAccountRecord{
 		ID:                 targetTestTelegramChannelID,
 		Channel:            "telegram",
 		ExternalAccountRef: "chat-1",
@@ -39,7 +45,30 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 		MetadataJSON:       []byte(`{"fixture":"telegram"}`),
 		CreatedAt:          now,
 		UpdatedAt:          now,
-	}), "upsert telegram channel account")
+	})
+	if err != nil {
+		t.Fatalf("upsert telegram channel account: %v", err)
+	}
+	if telegramAccount.ID != targetTestTelegramChannelID {
+		t.Fatalf("telegram channel account id = %q, want %q", telegramAccount.ID, targetTestTelegramChannelID)
+	}
+	replayedTelegramAccount, err := store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+		ID:                 "00000000-0000-4000-8000-000000009999",
+		Channel:            "telegram",
+		ExternalAccountRef: "chat-1",
+		DisplayName:        "Telegram replay",
+		Status:             "active",
+		MetadataJSON:       []byte(`{"fixture":"telegram-replay"}`),
+		CreatedAt:          now.Add(time.Second),
+		UpdatedAt:          now.Add(time.Second),
+	})
+	if err != nil {
+		t.Fatalf("upsert replayed telegram channel account: %v", err)
+	}
+	if replayedTelegramAccount.ID != targetTestTelegramChannelID {
+		t.Fatalf("replayed telegram channel account id = %q, want persisted conflict id %q", replayedTelegramAccount.ID, targetTestTelegramChannelID)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM channel_accounts WHERE channel=$1 AND external_account_ref=$2`, 1, "telegram", "chat-1")
 
 	t.Run("operation requests replay the original target", func(t *testing.T) {
 		first, err := store.RecordOperationRequest(ctx, OperationRequestRecord{

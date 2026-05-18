@@ -17,7 +17,7 @@ import (
 )
 
 type TargetStateStore interface {
-	UpsertChannelAccount(ctx context.Context, record targetstore.ChannelAccountRecord) error
+	UpsertChannelAccount(ctx context.Context, record targetstore.ChannelAccountRecord) (targetstore.ChannelAccountRecord, error)
 	ListChannelAccounts(ctx context.Context, limit int) ([]targetstore.ChannelAccountRecord, error)
 	UpdateChannelAccount(ctx context.Context, params targetstore.UpdateChannelAccountParams) (targetstore.ChannelAccountRecord, error)
 	RecordOperationRequest(ctx context.Context, record targetstore.OperationRequestRecord) (targetstore.OperationRequestRecord, error)
@@ -112,10 +112,11 @@ func (s *TargetRuntimeService) ResolveChannelAccount(ctx context.Context, req Ta
 		UpdatedAt:          now,
 		LastSeenAt:         &now,
 	}
-	if err := s.store.UpsertChannelAccount(ctx, record); err != nil {
+	saved, err := s.store.UpsertChannelAccount(ctx, record)
+	if err != nil {
 		return TargetChannelAccount{}, err
 	}
-	return targetChannelAccountFromRecord(record), nil
+	return targetChannelAccountFromRecord(saved), nil
 }
 
 func (s *TargetRuntimeService) ListChannelAccounts(ctx context.Context, req TargetListChannelAccountsRequest) (TargetChannelAccountPage, error) {

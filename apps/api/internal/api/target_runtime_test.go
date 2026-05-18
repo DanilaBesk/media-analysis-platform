@@ -147,6 +147,40 @@ func TestTargetRuntimeServicePersistsTargetOperations(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceResolveChannelAccountReturnsPersistedConflictID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 13, 15, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		channelAccount: targetstore.ChannelAccountRecord{
+			ID:                 "persisted-channel-account",
+			Channel:            "telegram",
+			ExternalAccountRef: "chat-1",
+			DisplayName:        "Existing",
+			Status:             "active",
+			MetadataJSON:       []byte(`{"first":true}`),
+			CreatedAt:          now.Add(-time.Hour),
+			UpdatedAt:          now.Add(-time.Hour),
+		},
+	}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs("generated-channel-account")),
+	)
+
+	account, err := service.ResolveChannelAccount(context.Background(), TargetChannelAccountRequest{
+		Channel:            "telegram",
+		ExternalAccountRef: "chat-1",
+		DisplayName:        "Updated",
+	})
+	if err != nil {
+		t.Fatalf("ResolveChannelAccount() error = %v", err)
+	}
+	if account.ChannelAccountID != "persisted-channel-account" {
+		t.Fatalf("resolved channel account id = %q, want persisted conflict id", account.ChannelAccountID)
+	}
+}
+
 func TestTargetRuntimeServiceReplaysMediaAssetIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
@@ -329,9 +363,20 @@ type fakeTargetRuntimeStore struct {
 	supersede              targetstore.SupersedeChannelSurfaceParams
 }
 
-func (s *fakeTargetRuntimeStore) UpsertChannelAccount(_ context.Context, record targetstore.ChannelAccountRecord) error {
+func (s *fakeTargetRuntimeStore) UpsertChannelAccount(_ context.Context, record targetstore.ChannelAccountRecord) (targetstore.ChannelAccountRecord, error) {
+	if s.channelAccount.ID != "" &&
+		s.channelAccount.Channel == record.Channel &&
+		s.channelAccount.ExternalAccountRef == record.ExternalAccountRef {
+		s.channelAccount.DisplayName = record.DisplayName
+		s.channelAccount.Status = record.Status
+		s.channelAccount.MetadataJSON = record.MetadataJSON
+		s.channelAccount.UpdatedAt = record.UpdatedAt
+		s.channelAccount.LastSeenAt = record.LastSeenAt
+		s.channelAccount.DisabledAt = record.DisabledAt
+		return s.channelAccount, nil
+	}
 	s.channelAccount = record
-	return nil
+	return record, nil
 }
 
 func (s *fakeTargetRuntimeStore) ListChannelAccounts(_ context.Context, _ int) ([]targetstore.ChannelAccountRecord, error) {
