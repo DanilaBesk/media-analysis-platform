@@ -757,7 +757,7 @@ func (s *Server) handleUploadTargetMediaAsset(w http.ResponseWriter, r *http.Req
 	if filename == "" {
 		filename = "upload.bin"
 	}
-	storedObjectID := stableTargetID(strings.Join([]string{metadata.ChannelAccountID, filename, checksum}, ":"))
+	storedObjectID := targetUploadStoredObjectID(metadata.ChannelAccountID, filename, checksum)
 	objectRef := "sources/uploads/" + storedObjectID + "/" + filename
 	displayName := firstNonEmpty(metadata.DisplayName, filename)
 	idempotencyKey := firstNonEmpty(metadata.IdempotencyKey, strings.TrimSpace(r.Header.Get("Idempotency-Key")))
@@ -785,6 +785,10 @@ func (s *Server) handleUploadTargetMediaAsset(w http.ResponseWriter, r *http.Req
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"media_asset": asset})
+}
+
+func targetUploadStoredObjectID(channelAccountID, filename, checksum string) string {
+	return stableTargetID(strings.Join([]string{"target-upload-sources-v2", channelAccountID, filename, checksum}, ":"))
 }
 
 func (s *Server) handleListTargetMediaAssets(w http.ResponseWriter, r *http.Request) {

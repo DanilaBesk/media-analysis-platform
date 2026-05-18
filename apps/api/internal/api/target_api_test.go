@@ -3,7 +3,9 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +92,13 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 	}
 	if !bytes.Equal(target.mediaAssetReq.Origin.UploadBody, []byte("hello")) {
 		t.Fatalf("upload media asset body = %q, want hello", string(target.mediaAssetReq.Origin.UploadBody))
+	}
+	legacyUploadID := legacyTargetUploadStoredObjectID("channel-account-1", "notes.txt", []byte("hello"))
+	if target.mediaAssetReq.Origin.StoredObjectID == legacyUploadID {
+		t.Fatalf("upload reused legacy stored_object_id %q; old rows with uploads/ keys can conflict with sources/uploads/ keys", legacyUploadID)
+	}
+	if !strings.HasPrefix(target.mediaAssetReq.Origin.ObjectRef, "sources/uploads/"+target.mediaAssetReq.Origin.StoredObjectID+"/") {
+		t.Fatalf("upload object_ref %q must be keyed by its new stored_object_id %q", target.mediaAssetReq.Origin.ObjectRef, target.mediaAssetReq.Origin.StoredObjectID)
 	}
 
 	listMedia := httptest.NewRecorder()
@@ -533,6 +542,12 @@ func multipartTargetUploadRequest(t *testing.T, path string, metadata map[string
 	req := httptest.NewRequest(http.MethodPost, path, &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	return req
+}
+
+func legacyTargetUploadStoredObjectID(channelAccountID, filename string, body []byte) string {
+	sum := sha256.Sum256(body)
+	checksum := fmt.Sprintf("sha256:%x", sum[:])
+	return stableTargetID(strings.Join([]string{channelAccountID, filename, checksum}, ":"))
 }
 
 type fakeTargetService struct {

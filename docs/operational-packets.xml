@@ -37,6 +37,7 @@
     <completed-packet bead="media-b5z">telegram-post-ingest-refresh-recovery</completed-packet>
     <completed-packet bead="media-cjb">channel-surface-active-address-handoff</completed-packet>
     <completed-packet bead="media-b6s">telegram-upload-object-store-and-worker-diagnostics</completed-packet>
+    <completed-packet bead="media-t8q">telegram-upload-legacy-stored-object-id-collision</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
