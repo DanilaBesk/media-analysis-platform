@@ -209,8 +209,8 @@
       </annotations>
     </M-MCP-ADAPTER>
 
-    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="adapter-worker-runtime-covered" OWNER="media-7f3.10.3">
-      <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, fresh schema reset smoke, and storage/API coverage evidence used by the coverage and QA epics.</purpose>
+    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="inventory-no-legacy-covered" OWNER="media-7f3.10.4">
+      <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, fresh schema reset smoke, coverage inventory, no-legacy target regression gate, and storage/API coverage evidence used by the coverage and QA epics.</purpose>
       <path>docs/architecture/target-coverage-matrix.md</path>
       <depends>M-TARGET-ARCHITECTURE, M-API-STORAGE, M-CONTRACTS</depends>
       <verification-ref>EV-COVERAGE-MATRIX</verification-ref>
@@ -220,10 +220,13 @@
         <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />
         <script-runtimeFinalE2E PATH="infra/scripts/runtime-final-e2e.py" PURPOSE="Runs target-only channel_account, media_asset, selection_snapshot, analysis_run, artifact download, diagnostics, cross-channel denial, and soft-delete history proof against the compose API." />
         <script-composeSmoke PATH="infra/scripts/compose-smoke.sh" PURPOSE="Builds and force-recreates the local compose stack, enforces runtime proof vocabulary guards, and runs the runtime-final target proof." />
+        <script-coverageInventory PATH="infra/scripts/coverage-inventory.sh" PURPOSE="Reports native coverage metrics per supported surface and runs pass/fail-only contract fixture, no-legacy, compose topology, runtime-proof wiring, and MCP typecheck gates." />
+        <script-noLegacyTargetGate PATH="infra/scripts/no-legacy-target-gate.sh" PURPOSE="Requires target runtime proof snippets and rejects deprecated active vocabulary plus legacy target reset schema recreation from target code paths." />
         <test-fixtureValidation PATH="packages/contracts/tests/test_target_fixtures.py" PURPOSE="Validates fixture manifest vocabulary, channel identities, object-store files, sizes, and hashes." />
         <test-storageApiCoverage PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers target API success, validation errors, empty arrays, pagination clamping, and conflict mapping." />
         <test-workerClaimTargetMetadata PATH="workers/common/tests/test_api.py" PURPOSE="Covers target selection_snapshot metadata accepted by worker claim DTO parsing." />
         <test-runtimeArtifactAccess PATH="apps/api/internal/storage/runtime_store_media_test.go" PURPOSE="Covers internal artifact download-access fallback from legacy artifact query shape to target artifact rows." />
+        <test-adminTargetResetNoop PATH="apps/api/internal/storage/runtime_store_media_test.go" PURPOSE="Covers admin observability, retention, orphan detection, and legacy queue inventory as empty/no-op when removed legacy tables or columns are absent after target reset." />
       </annotations>
     </M-COVERAGE>
 

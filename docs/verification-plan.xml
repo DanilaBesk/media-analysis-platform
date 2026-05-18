@@ -132,7 +132,7 @@
     </Gate>
     <Gate id="EV-COVERAGE-INVENTORY">
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
-      <required-evidence>`bash infra/scripts/coverage-inventory.sh` records statement, line, branch, or function coverage where supported, records pass/fail-only surfaces separately, and returns non-zero while any declared surface still has an unwired metric or failing probe.</required-evidence>
+      <required-evidence>`bash infra/scripts/coverage-inventory.sh` records statement, line, branch, or function coverage where supported, records pass/fail-only surfaces separately, runs contract fixture checks, runs `bash infra/scripts/no-legacy-target-gate.sh`, validates compose topology/runtime-proof wiring, runs MCP typecheck, and returns non-zero while any declared surface still has an unwired metric or failing probe. The no-legacy gate must reject deprecated active route/table/DTO vocabulary from target paths and must reject legacy table/column recreation in the target reset migration. Admin observability/reconcile/runtime inventory over a target-reset database must return empty/no-op results when only removed legacy tables or columns are absent.</required-evidence>
     </Gate>
     <Gate id="EV-COVERAGE-MATRIX">
       <description>Target coverage matrix and deterministic fixtures prepare the full proof wave.</description>
@@ -174,6 +174,7 @@
     <bead id="media-7f3.10.1">Run target coverage matrix review, deterministic fixture manifest validation, and target reset smoke before starting storage/API coverage expansion.</bead>
     <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and legacy storage package tests before starting adapter/worker/runtime E2E coverage.</bead>
     <bead id="media-7f3.10.3">Run Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download, target runtime proof, compose smoke, and GRACE XML checks before starting inventory/no-legacy gates.</bead>
+    <bead id="media-7f3.10.4">Run full coverage inventory, no-legacy target gate, admin target-reset regression tests, live admin observability/reconcile proof, GRACE XML checks, and git diff checks before starting QA traceability.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

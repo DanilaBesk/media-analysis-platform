@@ -26,7 +26,9 @@
     <completed-packet bead="media-7f3.9.8">implementation-cleanup-and-grace-artifact-refresh</completed-packet>
     <completed-packet bead="media-7f3.10.1">target-coverage-matrix-deterministic-test-environment</completed-packet>
     <completed-packet bead="media-7f3.10.2">target-storage-api-coverage</completed-packet>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10.3, media-7f3.10.4, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-packet bead="media-7f3.10.3">adapter-worker-runtime-e2e-coverage</completed-packet>
+    <completed-packet bead="media-7f3.10.4">coverage-inventory-no-legacy-gates</completed-packet>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10 epic closure audit and media-7f3.11 QA; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -458,6 +460,43 @@ Known follow-up: inventory/no-legacy gates must address legacy admin observabili
       <check>pnpm --dir apps/web test</check>
       <check>pnpm --dir apps/mcp-server test</check>
       <check>pnpm --dir apps/mcp-server typecheck</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.10.4-coverage-inventory-no-legacy-gates" module="M-COVERAGE,M-INFRA,M-API-STORAGE" phase="TargetRebuildCoverage" verification-ref="EV-COVERAGE-INVENTORY,EV-STALENESS,EV-GRACE">
+    <purpose>Wire executable coverage inventory and no-legacy regression gates so the target coverage matrix cannot drift silently after runtime proof.</purpose>
+    <depends-on>media-7f3.10.3-adapter-worker-runtime-e2e-coverage</depends-on>
+    <write-scope>
+      <file-1>infra/scripts/coverage-inventory.sh</file-1>
+      <file-2>infra/scripts/no-legacy-target-gate.sh</file-2>
+      <file-3>apps/api/internal/storage/runtime_store_media.go</file-3>
+      <file-4>apps/api/internal/storage/runtime_store_media_test.go</file-4>
+      <file-5>docs/architecture/target-coverage-matrix.md</file-5>
+      <file-6>docs/requirements.xml</file-6>
+      <file-7>docs/development-plan.xml</file-7>
+      <file-8>docs/verification-plan.xml</file-8>
+      <file-9>docs/knowledge-graph.xml</file-9>
+      <file-10>docs/operational-packets.xml</file-10>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Coverage inventory must report every declared target proof surface honestly using native metrics where supported and pass/fail-only gates where not supported.
+No repo-wide 100% claim is allowed unless every source-plan requirement has explicit automated or runtime proof.
+Deprecated terms such as media_item, selection, analysis_run_task, owner, adapter_projection, telegram_message_id, sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, and safe_adapter_context are allowed only in explicit compatibility, historical, or migration contexts.
+Active target adapter, worker, Web, MCP, runtime proof, storage target, and target reset migration paths must fail the no-legacy gate if compatibility names leak into the target contract.
+After target reset, admin observability, reconcile, retention, orphan detection, and legacy queue inventory must not fail only because removed legacy tables or columns are absent.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>coverage-inventory.sh labels metric surfaces by native output type and separates contract fixtures, no-legacy, compose topology/runtime-proof wiring, and MCP typecheck as pass/fail-only probes.</note>
+      <note>no-legacy-target-gate.sh requires target runtime snippets and rejects deprecated active vocabulary while allowing explicitly scoped compatibility aliases.</note>
+      <note>RuntimeStore legacy admin sweeps map SQLSTATE 42P01 and 42703 legacy schema absence to empty/no-op results only for legacy runtime surfaces.</note>
+    </implementation-notes>
+    <verification>
+      <check>bash infra/scripts/coverage-inventory.sh</check>
+      <check>bash infra/scripts/no-legacy-target-gate.sh</check>
+      <check>go test ./internal/api ./internal/storage -count=1 in apps/api</check>
+      <check>Live API restart proof for /v1/admin/observability and POST /v1/admin/reconcile-queue after target reset.</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
     </verification>

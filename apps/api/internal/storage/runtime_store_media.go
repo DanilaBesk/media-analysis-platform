@@ -509,6 +509,10 @@ WHERE a.id=$1
 }
 
 func isLegacyArtifactSchemaMismatch(err error) bool {
+	return isLegacyRuntimeSchemaMismatch(err)
+}
+
+func isLegacyRuntimeSchemaMismatch(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -813,6 +817,9 @@ WHERE expires_at IS NOT NULL
 		result.ExpiredArtifacts = rowsAffectedInt(res)
 		return nil
 	})
+	if isLegacyRuntimeSchemaMismatch(err) {
+		return RetentionSweepResult{}, nil
+	}
 	return result, err
 }
 
@@ -832,6 +839,9 @@ WHERE a.object_key IS NOT NULL
   AND (a.status IN ('expired','deleted') OR a.retention_state IN ('expired','hard_delete_eligible'))
 ORDER BY 1, 2`)
 	if err != nil {
+		if isLegacyRuntimeSchemaMismatch(err) {
+			return []OrphanObjectRecord{}, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -910,6 +920,9 @@ WHERE t.status='pending_enqueue'
 ORDER BY t.created_at ASC
 LIMIT $1`, limit)
 	if err != nil {
+		if isLegacyRuntimeSchemaMismatch(err) {
+			return []AnalysisRunTaskRecord{}, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -931,6 +944,9 @@ WHERE ($1='' OR t.status=$1)
 ORDER BY t.created_at ASC
 LIMIT $4`, status, runType, taskType, limit)
 	if err != nil {
+		if isLegacyRuntimeSchemaMismatch(err) {
+			return []AnalysisRunQueueRecord{}, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -976,6 +992,9 @@ FROM diagnostics
 WHERE code IN (`+strings.Join(placeholders, ",")+`)
 ORDER BY created_at DESC`, args...)
 	if err != nil {
+		if isLegacyRuntimeSchemaMismatch(err) {
+			return []DiagnosticRecord{}, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()

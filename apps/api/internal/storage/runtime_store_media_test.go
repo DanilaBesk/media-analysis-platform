@@ -3238,6 +3238,48 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 	now := time.Date(2026, 5, 11, 19, 45, 0, 0, time.UTC)
 	stepErr := errors.New("retention-orphan branch failed")
 
+	t.Run("target reset missing legacy tables are no-op for admin runtime sweeps", func(t *testing.T) {
+		t.Parallel()
+
+		missingLegacyRelation := errors.New(`ERROR: relation "media_items" does not exist (SQLSTATE 42P01)`)
+		missingLegacyColumn := errors.New(`ERROR: column "owner_type" does not exist (SQLSTATE 42703)`)
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items mi", err: missingLegacyRelation},
+			},
+			queryResponses: []scriptedQueryResponse{
+				{match: "SELECT 'source', s.id::text", err: missingLegacyRelation},
+				{match: "FROM analysis_run_tasks t\nJOIN analysis_runs ar", err: missingLegacyRelation},
+				{match: "FROM analysis_run_tasks t\nJOIN analysis_runs ar", err: missingLegacyRelation},
+				{match: "FROM diagnostics", err: missingLegacyColumn},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		retention, err := store.ApplyRetentionPolicies(context.Background(), now)
+		if err != nil || retention != (RetentionSweepResult{}) {
+			t.Fatalf("ApplyRetentionPolicies(target reset) = %#v err=%v, want zero nil", retention, err)
+		}
+		orphans, err := store.DetectOrphanObjects(context.Background())
+		if err != nil || len(orphans) != 0 {
+			t.Fatalf("DetectOrphanObjects(target reset) = %#v err=%v, want empty nil", orphans, err)
+		}
+		pending, err := store.ListPendingEnqueueTasks(context.Background(), 10)
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("ListPendingEnqueueTasks(target reset) = %#v err=%v, want empty nil", pending, err)
+		}
+		queue, err := store.ListAnalysisRunQueue(context.Background(), "", "", "", 10)
+		if err != nil || len(queue) != 0 {
+			t.Fatalf("ListAnalysisRunQueue(target reset) = %#v err=%v, want empty nil", queue, err)
+		}
+		diagnostics, err := store.ListOperationalDiagnostics(context.Background(), []string{"artifact_resolution_failed"})
+		if err != nil || len(diagnostics) != 0 {
+			t.Fatalf("ListOperationalDiagnostics(target reset) = %#v err=%v, want empty nil", diagnostics, err)
+		}
+	})
+
 	t.Run("apply retention policies propagates later step errors", func(t *testing.T) {
 		t.Parallel()
 

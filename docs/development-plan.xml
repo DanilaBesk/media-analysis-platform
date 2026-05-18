@@ -200,6 +200,7 @@
     <gate id="workers">Worker tests prove sealed snapshot and declared step-input consumption, agent-runner transcript/text-corpus input behavior, and analysis_run artifact reporting.</gate>
     <gate id="adapters">Adapter tests prove Telegram, Web, and MCP share API-owned state, with Web keeping normal UI language simple and non-technical.</gate>
     <gate id="runtime">Runtime smoke proves ingestion, selection_snapshot, run, prerequisite planning, artifact lineage, diagnostics, and retention behavior across services.</gate>
+    <gate id="coverage-inventory">Coverage inventory reports native metrics and pass/fail-only probes per surface, including no-legacy target vocabulary, compose topology/runtime-proof wiring, contract fixtures, and MCP typecheck.</gate>
   </EvidencePlan>
 
   <DeletedArchitecturePolicy>
@@ -227,7 +228,8 @@
     <completed bead="media-7f3.10.1">The target coverage matrix and deterministic fixture/reset environment are published for the full coverage wave.</completed>
     <completed bead="media-7f3.10.2">Storage/API coverage now includes live Postgres target constraints, operation idempotency replay, channel-account isolation, optimistic conflicts, immutable selection snapshots, analysis_run lifecycle/events/cancellation, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/events.</completed>
     <completed bead="media-7f3.10.3">Adapter, worker, and runtime coverage now includes Telegram restart/result/cancel flows, worker sealed-input and prerequisite materialization tests, Web/MCP target vocabulary tests, API artifact/download regressions, and the compose runtime target proof.</completed>
-    <remaining>Open work is tracked by media-7f3.10.4 and media-7f3.11. The current tree is not closed against the target rebuild until inventory/no-legacy regression gates and QA readiness pass.</remaining>
+    <completed bead="media-7f3.10.4">Coverage inventory/no-legacy closure now includes native per-surface metric output, pass/fail-only gates, target vocabulary regression scans, target reset schema guards, and admin runtime no-op behavior for removed legacy tables after target reset.</completed>
+    <remaining>Open work is tracked by the media-7f3.10 coverage epic closure audit and media-7f3.11 QA. The current tree is not closed against the target rebuild until those readiness checks pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>
