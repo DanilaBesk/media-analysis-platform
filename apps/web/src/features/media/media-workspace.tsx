@@ -3,26 +3,24 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { RECONCILE_STATE_MARKER, requiresRestReconciliation } from "../../lib/api/client";
 import type {
-  AddMediaItemDraft,
+  AddMediaAssetDraft,
   AnalysisRun,
   AnalysisRunSummary,
   Artifact,
   ArtifactSummary,
   Collection,
   Diagnostic,
-  MediaItem,
-  MediaItemSummary,
+  MediaAsset,
+  MediaAssetOrigin,
+  MediaAssetSummary,
   ObservabilitySnapshot,
-  OwnerScope,
+  ChannelAccountId,
   RunEvent,
   RunType,
 } from "../../lib/api/types";
 import { useWebUiRuntime } from "../../app/runtime-context";
 
-const DEFAULT_OWNER: OwnerScope = {
-  owner_type: "web",
-  owner_id: "web-console",
-};
+const DEFAULT_CHANNEL_ACCOUNT_ID: ChannelAccountId = "web-console";
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "cancel_requested"]);
 
@@ -32,8 +30,8 @@ interface DiagnosticSubject {
 }
 
 interface RunManifestItemOutcome {
-  selection_item_id?: string;
-  media_item_id: string;
+  selection_snapshot_item_id?: string;
+  media_asset_id: string;
   position: number;
   outcome: "succeeded" | "skipped" | "failed" | string;
   included?: boolean;
@@ -250,8 +248,6 @@ function kindLabel(kind: string): string {
 function diagnosticSubjectLabel(subjectType: string): string {
   switch (subjectType) {
     case "media_asset":
-    case "media_item":
-      return "материал";
     case "collection":
       return "группа";
     case "selection_snapshot":
@@ -275,13 +271,13 @@ function diagnosticCodeLabel(code: string): string {
   switch (code) {
     case "worker_failed":
       return "Сбой обработки";
-    case "source_unavailable":
+    case "origin_unavailable":
       return "Материал недоступен";
     case "artifact_preview_ready":
       return "Предпросмотр готов";
     case "retention_hold_pending":
       return "Удаление ожидает разрешения";
-    case "legacy_source_warning":
+    case "origin_warning":
       return "Предупреждение по материалу";
     default:
       return "Проверка";
@@ -378,21 +374,29 @@ function stageLabel(stage: string): string {
   }
 }
 
-function sourceLabel(item: MediaItemSummary): string {
-  if (item.source.external_uri) {
-    return item.source.external_uri;
+function originLabel(origin: MediaAssetOrigin): string {
+  if (origin.url || origin.origin_type === "url") {
+    return origin.url ?? origin.origin_ref ?? "Ссылка";
   }
-  if (item.source.object_key) {
+  if (origin.object_ref || origin.origin_type === "upload" || origin.origin_type === "telegram_file") {
     return "Загруженный файл";
   }
-  if (item.source.text_ref) {
+  if (origin.text || origin.origin_type === "text") {
     return "Встроенный текст";
   }
-  return kindLabel(item.source.origin_type);
+  return kindLabel(origin.origin_type);
+}
+
+function originObjectRef(origin: MediaAssetOrigin): string {
+  return origin.stored_object_id ?? origin.object_ref ?? origin.origin_ref ?? "";
+}
+
+function assetOriginLabel(item: MediaAssetSummary): string {
+  return originLabel(item.origin);
 }
 
 function selectionSummaryLabel(run: AnalysisRun): string {
-  const count = run.selection.items.length;
+  const count = run.selection_snapshot.items.length;
   if (count === 1) {
     return "1 материал";
   }
@@ -409,7 +413,7 @@ function useMessage(): [string, (message: string) => void] {
 
 function useInboxData() {
   const { apiClient } = useWebUiRuntime();
-  const [mediaItems, setMediaItems] = useState<MediaItemSummary[]>([]);
+  const [mediaAssets, setMediaAssets] = useState<MediaAssetSummary[]>([]);
   const [inbox, setInbox] = useState<Collection | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [runs, setRuns] = useState<AnalysisRunSummary[]>([]);
@@ -421,12 +425,12 @@ function useInboxData() {
     setError("");
     try {
       const [mediaResponse, inboxResponse, collectionsResponse, runsResponse] = await Promise.all([
-        apiClient.listMediaItems(DEFAULT_OWNER, { pageSize: 50 }),
-        apiClient.getInboxCollection(DEFAULT_OWNER),
-        apiClient.listCollections(DEFAULT_OWNER, { pageSize: 50 }),
-        apiClient.listAnalysisRuns(DEFAULT_OWNER, { pageSize: 25 }),
+        apiClient.listMediaAssets(DEFAULT_CHANNEL_ACCOUNT_ID, { pageSize: 50 }),
+        apiClient.getInboxCollection(DEFAULT_CHANNEL_ACCOUNT_ID),
+        apiClient.listCollections(DEFAULT_CHANNEL_ACCOUNT_ID, { pageSize: 50 }),
+        apiClient.listAnalysisRuns(DEFAULT_CHANNEL_ACCOUNT_ID, { pageSize: 25 }),
       ]);
-      setMediaItems(mediaResponse.items);
+      setMediaAssets(mediaResponse.items);
       setInbox(inboxResponse);
       setCollections(collectionsResponse.items);
       setRuns(runsResponse.items);
@@ -446,7 +450,7 @@ function useInboxData() {
     error,
     inbox,
     loading,
-    mediaItems,
+    mediaAssets,
     refresh,
     runs,
   };
@@ -472,7 +476,7 @@ function SectionHeader({
   );
 }
 
-export function MediaItemList({
+export function MediaAssetList({
   items,
   selected,
   onToggle,
@@ -480,12 +484,12 @@ export function MediaItemList({
   onClearSelection,
   onRemove,
 }: {
-  items: MediaItemSummary[];
+  items: MediaAssetSummary[];
   selected: Set<string>;
-  onToggle?: (mediaItemId: string) => void;
+  onToggle?: (mediaAssetId: string) => void;
   onSelectAll?: () => void;
   onClearSelection?: () => void;
-  onRemove?: (mediaItemId: string) => void;
+  onRemove?: (mediaAssetId: string) => void;
 }): JSX.Element {
   if (items.length === 0) {
     return <p className="muted-text">Материалов пока нет.</p>;
@@ -504,22 +508,22 @@ export function MediaItemList({
         </div>
       ) : null}
       {items.map((item) => (
-        <article className="data-row media-row" key={item.media_item_id}>
+        <article className="data-row media-row" key={item.media_asset_id}>
           {onToggle ? (
             <label className="select-cell">
               <input
                 aria-label={`Выбрать ${item.display_name}`}
-                checked={selected.has(item.media_item_id)}
-                onChange={() => onToggle(item.media_item_id)}
+                checked={selected.has(item.media_asset_id)}
+                onChange={() => onToggle(item.media_asset_id)}
                 type="checkbox"
               />
             </label>
           ) : null}
           <div className="row-main">
-            <Link className="text-link" to={`/inbox/${item.media_item_id}`}>
+            <Link className="text-link" to={`/inbox/${item.media_asset_id}`}>
               {item.display_name}
             </Link>
-            <p className="muted-text">{sourceLabel(item)}</p>
+            <p className="muted-text">{assetOriginLabel(item)}</p>
           </div>
           <dl className="row-meta">
             <div>
@@ -543,7 +547,7 @@ export function MediaItemList({
             <button
               aria-label={`Удалить ${item.display_name}`}
               className="icon-button danger"
-              onClick={() => onRemove(item.media_item_id)}
+              onClick={() => onRemove(item.media_asset_id)}
               type="button"
             >
               Удалить
@@ -572,7 +576,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
     setError("");
     setMessage("");
     try {
-      let draft: AddMediaItemDraft;
+      let draft: AddMediaAssetDraft;
       if (mode === "text") {
         if (text.trim() === "") {
           throw new Error("Добавьте текст.");
@@ -580,8 +584,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         draft = {
           kind: "text",
           displayName: displayName.trim() || text.trim().slice(0, 64),
-          adapterOrigin: "web",
-          source: { origin_type: "text", text: text.trim() },
+          origin: { origin_type: "text", text: text.trim(), origin_ref: text.trim().slice(0, 64) },
         };
       } else if (mode === "url") {
         if (url.trim() === "") {
@@ -590,8 +593,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         draft = {
           kind: "url",
           displayName: displayName.trim() || url.trim(),
-          adapterOrigin: "web",
-          source: { origin_type: "url", url: url.trim() },
+          origin: { origin_type: "url", url: url.trim(), origin_ref: url.trim() },
         };
       } else {
         if (!file) {
@@ -606,8 +608,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
                 ? "image"
                 : "file",
           displayName: displayName.trim() || file.name,
-          adapterOrigin: "web",
-          source: {
+          origin: {
             origin_type: "object",
             object_ref: `web-local://${encodeURIComponent(file.name)}-${file.size}-${file.lastModified}`,
             original_filename: file.name,
@@ -616,7 +617,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
           },
         };
       }
-      const item = await apiClient.addMediaItem(DEFAULT_OWNER, draft);
+      const item = await apiClient.addMediaAsset(DEFAULT_CHANNEL_ACCOUNT_ID, draft);
       setMessage(`Добавлено: ${item.display_name}`);
       setDisplayName("");
       setText("");
@@ -684,7 +685,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
 
 export function InboxRouteShell(): JSX.Element {
   const { apiClient } = useWebUiRuntime();
-  const { collections, error, inbox, loading, mediaItems, refresh, runs } = useInboxData();
+  const { collections, error, inbox, loading, mediaAssets, refresh, runs } = useInboxData();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [collectionName, setCollectionName] = useState("");
   const [targetCollectionId, setTargetCollectionId] = useState("");
@@ -694,20 +695,20 @@ export function InboxRouteShell(): JSX.Element {
 
   const activeRuns = runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status));
 
-  const toggle = (mediaItemId: string) => {
+  const toggle = (mediaAssetId: string) => {
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(mediaItemId)) {
-        next.delete(mediaItemId);
+      if (next.has(mediaAssetId)) {
+        next.delete(mediaAssetId);
       } else {
-        next.add(mediaItemId);
+        next.add(mediaAssetId);
       }
       return next;
     });
   };
 
   const selectAll = () => {
-    setSelected(new Set(mediaItems.map((item) => item.media_item_id)));
+    setSelected(new Set(mediaAssets.map((item) => item.media_asset_id)));
   };
 
   const clearSelection = () => {
@@ -719,7 +720,7 @@ export function InboxRouteShell(): JSX.Element {
     setActionError("");
     setActionMessage("");
     try {
-      const collection = await apiClient.createCollection(DEFAULT_OWNER, {
+      const collection = await apiClient.createCollection(DEFAULT_CHANNEL_ACCOUNT_ID, {
         name: collectionName.trim() || `Подборка ${new Date().toISOString().slice(0, 10)}`,
         items: Array.from(selected),
       });
@@ -744,11 +745,11 @@ export function InboxRouteShell(): JSX.Element {
     setActionError("");
     setActionMessage("");
     try {
-      const existing = collection.items.map((item) => item.media_item_id);
+      const existing = collection.items.map((item) => item.media_asset_id);
       const merged = Array.from(new Set([...existing, ...selected]));
-      await apiClient.replaceCollectionItems(DEFAULT_OWNER, collection.collection_id, {
+      await apiClient.replaceCollectionItems(DEFAULT_CHANNEL_ACCOUNT_ID, collection.collection_id, {
         expectedVersion: collection.version,
-        items: merged.map((media_item_id, position) => ({ media_item_id, position })),
+        items: merged.map((media_asset_id, position) => ({ media_asset_id, position })),
       });
       setSelected(new Set());
       setActionMessage(`Обновлена группа: ${collection.name}`);
@@ -760,15 +761,15 @@ export function InboxRouteShell(): JSX.Element {
     }
   };
 
-  const removeMediaItem = async (mediaItemId: string) => {
+  const removeMediaAsset = async (mediaAssetId: string) => {
     setActionPending(true);
     setActionError("");
     setActionMessage("");
     try {
-      const removed = await apiClient.removeMediaItem(DEFAULT_OWNER, mediaItemId);
+      const removed = await apiClient.removeMediaAsset(DEFAULT_CHANNEL_ACCOUNT_ID, mediaAssetId);
       setSelected((current) => {
         const next = new Set(current);
-        next.delete(mediaItemId);
+        next.delete(mediaAssetId);
         return next;
       });
       setActionMessage(`Удалено: ${removed.display_name}`);
@@ -801,7 +802,7 @@ export function InboxRouteShell(): JSX.Element {
               <span>в списке</span>
             </div>
             <div>
-              <strong>{mediaItems.length}</strong>
+              <strong>{mediaAssets.length}</strong>
               <span>материалов</span>
             </div>
             <div>
@@ -814,10 +815,10 @@ export function InboxRouteShell(): JSX.Element {
             </div>
           </div>
         ) : null}
-        <MediaItemList
-          items={mediaItems}
+        <MediaAssetList
+          items={mediaAssets}
           onClearSelection={clearSelection}
-          onRemove={(mediaItemId) => void removeMediaItem(mediaItemId)}
+          onRemove={(mediaAssetId) => void removeMediaAsset(mediaAssetId)}
           onSelectAll={selectAll}
           onToggle={toggle}
           selected={selected}
@@ -863,7 +864,7 @@ export function InboxRouteShell(): JSX.Element {
 
 export function CollectionsRouteShell(): JSX.Element {
   const { apiClient } = useWebUiRuntime();
-  const { collections, error, loading, mediaItems, refresh } = useInboxData();
+  const { collections, error, loading, mediaAssets, refresh } = useInboxData();
   const [name, setName] = useState("");
   const [selectedMediaId, setSelectedMediaId] = useState("");
   const [addTargets, setAddTargets] = useState<Record<string, string>>({});
@@ -876,7 +877,7 @@ export function CollectionsRouteShell(): JSX.Element {
     setActionError("");
     setMessage("");
     try {
-      const collection = await apiClient.createCollection(DEFAULT_OWNER, {
+      const collection = await apiClient.createCollection(DEFAULT_CHANNEL_ACCOUNT_ID, {
         name: name.trim() || `Группа ${userCollections.length + 1}`,
         items: selectedMediaId ? [selectedMediaId] : [],
       });
@@ -895,7 +896,7 @@ export function CollectionsRouteShell(): JSX.Element {
     }
     setActionError("");
     try {
-      await apiClient.updateCollection(DEFAULT_OWNER, collection.collection_id, {
+      await apiClient.updateCollection(DEFAULT_CHANNEL_ACCOUNT_ID, collection.collection_id, {
         expectedVersion: collection.version,
         name: nextName,
       });
@@ -905,13 +906,13 @@ export function CollectionsRouteShell(): JSX.Element {
     }
   };
 
-  const removeItem = async (collection: Collection, mediaItemId: string) => {
+  const removeItem = async (collection: Collection, mediaAssetId: string) => {
     setActionError("");
     try {
       await apiClient.removeCollectionItem(
-        DEFAULT_OWNER,
+        DEFAULT_CHANNEL_ACCOUNT_ID,
         collection.collection_id,
-        mediaItemId,
+        mediaAssetId,
         collection.version,
       );
       await refresh();
@@ -921,13 +922,13 @@ export function CollectionsRouteShell(): JSX.Element {
   };
 
   const addItem = async (collection: Collection) => {
-    const mediaItemId = addTargets[collection.collection_id]!;
+    const mediaAssetId = addTargets[collection.collection_id]!;
     setActionError("");
     try {
-      const existing = collection.items.map((item) => item.media_item_id);
-      await apiClient.replaceCollectionItems(DEFAULT_OWNER, collection.collection_id, {
+      const existing = collection.items.map((item) => item.media_asset_id);
+      await apiClient.replaceCollectionItems(DEFAULT_CHANNEL_ACCOUNT_ID, collection.collection_id, {
         expectedVersion: collection.version,
-        items: [...existing, mediaItemId].map((item_id, position) => ({ media_item_id: item_id, position })),
+        items: [...existing, mediaAssetId].map((item_id, position) => ({ media_asset_id: item_id, position })),
       });
       setAddTargets((current) => ({ ...current, [collection.collection_id]: "" }));
       await refresh();
@@ -939,7 +940,7 @@ export function CollectionsRouteShell(): JSX.Element {
   const setArchiveState = async (collection: Collection, status: "archived" | "active") => {
     setActionError("");
     try {
-      await apiClient.updateCollection(DEFAULT_OWNER, collection.collection_id, {
+      await apiClient.updateCollection(DEFAULT_CHANNEL_ACCOUNT_ID, collection.collection_id, {
         expectedVersion: collection.version,
         status,
       });
@@ -962,8 +963,8 @@ export function CollectionsRouteShell(): JSX.Element {
             Первый материал
             <select value={selectedMediaId} onChange={(event) => setSelectedMediaId(event.target.value)}>
               <option value="">Без материала</option>
-              {mediaItems.map((item) => (
-                <option key={item.media_item_id} value={item.media_item_id}>
+              {mediaAssets.map((item) => (
+                <option key={item.media_asset_id} value={item.media_asset_id}>
                   {item.display_name}
                 </option>
               ))}
@@ -1007,11 +1008,11 @@ export function CollectionsRouteShell(): JSX.Element {
               </p>
               <div className="mini-list">
                 {collection.items.map((item) => (
-                  <div className="mini-row" key={item.media_item_id}>
-                    <span>{item.media_item?.display_name ?? "Материал"}</span>
+                  <div className="mini-row" key={item.media_asset_id}>
+                    <span>{item.media_asset?.display_name ?? "Материал"}</span>
                     <button
                       className="text-button danger"
-                      onClick={() => void removeItem(collection, item.media_item_id)}
+                      onClick={() => void removeItem(collection, item.media_asset_id)}
                       type="button"
                     >
                       Убрать
@@ -1032,10 +1033,10 @@ export function CollectionsRouteShell(): JSX.Element {
                     }
                   >
                     <option value="">Выберите материал</option>
-                    {mediaItems
-                      .filter((item) => !collection.items.some((entry) => entry.media_item_id === item.media_item_id))
+                    {mediaAssets
+                      .filter((item) => !collection.items.some((entry) => entry.media_asset_id === item.media_asset_id))
                       .map((item) => (
-                        <option key={item.media_item_id} value={item.media_item_id}>
+                        <option key={item.media_asset_id} value={item.media_asset_id}>
                           {item.display_name}
                         </option>
                       ))}
@@ -1073,24 +1074,24 @@ export function CollectionsRouteShell(): JSX.Element {
 export function RunsRouteShell(): JSX.Element {
   const { apiClient } = useWebUiRuntime();
   const [searchParams] = useSearchParams();
-  const { collections, error, loading, mediaItems, refresh, runs } = useInboxData();
+  const { collections, error, loading, mediaAssets, refresh, runs } = useInboxData();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sourceCollectionId, setSourceCollectionId] = useState("");
   const [runType, setRunType] = useState<RunType>("transcription");
   const [paramsText, setParamsText] = useState("{\n  \"priority\": \"normal\"\n}");
-  const [lastPlan, setLastPlan] = useState<{ selectionId: string; runId: string } | null>(null);
+  const [lastPlan, setLastPlan] = useState<{ selectionSnapshotId: string; runId: string } | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useMessage();
   const [runError, setRunError] = useState("");
 
   const collectionItems = useMemo(() => {
     const collection = collections.find((candidate) => candidate.collection_id === sourceCollectionId);
-    return collection?.items.map((item) => item.media_item_id) ?? [];
+    return collection?.items.map((item) => item.media_asset_id) ?? [];
   }, [collections, sourceCollectionId]);
 
   const selectedItems = useMemo(
-    () => mediaItems.filter((item) => selected.has(item.media_item_id)),
-    [mediaItems, selected],
+    () => mediaAssets.filter((item) => selected.has(item.media_asset_id)),
+    [mediaAssets, selected],
   );
 
   useEffect(() => {
@@ -1109,20 +1110,20 @@ export function RunsRouteShell(): JSX.Element {
     }
   }, [collectionItems, sourceCollectionId]);
 
-  const toggle = (mediaItemId: string) => {
+  const toggle = (mediaAssetId: string) => {
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(mediaItemId)) {
-        next.delete(mediaItemId);
+      if (next.has(mediaAssetId)) {
+        next.delete(mediaAssetId);
       } else {
-        next.add(mediaItemId);
+        next.add(mediaAssetId);
       }
       return next;
     });
   };
 
   const selectAll = () => {
-    setSelected(new Set(mediaItems.map((item) => item.media_item_id)));
+    setSelected(new Set(mediaAssets.map((item) => item.media_asset_id)));
   };
 
   const clearSelection = () => {
@@ -1136,20 +1137,18 @@ export function RunsRouteShell(): JSX.Element {
     try {
       const ids = Array.from(selected);
       const params = paramsText.trim() ? (JSON.parse(paramsText) as Record<string, unknown>) : undefined;
-      const selection = await apiClient.createSelection(DEFAULT_OWNER, {
+      const selection = await apiClient.createSelectionSnapshot(DEFAULT_CHANNEL_ACCOUNT_ID, {
         sourceCollectionId: sourceCollectionId || undefined,
-        items: ids.map((media_item_id, position) => ({ media_item_id, position })),
-        optionSnapshot: { source: sourceCollectionId ? "collection" : "manual" },
-        duplicatePolicy: "reject",
-        createdBy: "web",
+        items: ids.map((media_asset_id, position) => ({ media_asset_id, position })),
+        optionSnapshot: { basis: sourceCollectionId ? "collection" : "manual" },
       });
-      const run = await apiClient.createAnalysisRun(DEFAULT_OWNER, {
-        selectionId: selection.selection_id,
+      const run = await apiClient.createAnalysisRun(DEFAULT_CHANNEL_ACCOUNT_ID, {
+        selectionSnapshotId: selection.selection_snapshot_id,
         runType,
         params,
         delivery: { strategy: "polling" },
       });
-      setLastPlan({ selectionId: selection.selection_id, runId: run.analysis_run_id });
+      setLastPlan({ selectionSnapshotId: selection.selection_snapshot_id, runId: run.analysis_run_id });
       setMessage("Запуск добавлен в очередь");
       await refresh();
     } catch (err) {
@@ -1192,8 +1191,8 @@ export function RunsRouteShell(): JSX.Element {
             <textarea rows={4} value={paramsText} onChange={(event) => setParamsText(event.target.value)} />
           </label>
         </div>
-        <MediaItemList
-          items={mediaItems}
+        <MediaAssetList
+          items={mediaAssets}
           onClearSelection={clearSelection}
           onSelectAll={selectAll}
           onToggle={toggle}
@@ -1245,7 +1244,7 @@ export function RunsRouteShell(): JSX.Element {
         {selectedItems.length > 0 ? (
           <div className="mini-list">
             {selectedItems.map((item, index) => (
-              <div className="mini-row" key={item.media_item_id}>
+              <div className="mini-row" key={item.media_asset_id}>
                 <span>
                   #{index + 1} {item.display_name}
                 </span>
@@ -1331,21 +1330,21 @@ export function RunDetailRouteShell(): JSX.Element {
     setError("");
     try {
       const [runResponse, eventsResponse, artifactsResponse] = await Promise.all([
-        apiClient.getAnalysisRun(DEFAULT_OWNER, analysisRunId),
-        apiClient.listAnalysisRunEvents(DEFAULT_OWNER, analysisRunId, { pageSize: 50 }),
-        apiClient.listArtifacts(DEFAULT_OWNER, { analysisRunId, pageSize: 50 }),
+        apiClient.getAnalysisRun(DEFAULT_CHANNEL_ACCOUNT_ID, analysisRunId),
+        apiClient.listAnalysisRunEvents(DEFAULT_CHANNEL_ACCOUNT_ID, analysisRunId, { pageSize: 50 }),
+        apiClient.listArtifacts(DEFAULT_CHANNEL_ACCOUNT_ID, { analysisRunId, pageSize: 50 }),
       ]);
       const subjects: DiagnosticSubject[] = [
         { subject_type: "analysis_run", subject_id: analysisRunId },
-        { subject_type: "selection_snapshot", subject_id: runResponse.selection_snapshot_id ?? runResponse.selection_id },
-        ...runResponse.selection.items.flatMap((item) => [
-          { subject_type: "media_asset", subject_id: item.media_item_id },
-          { subject_type: "stored_object", subject_id: item.source_snapshot.source_id },
+        { subject_type: "selection_snapshot", subject_id: runResponse.selection_snapshot_id },
+        ...runResponse.selection_snapshot.items.flatMap((item) => [
+          { subject_type: "media_asset", subject_id: item.media_asset_id },
+          { subject_type: "stored_object", subject_id: originObjectRef(item.origin_snapshot) },
         ]),
       ].filter((subject) => subject.subject_id);
       const diagnosticResponses = await Promise.all(
         subjects.map((subject) =>
-          apiClient.listDiagnostics(DEFAULT_OWNER, {
+          apiClient.listDiagnostics(DEFAULT_CHANNEL_ACCOUNT_ID, {
             subjectType: subject.subject_type as never,
             subjectId: subject.subject_id,
             pageSize: 50,
@@ -1386,7 +1385,7 @@ export function RunDetailRouteShell(): JSX.Element {
   const cancel = async () => {
     setMessage("");
     try {
-      const next = await apiClient.cancelAnalysisRun(DEFAULT_OWNER, analysisRunId);
+      const next = await apiClient.cancelAnalysisRun(DEFAULT_CHANNEL_ACCOUNT_ID, analysisRunId);
       setRun(next);
       setMessage("Остановка запрошена");
     } catch (err) {
@@ -1397,7 +1396,7 @@ export function RunDetailRouteShell(): JSX.Element {
   const retry = async () => {
     setMessage("");
     try {
-      await apiClient.retryAnalysisRun(DEFAULT_OWNER, analysisRunId);
+      await apiClient.retryAnalysisRun(DEFAULT_CHANNEL_ACCOUNT_ID, analysisRunId);
       setMessage("Повторный запуск добавлен в очередь");
       await refresh();
     } catch (err) {
@@ -1465,8 +1464,8 @@ export function RunDetailRouteShell(): JSX.Element {
             <section className="subsection">
               <h3>Подборка</h3>
               <div className="mini-list">
-                {run.selection.items.map((item) => (
-                  <div className="mini-row" key={`${item.media_item_id}-${item.position}`}>
+                {run.selection_snapshot.items.map((item) => (
+                  <div className="mini-row" key={`${item.media_asset_id}-${item.position}`}>
                     <span>
                       #{item.position + 1} {item.display_name}
                     </span>
@@ -1481,7 +1480,7 @@ export function RunDetailRouteShell(): JSX.Element {
             </section>
             <section className="subsection">
               <h3>Проверки по материалам</h3>
-              <SourceDiagnosticsList run={run} diagnostics={diagnostics} />
+              <OriginDiagnosticsList run={run} diagnostics={diagnostics} />
             </section>
           </>
         ) : null}
@@ -1536,12 +1535,12 @@ function RunOutcomeList({
         <div className="data-list">
           {manifest.items.map((item) => {
             return (
-              <article className="data-row outcome-row" key={`${item.media_item_id}-${item.position}`}>
+              <article className="data-row outcome-row" key={`${item.media_asset_id}-${item.position}`}>
                 <div className="row-main">
                   <strong>
                     #{item.position + 1} Материал
                   </strong>
-                  <p className="muted-text">{item.selection_item_id ? "Выбран в подборке" : "Элемент подборки"}</p>
+                  <p className="muted-text">{item.selection_snapshot_item_id ? "Выбран в подборке" : "Элемент подборки"}</p>
                 </div>
                 <dl className="row-meta">
                   <div>
@@ -1558,7 +1557,7 @@ function RunOutcomeList({
                   </div>
                   <div>
                     <dt>Проверки</dt>
-                    <dd>{item.diagnostic_ids?.length ?? diagnosticsForSubject(diagnostics, item.media_item_id).length}</dd>
+                    <dd>{item.diagnostic_ids?.length ?? diagnosticsForSubject(diagnostics, item.media_asset_id).length}</dd>
                   </div>
                 </dl>
               </article>
@@ -1571,11 +1570,11 @@ function RunOutcomeList({
 
   return (
     <div className="data-list">
-      {run.selection.items.map((item) => {
-        const itemDiagnostics = diagnosticsForSubject(diagnostics, item.media_item_id);
-        const sourceDiagnostics = diagnosticsForSubject(diagnostics, item.source_snapshot.source_id);
+      {run.selection_snapshot.items.map((item) => {
+        const itemDiagnostics = diagnosticsForSubject(diagnostics, item.media_asset_id);
+        const originDiagnostics = diagnosticsForSubject(diagnostics, originObjectRef(item.origin_snapshot));
         return (
-          <article className="data-row outcome-row" key={`${item.media_item_id}-${item.position}`}>
+          <article className="data-row outcome-row" key={`${item.media_asset_id}-${item.position}`}>
             <div className="row-main">
               <strong>
                 #{item.position + 1} {item.display_name}
@@ -1589,11 +1588,11 @@ function RunOutcomeList({
               </div>
               <div>
                 <dt>Откуда</dt>
-                <dd>{kindLabel(item.source_snapshot.origin_type)}</dd>
+                <dd>{originLabel(item.origin_snapshot)}</dd>
               </div>
               <div>
                 <dt>Проверки</dt>
-                <dd>{itemDiagnostics.length + sourceDiagnostics.length}</dd>
+                <dd>{itemDiagnostics.length + originDiagnostics.length}</dd>
               </div>
             </dl>
           </article>
@@ -1603,17 +1602,17 @@ function RunOutcomeList({
   );
 }
 
-function SourceDiagnosticsList({
+function OriginDiagnosticsList({
   run,
   diagnostics,
 }: {
   run: AnalysisRun;
   diagnostics: Diagnostic[];
 }): JSX.Element {
-  const entries = run.selection.items.map((item) => {
-    const itemDiagnostics = diagnosticsForSubject(diagnostics, item.media_item_id);
-    const sourceDiagnostics = diagnosticsForSubject(diagnostics, item.source_snapshot.source_id);
-    return { item, diagnostics: [...itemDiagnostics, ...sourceDiagnostics] };
+  const entries = run.selection_snapshot.items.map((item) => {
+    const itemDiagnostics = diagnosticsForSubject(diagnostics, item.media_asset_id);
+    const originDiagnostics = diagnosticsForSubject(diagnostics, originObjectRef(item.origin_snapshot));
+    return { item, diagnostics: [...itemDiagnostics, ...originDiagnostics] };
   });
 
   if (entries.every((entry) => entry.diagnostics.length === 0)) {
@@ -1625,10 +1624,10 @@ function SourceDiagnosticsList({
       {entries
         .filter((entry) => entry.diagnostics.length > 0)
         .map((entry) => (
-          <article className="data-row source-diagnostic-row" key={entry.item.media_item_id}>
+          <article className="data-row origin-diagnostic-row" key={entry.item.media_asset_id}>
             <div className="row-main">
               <strong>{entry.item.display_name}</strong>
-              <p className="muted-text">{kindLabel(entry.item.source_snapshot.origin_type)}</p>
+              <p className="muted-text">{originLabel(entry.item.origin_snapshot)}</p>
             </div>
             <DiagnosticList diagnostics={entry.diagnostics} />
           </article>
@@ -1760,12 +1759,12 @@ export function ArtifactsRouteShell(): JSX.Element {
   const refresh = useCallback(async () => {
     setError("");
     try {
-      const response = await apiClient.listArtifacts(DEFAULT_OWNER, { pageSize: 50 });
+      const response = await apiClient.listArtifacts(DEFAULT_CHANNEL_ACCOUNT_ID, { pageSize: 50 });
       setArtifacts(response.items);
       if (artifactId) {
         const [artifactResponse, diagnosticsResponse] = await Promise.all([
-          apiClient.getArtifact(DEFAULT_OWNER, artifactId),
-          apiClient.listDiagnostics(DEFAULT_OWNER, {
+          apiClient.getArtifact(DEFAULT_CHANNEL_ACCOUNT_ID, artifactId),
+          apiClient.listDiagnostics(DEFAULT_CHANNEL_ACCOUNT_ID, {
             subjectType: "artifact",
             subjectId: artifactId,
             pageSize: 50,
@@ -1795,10 +1794,10 @@ export function ArtifactsRouteShell(): JSX.Element {
     setMessage("");
     setRefreshingArtifact(true);
     try {
-      const refreshed = await apiClient.refreshArtifact(DEFAULT_OWNER, artifactId);
+      const refreshed = await apiClient.refreshArtifact(DEFAULT_CHANNEL_ACCOUNT_ID, artifactId);
       setArtifact(refreshed);
       setMessage("Ссылка обновлена");
-      const artifactsResponse = await apiClient.listArtifacts(DEFAULT_OWNER, { pageSize: 50 });
+      const artifactsResponse = await apiClient.listArtifacts(DEFAULT_CHANNEL_ACCOUNT_ID, { pageSize: 50 });
       setArtifacts(artifactsResponse.items);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось обновить ссылку.");
@@ -1901,7 +1900,7 @@ export function DiagnosticsRouteShell(): JSX.Element {
     setError("");
     try {
       const [response, snapshot] = await Promise.all([
-        apiClient.listDiagnostics(DEFAULT_OWNER, {
+        apiClient.listDiagnostics(DEFAULT_CHANNEL_ACCOUNT_ID, {
           subjectType: subjectType as never,
           severity: severity as never,
           pageSize: 50,
@@ -2028,10 +2027,10 @@ export function DiagnosticsRouteShell(): JSX.Element {
   );
 }
 
-export function MediaItemDetailRouteShell(): JSX.Element {
-  const { mediaItemId = "" } = useParams();
+export function MediaAssetDetailRouteShell(): JSX.Element {
+  const { mediaAssetId = "" } = useParams();
   const { apiClient } = useWebUiRuntime();
-  const [item, setItem] = useState<MediaItem | null>(null);
+  const [item, setItem] = useState<MediaAsset | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useMessage();
   const [removing, setRemoving] = useState(false);
@@ -2039,22 +2038,22 @@ export function MediaItemDetailRouteShell(): JSX.Element {
   const refresh = useCallback(async () => {
     setError("");
     try {
-      setItem(await apiClient.getMediaItem(DEFAULT_OWNER, mediaItemId));
+      setItem(await apiClient.getMediaAsset(DEFAULT_CHANNEL_ACCOUNT_ID, mediaAssetId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не удалось загрузить материал.");
     }
-  }, [apiClient, mediaItemId]);
+  }, [apiClient, mediaAssetId]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  const removeMediaItem = async () => {
+  const removeMediaAsset = async () => {
     setError("");
     setMessage("");
     setRemoving(true);
     try {
-      const removed = await apiClient.removeMediaItem(DEFAULT_OWNER, mediaItemId);
+      const removed = await apiClient.removeMediaAsset(DEFAULT_CHANNEL_ACCOUNT_ID, mediaAssetId);
       setItem(removed);
       setMessage(`Удалено: ${removed.display_name}`);
     } catch (err) {
@@ -2076,7 +2075,7 @@ export function MediaItemDetailRouteShell(): JSX.Element {
               aria-label={item ? `Удалить ${item.display_name}` : "Удалить материал"}
               className="secondary-button danger"
               disabled={removing}
-              onClick={() => void removeMediaItem()}
+              onClick={() => void removeMediaAsset()}
               type="button"
             >
               {removing ? "Удаляем..." : "Удалить"}
@@ -2099,16 +2098,12 @@ export function MediaItemDetailRouteShell(): JSX.Element {
             <dd>{statusLabel(item.status)}</dd>
           </div>
           <div>
-            <dt>Хранение</dt>
-            <dd>{statusLabel(item.retention.state)}</dd>
-          </div>
-          <div>
             <dt>Удален</dt>
-            <dd>{formatDate(item.retention.deleted_at ?? item.deleted_at)}</dd>
+            <dd>{formatDate(item.deleted_at)}</dd>
           </div>
           <div>
             <dt>Тип источника</dt>
-            <dd>{kindLabel(item.source.origin_type)}</dd>
+            <dd>{kindLabel(item.origin.origin_type)}</dd>
           </div>
           <div>
             <dt>Создан</dt>
@@ -2116,11 +2111,11 @@ export function MediaItemDetailRouteShell(): JSX.Element {
           </div>
           <div>
             <dt>Размер</dt>
-            <dd>{formatBytes(item.source.size_bytes)}</dd>
+            <dd>{formatBytes(item.origin.size_bytes)}</dd>
           </div>
           <div>
             <dt>Откуда</dt>
-            <dd>{sourceLabel(item)}</dd>
+            <dd>{assetOriginLabel(item)}</dd>
           </div>
         </dl>
       ) : null}

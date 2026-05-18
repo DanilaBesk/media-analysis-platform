@@ -477,11 +477,11 @@ button[disabled] {
   background: #1f2930;
 }
 
-.source-diagnostic-row {
+.origin-diagnostic-row {
   align-items: start;
 }
 
-.source-diagnostic-row .data-list {
+.origin-diagnostic-row .data-list {
   gap: 0.45rem;
 }
 

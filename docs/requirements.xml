@@ -193,7 +193,7 @@
     <bead id="media-sfx" status="completed">Worker execution now runs behind analysis_run with sealed selection consumption.</bead>
     <bead id="media-7al" status="completed">Telegram now operates over explicit selection/run semantics on the API-owned inbox.</bead>
     <bead id="media-7wo" status="completed">Web management UI now covers inbox, collections, run detail, artifact use, and sealed-selection regressions.</bead>
-    <bead id="media-uhi" status="completed">MCP tools match the historical canonical API surface and must be migrated to channel-account target contracts in media-7f3.</bead>
+    <bead id="media-uhi" status="completed">MCP tools matched the historical canonical API surface; active MCP target contracts are migrated under media-7f3.9.7 with channel_account_id schemas.</bead>
     <bead id="media-nvx" status="completed">Historical runtime-final compose proof exists; target rebuild runtime closure remains tracked by media-7f3.10 and media-7f3.11.</bead>
     <bead id="media-omt" status="completed">Executable coverage inventory is documented and runnable, with remaining measurement gaps explicit.</bead>
     <bead id="media-gna" status="completed">GRACE packet truth now matches the actual closed state of the repo.</bead>

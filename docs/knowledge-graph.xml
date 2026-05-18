@@ -100,8 +100,8 @@
       </annotations>
     </M-API-STORAGE>
 
-    <M-API-QUEUE NAME="ApiQueue" TYPE="INFRASTRUCTURE" STATUS="planned" OWNER="media-5cj">
-      <purpose>Schedule internal analysis_run_steps keyed by analysis_run_id without defining public product vocabulary.</purpose>
+    <M-API-QUEUE NAME="ApiQueue" TYPE="INFRASTRUCTURE" STATUS="implemented-runtime-proof-pending" OWNER="media-7f3.9.6">
+      <purpose>Expose internal analysis_run_step control-plane and bounded queue recovery without defining public product vocabulary.</purpose>
       <path>apps/api/internal/queue</path>
       <depends>M-API-DOMAIN</depends>
       <verification-ref>EV-API</verification-ref>
@@ -111,8 +111,8 @@
       </annotations>
     </M-API-QUEUE>
 
-    <M-API-EVENTS NAME="ApiEvents" TYPE="INFRASTRUCTURE" STATUS="planned" OWNER="media-5cj">
-      <purpose>Publish polling and live-update events for media_asset, collection, selection_snapshot, analysis_run, artifact, and diagnostic changes.</purpose>
+    <M-API-EVENTS NAME="ApiEvents" TYPE="INFRASTRUCTURE" STATUS="implemented-runtime-proof-pending" OWNER="media-7f3.9.3">
+      <purpose>Publish polling and live-update event surfaces for media_asset, collection, selection_snapshot, analysis_run, artifact, and diagnostic changes.</purpose>
       <path>apps/api/internal/ws</path>
       <depends>M-CONTRACTS, M-API-DOMAIN</depends>
       <verification-ref>EV-API</verification-ref>
@@ -220,7 +220,7 @@
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />
       <CrossLink from="M-API-DOMAIN" to="M-API-STORAGE" relation="persists-product-state-through" />
       <CrossLink from="M-API-DOMAIN" to="M-API-QUEUE" relation="schedules-internal-execution-through" />
-      <CrossLink from="M-INTERACTION-SURFACES" to="M-API-DOMAIN" relation="validates-owner-scoped-subjects-through" />
+      <CrossLink from="M-INTERACTION-SURFACES" to="M-API-DOMAIN" relation="historically-validated-owner-scoped-subjects-through" />
       <CrossLink from="M-TELEGRAM-ADAPTER" to="M-INTERACTION-SURFACES" relation="persists-external-card-mappings-through" />
       <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-API-HTTP" relation="publishes-run-artifacts-through" />
       <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-API-HTTP" relation="publishes-run-artifacts-through" />

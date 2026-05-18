@@ -1,6 +1,6 @@
 # Single-User Channel-Aware Target Architecture
 
-Status: planned
+Status: source plan; implementation tracked by media-7f3.9, media-7f3.10, and media-7f3.11
 Beads: media-7f3, media-w9y
 Date: 2026-05-17
 

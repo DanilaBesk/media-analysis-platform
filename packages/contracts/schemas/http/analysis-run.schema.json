@@ -73,8 +73,18 @@
     },
     "cancelAnalysisRunRequest": {
       "type": "object",
+      "required": [
+        "channel_account_id"
+      ],
       "properties": {
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
         "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "message": {
           "type": "string",
           "minLength": 1
         }
@@ -90,7 +100,7 @@
         "channel_account_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "reason": {
+        "idempotency_key": {
           "type": "string",
           "minLength": 1
         }

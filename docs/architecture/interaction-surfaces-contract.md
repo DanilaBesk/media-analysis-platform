@@ -1,12 +1,12 @@
 # Interaction Surfaces Contract
 
-Status: planned
+Status: historical; superseded by channel_surface target architecture in docs/architecture/single-user-channel-aware-target-architecture.md
 Beads: media-cgr, media-fal
 Date: 2026-05-16
 
 ## Purpose
 
-This document defines a generic API-owned Interaction Surfaces boundary for external channel surfaces that represent API-owned domain subjects.
+This historical document defined the generic API-owned Interaction Surfaces boundary before the target vocabulary was renamed to channel_surface.
 
 The immediate driver is the Telegram card model in `docs/architecture/telegram-selection-transcription-cards.md`: Telegram needs durable mappings between current materials cards, transcription task cards, result file messages, and API-owned subjects. The API should provide durability and owner-scoped consistency without becoming aware of Telegram-specific UI concepts.
 

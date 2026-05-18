@@ -1,12 +1,12 @@
 # Telegram Selection And Transcription Card Contract
 
-Status: planned
+Status: historical; superseded by the media-7f3.9.5 Telegram target materials and run-card flow
 Beads: media-lgf
 Date: 2026-05-16
 
 ## Purpose
 
-This document defines the Telegram presentation contract for collecting media into the current user-facing selection and running one or more transcription tasks from it.
+This historical document defined the Telegram presentation contract before the target media_asset, selection_snapshot, analysis_run, and channel_surface vocabulary was implemented.
 
 The product goal is to make Telegram feel like a task-oriented workspace:
 

@@ -6,41 +6,18 @@ import { createWebUiRoutes } from "../src/app/routes";
 import type { WebUiRuntime } from "../src/app/runtime";
 import type { WebUiApiClient } from "../src/lib/api/client";
 
-const owner = {
-  owner_type: "web" as const,
-  owner_id: "web-console",
-};
+const owner = "web-console";
 
-function mediaItem(overrides = {}) {
-  return {
-    media_item_id: "media-1",
-    owner,
-    kind: "text",
-    status: "ready",
-    display_name: "Call note",
-    source: {
-      source_id: "source-1",
-      origin_type: "text",
-      text_ref: "text:source-1",
-    },
-    diagnostics_count: 0,
-    retention: { state: "active" },
-    created_at: "2026-05-10T00:00:00Z",
-    updated_at: "2026-05-10T00:00:00Z",
-    ...overrides,
-  };
-}
-
-function secondMediaItem() {
-  return mediaItem({
-    media_item_id: "media-2",
+function secondMediaAsset() {
+  return mediaAsset({
+    media_asset_id: "media-2",
     kind: "audio",
     display_name: "Interview audio",
-    source: {
-      source_id: "source-2",
+    origin: {
       origin_type: "object",
       object_key: "web-local://interview.wav",
-      mime_type: "audio/wav",
+      object_ref: "web-local://interview.wav",
+      content_type: "audio/wav",
       size_bytes: 2048,
     },
   });
@@ -48,7 +25,7 @@ function secondMediaItem() {
 
 function mediaAsset(overrides = {}) {
   return {
-    media_asset_id: "asset-1",
+    media_asset_id: "media-1",
     channel_account_id: "web-console",
     kind: "text",
     status: "ready",
@@ -77,16 +54,16 @@ function selectionSnapshot(overrides = {}) {
 function collection(overrides = {}) {
   return {
     collection_id: "collection-1",
-    owner,
+    channel_account_id: "web-console",
     kind: "user",
     name: "Research set",
     status: "active",
     version: 3,
     items: [
       {
-        media_item_id: "media-1",
+        media_asset_id: "media-1",
         position: 0,
-        media_item: mediaItem(),
+        media_asset: mediaAsset(),
         added_at: "2026-05-10T00:00:00Z",
       },
     ],
@@ -99,25 +76,24 @@ function collection(overrides = {}) {
 function analysisRun(overrides = {}) {
   return {
     analysis_run_id: "run-1",
-    owner,
-    selection_id: "selection-1",
-    selection: {
-      selection_id: "selection-1",
-      owner,
+    channel_account_id: "web-console",
+    selection_snapshot_id: "snapshot-1",
+    selection_snapshot: {
+      selection_snapshot_id: "snapshot-1",
+      channel_account_id: "web-console",
       status: "sealed",
       items: [
         {
+          selection_snapshot_item_id: "snapshot-item-1",
           position: 0,
-          media_item_id: "media-1",
+          media_asset_id: "media-1",
           kind: "text",
-          source_snapshot: { source_id: "source-1", origin_type: "text" },
+          origin_snapshot: { origin_type: "text", stored_object_id: "origin-1", text: "Call note" },
           display_name: "Call note",
           status_at_selection: "ready",
-          retention_snapshot: { state: "active" },
         },
       ],
       option_snapshot: {},
-      created_by: "web",
       created_at: "2026-05-10T00:00:00Z",
       sealed_at: "2026-05-10T00:00:00Z",
     },
@@ -155,12 +131,12 @@ function analysisRun(overrides = {}) {
             summary: { included_count: 1, skipped_count: 0, failed_count: 0 },
             items: [
               {
-                selection_item_id: "selection-item-1",
-                media_item_id: "media-1",
+                selection_snapshot_item_id: "snapshot-item-1",
+                media_asset_id: "media-1",
                 position: 0,
                 outcome: "succeeded",
                 included: true,
-                lineage: { source_id: "source-1", role: "primary" },
+                lineage: { media_asset_id: "media-1", role: "primary" },
                 artifact_kinds: ["summary", "run_manifest"],
                 diagnostic_ids: [],
               },
@@ -190,22 +166,14 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
   const softDeletedAt = "2026-05-10T01:00:00Z";
   const apiClient: WebUiApiClient = {
     listMediaAssets: vi.fn().mockResolvedValue({
-      items: [mediaAsset()],
+      items: [mediaAsset(), secondMediaAsset()],
       page: { page_size: 50, has_more: false },
     }),
     getMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
-    addMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ media_asset_id: "asset-2", display_name: "Fresh note" })),
-    removeMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ status: "deleted", deleted_at: softDeletedAt })),
-    listMediaItems: vi.fn().mockResolvedValue({
-      items: [mediaItem(), secondMediaItem()],
-      page: { page_size: 50, has_more: false },
-    }),
-    getMediaItem: vi.fn().mockResolvedValue(mediaItem()),
-    addMediaItem: vi.fn().mockResolvedValue(mediaItem({ media_item_id: "media-2", display_name: "Fresh note" })),
-    removeMediaItem: vi.fn().mockResolvedValue(
-      mediaItem({
+    addMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ media_asset_id: "media-2", display_name: "Fresh note" })),
+    removeMediaAsset: vi.fn().mockResolvedValue(
+      mediaAsset({
         status: "deleted",
-        retention: { state: "soft_deleted", deleted_at: softDeletedAt },
         deleted_at: softDeletedAt,
       }),
     ),
@@ -219,16 +187,6 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
     updateCollection: vi.fn().mockResolvedValue(collection({ name: "Renamed set" })),
     replaceCollectionItems: vi.fn().mockResolvedValue(collection()),
     removeCollectionItem: vi.fn().mockResolvedValue(collection({ items: [] })),
-    createSelection: vi.fn().mockResolvedValue({
-      selection_id: "selection-2",
-      owner,
-      status: "sealed",
-      items: [],
-      created_by: "web",
-      created_at: "2026-05-10T00:00:00Z",
-      sealed_at: "2026-05-10T00:00:00Z",
-    }),
-    getSelection: vi.fn(),
     createSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot({ selection_snapshot_id: "snapshot-2" })),
     getSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot()),
     createAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ analysis_run_id: "run-2", status: "queued" })),
@@ -313,12 +271,12 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
           created_at: "2026-05-10T00:00:00Z",
         },
         {
-          diagnostic_id: "diagnostic-source",
+          diagnostic_id: "diagnostic-origin",
           owner,
-          subject: { subject_type: "stored_object", subject_id: "source-1" },
+          subject: { subject_type: "stored_object", subject_id: "origin-1" },
           severity: "warning",
-          code: "source_unavailable",
-          message: "Source warning kept with lineage",
+          code: "origin_unavailable",
+          message: "Origin warning kept with lineage",
           created_at: "2026-05-10T00:00:00Z",
         },
         {
@@ -403,7 +361,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
+      expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
           kind: "text",
@@ -418,7 +376,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(await within(runtime.container).findByRole("button", { name: "Удалить Call note" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
+      expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(owner, "media-1");
     });
     expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
   });
@@ -428,7 +386,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(await within(runtime.container).findByRole("button", { name: "Удалить Call note" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
+      expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(owner, "media-1");
     });
     expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
     expect(within(runtime.container).getAllByText("Удалено").length).toBeGreaterThan(0);
@@ -478,8 +436,8 @@ describe("createWebUiRoutes", () => {
       expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
         expectedVersion: 3,
         items: [
-          { media_item_id: "media-1", position: 0 },
-          { media_item_id: "media-2", position: 1 },
+          { media_asset_id: "media-1", position: 0 },
+          { media_asset_id: "media-2", position: 1 },
         ],
       });
     });
@@ -498,15 +456,15 @@ describe("createWebUiRoutes", () => {
         version: draft.expectedVersion + 1,
         items: [
           {
-            media_item_id: "media-1",
+            media_asset_id: "media-1",
             position: 0,
-            media_item: mediaItem(),
+            media_asset: mediaAsset(),
             added_at: "2026-05-10T00:00:00Z",
           },
           {
-            media_item_id: "media-2",
+            media_asset_id: "media-2",
             position: 1,
-            media_item: secondMediaItem(),
+            media_asset: secondMediaAsset(),
             added_at: "2026-05-10T00:00:00Z",
           },
         ],
@@ -527,8 +485,8 @@ describe("createWebUiRoutes", () => {
       expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
         expectedVersion: 3,
         items: [
-          { media_item_id: "media-1", position: 0 },
-          { media_item_id: "media-2", position: 1 },
+          { media_asset_id: "media-1", position: 0 },
+          { media_asset_id: "media-2", position: 1 },
         ],
       });
     });
@@ -552,17 +510,17 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.createSelection).toHaveBeenCalledWith(
+      expect(runtime.apiClient.createSelectionSnapshot).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
-          items: [{ media_item_id: "media-1", position: 0 }],
+          items: [{ media_asset_id: "media-1", position: 0 }],
         }),
       );
       expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
           runType: "summary",
-          selectionId: "selection-2",
+          selectionSnapshotId: "snapshot-2",
         }),
       );
     });
@@ -668,15 +626,15 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     expect(await screen.findByText("Добавьте ссылку.")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Ссылка"), { target: { value: "https://example.test/source" } });
+    fireEvent.change(screen.getByLabelText("Ссылка"), { target: { value: "https://example.test/origin" } });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
+      expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
           kind: "url",
-          displayName: "https://example.test/source",
-          source: { origin_type: "url", url: "https://example.test/source" },
+          displayName: "https://example.test/origin",
+          origin: { origin_type: "url", url: "https://example.test/origin", origin_ref: "https://example.test/origin" },
         }),
       );
     });
@@ -693,12 +651,12 @@ describe("createWebUiRoutes", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
+      expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
           kind: "audio",
           displayName: "sample.wav",
-          source: expect.objectContaining({
+          origin: expect.objectContaining({
             origin_type: "object",
             original_filename: "sample.wav",
             content_type: "audio/wav",
@@ -820,7 +778,7 @@ describe("createWebUiRoutes", () => {
 
   it("covers inbox action fallback errors", async () => {
     const runtime = renderRoute("/", {
-      addMediaItem: vi.fn().mockRejectedValue("boom"),
+      addMediaAsset: vi.fn().mockRejectedValue("boom"),
       createCollection: vi.fn().mockRejectedValue("boom"),
     });
 
@@ -863,7 +821,7 @@ describe("createWebUiRoutes", () => {
 
   it("covers run, artifact, diagnostics, and media-detail fallback errors", async () => {
     renderRoute("/runs", {
-      createSelection: vi.fn().mockRejectedValue("boom"),
+      createSelectionSnapshot: vi.fn().mockRejectedValue("boom"),
     });
     fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
     fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
@@ -897,27 +855,27 @@ describe("createWebUiRoutes", () => {
     diagnosticsRuntime.unmount();
 
     renderRoute("/inbox/media-1", {
-      getMediaItem: vi.fn().mockRejectedValue("boom"),
-      removeMediaItem: vi.fn().mockRejectedValue("boom"),
+      getMediaAsset: vi.fn().mockRejectedValue("boom"),
+      removeMediaAsset: vi.fn().mockRejectedValue("boom"),
     });
     expect(await screen.findByText("Не удалось загрузить материал.")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Удалить материал" }));
     expect(await screen.findByText("Не удалось удалить материал.")).toBeVisible();
   });
 
-  it("covers inbox helper fallbacks, selection toggles, and source labels", async () => {
+  it("covers inbox helper fallbacks, selection toggles, and origin labels", async () => {
     const runtime = renderRoute("/", {
-      listMediaItems: vi.fn().mockResolvedValue({
+      listMediaAssets: vi.fn().mockResolvedValue({
         items: [
-          mediaItem({
-            media_item_id: "media-url",
-            display_name: "URL source",
-            source: { source_id: "source-url", origin_type: "url", external_uri: "https://example.test/file" },
+          mediaAsset({
+            media_asset_id: "media-url",
+            display_name: "URL origin",
+            origin: { origin_type: "url", url: "https://example.test/file", origin_ref: "https://example.test/file" },
           }),
-          mediaItem({
-            media_item_id: "media-raw",
-            display_name: "Raw source",
-            source: { source_id: "source-raw", origin_type: "binary" },
+          mediaAsset({
+            media_asset_id: "media-raw",
+            display_name: "Raw origin",
+            origin: { origin_type: "object", origin_ref: "web-local://raw", object_ref: "web-local://raw" },
           }),
         ],
         page: { page_size: 50, has_more: false },
@@ -933,14 +891,14 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await screen.findByText("URL source")).toBeVisible();
+    expect(await screen.findByText("URL origin")).toBeVisible();
     expect(screen.getByText("https://example.test/file")).toBeVisible();
-    expect(screen.getByText("Данные")).toBeVisible();
+    expect(screen.getByText("Загруженный файл")).toBeVisible();
     expect(screen.queryByText("in inbox")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Выбрать все" }));
     expect(screen.getByRole("button", { name: "Очистить" })).toBeEnabled();
-    fireEvent.click(screen.getByLabelText("Выбрать URL source"));
+    fireEvent.click(screen.getByLabelText("Выбрать URL origin"));
     expect(screen.getByRole("button", { name: "Создать группу" })).toHaveTextContent("Создать группу");
     fireEvent.click(screen.getByRole("button", { name: "Очистить" }));
     expect(screen.getByRole("button", { name: "Очистить" })).toBeDisabled();
@@ -948,7 +906,7 @@ describe("createWebUiRoutes", () => {
     runtime.unmount();
 
     renderRoute("/", {
-      listMediaItems: vi.fn().mockRejectedValue("boom"),
+      listMediaAssets: vi.fn().mockRejectedValue("boom"),
       getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
       listCollections: vi.fn().mockResolvedValue({ items: [], page: { page_size: 50, has_more: false } }),
       listAnalysisRuns: vi.fn().mockResolvedValue({ items: [], page: { page_size: 25, has_more: false } }),
@@ -968,8 +926,8 @@ describe("createWebUiRoutes", () => {
       expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
         expectedVersion: 3,
         items: [
-          { media_item_id: "media-1", position: 0 },
-          { media_item_id: "media-2", position: 1 },
+          { media_asset_id: "media-1", position: 0 },
+          { media_asset_id: "media-2", position: 1 },
         ],
       });
     });
@@ -981,7 +939,7 @@ describe("createWebUiRoutes", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
+      expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
         1,
         owner,
         expect.objectContaining({ kind: "video", displayName: "clip.mp4" }),
@@ -996,7 +954,7 @@ describe("createWebUiRoutes", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
+      expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
         2,
         owner,
         expect.objectContaining({ kind: "image", displayName: "cover.png" }),
@@ -1012,7 +970,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
+      expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
         3,
         owner,
         expect.objectContaining({ kind: "file", displayName: "blob.bin" }),
@@ -1020,7 +978,7 @@ describe("createWebUiRoutes", () => {
     });
   });
 
-  it("covers manifest, legacy diagnostics, and non-progress event branches", async () => {
+  it("covers manifest, material diagnostics, and non-progress event branches", async () => {
     renderRoute("/runs/run-1", {
       getAnalysisRun: vi.fn().mockResolvedValue(
         analysisRun({
@@ -1039,10 +997,10 @@ describe("createWebUiRoutes", () => {
                 text_excerpt: JSON.stringify({
                   items: [
                     {
-                      media_item_id: "media-1",
+                      media_asset_id: "media-1",
                       position: 0,
                       outcome: "failed",
-                      selection_item_id: "selection-item-1",
+                      selection_snapshot_item_id: "selection-item-1",
                     },
                   ],
                 }),
@@ -1087,13 +1045,13 @@ describe("createWebUiRoutes", () => {
       listDiagnostics: vi.fn().mockResolvedValue({
         items: [
           {
-            diagnostic_id: "legacy-source",
+            diagnostic_id: "origin-diagnostic",
             owner,
-            subject_type: "source",
-            subject_id: "source-1",
+            subject_type: "stored_object",
+            subject_id: "origin-1",
             severity: "warning",
-            code: "legacy_source_warning",
-            message: "Legacy payload kept readable.",
+            code: "origin_warning",
+            message: "Origin payload kept readable.",
             created_at: "2026-05-10T00:00:00Z",
           },
         ],
@@ -1210,14 +1168,14 @@ describe("createWebUiRoutes", () => {
       listCollections: vi.fn().mockResolvedValue({
         items: [
           collection({
-            items: [{ media_item_id: "media-opaque", position: 0, added_at: "2026-05-10T00:00:00Z" }],
+            items: [{ media_asset_id: "media-opaque", position: 0, added_at: "2026-05-10T00:00:00Z" }],
           }),
         ],
         page: { page_size: 50, has_more: false },
       }),
       getCollection: vi.fn().mockResolvedValue(
         collection({
-          items: [{ media_item_id: "media-opaque", position: 0, added_at: "2026-05-10T00:00:00Z" }],
+          items: [{ media_asset_id: "media-opaque", position: 0, added_at: "2026-05-10T00:00:00Z" }],
         }),
       ),
     });
@@ -1287,7 +1245,7 @@ describe("createWebUiRoutes", () => {
     const mediaRuntime = renderRoute("/inbox/media-1");
     fireEvent.click(await screen.findByRole("button", { name: "Обновить" }));
     await waitFor(() => {
-      expect(mediaRuntime.apiClient.getMediaItem).toHaveBeenCalledTimes(2);
+      expect(mediaRuntime.apiClient.getMediaAsset).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -1296,7 +1254,7 @@ describe("createWebUiRoutes", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Обновить" }));
     await waitFor(() => {
-      expect(inboxRuntime.apiClient.listMediaItems).toHaveBeenCalledTimes(2);
+      expect(inboxRuntime.apiClient.listMediaAssets).toHaveBeenCalledTimes(2);
       expect(inboxRuntime.apiClient.getInboxCollection).toHaveBeenCalledTimes(2);
       expect(inboxRuntime.apiClient.listCollections).toHaveBeenCalledTimes(2);
       expect(inboxRuntime.apiClient.listAnalysisRuns).toHaveBeenCalledTimes(2);
@@ -1420,11 +1378,11 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.createSelection).toHaveBeenCalledWith(
+      expect(runtime.apiClient.createSelectionSnapshot).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
           sourceCollectionId: "collection-1",
-          optionSnapshot: { source: "collection" },
+          optionSnapshot: { basis: "collection" },
         }),
       );
     });
@@ -1432,7 +1390,7 @@ describe("createWebUiRoutes", () => {
       expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
-          selectionId: "selection-2",
+          selectionSnapshotId: "snapshot-2",
           params: undefined,
         }),
       );
@@ -1459,7 +1417,7 @@ describe("createWebUiRoutes", () => {
                   summary: {},
                   items: [
                     {
-                      media_item_id: "media-1",
+                      media_asset_id: "media-1",
                       position: 0,
                       outcome: "skipped",
                     },
@@ -1514,7 +1472,7 @@ describe("createWebUiRoutes", () => {
 
   it("covers concrete Error object branches for inbox and collection actions", async () => {
     const inboxLoaderRuntime = renderRoute("/", {
-      listMediaItems: vi.fn().mockRejectedValue(new Error("Workspace exploded")),
+      listMediaAssets: vi.fn().mockRejectedValue(new Error("Workspace exploded")),
       getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
       listCollections: vi.fn().mockResolvedValue({
         items: [collection()],
@@ -1532,7 +1490,7 @@ describe("createWebUiRoutes", () => {
     const inboxRuntime = renderRoute("/", {
       createCollection: vi.fn().mockRejectedValue(new Error("Inbox collection create exploded")),
       replaceCollectionItems: vi.fn().mockRejectedValue(new Error("Inbox collection update exploded")),
-      removeMediaItem: vi.fn().mockRejectedValue(new Error("Inbox removal exploded")),
+      removeMediaAsset: vi.fn().mockRejectedValue(new Error("Inbox removal exploded")),
     });
 
     fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
@@ -1701,24 +1659,24 @@ describe("createWebUiRoutes", () => {
     diagnosticsRuntime.unmount();
 
     const mediaLoaderRuntime = renderRoute("/inbox/media-1", {
-      getMediaItem: vi.fn().mockRejectedValue(new Error("Media detail exploded")),
+      getMediaAsset: vi.fn().mockRejectedValue(new Error("Media detail exploded")),
     });
 
     expect(await within(mediaLoaderRuntime.container).findByText("Media detail exploded")).toBeVisible();
     mediaLoaderRuntime.unmount();
 
     const mediaRuntime = renderRoute("/inbox/media-1", {
-      removeMediaItem: vi.fn().mockRejectedValue(new Error("Media removal exploded")),
+      removeMediaAsset: vi.fn().mockRejectedValue(new Error("Media removal exploded")),
     });
 
     fireEvent.click(await within(mediaRuntime.container).findByRole("button", { name: "Удалить Call note" }));
     expect(await within(mediaRuntime.container).findByText("Media removal exploded")).toBeVisible();
   });
 
-  it("covers generic inbox fallback messages and stale run-builder source labels", async () => {
+  it("covers generic inbox fallback messages and stale run-builder origin labels", async () => {
     const inboxRuntime = renderRoute("/", {
       replaceCollectionItems: vi.fn().mockRejectedValue("boom"),
-      removeMediaItem: vi.fn().mockRejectedValue("boom"),
+      removeMediaAsset: vi.fn().mockRejectedValue("boom"),
     });
 
     fireEvent.click(await screen.findByLabelText("Выбрать Call note"));

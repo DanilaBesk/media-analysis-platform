@@ -5,7 +5,7 @@ import {
   CollectionsRouteShell,
   DiagnosticsRouteShell,
   InboxRouteShell,
-  MediaItemDetailRouteShell,
+  MediaAssetDetailRouteShell,
   RouteNotFoundShell,
   RunDetailRouteShell,
   RunsRouteShell,
@@ -39,8 +39,8 @@ export function createWebUiRoutes(runtime: WebUiRuntime): RouteObject[] {
           element: <InboxRouteShell />,
         },
         {
-          path: "inbox/:mediaItemId",
-          element: <MediaItemDetailRouteShell />,
+          path: "inbox/:mediaAssetId",
+          element: <MediaAssetDetailRouteShell />,
         },
         {
           path: "collections",

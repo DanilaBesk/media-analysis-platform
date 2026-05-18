@@ -167,7 +167,7 @@
 
   <AdapterPlan>
     <Telegram bead="media-7al">
-      <step>Map every accepted Telegram message, URL, media group part, file, voice, audio, video, photo, or document into API add_media.</step>
+      <step>Map every accepted Telegram message, URL, media group part, file, voice, audio, video, photo, or document into target media_asset creation or upload.</step>
       <step>After input, render current inbox or selected collection state and explicit actions for manage, create selection, run analysis, remove item, and view diagnostics.</step>
       <step>Use API identifiers and version tokens in callbacks for mutable collection operations.</step>
       <step>Display analysis_run status and artifacts returned by the API.</step>
@@ -222,7 +222,8 @@
   <CurrentClosureState>
     <completed>Earlier inbox-first packets remain historical implementation evidence, but they are superseded by the media-7f3 target rebuild plan where naming, table boundaries, API orchestration, Web copy, and worker input contracts are being redefined from first principles.</completed>
     <completed bead="media-7f3.9.6">Active workers now use analysis_run_step queue/claim/progress/finalize contracts, sealed selection_snapshot materialization, declared artifact step inputs for agent-runner, and API-owned artifact/diagnostic publication.</completed>
-    <remaining>Open work is tracked by media-7f3.9, media-7f3.10, and media-7f3.11. The current tree is not closed against the target rebuild until Web/MCP migration, full prerequisite runtime orchestration proof, coverage closure, and QA vocabulary gates pass.</remaining>
+    <completed bead="media-7f3.9.7">Web and MCP now use target media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account_id contracts.</completed>
+    <remaining>Open work is tracked by media-7f3.9.8, media-7f3.10, and media-7f3.11. The current tree is not closed against the target rebuild until cleanup/GRACE refresh, full prerequisite runtime orchestration proof, coverage closure, and QA vocabulary gates pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>

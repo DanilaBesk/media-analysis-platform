@@ -69,7 +69,7 @@
 
     <AdapterTests>
       <Telegram>
-        <item>Accepted message, file, URL, photo, image, voice, audio, video, and document inputs call add_media and update inbox state.</item>
+        <item>Accepted message, file, URL, photo, image, voice, audio, video, and document inputs create media_asset records through the target API and update channel-account inbox state.</item>
         <item>Inline actions manage API-owned inbox or collection items, create selections, start analysis_run records, view diagnostics, and fetch artifacts.</item>
         <item>Focused queued or running analysis_run cards expose cancellation through a run id and version checked callback, unfocused cards can cancel the latest visible active run, and background active runs do not block starting a new current selection.</item>
         <item>Inbox visible items, remove actions, and clear-visible actions follow collection membership rather than the broad media inventory.</item>
@@ -165,11 +165,13 @@
     <bead id="media-7f3.9.4">Run Telegram channel surface checks for current_materials_panel persistence, analysis_task_surface restart watcher recovery, result_artifact_surface duplicate-delivery prevention, supersede on uneditable messages, and target channel_surface storage upsert behavior.</bead>
     <bead id="media-7f3.9.5">Run Telegram adapter checks for target media_asset creation/upload, channel-account collection reads and mutation, selection_snapshot creation, analysis_run start/cancel/status, artifact/diagnostic reads, and stale Telegram vocabulary search.</bead>
     <bead id="media-7f3.9.6">Run worker-common, transcription, agent-runner, target contract, and API tests for analysis_run_step queue/claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, stored_object artifact registration, diagnostics, and cancellation.</bead>
-    <bead id="media-5cj">Run storage and API orchestration checks.</bead>
-    <bead id="media-sfx">Run worker execution checks.</bead>
-    <bead id="media-7al">Run Telegram adapter checks.</bead>
-    <bead id="media-7wo">Run Web checks.</bead>
-    <bead id="media-uhi">Run MCP checks.</bead>
+    <bead id="media-7f3.9.7">Run Web, MCP, API artifact refresh, GRACE XML, and focused stale target vocabulary checks.</bead>
+    <bead id="media-7f3.9.8">Run cleanup, OpenAPI, GRACE XML, and stale public vocabulary checks before closing the implementation epic.</bead>
+    <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
+    <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
+    <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>
+    <bead id="media-7wo">Historical Web checks; superseded by media-7f3.9.7 target Web evidence.</bead>
+    <bead id="media-uhi">Historical MCP checks; superseded by media-7f3.9.7 target MCP evidence.</bead>
     <bead id="runtime-final">Run complete compose evidence gate.</bead>
   </BeadsVerificationSequence>
 </VerificationPlan>

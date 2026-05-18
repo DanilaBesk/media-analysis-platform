@@ -529,7 +529,7 @@
           }
         ],
         "requestBody": {
-          "required": false,
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
@@ -700,7 +700,7 @@
     "/v1/media-items": {
       "post": {
         "operationId": "addMediaItem",
-        "summary": "Create one owner-scoped media item without starting analysis.",
+        "summary": "Deprecated compatibility route that creates one owner-scoped media item without starting analysis.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -731,7 +731,7 @@
         },
         "responses": {
           "201": {
-            "description": "Accepted input persisted as a media item and visible through the owner inbox.",
+            "description": "Deprecated compatibility response for input persisted as a media item and visible through the owner inbox.",
             "content": {
               "application/json": {
                 "schema": {
@@ -756,7 +756,7 @@
       },
       "get": {
         "operationId": "listMediaItems",
-        "summary": "List owner-scoped media items with filters, diagnostics summary, and pagination.",
+        "summary": "Deprecated compatibility route that lists owner-scoped media items with filters, diagnostics summary, and pagination.",
         "parameters": [
           {
             "$ref": "#/components/parameters/OwnerType"
@@ -902,16 +902,10 @@
     "/v1/collections/inbox": {
       "get": {
         "operationId": "getInboxCollection",
-        "summary": "Read the caller's default inbox collection.",
+        "summary": "Read the channel account's default inbox collection.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/PageCursor"
@@ -937,7 +931,7 @@
     "/v1/collections": {
       "post": {
         "operationId": "createCollection",
-        "summary": "Create a mutable owner-scoped collection.",
+        "summary": "Create a mutable channel-scoped collection.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -974,16 +968,10 @@
       },
       "get": {
         "operationId": "listCollections",
-        "summary": "List inbox and user collections for the owner.",
+        "summary": "List inbox and user collections for the channel account.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/PageCursor"
@@ -1012,13 +1000,7 @@
         "summary": "Read one collection and its current item page.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/CollectionId"
@@ -1117,25 +1099,19 @@
         }
       }
     },
-    "/v1/collections/{collection_id}/items/{media_item_id}": {
+    "/v1/collections/{collection_id}/items/{media_asset_id}": {
       "delete": {
         "operationId": "removeCollectionItem",
-        "summary": "Remove one media item membership from a collection.",
+        "summary": "Remove one media asset membership from a collection.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/CollectionId"
           },
           {
-            "$ref": "#/components/parameters/MediaItemId"
+            "$ref": "#/components/parameters/MediaAssetId"
           },
           {
             "$ref": "#/components/parameters/ExpectedVersion"
@@ -1281,16 +1257,10 @@
       },
       "get": {
         "operationId": "listAnalysisRuns",
-        "summary": "List owner-scoped analysis runs.",
+        "summary": "List channel-scoped analysis runs.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/PageCursor"
@@ -1304,6 +1274,14 @@
             "required": false,
             "schema": {
               "$ref": "../schemas/common/enums.schema.json#/$defs/analysisRunStatus"
+            }
+          },
+          {
+            "name": "run_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/runType"
             }
           }
         ],
@@ -1327,13 +1305,7 @@
         "summary": "Read run status, diagnostics summary, and artifact summary.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
@@ -1361,15 +1333,6 @@
         "operationId": "cancelAnalysisRun",
         "summary": "Request cooperative cancellation for an analysis run.",
         "parameters": [
-          {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
-          },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
           }
@@ -1403,15 +1366,6 @@
         "operationId": "retryAnalysisRun",
         "summary": "Create a new analysis run attempt from the same sealed selection as a previous run.",
         "parameters": [
-          {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
-          },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
           },
@@ -1452,13 +1406,7 @@
         "summary": "Poll append-only run status, artifact, and diagnostic events.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
@@ -1490,16 +1438,47 @@
         "summary": "List artifacts produced by one analysis run.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/AnalysisRunId"
+          },
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Artifact summaries with preview metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/artifact.schema.json#/$defs/artifactListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/artifacts": {
+      "get": {
+        "operationId": "listArtifacts",
+        "summary": "List channel-scoped artifacts, optionally filtered by analysis run.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "name": "analysis_run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
           },
           {
             "$ref": "#/components/parameters/PageCursor"
@@ -1528,13 +1507,7 @@
         "summary": "Resolve artifact metadata plus preview and download handles.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/ArtifactId"
@@ -1560,16 +1533,10 @@
     "/v1/artifacts/{artifact_id}/refresh": {
       "post": {
         "operationId": "refreshArtifactLink",
-        "summary": "Refresh owner-scoped artifact preview and download handles.",
+        "summary": "Refresh channel-scoped artifact preview and download handles.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "$ref": "#/components/parameters/ArtifactId"
@@ -1598,16 +1565,10 @@
     "/v1/diagnostics": {
       "get": {
         "operationId": "getDiagnostics",
-        "summary": "Query owner-scoped diagnostics by subject, severity, code, and correlation id.",
+        "summary": "Query channel-scoped diagnostics by subject, severity, code, and correlation id.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
+            "$ref": "#/components/parameters/ChannelAccountId"
           },
           {
             "name": "subject_type",
@@ -1723,7 +1684,7 @@
     "/v1/ws": {
       "get": {
         "operationId": "openRunEventStream",
-        "summary": "Open the shared event stream for owner-scoped run and collection updates.",
+        "summary": "Open the shared event stream for channel-scoped run and collection updates.",
         "responses": {
           "101": {
             "description": "Versioned event stream upgrade.",
@@ -2173,7 +2134,7 @@
     },
     "responses": {
       "ErrorEnvelope": {
-        "description": "Validation, owner-scope, conflict, retention, or diagnostic error envelope.",
+        "description": "Validation, channel-scope, conflict, retention, or diagnostic error envelope.",
         "content": {
           "application/json": {
             "schema": {

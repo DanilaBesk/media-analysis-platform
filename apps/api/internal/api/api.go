@@ -118,7 +118,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/collections",
 		"/v1/collections/{collection_id}",
 		"/v1/collections/{collection_id}/items",
-		"/v1/collections/{collection_id}/items/{media_item_id}",
+		"/v1/collections/{collection_id}/items/{media_asset_id}",
 		"/v1/selections",
 		"/v1/selections/{selection_id}",
 		"/v1/selection-snapshots",
@@ -184,7 +184,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/collections/{collection_id}", s.withCORS(s.handleGetCollection))
 	mux.HandleFunc("PATCH /v1/collections/{collection_id}", s.withCORS(s.handleUpdateCollection))
 	mux.HandleFunc("POST /v1/collections/{collection_id}/items", s.withCORS(s.handleUpdateCollectionItems))
-	mux.HandleFunc("DELETE /v1/collections/{collection_id}/items/{media_item_id}", s.withCORS(s.handleRemoveCollectionItem))
+	mux.HandleFunc("DELETE /v1/collections/{collection_id}/items/{media_asset_id}", s.withCORS(s.handleRemoveCollectionItem))
 	mux.HandleFunc("POST /v1/selections", s.withCORS(s.handleCreateSelection))
 	mux.HandleFunc("GET /v1/selections/{selection_id}", s.withCORS(s.handleGetSelection))
 	mux.HandleFunc("POST /v1/analysis-runs", s.withCORS(s.handleCreateAnalysisRun))

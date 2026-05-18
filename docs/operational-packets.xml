@@ -23,7 +23,8 @@
     <completed-packet bead="media-7f3.9.5">telegram-target-materials-and-run-cards</completed-packet>
     <completed-packet bead="media-7f3.9.6">workers-analysis-run-steps-selection-snapshots</completed-packet>
     <completed-packet bead="media-7f3.9.7">web-mcp-target-vocabulary-api-operations</completed-packet>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.9, media-7f3.10, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-packet bead="media-7f3.9.8">implementation-cleanup-and-grace-artifact-refresh</completed-packet>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10 and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -407,7 +408,7 @@ Transcription converts speech media into transcript artifacts. Agent-runner repo
       <file-2>Telegram adapter tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram turns messages, files, URLs, media groups, voice, audio, video, photos, images, and documents into add_media calls. It renders inbox or collection state after accepted input and exposes explicit actions to manage items, create a selection, start analysis_run, view diagnostics, and retrieve artifacts.
+Historical Telegram packet: active target Telegram behavior now resolves channel_account, creates media_asset records, renders collection state after accepted input, creates immutable selection_snapshots, starts analysis_runs, views diagnostics, and retrieves artifacts.
     ]]></contract-excerpt>
     <verification>
       <check>Telegram tests prove accumulation without user-facing execution modes and prove callbacks use API identifiers plus version checks where mutation is allowed.</check>
@@ -446,8 +447,8 @@ MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media
   </ExecutionPacket>
 
   <RuntimePacket packet-id="runtime-final-inbox-first" module="FULL-STACK" phase="Runtime" verification-ref="EV-RUNTIME">
-    <purpose>Prove the complete inbox-first flow after contracts, server, workers, and adapters converge.</purpose>
-    <depends-on>media-7al-telegram-adapter, media-7wo-web-adapter, media-uhi-mcp-adapter, media-sfx-workers</depends-on>
+    <purpose>Prove the complete target channel-aware flow after contracts, server, workers, and adapters converge.</purpose>
+    <depends-on>media-7f3.9.5-telegram-target-materials-and-run-cards, media-7f3.9.6-workers-analysis-run-steps-selection-snapshots, media-7f3.9.7-web-mcp-target-vocabulary-api-operations, media-7f3.9.8-implementation-cleanup-and-grace-artifact-refresh</depends-on>
     <verification>
       <check>Runtime smoke ingests input, lists it in inbox, seals selection_snapshot, starts analysis_run, observes events, retrieves artifacts, reads diagnostics, denies cross-channel-account access, and applies retention without corrupting run history.</check>
       <check>Focused stale vocabulary search passes across active docs and public contracts.</check>
@@ -455,7 +456,7 @@ MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media
   </RuntimePacket>
 
   <HotfixPacket packet-id="media-xgf-sql-collection-append" module="M-API-STORAGE" phase="RuntimeBugfix" verification-ref="EV-STORAGE,EV-API,EV-RUNTIME">
-    <purpose>Fix API-owned inbox ingestion when an owner already has active collection_items.</purpose>
+    <purpose>Historical compatibility hotfix for API-owned inbox ingestion when an owner already has active collection_items; target collection behavior is covered by media-7f3.9.</purpose>
     <write-scope>
       <file-1>apps/api/internal/storage/runtime_store_media.go</file-1>
       <file-2>apps/api/internal/storage/runtime_store_media_test.go</file-2>
@@ -464,12 +465,12 @@ MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media
       <file-5>docs/operational-packets.xml</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-New media_item records remain API-owned and append to inbox or named collection membership using the next active collection position. Telegram, Web, and MCP must not carry durable local inbox state or legacy fallback buffers.
+Historical compatibility behavior kept media_item records API-owned and appended them to inbox or named collection membership using the next active collection position. Target Telegram, Web, and MCP must not carry durable local inbox state or legacy fallback buffers.
     ]]></contract-excerpt>
     <verification>
       <check>Focused SQL storage regression proves existing inbox and target collection appends do not reuse position 0.</check>
       <check>Storage and API package tests pass.</check>
-      <check>Compose API accepts a second media_item for an owner with an existing inbox item.</check>
+      <check>Historical compose API accepted a second media_item for an owner with an existing inbox item; target proof uses media_asset collection membership.</check>
     </verification>
   </HotfixPacket>
 
@@ -487,8 +488,8 @@ Public paginated list envelopes must encode items as an array on every page, inc
     ]]></contract-excerpt>
     <verification>
       <check>Focused API regression proves nil source slices encode as items: [] through the shared paging helper.</check>
-      <check>Live diagnostics endpoint for the Telegram owner returns items: [] for an empty run diagnostic page.</check>
-      <check>Telegram gateway restore_status completes against the live API for the affected owner and terminal run.</check>
+      <check>Historical live diagnostics endpoint for the Telegram owner returned items: [] for an empty run diagnostic page; target checks use channel_account.</check>
+      <check>Historical Telegram gateway restore_status completed against the live API for the affected owner and terminal run; target checks use channel_account.</check>
     </verification>
   </HotfixPacket>
 
@@ -509,7 +510,7 @@ Collection envelopes must expose items as an array even when the collection is e
     <verification>
       <check>Focused storage regression proves GetCollection returns an empty items slice instead of nil.</check>
       <check>Focused API regression proves GET /v1/collections/inbox encodes items: [] for an empty inbox collection.</check>
-      <check>Live restore_status against the affected Telegram owner renders after the empty inbox collection response without callback-handler errors.</check>
+      <check>Historical live restore_status against the affected Telegram owner rendered after the empty inbox collection response without callback-handler errors; target checks use channel_account.</check>
     </verification>
   </HotfixPacket>
 
@@ -525,12 +526,12 @@ Collection envelopes must expose items as an array even when the collection is e
       <file-7>docs/operational-packets.xml</file-7>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram inbox pagination, remove, and clear-visible actions must render the API-owned inbox collection membership, not the broader owner media inventory. Refresh actions may no-op safely when Telegram reports the message is not modified.
+Historical Telegram inbox pagination, remove, and clear-visible actions rendered the API-owned inbox collection membership, not the broader owner media inventory. Target Telegram checks use channel_account-scoped collections.
     ]]></contract-excerpt>
     <verification>
-      <check>Focused gateway regression proves collection-only removal changes the visible inbox surface even when owner-wide media inventory still contains the removed items.</check>
+      <check>Historical focused gateway regression proved collection-only removal changes the visible inbox surface even when owner-wide media inventory still contains the removed items; target checks use channel_account-scoped collections.</check>
       <check>Focused runtime regression proves refresh tolerates Telegram message-not-modified responses.</check>
-      <check>Live restore_status for the affected owner shows zero visible inbox items when the inbox collection is empty.</check>
+      <check>Historical live restore_status for the affected owner showed zero visible inbox items when the inbox collection was empty; target checks use channel_account.</check>
     </verification>
   </HotfixPacket>
 
@@ -552,7 +553,7 @@ Telegram status text and button labels must explain refresh, collection mutation
     ]]></contract-excerpt>
     <verification>
       <check>Focused telegram-bot tests prove Russian-first callback copy, status text, and button semantics.</check>
-      <check>Live restored status text for the affected Telegram owner is Russian-first and renders the current inbox state clearly.</check>
+      <check>Historical live restored status text for the affected Telegram owner was Russian-first and rendered the current inbox state clearly; target checks use channel_account.</check>
     </verification>
   </HotfixPacket>
 
@@ -674,10 +675,10 @@ Public cancel requests terminally cancel unclaimed queued analysis_run records, 
       <file-5>docs/architecture/telegram-selection-transcription-cards.md</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-Interaction surfaces persist owner-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. Surface subjects are stored in a separate subject-link table, and surface events are append-only operational history. Domain entities do not gain Telegram-specific message fields, and interaction surface display state does not drive domain lifecycle.
+Historical interaction surfaces persisted owner-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. The target architecture supersedes this wording with channel_surface and channel_account contracts.
     ]]></contract-excerpt>
     <verification>
-      <check>Architecture document defines boundaries, three-table schema, internal endpoints, Telegram usage, owner-scope rules, retention, observability, and staged implementation.</check>
+      <check>Historical architecture document defined boundaries, three-table schema, internal endpoints, Telegram usage, owner-scope rules, retention, observability, and staged implementation; target checks use channel_surface and channel_account vocabulary.</check>
       <check>GRACE requirements and knowledge graph link the Interaction Surfaces boundary without moving it into public product vocabulary.</check>
     </verification>
   </PlanningPacket>

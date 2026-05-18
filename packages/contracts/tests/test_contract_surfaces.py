@@ -97,8 +97,23 @@ def test_target_openapi_contains_media_asset_snapshot_and_channel_surface_paths(
         "/v1/media-assets",
         "/v1/media-assets/upload",
         "/v1/media-assets/{media_asset_id}",
+        "/v1/collections/inbox",
+        "/v1/collections",
+        "/v1/collections/{collection_id}",
+        "/v1/collections/{collection_id}/items",
+        "/v1/collections/{collection_id}/items/{media_asset_id}",
         "/v1/selection-snapshots",
         "/v1/selection-snapshots/{selection_snapshot_id}",
+        "/v1/analysis-runs",
+        "/v1/analysis-runs/{analysis_run_id}",
+        "/v1/analysis-runs/{analysis_run_id}/cancel",
+        "/v1/analysis-runs/{analysis_run_id}/retry",
+        "/v1/analysis-runs/{analysis_run_id}/events",
+        "/v1/analysis-runs/{analysis_run_id}/artifacts",
+        "/v1/artifacts",
+        "/v1/artifacts/{artifact_id}",
+        "/v1/artifacts/{artifact_id}/refresh",
+        "/v1/diagnostics",
         "/internal/v1/channel-accounts",
         "/internal/v1/channel-accounts/{channel_account_id}",
         "/internal/v1/channel-surfaces",
@@ -116,6 +131,9 @@ def test_target_openapi_contains_media_asset_snapshot_and_channel_surface_paths(
     assert _path_item(spec, "/v1/media-assets", "post")["operationId"] == "createMediaAsset"
     assert _path_item(spec, "/v1/media-assets/upload", "post")["operationId"] == "uploadMediaAsset"
     assert _path_item(spec, "/v1/media-assets/{media_asset_id}", "get")["operationId"] == "getMediaAsset"
+    assert _path_item(spec, "/v1/collections/{collection_id}/items/{media_asset_id}", "delete")["operationId"] == (
+        "removeCollectionItem"
+    )
     assert _path_item(spec, "/v1/selection-snapshots", "post")["operationId"] == "createSelectionSnapshot"
     assert _path_item(spec, "/v1/selection-snapshots/{selection_snapshot_id}", "get")["operationId"] == (
         "getSelectionSnapshot"
@@ -129,7 +147,19 @@ def test_target_openapi_contains_media_asset_snapshot_and_channel_surface_paths(
     )
     _assert_channel_scope_query_parameters(_path_item(spec, "/v1/media-assets", "get"))
     _assert_channel_scope_query_parameters(_path_item(spec, "/v1/media-assets/{media_asset_id}", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/collections/inbox", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/collections", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/collections/{collection_id}", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/collections/{collection_id}/items/{media_asset_id}", "delete"))
     _assert_channel_scope_query_parameters(_path_item(spec, "/v1/selection-snapshots/{selection_snapshot_id}", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/analysis-runs", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/analysis-runs/{analysis_run_id}", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/analysis-runs/{analysis_run_id}/events", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/analysis-runs/{analysis_run_id}/artifacts", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/artifacts", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/artifacts/{artifact_id}", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/artifacts/{artifact_id}/refresh", "post"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/diagnostics", "get"))
 
 
 def test_target_dto_schemas_use_channel_aware_vocabulary() -> None:
@@ -227,9 +257,26 @@ def test_target_operations_do_not_reintroduce_compatibility_names() -> None:
         ("/v1/media-assets/upload", "post"),
         ("/v1/media-assets/{media_asset_id}", "get"),
         ("/v1/media-assets/{media_asset_id}", "delete"),
+        ("/v1/collections/inbox", "get"),
+        ("/v1/collections", "post"),
+        ("/v1/collections", "get"),
+        ("/v1/collections/{collection_id}", "get"),
+        ("/v1/collections/{collection_id}", "patch"),
+        ("/v1/collections/{collection_id}/items", "post"),
+        ("/v1/collections/{collection_id}/items/{media_asset_id}", "delete"),
         ("/v1/selection-snapshots", "post"),
         ("/v1/selection-snapshots/{selection_snapshot_id}", "get"),
         ("/v1/analysis-runs", "post"),
+        ("/v1/analysis-runs", "get"),
+        ("/v1/analysis-runs/{analysis_run_id}", "get"),
+        ("/v1/analysis-runs/{analysis_run_id}/cancel", "post"),
+        ("/v1/analysis-runs/{analysis_run_id}/retry", "post"),
+        ("/v1/analysis-runs/{analysis_run_id}/events", "get"),
+        ("/v1/analysis-runs/{analysis_run_id}/artifacts", "get"),
+        ("/v1/artifacts", "get"),
+        ("/v1/artifacts/{artifact_id}", "get"),
+        ("/v1/artifacts/{artifact_id}/refresh", "post"),
+        ("/v1/diagnostics", "get"),
         ("/internal/v1/analysis-runs/{analysis_run_id}/steps/claim", "post"),
         ("/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check", "get"),
         ("/internal/v1/analysis-runs/{analysis_run_id}/steps/progress", "post"),
@@ -263,7 +310,7 @@ def test_openapi_contains_final_inbox_first_public_paths() -> None:
         "/v1/collections",
         "/v1/collections/{collection_id}",
         "/v1/collections/{collection_id}/items",
-        "/v1/collections/{collection_id}/items/{media_item_id}",
+        "/v1/collections/{collection_id}/items/{media_asset_id}",
         "/v1/selections",
         "/v1/selections/{selection_id}",
         "/v1/analysis-runs",
@@ -272,6 +319,7 @@ def test_openapi_contains_final_inbox_first_public_paths() -> None:
         "/v1/analysis-runs/{analysis_run_id}/retry",
         "/v1/analysis-runs/{analysis_run_id}/events",
         "/v1/analysis-runs/{analysis_run_id}/artifacts",
+        "/v1/artifacts",
         "/v1/artifacts/{artifact_id}",
         "/v1/artifacts/{artifact_id}/refresh",
         "/v1/diagnostics",
@@ -319,7 +367,7 @@ def test_public_operations_use_inbox_first_vocabulary_and_idempotency_boundaries
     assert "query" in _parameter_names(_path_item(spec, "/v1/media-items", "get"))
 
     assert "#/components/parameters/ExpectedVersion" in _parameter_names(
-        _path_item(spec, "/v1/collections/{collection_id}/items/{media_item_id}", "delete")
+        _path_item(spec, "/v1/collections/{collection_id}/items/{media_asset_id}", "delete")
     )
     diagnostics_parameters = _parameter_names(_path_item(spec, "/v1/diagnostics", "get"))
     assert "severity" in diagnostics_parameters
@@ -354,20 +402,7 @@ def test_owner_scoped_public_routes_document_owner_scope_query_contract() -> Non
         ("/v1/media-items", "get"),
         ("/v1/media-items/{media_item_id}", "get"),
         ("/v1/media-items/{media_item_id}", "delete"),
-        ("/v1/collections/inbox", "get"),
-        ("/v1/collections", "get"),
-        ("/v1/collections/{collection_id}", "get"),
-        ("/v1/collections/{collection_id}/items/{media_item_id}", "delete"),
         ("/v1/selections/{selection_id}", "get"),
-        ("/v1/analysis-runs", "get"),
-        ("/v1/analysis-runs/{analysis_run_id}", "get"),
-        ("/v1/analysis-runs/{analysis_run_id}/cancel", "post"),
-        ("/v1/analysis-runs/{analysis_run_id}/retry", "post"),
-        ("/v1/analysis-runs/{analysis_run_id}/events", "get"),
-        ("/v1/analysis-runs/{analysis_run_id}/artifacts", "get"),
-        ("/v1/artifacts/{artifact_id}", "get"),
-        ("/v1/artifacts/{artifact_id}/refresh", "post"),
-        ("/v1/diagnostics", "get"),
     )
 
     for path, method in owner_scoped_operations:

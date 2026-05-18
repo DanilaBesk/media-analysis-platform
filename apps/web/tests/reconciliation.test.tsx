@@ -7,11 +7,6 @@ import type { WebUiRuntime } from "../src/app/runtime";
 import { RECONCILE_STATE_MARKER } from "../src/lib/api/client";
 import type { RunEvent } from "../src/lib/api/types";
 
-const owner = {
-  owner_type: "web" as const,
-  owner_id: "web-console",
-};
-
 function mediaAsset() {
   return {
     media_asset_id: "asset-1",
@@ -41,25 +36,24 @@ function selectionSnapshot() {
 function runSnapshot(version = 2) {
   return {
     analysis_run_id: "run-1",
-    owner,
-    selection_id: "selection-1",
-    selection: {
-      selection_id: "selection-1",
-      owner,
+    channel_account_id: "web-console",
+    selection_snapshot_id: "snapshot-1",
+    selection_snapshot: {
+      selection_snapshot_id: "snapshot-1",
+      channel_account_id: "web-console",
       status: "sealed",
       items: [
         {
+          selection_snapshot_item_id: "snapshot-item-1",
           position: 0,
-          media_item_id: "media-1",
+          media_asset_id: "asset-1",
           kind: "text",
-          source_snapshot: { source_id: "source-1", origin_type: "text" },
+          origin_snapshot: { origin_type: "text", text: "Call note" },
           display_name: "Call note",
           status_at_selection: "ready",
-          retention_snapshot: { state: "active" },
         },
       ],
       option_snapshot: {},
-      created_by: "web",
       created_at: "2026-05-10T00:00:00Z",
       sealed_at: "2026-05-10T00:00:00Z",
     },
@@ -88,10 +82,6 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
       getMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
       addMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
       removeMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
-      listMediaItems: vi.fn(),
-      getMediaItem: vi.fn(),
-      addMediaItem: vi.fn(),
-      removeMediaItem: vi.fn(),
       getInboxCollection: vi.fn(),
       listCollections: vi.fn(),
       getCollection: vi.fn(),
@@ -101,8 +91,6 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
       removeCollectionItem: vi.fn(),
       createSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot()),
       getSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot()),
-      createSelection: vi.fn(),
-      getSelection: vi.fn(),
       createAnalysisRun: vi.fn(),
       listAnalysisRuns: vi.fn(),
       getAnalysisRun: vi.fn().mockResolvedValue(runSnapshot()),

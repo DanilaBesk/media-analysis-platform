@@ -2,33 +2,31 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
-import { MediaItemList } from "../src/features/media/media-workspace";
-import type { MediaItemSummary } from "../src/lib/api/types";
+import { MediaAssetList } from "../src/features/media/media-workspace";
+import type { MediaAssetSummary } from "../src/lib/api/types";
 
-const items: MediaItemSummary[] = [
+const items: MediaAssetSummary[] = [
   {
-    media_item_id: "media-1",
-    owner: { owner_type: "web", owner_id: "u-1" },
+    media_asset_id: "media-1",
+    channel_account_id: "web-console",
     kind: "text",
     status: "ready",
     display_name: "First note",
-    source: {
-      source_id: "source-1",
+    origin: {
       origin_type: "text",
-      text_ref: "inline:source-1",
+      text: "First note",
     },
     diagnostics_count: 0,
-    retention: { state: "active" },
     created_at: "2026-05-10T00:00:00Z",
     updated_at: "2026-05-10T00:00:00Z",
   },
 ];
 
-describe("MediaItemList", () => {
+describe("MediaAssetList", () => {
   it("renders without selection controls when toggle callbacks are absent", () => {
     render(
       <MemoryRouter>
-        <MediaItemList items={items} selected={new Set()} />
+        <MediaAssetList items={items} selected={new Set()} />
       </MemoryRouter>,
     );
 
@@ -40,7 +38,7 @@ describe("MediaItemList", () => {
   it("renders an empty state when there are no items", () => {
     render(
       <MemoryRouter>
-        <MediaItemList items={[]} selected={new Set()} onToggle={vi.fn()} onSelectAll={vi.fn()} onClearSelection={vi.fn()} />
+        <MediaAssetList items={[]} selected={new Set()} onToggle={vi.fn()} onSelectAll={vi.fn()} onClearSelection={vi.fn()} />
       </MemoryRouter>,
     );
 

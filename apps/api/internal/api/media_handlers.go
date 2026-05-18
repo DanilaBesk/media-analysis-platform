@@ -393,7 +393,7 @@ func (s *Server) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Reque
 	}
 	owner := ownerFromQuery(r)
 	collectionID := r.PathValue("collection_id")
-	removeID := r.PathValue("media_item_id")
+	removeID := firstNonEmpty(r.PathValue("media_asset_id"), r.PathValue("media_item_id"))
 	current, err := s.deps.Public.GetCollection(r.Context(), owner, collectionID)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))

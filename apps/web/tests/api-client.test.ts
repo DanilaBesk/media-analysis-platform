@@ -5,19 +5,10 @@ import {
   createWebUiApiClient,
   requiresRestReconciliation,
 } from "../src/lib/api/client";
-import type { OwnerScope } from "../src/lib/api/types";
+import type { ChannelAccountId } from "../src/lib/api/types";
 
-const owner: OwnerScope = {
-  owner_type: "web",
-  owner_id: "web-console",
-};
-
-const tenantOwner: OwnerScope = {
-  owner_type: "web",
-  owner_id: "web-console",
-  tenant_id: " tenant-a ",
-  adapter_identity: { adapter: "web-ui" },
-};
+const owner: ChannelAccountId = "web-console";
+const tenantOwner: ChannelAccountId = "web-console";
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -157,13 +148,13 @@ describe("createWebUiApiClient", () => {
   it("adds text media through the target media asset endpoint", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({
-        media_item: {
-          media_item_id: "media-1",
-          owner,
+        media_asset: {
+          media_asset_id: "media-1",
+          channel_account_id: "web-console",
           kind: "text",
           status: "ready",
           display_name: "Note",
-          source: { source_id: "source-1", origin_type: "text" },
+          origin: { origin_type: "text", text: "Meeting note" },
           retention: { state: "active" },
           created_at: "2026-05-10T00:00:00Z",
           updated_at: "2026-05-10T00:00:00Z",
@@ -177,13 +168,12 @@ describe("createWebUiApiClient", () => {
     });
 
     await expect(
-      client.addMediaItem(owner, {
+      client.addMediaAsset(owner, {
         kind: "text",
         displayName: "Note",
-        adapterOrigin: "web",
-        source: { origin_type: "text", text: "Meeting note" },
+        origin: { origin_type: "text", text: "Meeting note" },
       }),
-    ).resolves.toEqual(expect.objectContaining({ media_item_id: "media-1" }));
+    ).resolves.toEqual(expect.objectContaining({ media_asset_id: "media-1" }));
 
     expect(fetchImpl).toHaveBeenCalledWith(
       new URL("v1/media-assets", "http://localhost:8080/api/"),
@@ -204,9 +194,9 @@ describe("createWebUiApiClient", () => {
       .fn()
       .mockResolvedValueOnce(
         jsonResponse({
-          selection: {
-            selection_id: "selection-1",
-            owner,
+          selection_snapshot: {
+            selection_snapshot_id: "selection-1",
+            channel_account_id: "web-console",
             status: "sealed",
             items: [],
             option_snapshot: {},
@@ -220,9 +210,9 @@ describe("createWebUiApiClient", () => {
         jsonResponse({
           analysis_run: {
             analysis_run_id: "run-1",
-            owner,
-            selection_id: "selection-1",
-            selection: { selection_id: "selection-1", owner, status: "sealed", items: [] },
+            channel_account_id: "web-console",
+            selection_snapshot_id: "selection-1",
+            selection_snapshot: { selection_snapshot_id: "selection-1", channel_account_id: "web-console", status: "sealed", items: [] },
             run_type: "summary",
             status: "queued",
             version: 1,
@@ -240,15 +230,14 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    const selection = await client.createSelection(owner, {
-      items: [{ media_item_id: "media-1", position: 0 }],
+    const selection = await client.createSelectionSnapshot(owner, {
+      items: [{ media_asset_id: "media-1", position: 0 }],
       sourceCollectionId: "collection-1",
-      duplicatePolicy: "reject",
-      createdBy: "web",
+      optionSnapshot: { language: "ru" },
     });
     await expect(
       client.createAnalysisRun(owner, {
-        selectionId: selection.selection_id,
+        selectionSnapshotId: selection.selection_snapshot_id,
         runType: "summary",
         params: { tone: "brief" },
         delivery: { strategy: "polling" },
@@ -268,6 +257,7 @@ describe("createWebUiApiClient", () => {
           channel_account_id: "web-console",
           source_collection_id: "collection-1",
           items: [{ media_asset_id: "media-1", position: 0 }],
+          option_snapshot: { language: "ru" },
           created_via_channel_account_id: "web-console",
         }),
       }),
@@ -354,9 +344,9 @@ describe("createWebUiApiClient", () => {
         jsonResponse({
           analysis_run: {
             analysis_run_id: "run-1",
-            owner,
-            selection_id: "selection-1",
-            selection: { selection_id: "selection-1", owner, status: "sealed", items: [] },
+            channel_account_id: "web-console",
+            selection_snapshot_id: "selection-1",
+            selection_snapshot: { selection_snapshot_id: "selection-1", channel_account_id: "web-console", status: "sealed", items: [] },
             run_type: "summary",
             status: "cancel_requested",
             version: 3,
@@ -372,7 +362,7 @@ describe("createWebUiApiClient", () => {
         jsonResponse({
           artifact: {
             artifact_id: "artifact-1",
-            owner,
+            channel_account_id: "web-console",
             analysis_run_id: "run-1",
             kind: "summary",
             status: "available",
@@ -446,7 +436,7 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.listMediaItems(owner)).rejects.toMatchObject({
+    await expect(client.listMediaAssets(owner)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       path: "/v1/media-assets?channel_account_id=web-console",
       status: 400,
@@ -455,10 +445,10 @@ describe("createWebUiApiClient", () => {
     });
   });
 
-  it("lists media items with trimmed filters and tenant scope", async () => {
+  it("lists media assets with trimmed filters and channel scope", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({
-        items: [{ media_item_id: "media-1", display_name: "Inbox note" }],
+        items: [{ media_asset_id: "media-1", display_name: "Inbox note" }],
         page: { cursor: "cursor-2", page_size: 25, has_more: true },
       }),
     );
@@ -469,7 +459,7 @@ describe("createWebUiApiClient", () => {
     });
 
     await expect(
-      client.listMediaItems(tenantOwner, {
+      client.listMediaAssets(tenantOwner, {
         cursor: " cursor-1 ",
         pageSize: 25,
         query: "  note search  ",
@@ -477,7 +467,7 @@ describe("createWebUiApiClient", () => {
         status: "ready",
       }),
     ).resolves.toMatchObject({
-      items: [expect.objectContaining({ media_item_id: "media-1" })],
+      items: [expect.objectContaining({ media_asset_id: "media-1" })],
       page: expect.objectContaining({ cursor: "cursor-2", has_more: true }),
     });
 
@@ -495,17 +485,17 @@ describe("createWebUiApiClient", () => {
   it("reads media and collection envelopes through channel-scoped GET requests", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ media_item: { media_item_id: "media-1", display_name: "Inbox note" } }))
+      .mockResolvedValueOnce(jsonResponse({ media_asset: { media_asset_id: "media-1", display_name: "Inbox note" } }))
       .mockResolvedValueOnce(jsonResponse({ collection: { collection_id: "inbox", name: "Inbox" } }))
       .mockResolvedValueOnce(jsonResponse({ collection: { collection_id: "collection-1", name: "Research set" } }))
-      .mockResolvedValueOnce(jsonResponse({ selection: { selection_id: "selection-1", status: "sealed", items: [] } }))
+      .mockResolvedValueOnce(jsonResponse({ selection_snapshot: { selection_snapshot_id: "selection-1", channel_account_id: "web-console", status: "sealed", items: [] } }))
       .mockResolvedValueOnce(
         jsonResponse({
           analysis_run: {
             analysis_run_id: "run-1",
-            owner,
-            selection_id: "selection-1",
-            selection: { selection_id: "selection-1", owner, status: "sealed", items: [] },
+            channel_account_id: "web-console",
+            selection_snapshot_id: "selection-1",
+            selection_snapshot: { selection_snapshot_id: "selection-1", channel_account_id: "web-console", status: "sealed", items: [] },
             run_type: "summary",
             status: "running",
             version: 7,
@@ -523,12 +513,12 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.getMediaItem(owner, "media-1")).resolves.toMatchObject({ media_item_id: "media-1" });
+    await expect(client.getMediaAsset(owner, "media-1")).resolves.toMatchObject({ media_asset_id: "media-1" });
     await expect(client.getInboxCollection(owner)).resolves.toMatchObject({ collection_id: "inbox" });
     await expect(client.getCollection(owner, "collection-1", { cursor: " cursor-2 ", pageSize: 10 })).resolves.toMatchObject({
       collection_id: "collection-1",
     });
-    await expect(client.getSelection(owner, "selection-1")).resolves.toMatchObject({ selection_id: "selection-1" });
+    await expect(client.getSelectionSnapshot(owner, "selection-1")).resolves.toMatchObject({ selection_snapshot_id: "selection-1" });
     await expect(client.getAnalysisRun(owner, "run-1")).resolves.toMatchObject({ analysis_run_id: "run-1", version: 7 });
 
     expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
@@ -564,7 +554,7 @@ describe("createWebUiApiClient", () => {
     });
     await client.replaceCollectionItems(tenantOwner, "collection-1", {
       expectedVersion: 4,
-      items: [{ media_item_id: "media-2", position: 0 }],
+      items: [{ media_asset_id: "media-2", position: 0 }],
     });
     await client.removeCollectionItem(owner, "collection-1", "media-2", 5);
 
@@ -620,9 +610,9 @@ describe("createWebUiApiClient", () => {
         jsonResponse({
           analysis_run: {
             analysis_run_id: "run-2",
-            owner,
-            selection_id: "selection-2",
-            selection: { selection_id: "selection-2", owner, status: "sealed", items: [] },
+            channel_account_id: "web-console",
+            selection_snapshot_id: "selection-2",
+            selection_snapshot: { selection_snapshot_id: "selection-2", channel_account_id: "web-console", status: "sealed", items: [] },
             run_type: "report",
             status: "queued",
             version: 1,
@@ -718,7 +708,7 @@ describe("createWebUiApiClient", () => {
       fetchImpl: failingFetch,
     });
 
-    await expect(envelopeClient.getMediaItem(owner, "media-1")).rejects.toThrowError(
+    await expect(envelopeClient.getMediaAsset(owner, "media-1")).rejects.toThrowError(
       "API response does not include media_asset",
     );
     await expect(failingClient.listCollections(owner)).rejects.toMatchObject({
@@ -732,33 +722,30 @@ describe("createWebUiApiClient", () => {
   it("normalizes blank optional payload fields and supports media deletion", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ media_item: { media_item_id: "media-1", display_name: "Inbox note" } }, 201))
+      .mockResolvedValueOnce(jsonResponse({ media_asset: { media_asset_id: "media-1", display_name: "Inbox note" } }, 201))
       .mockResolvedValueOnce(jsonResponse({ collection: { collection_id: "collection-1", name: "Inbox" } }))
-      .mockResolvedValueOnce(jsonResponse({ selection: { selection_id: "selection-1", status: "sealed", items: [] } }, 201))
-      .mockResolvedValueOnce(jsonResponse({ media_item: { media_item_id: "media-1", status: "deleted" } }));
+      .mockResolvedValueOnce(jsonResponse({ selection_snapshot: { selection_snapshot_id: "selection-1", channel_account_id: "web-console", status: "sealed", items: [] } }, 201))
+      .mockResolvedValueOnce(jsonResponse({ media_asset: { media_asset_id: "media-1", status: "deleted" } }));
     const client = createWebUiApiClient({
       baseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
       fetchImpl,
     });
 
-    await client.addMediaItem(owner, {
+    await client.addMediaAsset(owner, {
       kind: "text",
       displayName: "   ",
-      adapterOrigin: "   ",
-      source: { origin_type: "text", text: "Meeting note" },
+      origin: { origin_type: "text", text: "Meeting note" },
     });
     await client.updateCollection(owner, "collection-1", {
       expectedVersion: 4,
       name: "   ",
     });
-    await client.createSelection(owner, {
-      items: [{ media_item_id: "media-1", position: 0 }],
+    await client.createSelectionSnapshot(owner, {
+      items: [{ media_asset_id: "media-1", position: 0 }],
       sourceCollectionId: "",
-      duplicatePolicy: "allow",
-      createdBy: "   ",
     });
-    await client.removeMediaItem(owner, "media-1");
+    await client.removeMediaAsset(owner, "media-1");
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), call[1]])).toEqual([
       [
@@ -832,7 +819,7 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.listMediaItems(owner)).rejects.toMatchObject({
+    await expect(client.listMediaAssets(owner)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 400,
       path: "/v1/media-assets?channel_account_id=web-console",

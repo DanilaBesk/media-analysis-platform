@@ -1,12 +1,12 @@
 # Cutover Checklist
 
-This checklist tracks acceptance for the final inbox-first architecture. The former public job control plane is retired as target guidance; acceptance is based on API-owned media accumulation, immutable selections, analysis runs, artifacts, diagnostics, and thin adapters.
+This historical checklist tracks the earlier inbox-first acceptance model. Current target closure is governed by the GRACE XML docs plus `docs/architecture/single-user-channel-aware-target-architecture.md`; when terms conflict, the target media_asset, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account vocabulary wins.
 
 ## Preconditions
 
 - `bash infra/scripts/compose-smoke.sh --check-config` passes as the static topology preflight.
-- PostgreSQL exposes the final media model: sources, media_items, collections, collection_items, selections, analysis_runs, artifacts, diagnostics, and internal execution rows.
-- Public contracts expose inbox-first routes only: media ingestion, collection management, selection creation/read, analysis_run lifecycle, artifact access, and diagnostics query.
+- PostgreSQL exposes the target media model: stored_objects, media_assets, collections, collection_items, selection_snapshots, analysis_runs, analysis_run_steps, artifact_subjects, artifacts, diagnostics, channel_accounts, and channel_surfaces.
+- Public contracts expose target routes for media_asset ingestion, collection management, selection_snapshot creation/read, analysis_run lifecycle, artifact access, and diagnostics query.
 - Worker execution is internal to analysis_run and consumes sealed selection snapshots rather than mutable inbox or collection state.
 
 ## Final Acceptance Matrix
@@ -54,13 +54,13 @@ Interpretation rules:
 
 Container-native live smoke is accepted only after all of the following pass through the public API and shared adapter state:
 
-- media can be added from text, URL, file, image/photo, audio/voice, video, and document inputs;
-- accepted media appears in the owner inbox without requiring a user-facing execution mode;
+- media_asset records can be added from text, URL, file, image/photo, audio/voice, video, and document inputs;
+- accepted media appears in the channel-account inbox without requiring a user-facing execution mode;
 - collections can be created, version-checked, mutated, archived, and restored;
-- selections are immutable snapshots and do not change when the source inbox or collection changes later;
+- selection_snapshots are immutable and do not change when the origin inbox or collection changes later;
 - analysis_run creation requires a sealed selection and records lifecycle state, diagnostics, and artifact summaries;
 - cancellation is cooperative and visible through analysis_run state and diagnostics;
-- artifacts can be previewed or resolved through owner-scoped artifact routes;
+- artifacts can be previewed or resolved through channel-account artifact routes;
 - Telegram, Web, and MCP operate as thin clients over the same API-owned state.
 
 ## Coverage Inventory
