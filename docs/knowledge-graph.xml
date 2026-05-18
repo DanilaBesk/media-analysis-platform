@@ -209,7 +209,7 @@
       </annotations>
     </M-MCP-ADAPTER>
 
-    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="inventory-no-legacy-covered" OWNER="media-7f3.10.4">
+    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="coverage-epic-closed" OWNER="media-7f3.10">
       <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, fresh schema reset smoke, coverage inventory, no-legacy target regression gate, and storage/API coverage evidence used by the coverage and QA epics.</purpose>
       <path>docs/architecture/target-coverage-matrix.md</path>
       <depends>M-TARGET-ARCHITECTURE, M-API-STORAGE, M-CONTRACTS</depends>

@@ -1,6 +1,6 @@
 # Target Coverage Matrix And Deterministic Test Environment
 
-Status: active coverage evidence through `media-7f3.10.4`
+Status: coverage epic `media-7f3.10` closed; QA readiness remains in `media-7f3.11`
 Source plan: `docs/architecture/single-user-channel-aware-target-architecture.md`  
 Fixture manifest: `infra/fixtures/target/manifest.json`
 
@@ -186,5 +186,7 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 `media-7f3.10.3` has converted this matrix into adapter/worker/runtime E2E proof for Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download access, and compose runtime target flow.
 
 `media-7f3.10.4` has wired the inventory/no-legacy gates so this matrix cannot drift silently, including the observed legacy admin observability/reconcile/retention table references after target reset.
+
+`media-7f3.10` is closed after a completion audit confirmed `media-7f3.10.1` through `media-7f3.10.4` are closed and the final coverage proof commit is pushed to `origin/master`.
 
 `media-7f3.11.*` must audit that every "remaining proof" row either became evidence, was fixed, was accepted, or is a named blocker.

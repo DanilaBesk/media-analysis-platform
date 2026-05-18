@@ -28,7 +28,8 @@
     <completed-packet bead="media-7f3.10.2">target-storage-api-coverage</completed-packet>
     <completed-packet bead="media-7f3.10.3">adapter-worker-runtime-e2e-coverage</completed-packet>
     <completed-packet bead="media-7f3.10.4">coverage-inventory-no-legacy-gates</completed-packet>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10 epic closure audit and media-7f3.11 QA; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-closure-gate bead="media-7f3.10">Coverage epic audit is closed after committed and pushed proof for target coverage, deterministic reset, runtime E2E, inventory, and no-legacy gates.</completed-closure-gate>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.11 QA; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
