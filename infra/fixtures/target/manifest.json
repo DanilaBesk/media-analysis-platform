@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "fixtures": {
+    "channel_accounts": [
+      {
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "channel": "local",
+        "external_account_ref": "single-user",
+        "display_name": "Single user"
+      },
+      {
+        "channel_account_id": "00000000-0000-4000-8000-000000000002",
+        "channel": "telegram",
+        "external_account_ref": "chat:100:user:200",
+        "display_name": "Telegram deterministic private chat"
+      },
+      {
+        "channel_account_id": "00000000-0000-4000-8000-000000000003",
+        "channel": "web",
+        "external_account_ref": "web-console",
+        "display_name": "Web deterministic console"
+      },
+      {
+        "channel_account_id": "00000000-0000-4000-8000-000000000004",
+        "channel": "mcp",
+        "external_account_ref": "mcp-local",
+        "display_name": "MCP deterministic client"
+      }
+    ],
+    "collections": [
+      {
+        "collection_id": "00000000-0000-4000-8000-000000000101",
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "kind": "inbox",
+        "name": "Inbox",
+        "version": 1
+      }
+    ],
+    "stored_objects": [
+      {
+        "stored_object_id": "00000000-0000-4000-8000-000000000301",
+        "bucket": "media-inputs",
+        "object_key": "document-note.txt",
+        "fixture_path": "infra/fixtures/target/object-store/media-inputs/document-note.txt",
+        "content_type": "text/plain; charset=utf-8",
+        "size_bytes": 135,
+        "sha256": "8b8ce790edea50bcb3ed61fb96c62cb32fc3a7b8fa25be68c5a8cc01c93fe1b0"
+      },
+      {
+        "stored_object_id": "00000000-0000-4000-8000-000000000701",
+        "bucket": "artifacts",
+        "object_key": "run-summary/report.md",
+        "fixture_path": "infra/fixtures/target/object-store/artifacts/run-summary/report.md",
+        "content_type": "text/markdown; charset=utf-8",
+        "size_bytes": 122,
+        "sha256": "9dc6aae57b399aaf855268994bcbc0ff93403258d5d3e939e7314c22296c47e4"
+      }
+    ],
+    "media_assets": [
+      {
+        "media_asset_id": "00000000-0000-4000-8000-000000000201",
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "kind": "text",
+        "origin": {
+          "origin_type": "text",
+          "text_sha256": "ffa7d222107ea7e011cd86eb69565b79224d0550b3dba7203609badd1bb7a31f"
+        },
+        "display_name": "Inline deterministic note"
+      },
+      {
+        "media_asset_id": "00000000-0000-4000-8000-000000000202",
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "kind": "document",
+        "stored_object_id": "00000000-0000-4000-8000-000000000301",
+        "origin": {
+          "origin_type": "upload",
+          "object_ref": "media-inputs/document-note.txt"
+        },
+        "display_name": "document-note.txt"
+      }
+    ],
+    "selection_snapshots": [
+      {
+        "selection_snapshot_id": "00000000-0000-4000-8000-000000000401",
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "items": [
+          {
+            "media_asset_id": "00000000-0000-4000-8000-000000000201",
+            "position": 0
+          },
+          {
+            "media_asset_id": "00000000-0000-4000-8000-000000000202",
+            "position": 1
+          }
+        ]
+      }
+    ],
+    "analysis_runs": [
+      {
+        "analysis_run_id": "00000000-0000-4000-8000-000000000501",
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "selection_snapshot_id": "00000000-0000-4000-8000-000000000401",
+        "run_type": "summary",
+        "status": "queued"
+      }
+    ],
+    "artifacts": [
+      {
+        "artifact_id": "00000000-0000-4000-8000-000000000601",
+        "channel_account_id": "00000000-0000-4000-8000-000000000001",
+        "analysis_run_id": "00000000-0000-4000-8000-000000000501",
+        "stored_object_id": "00000000-0000-4000-8000-000000000701",
+        "kind": "report",
+        "status": "available"
+      }
+    ]
+  }
+}

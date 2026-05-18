@@ -177,6 +177,7 @@
     <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed snapshots and declared step inputs, agent-runner consumes ready transcript/text-corpus artifacts for report and research work, and results are reported through analysis_run artifacts and diagnostics.</gate>
     <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions; Web tests also prove normal UI copy stays human and avoids internal technical vocabulary.</gate>
     <gate id="GATE-RUNTIME">Compose or equivalent runtime proof verifies end-to-end ingestion, selection, run, artifact, diagnostics, and retention behavior.</gate>
+    <gate id="GATE-COVERAGE-MATRIX">The target coverage matrix maps every table, API operation, user flow, failure mode, compatibility rule, non-goal, app boundary, and data reset rule to implementation proof, automated proof, QA proof, or an explicit remaining Bead.</gate>
   </EvidenceGates>
 
   <BeadsTrace>
@@ -205,8 +206,9 @@
     <bead id="media-fal" status="completed">Interaction Surfaces terminology refines the external surface contract around channel, surface type, address, display state, and lifecycle status.</bead>
     <bead id="media-w9y" status="completed">Interaction Surfaces table design is finalized as surfaces, subject links, and append-only events.</bead>
     <bead id="media-7f3" status="completed">Single-user channel-aware target architecture is fixed as the new from-scratch product plan, with child Beads for implementation execution.</bead>
-    <bead id="media-7f3.9" status="open">Implementation epic for target contracts, storage, API orchestration, workers, Telegram, Web, MCP, and GRACE refresh.</bead>
+    <bead id="media-7f3.9" status="completed">Implementation epic for target contracts, storage, API orchestration, workers, Telegram, Web, MCP, and GRACE refresh is closed; remaining proof work is tracked in coverage and QA Beads.</bead>
     <bead id="media-7f3.10" status="open">Coverage epic for storage/API, worker, Telegram, Web, MCP, prerequisite, lineage, and no-legacy vocabulary proofs.</bead>
+    <bead id="media-7f3.10.1" status="completed">Target coverage matrix, deterministic channel fixtures, object-store fixture bytes, and fresh Postgres reset smoke are prepared for later coverage Beads.</bead>
     <bead id="media-7f3.11" status="open">Pre-MR QA epic for traceability, backend/security/worker, channel UX/Web/MCP/runtime, and final readiness.</bead>
   </BeadsTrace>
 

@@ -15,6 +15,7 @@
         <target-channel-domain PURPOSE="channel_accounts, channel_surfaces, channel_surface_subjects, and channel_surface_events persist external presentation and recovery state without mutating product lifecycle." />
         <target-operations-domain PURPOSE="operation_requests records idempotency and accepted mutation attempts for safe retries." />
         <target-data-reset-policy PURPOSE="Current local database contents are disposable; target implementation should prove clean reset/recreate and deterministic fixtures, not preservation of current rows." />
+        <target-coverageMatrix PATH="docs/architecture/target-coverage-matrix.md" PURPOSE="Maps source-plan requirements to implementation evidence, automated proof, QA proof, deterministic fixtures, and remaining coverage Beads." />
       </annotations>
     </M-TARGET-ARCHITECTURE>
 
@@ -207,6 +208,19 @@
       </annotations>
     </M-MCP-ADAPTER>
 
+    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="prepared" OWNER="media-7f3.10.1">
+      <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, and fresh schema reset smoke used by the coverage and QA epics.</purpose>
+      <path>docs/architecture/target-coverage-matrix.md</path>
+      <depends>M-TARGET-ARCHITECTURE, M-API-STORAGE, M-CONTRACTS</depends>
+      <verification-ref>EV-COVERAGE-MATRIX</verification-ref>
+      <annotations>
+        <fixture-manifest PATH="infra/fixtures/target/manifest.json" PURPOSE="Defines stable channel_account, collection, media_asset, selection_snapshot, analysis_run, artifact, and stored_object fixture ids." />
+        <fixture-objectStore PATH="infra/fixtures/target/object-store" PURPOSE="Stores deterministic object-store bytes with manifest sizes and SHA-256 hashes." />
+        <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />
+        <test-fixtureValidation PATH="packages/contracts/tests/test_target_fixtures.py" PURPOSE="Validates fixture manifest vocabulary, channel identities, object-store files, sizes, and hashes." />
+      </annotations>
+    </M-COVERAGE>
+
     <CrossLinks>
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-CONTRACTS" relation="defines-target-contract-vocabulary-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-API-STORAGE" relation="defines-target-table-set-for" />
@@ -217,6 +231,7 @@
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-MCP-ADAPTER" relation="defines-tool-contract-responsibility-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-TRANSCRIPTION" relation="defines-step-and-snapshot-execution-contract-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-AGENT-RUNNER" relation="defines-step-and-snapshot-execution-contract-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-COVERAGE" relation="defines-source-plan-requirements-for" />
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />
       <CrossLink from="M-API-DOMAIN" to="M-API-STORAGE" relation="persists-product-state-through" />
       <CrossLink from="M-API-DOMAIN" to="M-API-QUEUE" relation="schedules-internal-execution-through" />
@@ -227,6 +242,7 @@
       <CrossLink from="M-WEB" to="M-API-HTTP" relation="manages-api-owned-state-through" />
       <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="manages-api-owned-state-through" />
       <CrossLink from="M-MCP-ADAPTER" to="M-API-HTTP" relation="manages-api-owned-state-through" />
+      <CrossLink from="M-COVERAGE" to="M-API-STORAGE" relation="uses-reset-and-fixture-contracts-from" />
     </CrossLinks>
   </Project>
 </KnowledgeGraph>

@@ -134,6 +134,10 @@
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
       <required-evidence>`bash infra/scripts/coverage-inventory.sh` records statement, line, branch, or function coverage where supported, records pass/fail-only surfaces separately, and returns non-zero while any declared surface still has an unwired metric or failing probe.</required-evidence>
     </Gate>
+    <Gate id="EV-COVERAGE-MATRIX">
+      <description>Target coverage matrix and deterministic fixtures prepare the full proof wave.</description>
+      <required-evidence>docs/architecture/target-coverage-matrix.md maps source-plan tables, API operations, user flows, failure modes, compatibility rules, non-goals, app boundaries, and data reset rules to implementation proof, automated proof, QA proof, and remaining Beads; infra/fixtures/target/manifest.json and infra/scripts/target-reset-smoke.sh validate deterministic fixture and reset assumptions.</required-evidence>
+    </Gate>
     <Gate id="EV-RUNTIME">
       <description>Runtime smoke proves end-to-end behavior.</description>
       <required-evidence>Compose proof captures ingestion, selection_snapshot, run, prerequisite planning, artifact lineage, diagnostics, channel-account denial, and retention behavior.</required-evidence>
@@ -167,6 +171,7 @@
     <bead id="media-7f3.9.6">Run worker-common, transcription, agent-runner, target contract, and API tests for analysis_run_step queue/claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, stored_object artifact registration, diagnostics, and cancellation.</bead>
     <bead id="media-7f3.9.7">Run Web, MCP, API artifact refresh, GRACE XML, and focused stale target vocabulary checks.</bead>
     <bead id="media-7f3.9.8">Run cleanup, OpenAPI, GRACE XML, and stale public vocabulary checks before closing the implementation epic.</bead>
+    <bead id="media-7f3.10.1">Run target coverage matrix review, deterministic fixture manifest validation, and target reset smoke before starting storage/API coverage expansion.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

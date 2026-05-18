@@ -1,0 +1,2 @@
+Target rebuild fixture: document note.
+This deterministic object-store body is used for media_asset upload and artifact lineage tests.

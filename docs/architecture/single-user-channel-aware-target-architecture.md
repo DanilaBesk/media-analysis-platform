@@ -1493,6 +1493,8 @@ Tasks:
 
 `media-7f3.10`: Full Test Coverage Epic: target architecture proof.
 
+Coverage matrix and deterministic fixture source: `docs/architecture/target-coverage-matrix.md`.
+
 Tasks:
 
 1. `media-7f3.10.1`: Build target coverage matrix and deterministic test environment.

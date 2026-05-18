@@ -24,7 +24,8 @@
     <completed-packet bead="media-7f3.9.6">workers-analysis-run-steps-selection-snapshots</completed-packet>
     <completed-packet bead="media-7f3.9.7">web-mcp-target-vocabulary-api-operations</completed-packet>
     <completed-packet bead="media-7f3.9.8">implementation-cleanup-and-grace-artifact-refresh</completed-packet>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10 and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-packet bead="media-7f3.10.1">target-coverage-matrix-deterministic-test-environment</completed-packet>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10.2, media-7f3.10.3, media-7f3.10.4, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -351,6 +352,35 @@ MCP exposes target technical tools create_media_asset, list_media_assets, search
       <check>go test ./internal/api -count=1 in apps/api</check>
       <check>Focused stale-vocabulary searches across Web visible copy and MCP active tool contracts.</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.10.1-target-coverage-matrix-deterministic-test-environment" module="M-COVERAGE,M-API-STORAGE,M-INFRA" phase="TargetRebuildCoverage" verification-ref="EV-COVERAGE-MATRIX,EV-STORAGE,EV-GRACE">
+    <purpose>Prepare the full target rebuild coverage wave with a source-plan coverage matrix, deterministic channel/object fixtures, and a fresh target schema reset smoke.</purpose>
+    <depends-on>media-7f3.9.8-implementation-cleanup-and-grace-artifact-refresh</depends-on>
+    <write-scope>
+      <file-1>docs/architecture/target-coverage-matrix.md</file-1>
+      <file-2>infra/fixtures/target</file-2>
+      <file-3>infra/scripts/target-reset-smoke.sh</file-3>
+      <file-4>packages/contracts/tests/test_target_fixtures.py</file-4>
+      <file-5>README.md</file-5>
+      <file-6>docs/architecture/final-closure-matrix.md</file-6>
+      <file-7>docs/requirements.xml</file-7>
+      <file-8>docs/development-plan.xml</file-8>
+      <file-9>docs/verification-plan.xml</file-9>
+      <file-10>docs/knowledge-graph.xml</file-10>
+      <file-11>docs/operational-packets.xml</file-11>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The matrix maps every target table, API operation group, source-plan user flow, failure mode, compatibility rule, non-goal, app boundary, and data reset rule to implementation evidence, current automated proof, QA proof, and the Bead that must close remaining proof.
+The deterministic fixture catalog defines stable local, Telegram, Web, and MCP channel_accounts, media_asset ids, selection_snapshot, analysis_run, artifact ids, and object-store fixture bytes with SHA-256 hashes.
+The reset smoke applies the target migration twice to fresh Postgres, verifies all 18 target tables, verifies forbidden legacy tables are absent, checks immutable selection_snapshot triggers, and inserts the deterministic channel/inbox seed.
+    ]]></contract-excerpt>
+    <verification>
+      <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
+      <check>bash infra/scripts/target-reset-smoke.sh</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
     </verification>
   </ExecutionPacket>
 

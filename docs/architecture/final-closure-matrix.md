@@ -1,15 +1,16 @@
 # Final Closure Matrix
 
-This document is the canonical ordered runbook for final repo closure against the inbox-first GRACE plan.
+This document is the canonical ordered runbook for final repo closure against the single-user channel-aware target plan.
 
-It records the exact commands that prove the current state and the metrics each surface can actually emit.
-All declared percentage-emitting surfaces in the current tree are now at literal `100%`.
+It records the exact commands that prove the current state and the metrics each surface can actually emit. The traceability source for target rebuild coverage is `docs/architecture/target-coverage-matrix.md`; this runbook is command evidence, not a substitute for the matrix.
 
 ## Preconditions
 
 - `docker compose`, `uv`, `pnpm`, `python3`, and `xmllint` are available.
 - Compose env examples under `infra/env/*.env.example` are present and unchanged from the checked-in runtime contract.
 - For Python suites, use the exact `PYTHONPATH` values below instead of relying on ambient shell state.
+- The deterministic target fixture manifest validates with `uv run pytest packages/contracts/tests/test_target_fixtures.py -q`.
+- A disposable target Postgres reset can be checked with `bash infra/scripts/target-reset-smoke.sh`.
 
 ## Ordered Gates
 
@@ -34,11 +35,13 @@ Expected gate:
 
 ```bash
 uv run pytest packages/contracts/tests/test_contract_surfaces.py
+uv run pytest packages/contracts/tests/test_target_fixtures.py -q
 ```
 
 Expected gate:
 - Public contract tests pass.
 - Removed vocabulary checks stay green.
+- Deterministic fixture ids, object-store bytes, hashes, and target vocabulary validate.
 
 ### 3. Go API And Storage
 
@@ -115,7 +118,7 @@ cd ../..
 ```
 
 Expected gate:
-- MCP tool registry, request shaping, owner-scope parity, and runtime bootstrap tests pass.
+- MCP tool registry, request shaping, channel-account scope parity, and runtime bootstrap tests pass.
 
 ### 10. Runtime Final E2E
 
@@ -134,7 +137,7 @@ Expected gate:
   - events
   - artifacts
   - diagnostics endpoint readability
-  - cross-owner denial
+  - cross-channel-account denial
   - retention-preserved run lineage
 
 ### 11. Coverage Inventory
@@ -150,22 +153,10 @@ Expected gate:
 
 ## Current Measurable Baselines
 
-Latest measured baselines from the active tree:
-
-- Go `apps/api/internal/api`: `100%` statements
-- Go `apps/api/internal/storage`: `100%` statements
-- Python `workers/common/src/transcriber_workers_common`: `100%`
-- Python `workers/transcription/src/transcriber_worker_transcription.py`: `100%`
-- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `100%`
-- Python `apps/telegram-bot/src/telegram_adapter`: `100%`
-- Node `apps/mcp-server/src`: `100%` lines, `100%` branches, `100%` functions
-- Web `apps/web/src`: `100%` lines, `100%` branches, `100%` functions
+The executable percentage baselines are owned by `bash infra/scripts/coverage-inventory.sh`. Refresh them from command output during closure instead of copying older values into this document.
 
 ## Remaining Closure Truth
 
-The repo now satisfies a literal `100%` measured coverage claim for every declared percentage-emitting surface.
-
-Remaining truth:
-
-- XML integrity, contract tests, and runtime-final compose proof remain separate acceptance gates and must still be cited alongside the coverage inventory.
+- XML integrity, contract tests, fixture validation, target reset smoke, and runtime-final compose proof remain separate acceptance gates and must still be cited alongside the coverage inventory.
+- `media-7f3.10` and `media-7f3.11` remain open until the target coverage matrix rows have actual proof, gaps, accepted risks, or blockers.
 - Any future claim of full closure must cite this runbook and the actual command outputs, not proxy signals.

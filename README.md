@@ -1,17 +1,17 @@
 # Media Analysis Platform
 
-Local-first платформа для накопления медиа в API-owned inbox, сборки явных selections и запуска analysis runs через worker stack. Telegram, Web и MCP являются thin adapters: они управляют одним и тем же серверным состоянием, но не владеют бизнес-логикой.
+Local-first платформа для накопления media_assets в API-owned inbox, сборки immutable selection_snapshots и запуска analysis_runs через worker stack. Telegram, Web и MCP являются thin adapters: они управляют одним и тем же серверным состоянием, но не владеют бизнес-логикой.
 
 ## Что умеет
 
-- принимает через API и адаптеры media items:
+- принимает через API и адаптеры media_assets:
   - одну YouTube-ссылку;
   - текст с одной или несколькими ссылками;
   - аудио/видео/voice/video note/document с media mime type;
-- хранит media items в inbox collection до явного запуска обработки;
-- создает immutable selection snapshot из выбранных media items;
-- запускает analysis run по selection и публикует artifacts/diagnostics через API;
-- сохраняет границы источников и stable source labels в artifact metadata;
+- хранит media_assets в inbox collection до явного запуска обработки;
+- создает immutable selection_snapshot из выбранных media_assets;
+- запускает analysis_run по selection_snapshot и публикует artifacts/diagnostics через API;
+- сохраняет границы origin и stable origin labels в artifact metadata;
 - дает адаптерам единый restore/status flow после перезапуска.
 
 ## Ограничения MVP
@@ -62,16 +62,16 @@ Root package entrypoint intentionally does not exist. Runtime code lives under `
 
 ## Архитектура
 
-- `apps/api` — Go control plane for media items, collections, selections, analysis runs, artifacts, diagnostics, retry/cancel/progress, and adapter restore state.
+- `apps/api` — Go control plane for media_assets, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, retry/cancel/progress, and channel surface recovery state.
 - `apps/telegram-bot/src/telegram_adapter` — compose-owned Telegram adapter over the API.
 - `apps/web` — Web UI over the same media and run APIs.
 - `apps/mcp-server` — MCP adapter over the same media and run APIs.
 - `packages/contracts` — OpenAPI and JSON schema contracts for public, internal, webhook, and websocket surfaces.
-- `workers/transcription/src` — transcription runtime, local source materialization, and transcript artifact persistence.
+- `workers/transcription/src` — transcription runtime, local input materialization, and transcript artifact persistence.
 - `workers/agent-runner/src` — AI-model runtime for report/deep-research execution.
-- `workers/common/src/transcriber_workers_common` — shared worker helpers for API transport, artifacts, source materialization, transcription, and document rendering.
+- `workers/common/src/transcriber_workers_common` — shared worker helpers for API transport, artifacts, input materialization, transcription, and document rendering.
 
-Final media, selection, run, artifact, and diagnostic state is owned by API PostgreSQL + MinIO boundaries; worker workspace remains execution-local.
+Final media_asset, selection_snapshot, analysis_run, artifact, and diagnostic state is owned by API PostgreSQL + MinIO boundaries; worker workspace remains execution-local.
 
 ## Тесты
 
@@ -84,15 +84,23 @@ PYTHONPATH=workers/common/src:workers/agent-runner/src uv run pytest workers/age
 
 Покрыты:
 
-- media item ingestion and restore flows;
+- media_asset ingestion and restore flows;
 - explicit rejected-record diagnostics for unsupported inputs;
-- selection creation and analysis run launch;
-- worker-local source materialization and transcript artifact generation;
+- selection_snapshot creation and analysis_run launch;
+- worker-local input materialization and transcript artifact generation;
 - thin adapter callbacks, paging, removal, and artifact/diagnostic display.
 
 ## Coverage Snapshot
 
-Current executable coverage inventory is collected by:
+Target rebuild coverage is tracked in:
+
+```bash
+docs/architecture/target-coverage-matrix.md
+```
+
+That matrix maps source-plan requirements to implementation evidence, current tests, deterministic fixtures, and the remaining Beads that must turn matrix rows into proof. It is the traceability artifact for `media-7f3.10`; percentage coverage alone is not target rebuild closure.
+
+Current executable percentage inventory is collected by:
 
 ```bash
 bash infra/scripts/coverage-inventory.sh
@@ -111,8 +119,9 @@ Measured baselines from the current tree:
 
 Current truth:
 
-- All declared measurable coverage surfaces now emit `100%`.
-- Contract, XML, and runtime-final e2e remain separate acceptance gates and are not folded into a fake percentage.
+- Percentage-emitting surfaces are measured per tool through `infra/scripts/coverage-inventory.sh`.
+- Contract, XML, fixture, target reset, stale vocabulary, and runtime-final E2E gates remain separate acceptance evidence.
+- The target rebuild is not closed until `media-7f3.10` and `media-7f3.11` complete against the coverage matrix and source plan.
 
 ## Final Verification
 
@@ -124,7 +133,7 @@ docs/architecture/final-closure-matrix.md
 
 ## Executable coverage inventory
 
-The repo still measures coverage per surface with the metric each tool can actually emit:
+The repo measures coverage per surface with the metric each tool can actually emit:
 
 - Go API packages: statement coverage from focused `go test -cover` commands.
 - Python adapter and worker packages: line coverage from isolated `pytest-cov` runs.
@@ -140,7 +149,13 @@ bash infra/scripts/coverage-inventory.sh
 
 The command is intentionally a gate, not a vanity report: it exits non-zero while any declared surface lacks a real metric, falls below `100%`, or any runtime/adapter probe fails.
 
-Current baseline snapshot from `2026-05-11`:
+The deterministic target test environment starts with:
+
+- `infra/fixtures/target/manifest.json` for stable channel accounts, media assets, object-store objects, selection snapshot, run, and artifact ids.
+- `infra/scripts/target-reset-smoke.sh` for a fresh Postgres schema reset smoke.
+- `packages/contracts/tests/test_target_fixtures.py` for fixture hash and vocabulary validation.
+
+Latest measured percentage baselines should be refreshed by running the inventory, not copied from older closure notes:
 
 | Surface | Metric | Current baseline | Status |
 | --- | --- | --- | --- |
@@ -151,9 +166,9 @@ Current baseline snapshot from `2026-05-11`:
 | `workers/transcription/src` | line coverage | `100%` | measured |
 | `workers/agent-runner/src` | line coverage | `100%` | measured |
 | `apps/mcp-server/src` | line / branch / function coverage | `100% / 100% / 100%` | measured |
-| `apps/web/src` | line / branch / function coverage | `100% / 100% / 100%` | measured |
+| `apps/web/src` | line / branch / function coverage | inventory-owned | measured by command |
 
-The repo can now truthfully claim full measured coverage closure for all declared percentage-emitting surfaces, while still treating contracts, XML integrity, and runtime-final e2e as separate acceptance gates.
+Do not claim full target closure from this table by itself. Use the target coverage matrix plus the ordered gates in `docs/architecture/final-closure-matrix.md`.
 
 ## Telegram Ops
 

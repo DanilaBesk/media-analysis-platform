@@ -223,7 +223,9 @@
     <completed>Earlier inbox-first packets remain historical implementation evidence, but they are superseded by the media-7f3 target rebuild plan where naming, table boundaries, API orchestration, Web copy, and worker input contracts are being redefined from first principles.</completed>
     <completed bead="media-7f3.9.6">Active workers now use analysis_run_step queue/claim/progress/finalize contracts, sealed selection_snapshot materialization, declared artifact step inputs for agent-runner, and API-owned artifact/diagnostic publication.</completed>
     <completed bead="media-7f3.9.7">Web and MCP now use target media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account_id contracts.</completed>
-    <remaining>Open work is tracked by media-7f3.9.8, media-7f3.10, and media-7f3.11. The current tree is not closed against the target rebuild until cleanup/GRACE refresh, full prerequisite runtime orchestration proof, coverage closure, and QA vocabulary gates pass.</remaining>
+    <completed bead="media-7f3.9.8">Implementation cleanup and GRACE artifact refresh closed the implementation epic.</completed>
+    <completed bead="media-7f3.10.1">The target coverage matrix and deterministic fixture/reset environment are published for the full coverage wave.</completed>
+    <remaining>Open work is tracked by media-7f3.10.2, media-7f3.10.3, media-7f3.10.4, and media-7f3.11. The current tree is not closed against the target rebuild until storage/API coverage, adapter/worker/runtime E2E coverage, no-legacy regression gates, and QA readiness pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>
