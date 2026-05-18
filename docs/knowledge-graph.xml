@@ -230,18 +230,20 @@
       </annotations>
     </M-COVERAGE>
 
-    <M-QA-READINESS NAME="TargetQaReadiness" TYPE="VERIFICATION" STATUS="backend-worker-audited" OWNER="media-7f3.11.2">
+    <M-QA-READINESS NAME="TargetQaReadiness" TYPE="VERIFICATION" STATUS="channel-runtime-audited" OWNER="media-7f3.11.3">
       <purpose>Own pre-MR QA traceability, backend/security/worker review, channel UX/runtime review, and final readiness packaging after implementation and coverage epics close.</purpose>
       <path>docs/architecture/target-qa-traceability-audit.md</path>
       <path>docs/architecture/target-backend-storage-worker-qa.md</path>
+      <path>docs/architecture/target-channel-ux-runtime-qa.md</path>
       <depends>M-TARGET-ARCHITECTURE, M-COVERAGE, M-CONTRACTS, M-API-HTTP, M-TELEGRAM-ADAPTER, M-WEB, M-MCP-ADAPTER, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER</depends>
       <verification-ref>EV-COVERAGE-MATRIX,EV-COVERAGE-INVENTORY,EV-STALENESS</verification-ref>
       <annotations>
         <audit-traceability PATH="docs/architecture/target-qa-traceability-audit.md" PURPOSE="Maps source-plan sections to implementation evidence, test evidence, GRACE artifacts, Beads state, findings, accepted notes, and remaining QA owners." />
         <audit-backendWorkerSecurity PATH="docs/architecture/target-backend-storage-worker-qa.md" PURPOSE="Records backend, storage, security, object-store, diagnostics, cancellation, and worker QA findings and fixes." />
+        <audit-channelRuntimeUx PATH="docs/architecture/target-channel-ux-runtime-qa.md" PURPOSE="Records Telegram, Web, MCP, artifact, prerequisite, and runtime QA evidence plus Web UX drift fixes." />
         <finding-staleClosureCoverageDocs PURPOSE="Fixed stale README, final closure matrix, and historical cutover checklist wording that still claimed old 100 percent baselines or an open coverage epic." />
         <finding-workerBoundaryHardening PURPOSE="Fixed worker workspace path sanitization, bucket-relative object key validation, worker step write validation, and HTTP server timeout/header hardening." />
-        <remaining-channelRuntimeReview OWNER="media-7f3.11.3" PURPOSE="Telegram, Web, MCP, UX copy, runtime behavior, stale callback, recovery, duplicate delivery, and artifact access review remains open." />
+        <finding-webNormalSurfaceDrift PURPOSE="Fixed ordinary Web UI leaks of runtime endpoints, raw JSON launch params, and service artifact manifests, diagnostics, bundles, and logs." />
         <remaining-finalReadiness OWNER="media-7f3.11.4" PURPOSE="Final MR readiness packet remains open." />
       </annotations>
     </M-QA-READINESS>

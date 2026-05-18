@@ -1,8 +1,6 @@
 import type { PropsWithChildren } from "react";
 import { NavLink } from "react-router-dom";
 
-import { useWebUiRuntime } from "./runtime-context";
-
 const NAV_ITEMS = [
   { to: "/", label: "Материалы", end: true },
   { to: "/collections", label: "Группы" },
@@ -12,8 +10,6 @@ const NAV_ITEMS = [
 ];
 
 export function AppShell({ children }: PropsWithChildren): JSX.Element {
-  const { env } = useWebUiRuntime();
-
   return (
     <div className="app-shell">
       <header className="app-shell__header">
@@ -21,16 +17,6 @@ export function AppShell({ children }: PropsWithChildren): JSX.Element {
           <p className="app-shell__eyebrow">Анализ медиа</p>
           <h1>Материалы</h1>
         </div>
-        <dl className="app-shell__env">
-          <div>
-            <dt>API</dt>
-            <dd>{env.apiBaseUrl}</dd>
-          </div>
-          <div>
-            <dt>События</dt>
-            <dd>{env.wsUrl}</dd>
-          </div>
-        </dl>
       </header>
 
       <nav className="app-shell__nav" aria-label="Основная навигация">

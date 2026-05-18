@@ -354,6 +354,8 @@ describe("createWebUiRoutes", () => {
     expect(primaryNav.getByRole("link", { name: "Результаты" })).toHaveAttribute("href", "/artifacts");
     expect(primaryNav.getByRole("link", { name: "Проверки" })).toHaveAttribute("href", "/diagnostics");
     expect(primaryNav.queryByText(/Inbox|Collections|Run builder|Artifacts|Admin/i)).toBeNull();
+    expect(screen.queryByText("http://localhost:8080")).toBeNull();
+    expect(screen.queryByText("ws://localhost:8080/v1/ws")).toBeNull();
     expect(await screen.findByText("Call note")).toBeVisible();
 
     fireEvent.change(screen.getByLabelText("Название"), { target: { value: "Fresh note" } });
@@ -568,16 +570,16 @@ describe("createWebUiRoutes", () => {
     });
   });
 
-  it("opens json artifact previews and artifact diagnostics", async () => {
+  it("hides service artifact previews from normal results", async () => {
     renderRoute("/artifacts/artifact-manifest");
 
-    expect(await screen.findByText(/analysis_run_manifest\/v2/)).toBeVisible();
-    expect(await screen.findByText("Предпросмотр готов")).toBeVisible();
-    expect(await screen.findAllByText("Предпросмотр готов")).toHaveLength(1);
-    expect(await screen.findByRole("link", { name: "План запуска" })).toHaveAttribute(
+    expect(await screen.findByText("Этот служебный файл не показывается в обычных результатах.")).toBeVisible();
+    expect(await screen.findByRole("link", { name: "Краткое содержание" })).toHaveAttribute(
       "href",
-      "/artifacts/artifact-manifest",
+      "/artifacts/artifact-1",
     );
+    expect(screen.queryByText(/analysis_run_manifest\/v2/)).toBeNull();
+    expect(screen.queryByRole("link", { name: "План запуска" })).toBeNull();
   });
 
   it("does not register the old jobs entrypoint", async () => {
@@ -700,13 +702,21 @@ describe("createWebUiRoutes", () => {
     });
   });
 
-  it("covers run-builder validation and run-detail lifecycle branches", async () => {
+  it("covers run-builder creation and run-detail lifecycle branches", async () => {
     const runtime = renderRoute("/runs");
 
     fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
-    fireEvent.change(screen.getByLabelText("Параметры"), { target: { value: "{not-json" } });
+    expect(screen.queryByLabelText("Параметры")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
-    expect(await screen.findByText(/Expected property name/)).toBeVisible();
+    await waitFor(() => {
+      expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
+        owner,
+        expect.objectContaining({
+          params: undefined,
+          runType: "transcription",
+        }),
+      );
+    });
 
     const detailRuntime = renderRoute("/runs/run-1", {
       getAnalysisRun: vi.fn().mockResolvedValue(
@@ -1124,7 +1134,7 @@ describe("createWebUiRoutes", () => {
     });
 
     expect((await screen.findAllByText("Данные")).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Журнал").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Журнал")).toBeNull();
     expect(screen.getAllByText("custom blob").length).toBeGreaterThan(0);
     expect(screen.getByText("{invalid-json")).toBeVisible();
     expect(screen.getAllByText("2.4 MB")).toHaveLength(2);
@@ -1209,7 +1219,7 @@ describe("createWebUiRoutes", () => {
       getArtifact: vi.fn().mockResolvedValue({
         artifact_id: "artifact-1",
         analysis_run_id: "run-1",
-        kind: "execution_log",
+        kind: "summary",
         status: "available",
         content_type: "application/octet-stream",
         size_bytes: 42,
@@ -1328,7 +1338,7 @@ describe("createWebUiRoutes", () => {
           {
             artifact_id: "artifact-kb",
             analysis_run_id: "run-1",
-            kind: "execution_log",
+            kind: "report",
             status: "available",
             content_type: "text/plain",
             size_bytes: 2048,
@@ -1340,7 +1350,7 @@ describe("createWebUiRoutes", () => {
       getArtifact: vi.fn().mockResolvedValue({
         artifact_id: "artifact-text-preview",
         analysis_run_id: "run-1",
-        kind: "execution_log",
+        kind: "report",
         status: "available",
         content_type: "text/plain",
         size_bytes: 2048,
@@ -1374,7 +1384,7 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findByText("#1 Call note")).toBeVisible();
     expect(screen.getByText("0")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Параметры"), { target: { value: "" } });
+    expect(screen.queryByLabelText("Параметры")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
 
     await waitFor(() => {

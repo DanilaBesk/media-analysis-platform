@@ -216,6 +216,7 @@
     <bead id="media-7f3.11" status="open">Pre-MR QA epic for traceability, backend/security/worker, channel UX/Web/MCP/runtime, and final readiness.</bead>
     <bead id="media-7f3.11.1" status="completed">QA traceability audit maps source-plan requirements to implementation, coverage proof, GRACE artifacts, Beads state, and remaining QA owners; stale closure and coverage wording was corrected.</bead>
     <bead id="media-7f3.11.2" status="completed">Backend, storage, security, object storage, diagnostics, cancellation, and worker review fixed worker workspace path sanitization, bucket-relative object-key validation, worker step write validation, and HTTP server timeout/header hardening.</bead>
+    <bead id="media-7f3.11.3" status="completed">Channel UX, Web, MCP, Telegram, report/research prerequisite, and runtime review fixed Web runtime endpoint leaks, raw JSON launch parameters, and service artifact exposure in normal result views.</bead>
   </BeadsTrace>
 
   <NonGoals>

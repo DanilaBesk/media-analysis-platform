@@ -107,6 +107,26 @@ function diagnosticsForSubject(diagnostics: Diagnostic[], subjectId: string): Di
   return diagnostics.filter((diagnostic) => diagnosticSubject(diagnostic).subject_id === subjectId);
 }
 
+const INTERNAL_RESULT_ARTIFACT_KINDS = new Set<string>([
+  "run_manifest",
+  "run_diagnostics",
+  "diagnostic_bundle",
+  "execution_log",
+]);
+
+function isUserVisibleArtifactKind(kind: string): boolean {
+  return !INTERNAL_RESULT_ARTIFACT_KINDS.has(kind);
+}
+
+function userVisibleArtifacts<TArtifact extends { kind: string }>(artifacts: TArtifact[]): TArtifact[] {
+  return artifacts.filter((artifact) => isUserVisibleArtifactKind(artifact.kind));
+}
+
+function userVisibleArtifactLabels(kinds?: string[]): string {
+  const labels = (kinds ?? []).filter(isUserVisibleArtifactKind).map(artifactGroupLabel);
+  return labels.length ? labels.join(", ") : "Нет";
+}
+
 function artifactGroupLabel(kind: string): string {
   switch (kind) {
     case "transcript":
@@ -118,14 +138,12 @@ function artifactGroupLabel(kind: string): string {
     case "deep_research":
       return "Глубокое исследование";
     case "run_manifest":
-      return "План запуска";
     case "run_diagnostics":
     case "diagnostic_bundle":
-      return "Проверки";
+    case "execution_log":
+      return "Служебный файл";
     case "structured_data":
       return "Данные";
-    case "execution_log":
-      return "Журнал";
     case "source_manifest":
       return "Список материалов";
     case "preview":
@@ -1078,7 +1096,6 @@ export function RunsRouteShell(): JSX.Element {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sourceCollectionId, setSourceCollectionId] = useState("");
   const [runType, setRunType] = useState<RunType>("transcription");
-  const [paramsText, setParamsText] = useState("{\n  \"priority\": \"normal\"\n}");
   const [lastPlan, setLastPlan] = useState<{ selectionSnapshotId: string; runId: string } | null>(null);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useMessage();
@@ -1136,7 +1153,6 @@ export function RunsRouteShell(): JSX.Element {
     setMessage("");
     try {
       const ids = Array.from(selected);
-      const params = paramsText.trim() ? (JSON.parse(paramsText) as Record<string, unknown>) : undefined;
       const selection = await apiClient.createSelectionSnapshot(DEFAULT_CHANNEL_ACCOUNT_ID, {
         sourceCollectionId: sourceCollectionId || undefined,
         items: ids.map((media_asset_id, position) => ({ media_asset_id, position })),
@@ -1145,7 +1161,7 @@ export function RunsRouteShell(): JSX.Element {
       const run = await apiClient.createAnalysisRun(DEFAULT_CHANNEL_ACCOUNT_ID, {
         selectionSnapshotId: selection.selection_snapshot_id,
         runType,
-        params,
+        params: undefined,
         delivery: { strategy: "polling" },
       });
       setLastPlan({ selectionSnapshotId: selection.selection_snapshot_id, runId: run.analysis_run_id });
@@ -1185,10 +1201,6 @@ export function RunsRouteShell(): JSX.Element {
               <option value="deep_research">Глубокое исследование</option>
               <option value="custom">Свой сценарий</option>
             </select>
-          </label>
-          <label>
-            Параметры
-            <textarea rows={4} value={paramsText} onChange={(event) => setParamsText(event.target.value)} />
           </label>
         </div>
         <MediaAssetList
@@ -1553,7 +1565,7 @@ function RunOutcomeList({
                   </div>
                   <div>
                     <dt>Результаты</dt>
-                    <dd>{item.artifact_kinds?.map((kind) => artifactGroupLabel(kind as ArtifactSummary["kind"])).join(", ") || "Нет"}</dd>
+                    <dd>{userVisibleArtifactLabels(item.artifact_kinds)}</dd>
                   </div>
                   <div>
                     <dt>Проверки</dt>
@@ -1662,12 +1674,14 @@ function EventList({ events }: { events: RunEvent[] }): JSX.Element {
 }
 
 function ArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Element {
-  if (artifacts.length === 0) {
+  const visibleArtifacts = userVisibleArtifacts(artifacts);
+
+  if (visibleArtifacts.length === 0) {
     return <p className="muted-text">Результатов пока нет.</p>;
   }
   return (
     <div className="data-list">
-      {artifacts.map((artifact) => (
+      {visibleArtifacts.map((artifact) => (
         <article className="data-row" key={artifact.artifact_id}>
           <div className="row-main">
             <Link className="text-link" to={`/artifacts/${artifact.artifact_id}`}>
@@ -1692,11 +1706,13 @@ function ArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Elem
 }
 
 function GroupedArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Element {
-  if (artifacts.length === 0) {
+  const visibleArtifacts = userVisibleArtifacts(artifacts);
+
+  if (visibleArtifacts.length === 0) {
     return <p className="muted-text">Результатов пока нет.</p>;
   }
 
-  const groups = artifacts.reduce<Record<string, ArtifactSummary[]>>((acc, artifact) => {
+  const groups = visibleArtifacts.reduce<Record<string, ArtifactSummary[]>>((acc, artifact) => {
     const key = `${artifact.analysis_run_id}:${artifactGroupLabel(artifact.kind)}`;
     acc[key] = [...(acc[key] ?? []), artifact];
     return acc;
@@ -1770,6 +1786,12 @@ export function ArtifactsRouteShell(): JSX.Element {
             pageSize: 50,
           }),
         ]);
+        if (!isUserVisibleArtifactKind(artifactResponse.kind)) {
+          setArtifact(null);
+          setDiagnostics([]);
+          setError("Этот служебный файл не показывается в обычных результатах.");
+          return;
+        }
         setArtifact(artifactResponse);
         setDiagnostics(diagnosticsResponse.items);
       } else {

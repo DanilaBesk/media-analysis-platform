@@ -36,7 +36,7 @@ describe("WebUiRuntimeProvider", () => {
     );
   });
 
-  it("renders the shell env block from provided runtime", () => {
+  it("renders the shell without leaking runtime endpoints", () => {
     render(
       <MemoryRouter initialEntries={["/"]}>
         <WebUiRuntimeProvider runtime={runtime}>
@@ -48,8 +48,8 @@ describe("WebUiRuntimeProvider", () => {
     );
 
     expect(screen.getByText("Анализ медиа")).toBeVisible();
-    expect(screen.getByText("http://localhost:8080")).toBeVisible();
-    expect(screen.getByText("ws://localhost:8080/v1/ws")).toBeVisible();
+    expect(screen.queryByText("http://localhost:8080")).toBeNull();
+    expect(screen.queryByText("ws://localhost:8080/v1/ws")).toBeNull();
     expect(screen.getByText("Child content")).toBeVisible();
   });
 });

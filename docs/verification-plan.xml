@@ -177,6 +177,7 @@
     <bead id="media-7f3.10.4">Run full coverage inventory, no-legacy target gate, admin target-reset regression tests, live admin observability/reconcile proof, GRACE XML checks, and git diff checks before starting QA traceability.</bead>
     <bead id="media-7f3.11.1">Run source-plan to artifact traceability audit, Beads graph status audit, GRACE XML checks, no-legacy target gate, contract fixture tests, stale closure wording scan, and git diff checks before starting backend/security/worker QA.</bead>
     <bead id="media-7f3.11.2">Run backend/storage/security/worker QA, focused worker-common/transcription/agent-runner regressions, focused API/storage regressions, full worker-common/transcription/agent-runner suites, API/storage tests, target reset smoke, no-legacy target gate, GRACE XML checks, and git diff checks before starting channel UX/runtime QA.</bead>
+    <bead id="media-7f3.11.3">Run Web, Telegram, MCP, API prerequisite planning, agent-runner step-input, runtime-final E2E, compose config, target reset, no-legacy target gate, GRACE XML, and git diff checks before starting final readiness packaging.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>
