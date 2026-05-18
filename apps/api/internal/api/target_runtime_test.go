@@ -144,6 +144,51 @@ func TestTargetRuntimeServicePersistsTargetOperations(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceReplaysMediaAssetIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 13, 30, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{operationsByKey: map[string]targetstore.OperationRequestRecord{}}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"operation-1",
+			"media-asset-1",
+			"collection-item-1",
+			"operation-2",
+			"media-asset-2",
+			"collection-item-2",
+		)),
+	)
+
+	first, err := service.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+		ChannelAccountID: "channel-account-1",
+		Origin:           TargetMediaAssetOrigin{OriginType: "upload", OriginRef: "uploads/file.txt"},
+		Kind:             "document",
+		DisplayName:      "file.txt",
+		IdempotencyKey:   "upload:stable",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaAsset(first) error = %v", err)
+	}
+	replayed, err := service.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+		ChannelAccountID: "channel-account-1",
+		Origin:           TargetMediaAssetOrigin{OriginType: "upload", OriginRef: "uploads/file-duplicate.txt"},
+		Kind:             "document",
+		DisplayName:      "file-duplicate.txt",
+		IdempotencyKey:   "upload:stable",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaAsset(replay) error = %v", err)
+	}
+	if replayed.MediaAssetID != first.MediaAssetID {
+		t.Fatalf("replayed media asset id = %q, want original %q", replayed.MediaAssetID, first.MediaAssetID)
+	}
+	if store.mediaAssetCreateCalls != 1 {
+		t.Fatalf("CreateMediaAssetWithInbox calls = %d, want 1", store.mediaAssetCreateCalls)
+	}
+}
+
 func TestTargetRuntimeServicePlansSpeechPrerequisiteForReportRuns(t *testing.T) {
 	t.Parallel()
 
@@ -200,7 +245,9 @@ func TestTargetRuntimeServicePlansSpeechPrerequisiteForReportRuns(t *testing.T) 
 type fakeTargetRuntimeStore struct {
 	channelAccount         targetstore.ChannelAccountRecord
 	operation              targetstore.OperationRequestRecord
+	operationsByKey        map[string]targetstore.OperationRequestRecord
 	mediaAssetParams       targetstore.CreateMediaAssetWithInboxParams
+	mediaAssetCreateCalls  int
 	selectionSnapshot      targetstore.SelectionSnapshotRecord
 	selectionSnapshotItems []targetstore.SelectionSnapshotItemRecord
 	snapshotItems          []targetstore.SelectionSnapshotItemRecord
@@ -228,11 +275,20 @@ func (s *fakeTargetRuntimeStore) UpdateChannelAccount(_ context.Context, params 
 }
 
 func (s *fakeTargetRuntimeStore) RecordOperationRequest(_ context.Context, record targetstore.OperationRequestRecord) (targetstore.OperationRequestRecord, error) {
+	if s.operationsByKey != nil {
+		key := record.ChannelAccountID + "\x00" + record.OperationType + "\x00" + record.IdempotencyKey
+		if existing, ok := s.operationsByKey[key]; ok {
+			s.operation = existing
+			return existing, nil
+		}
+		s.operationsByKey[key] = record
+	}
 	s.operation = record
 	return record, nil
 }
 
 func (s *fakeTargetRuntimeStore) CreateMediaAssetWithInbox(_ context.Context, params targetstore.CreateMediaAssetWithInboxParams) error {
+	s.mediaAssetCreateCalls++
 	s.mediaAssetParams = params
 	return nil
 }

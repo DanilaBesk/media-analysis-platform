@@ -173,7 +173,7 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 	}
 	assetID := s.nextID()
 	if req.IdempotencyKey != "" {
-		if _, err := s.store.RecordOperationRequest(ctx, targetstore.OperationRequestRecord{
+		operation, err := s.store.RecordOperationRequest(ctx, targetstore.OperationRequestRecord{
 			ID:               operationID,
 			ChannelAccountID: req.ChannelAccountID,
 			OperationType:    "media_asset.create",
@@ -183,8 +183,19 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 			TargetID:         assetID,
 			MetadataJSON:     []byte(`{}`),
 			CreatedAt:        now,
-		}); err != nil {
+		})
+		if err != nil {
 			return TargetMediaAsset{}, err
+		}
+		if operation.TargetType == "media_asset" && operation.TargetID != "" && operation.TargetID != assetID {
+			record, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, operation.TargetID)
+			if errors.Is(err, sql.ErrNoRows) {
+				assetID = operation.TargetID
+			} else if err != nil {
+				return TargetMediaAsset{}, err
+			} else {
+				return targetMediaAssetFromRecord(record), nil
+			}
 		}
 	}
 	params := targetstore.CreateMediaAssetWithInboxParams{

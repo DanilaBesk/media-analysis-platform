@@ -49,7 +49,7 @@ run_psql() {
   if [[ -n "${TARGET_DATABASE_URL:-}" ]]; then
     psql "${TARGET_DATABASE_URL}" -v ON_ERROR_STOP=1 "$@"
   else
-    docker exec -i "${CONTAINER_NAME}" psql -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"
+    docker exec -i "${CONTAINER_NAME}" psql -h 127.0.0.1 -U postgres -d postgres -v ON_ERROR_STOP=1 "$@"
   fi
 }
 
@@ -63,7 +63,7 @@ run_migration_up() {
 if [[ -z "${TARGET_DATABASE_URL:-}" ]]; then
   CONTAINER_NAME="map-target-reset-${RANDOM}-$$"
   docker run --rm -d --name "${CONTAINER_NAME}" -e POSTGRES_PASSWORD=postgres postgres:16-alpine >/dev/null
-  until docker exec "${CONTAINER_NAME}" pg_isready -U postgres >/dev/null 2>&1; do
+  until docker exec "${CONTAINER_NAME}" pg_isready -h 127.0.0.1 -U postgres >/dev/null 2>&1; do
     sleep 1
   done
 fi

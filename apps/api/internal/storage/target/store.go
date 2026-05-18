@@ -39,20 +39,13 @@ SET display_name=EXCLUDED.display_name,
 }
 
 func (s *Store) RecordOperationRequest(ctx context.Context, record OperationRequestRecord) (OperationRequestRecord, error) {
-	_, err := s.db.ExecContext(ctx, `
+	result, err := s.db.ExecContext(ctx, `
 INSERT INTO operation_requests (
     id, channel_account_id, operation_type, idempotency_key, request_hash, status,
     target_type, target_id, error_code, metadata, created_at, completed_at
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-ON CONFLICT (channel_account_id, operation_type, idempotency_key) DO UPDATE
-SET request_hash=EXCLUDED.request_hash,
-    status=EXCLUDED.status,
-    target_type=EXCLUDED.target_type,
-    target_id=EXCLUDED.target_id,
-    error_code=EXCLUDED.error_code,
-    metadata=EXCLUDED.metadata,
-    completed_at=EXCLUDED.completed_at`,
+ON CONFLICT (channel_account_id, operation_type, idempotency_key) DO NOTHING`,
 		record.ID, record.ChannelAccountID, record.OperationType, record.IdempotencyKey,
 		nullString(record.RequestHash), withDefault(record.Status, "accepted"),
 		nullString(record.TargetType), nullString(record.TargetID), nullString(record.ErrorCode),
@@ -60,7 +53,40 @@ SET request_hash=EXCLUDED.request_hash,
 	if err != nil {
 		return OperationRequestRecord{}, err
 	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return OperationRequestRecord{}, err
+	}
+	if affected == 0 {
+		return s.getOperationRequestByIdempotency(ctx, record.ChannelAccountID, record.OperationType, record.IdempotencyKey)
+	}
 	return record, nil
+}
+
+func (s *Store) getOperationRequestByIdempotency(ctx context.Context, channelAccountID, operationType, idempotencyKey string) (OperationRequestRecord, error) {
+	var record OperationRequestRecord
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, COALESCE(channel_account_id::text,''), operation_type, idempotency_key,
+       COALESCE(request_hash,''), status, COALESCE(target_type,''),
+       COALESCE(target_id::text,''), COALESCE(error_code,''), metadata,
+       created_at, completed_at
+FROM operation_requests
+WHERE channel_account_id=$1 AND operation_type=$2 AND idempotency_key=$3`,
+		channelAccountID, operationType, idempotencyKey).Scan(
+		&record.ID,
+		&record.ChannelAccountID,
+		&record.OperationType,
+		&record.IdempotencyKey,
+		&record.RequestHash,
+		&record.Status,
+		&record.TargetType,
+		&record.TargetID,
+		&record.ErrorCode,
+		&record.MetadataJSON,
+		&record.CreatedAt,
+		&record.CompletedAt,
+	)
+	return record, err
 }
 
 func (s *Store) CreateMediaAssetWithInbox(ctx context.Context, params CreateMediaAssetWithInboxParams) error {

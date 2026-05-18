@@ -265,6 +265,7 @@ func TestStoreWritesTargetStateWithoutLegacyTables(t *testing.T) {
 		"INSERT INTO channel_accounts",
 		"INSERT INTO operation_requests",
 		"ON CONFLICT (channel_account_id, operation_type, idempotency_key)",
+		"DO NOTHING",
 		"INSERT INTO stored_objects",
 		"INSERT INTO media_assets",
 		"INSERT INTO collections",

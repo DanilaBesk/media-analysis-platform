@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
 func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
@@ -427,6 +429,48 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 	}
 }
 
+func TestTargetApiEdgeCoverageForValidationConflictAndPagination(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 12, 30, 0, 0, time.UTC)
+	target := &fakeTargetService{now: now}
+	mux := newFinalMux(Dependencies{Target: target})
+
+	invalidMedia := httptest.NewRecorder()
+	mux.ServeHTTP(invalidMedia, httptest.NewRequest(http.MethodPost, "/v1/media-assets", strings.NewReader("{")))
+	assertErrorCode(t, invalidMedia, http.StatusBadRequest, "invalid_media_asset")
+	assertNoLegacyTargetVocabulary(t, invalidMedia.Body.String())
+
+	missingUploadMetadata := httptest.NewRecorder()
+	uploadReq := httptest.NewRequest(http.MethodPost, "/v1/media-assets/upload", strings.NewReader(""))
+	uploadReq.Header.Set("Content-Type", "multipart/form-data; boundary=missing")
+	mux.ServeHTTP(missingUploadMetadata, uploadReq)
+	assertErrorCode(t, missingUploadMetadata, http.StatusBadRequest, "invalid_media_asset")
+	assertNoLegacyTargetVocabulary(t, missingUploadMetadata.Body.String())
+
+	paginated := httptest.NewRecorder()
+	mux.ServeHTTP(paginated, httptest.NewRequest(http.MethodGet, "/v1/diagnostics?channel_account_id=channel-account-1&page_size=999&cursor=diag-1", nil))
+	assertTargetStatus(t, paginated, http.StatusOK)
+	if target.listDiagnosticsReq.PageSize != 100 || target.listDiagnosticsReq.Cursor != "diag-1" {
+		t.Fatalf("diagnostics pagination request = %#v", target.listDiagnosticsReq)
+	}
+	if !strings.Contains(paginated.Body.String(), `"items":[`) || !strings.Contains(paginated.Body.String(), `"page_size":100`) {
+		t.Fatalf("diagnostics pagination response = %s", paginated.Body.String())
+	}
+	assertNoLegacyTargetVocabulary(t, paginated.Body.String())
+
+	conflictTarget := &fakeTargetService{now: now, updateCollectionErr: storage.ErrCollectionVersionConflict}
+	conflictMux := newFinalMux(Dependencies{Target: conflictTarget})
+	conflict := httptest.NewRecorder()
+	conflictMux.ServeHTTP(conflict, jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{
+		"channel_account_id": "channel-account-1",
+		"expected_version":   1,
+		"name":               "stale",
+	}))
+	assertErrorCode(t, conflict, http.StatusConflict, "collection_version_conflict")
+	assertNoLegacyTargetVocabulary(t, conflict.Body.String())
+}
+
 func assertTargetStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	if rec.Code != want {
@@ -489,7 +533,8 @@ func multipartTargetUploadRequest(t *testing.T, path string, metadata map[string
 }
 
 type fakeTargetService struct {
-	now time.Time
+	now                 time.Time
+	updateCollectionErr error
 
 	channelAccountReq        TargetChannelAccountRequest
 	listChannelAccountsReq   TargetListChannelAccountsRequest
@@ -648,6 +693,9 @@ func (f *fakeTargetService) GetCollection(_ context.Context, req TargetGetCollec
 }
 
 func (f *fakeTargetService) UpdateCollection(_ context.Context, req TargetUpdateCollectionRequest) (TargetCollection, error) {
+	if f.updateCollectionErr != nil {
+		return TargetCollection{}, f.updateCollectionErr
+	}
 	f.updateCollectionReq = req
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", req.Name, f.now)
 	collection.Version = req.ExpectedVersion + 1

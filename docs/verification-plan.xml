@@ -116,11 +116,11 @@
     </Gate>
     <Gate id="EV-STORAGE">
       <description>Storage implements channel-account scope, immutable selection snapshots, step inputs, artifact lineage, lifecycle, retention, and diagnostics.</description>
-      <required-evidence>Focused storage tests pass for target schema fragments, target repositories, deterministic fixtures, same-channel-account behavior, and cross-channel-account cases.</required-evidence>
+      <required-evidence>Focused storage tests pass for target schema fragments, target repositories, deterministic fixtures, live Postgres reset/recreate, operation_request replay, same-channel-account behavior, cross-channel-account cases, immutable selection snapshots, analysis_run events, artifact access, diagnostics, retention state, and channel_surface conflict/supersede/event behavior.</required-evidence>
     </Gate>
     <Gate id="EV-API">
       <description>API provides the complete media_asset to artifact flow plus prerequisite orchestration.</description>
-      <required-evidence>Focused API tests pass for ingestion, inbox, collections, selection_snapshot, analysis_run, prerequisite planning, cancellation, artifacts, artifact_subjects, diagnostics, and retention.</required-evidence>
+      <required-evidence>Focused API tests pass for ingestion, inbox, collections, selection_snapshot, analysis_run, prerequisite planning, cancellation, artifacts, artifact_subjects, diagnostics, retention, validation errors, conflict mapping, empty arrays, pagination clamping, and media_asset idempotent replay.</required-evidence>
     </Gate>
     <Gate id="EV-WORKERS">
       <description>Workers execute only through analysis_run_step contracts and immutable declared inputs.</description>
@@ -172,6 +172,7 @@
     <bead id="media-7f3.9.7">Run Web, MCP, API artifact refresh, GRACE XML, and focused stale target vocabulary checks.</bead>
     <bead id="media-7f3.9.8">Run cleanup, OpenAPI, GRACE XML, and stale public vocabulary checks before closing the implementation epic.</bead>
     <bead id="media-7f3.10.1">Run target coverage matrix review, deterministic fixture manifest validation, and target reset smoke before starting storage/API coverage expansion.</bead>
+    <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and legacy storage package tests before starting adapter/worker/runtime E2E coverage.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

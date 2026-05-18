@@ -209,6 +209,7 @@
     <bead id="media-7f3.9" status="completed">Implementation epic for target contracts, storage, API orchestration, workers, Telegram, Web, MCP, and GRACE refresh is closed; remaining proof work is tracked in coverage and QA Beads.</bead>
     <bead id="media-7f3.10" status="open">Coverage epic for storage/API, worker, Telegram, Web, MCP, prerequisite, lineage, and no-legacy vocabulary proofs.</bead>
     <bead id="media-7f3.10.1" status="completed">Target coverage matrix, deterministic channel fixtures, object-store fixture bytes, and fresh Postgres reset smoke are prepared for later coverage Beads.</bead>
+    <bead id="media-7f3.10.2" status="completed">Storage and API target coverage now proves clean reset, live Postgres constraints, operation idempotency replay, channel-account isolation, collection conflicts, immutable selection_snapshots, analysis_run lifecycle/events/cancellation, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/events.</bead>
     <bead id="media-7f3.11" status="open">Pre-MR QA epic for traceability, backend/security/worker, channel UX/Web/MCP/runtime, and final readiness.</bead>
   </BeadsTrace>
 

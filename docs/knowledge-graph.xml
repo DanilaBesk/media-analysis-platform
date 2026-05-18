@@ -98,6 +98,7 @@
         <table-channelSurfaces PURPOSE="Store restart-safe channel presentation mappings with active uniqueness by channel account, surface key, and address fingerprint." />
         <table-channelSurfaceSubjects PURPOSE="Store external surface links to target product subjects while enforcing one primary subject per surface." />
         <table-channelSurfaceEvents PURPOSE="Store append-only channel surface lifecycle and recovery history." />
+        <test-livePostgresContracts PATH="apps/api/internal/storage/target/store_postgres_test.go" PURPOSE="Runs the target migration twice on disposable Postgres and proves operation idempotency replay, channel isolation, collection conflicts, immutable selection_snapshots, analysis_run lifecycle/events/cancellation, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/event history." />
       </annotations>
     </M-API-STORAGE>
 
@@ -208,8 +209,8 @@
       </annotations>
     </M-MCP-ADAPTER>
 
-    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="prepared" OWNER="media-7f3.10.1">
-      <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, and fresh schema reset smoke used by the coverage and QA epics.</purpose>
+    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="storage-api-covered" OWNER="media-7f3.10.2">
+      <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, fresh schema reset smoke, and storage/API coverage evidence used by the coverage and QA epics.</purpose>
       <path>docs/architecture/target-coverage-matrix.md</path>
       <depends>M-TARGET-ARCHITECTURE, M-API-STORAGE, M-CONTRACTS</depends>
       <verification-ref>EV-COVERAGE-MATRIX</verification-ref>
@@ -218,6 +219,7 @@
         <fixture-objectStore PATH="infra/fixtures/target/object-store" PURPOSE="Stores deterministic object-store bytes with manifest sizes and SHA-256 hashes." />
         <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />
         <test-fixtureValidation PATH="packages/contracts/tests/test_target_fixtures.py" PURPOSE="Validates fixture manifest vocabulary, channel identities, object-store files, sizes, and hashes." />
+        <test-storageApiCoverage PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers target API success, validation errors, empty arrays, pagination clamping, and conflict mapping." />
       </annotations>
     </M-COVERAGE>
 

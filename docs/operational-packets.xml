@@ -25,7 +25,8 @@
     <completed-packet bead="media-7f3.9.7">web-mcp-target-vocabulary-api-operations</completed-packet>
     <completed-packet bead="media-7f3.9.8">implementation-cleanup-and-grace-artifact-refresh</completed-packet>
     <completed-packet bead="media-7f3.10.1">target-coverage-matrix-deterministic-test-environment</completed-packet>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10.2, media-7f3.10.3, media-7f3.10.4, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-packet bead="media-7f3.10.2">target-storage-api-coverage</completed-packet>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.10.3, media-7f3.10.4, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -378,6 +379,40 @@ The reset smoke applies the target migration twice to fresh Postgres, verifies a
     ]]></contract-excerpt>
     <verification>
       <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
+      <check>bash infra/scripts/target-reset-smoke.sh</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.10.2-target-storage-api-coverage" module="M-API-STORAGE,M-API-DOMAIN,M-API-HTTP,M-COVERAGE" phase="TargetRebuildCoverage" verification-ref="EV-STORAGE,EV-API,EV-COVERAGE-MATRIX,EV-GRACE">
+    <purpose>Convert the target coverage matrix storage/API rows into committed tests and runtime-service fixes.</purpose>
+    <depends-on>media-7f3.10.1-target-coverage-matrix-deterministic-test-environment</depends-on>
+    <write-scope>
+      <file-1>apps/api/internal/storage/target/store.go</file-1>
+      <file-2>apps/api/internal/storage/target/store_test.go</file-2>
+      <file-3>apps/api/internal/storage/target/store_postgres_test.go</file-3>
+      <file-4>apps/api/internal/api/target_runtime.go</file-4>
+      <file-5>apps/api/internal/api/target_runtime_test.go</file-5>
+      <file-6>apps/api/internal/api/target_api_test.go</file-6>
+      <file-7>docs/architecture/target-coverage-matrix.md</file-7>
+      <file-8>docs/requirements.xml</file-8>
+      <file-9>docs/development-plan.xml</file-9>
+      <file-10>docs/verification-plan.xml</file-10>
+      <file-11>docs/knowledge-graph.xml</file-11>
+      <file-12>docs/operational-packets.xml</file-12>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Storage/API coverage must prove clean target schema reset/recreate, deterministic seed use, operation_request idempotent replay, channel-account isolation, collection optimistic conflicts, immutable selection_snapshots, analysis_run_step declared inputs, analysis_run_events, cancellation races, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/event history.
+Repeated media_asset creates with the same channel_account_id, operation type, and idempotency key return the original target and do not create another media_asset/inbox membership.
+Target route tests must cover invalid request bodies, empty arrays, pagination clamping, and conflict error mapping without leaking deprecated public vocabulary.
+    ]]></contract-excerpt>
+    <verification>
+      <check>cd apps/api &amp;&amp; go test ./internal/storage/target -run TestTargetStorePostgresContracts -count=1 -v</check>
+      <check>cd apps/api &amp;&amp; go test ./internal/api -count=1</check>
+      <check>cd apps/api &amp;&amp; go test ./internal/storage/target -count=1</check>
+      <check>cd apps/api &amp;&amp; go test ./internal/storage -count=1</check>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py packages/contracts/tests/test_target_fixtures.py -q</check>
       <check>bash infra/scripts/target-reset-smoke.sh</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>

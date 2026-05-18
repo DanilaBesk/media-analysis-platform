@@ -10,11 +10,36 @@ This document is the target rebuild coverage map. It is not a final readiness cl
 
 | Requirement | Evidence now | Remaining gate |
 | --- | --- | --- |
-| Coverage matrix maps each source-plan requirement to implementation proof, test proof, and QA proof. | This file maps data reset, tables, API operations, user flows, failure modes, compatibility rules, non-goals, and app boundaries. | `media-7f3.10.2`, `media-7f3.10.3`, `media-7f3.10.4`, `media-7f3.11.*` must turn open rows into runnable proof. |
-| Deterministic DB reset can drop/recreate target schema. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`; `infra/scripts/target-reset-smoke.sh` applies it twice to fresh Postgres and validates target/legacy table state. | `media-7f3.10.2` must extend this into committed storage/API coverage for constraints and repository behavior. |
-| Deterministic seed/channel fixtures exist. | `apps/api/internal/storage/target/fixtures.go`; `infra/fixtures/target/manifest.json`; `packages/contracts/tests/test_target_fixtures.py`. | `media-7f3.10.2` and `media-7f3.10.3` should use these identifiers in storage/API/E2E tests instead of ad hoc ids. |
+| Coverage matrix maps each source-plan requirement to implementation proof, test proof, and QA proof. | This file maps data reset, tables, API operations, user flows, failure modes, compatibility rules, non-goals, and app boundaries. `media-7f3.10.2` added storage/API proof. | `media-7f3.10.3`, `media-7f3.10.4`, `media-7f3.11.*` must turn the remaining runtime/no-legacy/QA rows into runnable proof. |
+| Deterministic DB reset can drop/recreate target schema. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`; `infra/scripts/target-reset-smoke.sh`; `TestTargetStorePostgresContracts` applies it twice to fresh Postgres and validates target/legacy table state. | Runtime compose reset remains in `media-7f3.10.3`. |
+| Deterministic seed/channel fixtures exist. | `apps/api/internal/storage/target/fixtures.go`; `infra/fixtures/target/manifest.json`; `packages/contracts/tests/test_target_fixtures.py`; `TestTargetStorePostgresContracts` consumes the deterministic local channel/inbox seed. | `media-7f3.10.3` should use these identifiers in adapter/worker/runtime E2E tests instead of ad hoc ids. |
 | Object-store fixture bytes are known. | `infra/fixtures/target/object-store/media-inputs/document-note.txt` and `infra/fixtures/target/object-store/artifacts/run-summary/report.md` with size and SHA-256 in the manifest. | Runtime artifact/download tests in `media-7f3.10.3`. |
 | Blockers are recorded honestly. | Open rows below are explicitly assigned to future Beads instead of hidden behind percentage coverage. | QA must challenge these assignments in `media-7f3.11.1`. |
+
+## 10.2 Storage And API Coverage Evidence
+
+`media-7f3.10.2` turns the storage/API rows below into runnable proof. The new evidence is intentionally split between live Postgres storage constraints and API/service edge behavior:
+
+| Requirement | Evidence |
+| --- | --- |
+| Clean schema reset/recreate and disposable local rows. | `TestTargetStorePostgresContracts` applies `0001_final_inbox_analysis_run_schema.sql` twice to disposable `postgres:16-alpine`, verifies all 18 target tables, forbidden legacy tables, and immutable snapshot triggers. |
+| Deterministic seed fixtures are consumed by storage tests. | `TestTargetStorePostgresContracts` inserts `target.DeterministicSeedFixtures()` and uses stable channel/inbox ids as the local channel fixture. |
+| Success, validation failure, conflict, empty array, and pagination API behavior. | `TestTargetApiCanonicalRoutesUseTargetVocabulary` and `TestTargetApiEdgeCoverageForValidationConflictAndPagination` cover target route success, invalid JSON/form errors, empty arrays, page-size clamping, and collection conflict mapping. |
+| Operation idempotency replay. | `target.Store.RecordOperationRequest` now preserves the first operation target on replay; `TestTargetRuntimeServiceReplaysMediaAssetIdempotencyKey` proves duplicate media_asset create requests return the original target and do not create a second inbox item. |
+| Channel-account isolation. | `TestTargetStorePostgresContracts` proves cross-channel `media_asset` and `artifact` access returns no rows before exposing data. |
+| Collection lifecycle and optimistic conflicts. | `TestTargetStorePostgresContracts` proves collection version increments, stale version rejection, and duplicate active collection positions are rejected by target constraints. |
+| Immutable selection snapshots and copied item facts. | `TestTargetStorePostgresContracts` proves update triggers reject snapshot mutation and later `media_assets` edits do not change `selection_snapshot_items`. |
+| analysis_run, step, input, events, cancellation, artifacts, diagnostics, and retention. | `TestTargetStorePostgresContracts` creates run graph, claims declared inputs, records progress/cancel/finalize events, forces late finalize to canceled, records artifacts plus `artifact_subjects`, records diagnostics, and verifies stored object `retention_state`. |
+| channel_surface uniqueness, subject rebinding, version conflict, supersede, and events. | `TestTargetStorePostgresContracts` proves active key uniqueness, one primary subject, display-state expected-version conflicts, supersede removal from active recovery, and append-only surface events. |
+
+Validation commands:
+
+```bash
+(cd apps/api && go test ./internal/storage/target -run TestTargetStorePostgresContracts -count=1 -v)
+(cd apps/api && go test ./internal/api -count=1)
+(cd apps/api && go test ./internal/storage/target -count=1)
+(cd apps/api && go test ./internal/storage -count=1)
+```
 
 ## Deterministic Fixture Catalog
 
@@ -44,9 +69,9 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 
 | Source-plan rule | Implementation proof | Test or fixture proof | Remaining proof owner |
 | --- | --- | --- | --- |
-| Current local database rows are disposable. | Migration begins with target and legacy `DROP TABLE IF EXISTS` statements. | `target-reset-smoke.sh` applies the migration twice against a fresh Postgres instance. | `media-7f3.10.2` for repository constraints after reset. |
-| Clean schema initializes from empty database. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`. | `apps/api/internal/storage/target_schema_test.go`; `target-reset-smoke.sh`. | `media-7f3.10.2`. |
-| Deterministic seed data exists. | `apps/api/internal/storage/target/fixtures.go`. | `TestDeterministicSeedFixturesAreStable`; manifest validator. | `media-7f3.10.2` and `media-7f3.10.3` must consume it. |
+| Current local database rows are disposable. | Migration begins with target and legacy `DROP TABLE IF EXISTS` statements. | `target-reset-smoke.sh` and `TestTargetStorePostgresContracts` apply the migration twice against fresh Postgres instances. | Runtime compose reset in `media-7f3.10.3`. |
+| Clean schema initializes from empty database. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`. | `apps/api/internal/storage/target_schema_test.go`; `target-reset-smoke.sh`; `TestTargetStorePostgresContracts`. | Runtime compose reset in `media-7f3.10.3`. |
+| Deterministic seed data exists. | `apps/api/internal/storage/target/fixtures.go`. | `TestDeterministicSeedFixturesAreStable`; manifest validator; `TestTargetStorePostgresContracts` seed insertion. | Adapter/runtime E2E in `media-7f3.10.3` must consume it. |
 | Object-store fixtures are deterministic. | Manifest declares bucket, object key, content type, size, and SHA-256. | `test_target_fixture_manifest_has_stable_channel_accounts_and_media_bytes`. | `media-7f3.10.3` artifact/download runtime tests. |
 | Channel identities are stable across adapters. | Manifest declares `local`, `telegram`, `web`, and `mcp` channel accounts. | Manifest validator enforces ids and refs. | Adapter/E2E tests in `media-7f3.10.3`. |
 
@@ -54,36 +79,36 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 
 | Table | Required invariant | Implementation proof | Current automated proof | Remaining proof |
 | --- | --- | --- | --- | --- |
-| `channel_accounts` | Unique channel identity, active/disabled lifecycle, no product ownership. | migration, target store, channel account API. | schema fragments, target store SQL recording, deterministic seed smoke. | Cross-channel access matrix in `media-7f3.10.2`. |
-| `operation_requests` | Idempotent mutation record scoped by channel account, operation type, key. | migration unique index; target store `RecordOperationRequest`. | target store SQL recording. | Replay/conflict tests in `media-7f3.10.2`. |
-| `stored_objects` | Bucket/key uniqueness, checksum/size/content metadata, retention state. | migration; artifact/media store methods. | schema fragments, target store SQL recording, fixture manifest hashes. | Stored object lifecycle tests in `media-7f3.10.2` and runtime download in `media-7f3.10.3`. |
-| `media_assets` | Channel-account-scoped material, accepted/quarantined/deleted lifecycle, inbox insertion. | target store and API media asset handlers. | target API tests, Web/MCP client tests, Telegram adapter tests from implementation slices. | Exhaustive validation and channel isolation in `media-7f3.10.2`. |
-| `collections` | One active inbox per channel, versioned user collections. | migration unique index; target collection routes. | schema fragments, route tests, target store SQL recording. | Archive/restore/delete and conflict table in `media-7f3.10.2`. |
-| `collection_items` | Ordered active membership, no duplicate active media asset per collection. | migration indexes; collection item handlers. | schema fragments, Web route and API tests. | Reorder/remove/pagination cases in `media-7f3.10.2`. |
-| `selection_snapshots` | Immutable sealed execution input, copied options and access scope. | migration triggers; target selection service. | schema fragments, target store SQL recording, route tests. | Live trigger mutation proof and invalidation cases in `media-7f3.10.2`. |
-| `selection_snapshot_items` | Ordered copied media facts, stable after collection/media edits. | migration; target store `CreateSelectionSnapshot`. | schema fragments, implementation tests. | Later collection mutation regression in `media-7f3.10.2`. |
-| `analysis_runs` | Public run lifecycle from one sealed snapshot. | target runtime service and analysis run routes. | target API/Web/MCP/Telegram tests from implementation slices. | Success/error/idempotency/cancel matrix in `media-7f3.10.2`. |
-| `analysis_run_steps` | Internal worker-claimable execution state behind analysis_run. | target runtime service, queue/claim/finalize handlers. | worker-common/transcription/agent-runner tests. | API lifecycle/cancel races in `media-7f3.10.2` and E2E in `media-7f3.10.3`. |
-| `analysis_run_step_inputs` | Declared selection item or artifact inputs; no mutable collection reads. | target runtime planning and worker claim contracts. | worker tests for declared inputs and artifact input materialization. | Prerequisite planning proof in `media-7f3.10.2` and `media-7f3.10.3`. |
-| `analysis_run_events` | Append-only status/progress/user-visible event stream. | target runtime event records and `/events` route. | route tests and worker progress tests. | Pagination/reconciliation/runtime event proof in `media-7f3.10.2`/`10.3`. |
-| `artifacts` | Channel-scoped output metadata, preview/download, retention state. | target artifact service and worker artifact registration. | worker/common artifact tests, Web artifact tests, API target tests. | Real download/access path in `media-7f3.10.3`. |
-| `artifact_subjects` | Lineage from artifact to run/step/snapshot/item/media/diagnostic. | target worker artifact registration. | target store SQL recording and worker tests. | End-to-end lineage assertion in `media-7f3.10.3`. |
-| `diagnostics` | Stable code/message/context/remediation without secret leakage. | target diagnostic service and worker/adapter diagnostics. | contract failure taxonomy, worker tests, Web diagnostics tests. | Subject/severity/correlation matrix in `media-7f3.10.2`. |
-| `channel_surfaces` | Restart-safe external presentation mapping, active uniqueness and supersede. | migration indexes; Telegram surface recovery; internal routes. | channel surface tests from implementation slices. | Runtime restart proof in `media-7f3.10.3`. |
-| `channel_surface_subjects` | Surface-to-domain subject links, one primary subject per surface. | target store upsert and subject rebinding. | target store SQL recording, Telegram tests. | Duplicate/rebind matrix in `media-7f3.10.2`. |
-| `channel_surface_events` | Append-only surface lifecycle and recovery history. | target store supersede/event APIs. | target store SQL recording, Telegram tests. | Event history runtime proof in `media-7f3.10.3`. |
+| `channel_accounts` | Unique channel identity, active/disabled lifecycle, no product ownership. | migration, target store, channel account API. | schema fragments, target store SQL recording, deterministic seed smoke, `TestTargetStorePostgresContracts`. | Runtime adapter identity proof in `media-7f3.10.3`. |
+| `operation_requests` | Idempotent mutation record scoped by channel account, operation type, key. | migration unique index; target store `RecordOperationRequest`. | target store SQL recording, `TestTargetStorePostgresContracts`, `TestTargetRuntimeServiceReplaysMediaAssetIdempotencyKey`. | Runtime duplicate-delivery proof in `media-7f3.10.3`. |
+| `stored_objects` | Bucket/key uniqueness, checksum/size/content metadata, retention state. | migration; artifact/media store methods. | schema fragments, target store SQL recording, fixture manifest hashes, live retention-state storage proof. | Runtime download in `media-7f3.10.3`. |
+| `media_assets` | Channel-account-scoped material, accepted/quarantined/deleted lifecycle, inbox insertion. | target store and API media asset handlers. | target API tests, Web/MCP/Telegram client tests, Telegram adapter tests, live channel isolation and delete lifecycle proof. | Runtime ingestion proof in `media-7f3.10.3`. |
+| `collections` | One active inbox per channel, versioned user collections. | migration unique index; target collection routes. | schema fragments, route tests, target store SQL recording, live version conflict proof. | Runtime collection mutation proof in `media-7f3.10.3`. |
+| `collection_items` | Ordered active membership, no duplicate active media asset per collection. | migration indexes; collection item handlers. | schema fragments, Web route and API tests, live duplicate active position rejection. | Runtime reorder/remove proof in `media-7f3.10.3`. |
+| `selection_snapshots` | Immutable sealed execution input, copied options and access scope. | migration triggers; target selection service. | schema fragments, target store SQL recording, route tests, live trigger mutation proof. | Runtime snapshot creation proof in `media-7f3.10.3`. |
+| `selection_snapshot_items` | Ordered copied media facts, stable after collection/media edits. | migration; target store `CreateSelectionSnapshot`. | schema fragments, implementation tests, live later media edit regression. | Runtime worker input proof in `media-7f3.10.3`. |
+| `analysis_runs` | Public run lifecycle from one sealed snapshot. | target runtime service and analysis run routes. | target API/Web/MCP/Telegram tests, live run graph/cancel/finalize event proof. | Runtime active-run proof in `media-7f3.10.3`. |
+| `analysis_run_steps` | Internal worker-claimable execution state behind analysis_run. | target runtime service, queue/claim/finalize handlers. | worker-common/transcription/agent-runner tests, live queue/claim/cancel/finalize proof. | Worker runtime E2E in `media-7f3.10.3`. |
+| `analysis_run_step_inputs` | Declared selection item or artifact inputs; no mutable collection reads. | target runtime planning and worker claim contracts. | worker tests for declared inputs and artifact input materialization, live declared selection item claim proof. | Worker runtime E2E in `media-7f3.10.3`. |
+| `analysis_run_events` | Append-only status/progress/user-visible event stream. | target runtime event records and `/events` route. | route tests, worker progress tests, live ordered created/progress/cancel/finalize event proof. | Reconciliation/runtime event proof in `media-7f3.10.3`. |
+| `artifacts` | Channel-scoped output metadata, preview/download, retention state. | target artifact service and worker artifact registration. | worker/common artifact tests, Web artifact tests, API target tests, live channel-scoped artifact access and retained stored_object proof. | Real download/access path in `media-7f3.10.3`. |
+| `artifact_subjects` | Lineage from artifact to run/step/snapshot/item/media/diagnostic. | target worker artifact registration. | target store SQL recording, worker tests, live artifact_subject insert proof. | End-to-end lineage assertion in `media-7f3.10.3`. |
+| `diagnostics` | Stable code/message/context/remediation without secret leakage. | target diagnostic service and worker/adapter diagnostics. | contract failure taxonomy, worker tests, Web diagnostics tests, live subject/severity/code/correlation query proof. | Runtime diagnostic proof in `media-7f3.10.3`. |
+| `channel_surfaces` | Restart-safe external presentation mapping, active uniqueness and supersede. | migration indexes; Telegram surface recovery; internal routes. | channel surface tests from implementation slices, live active uniqueness/version/supersede proof. | Runtime restart proof in `media-7f3.10.3`. |
+| `channel_surface_subjects` | Surface-to-domain subject links, one primary subject per surface. | target store upsert and subject rebinding. | target store SQL recording, Telegram tests, live primary uniqueness and rebind proof. | Runtime restart proof in `media-7f3.10.3`. |
+| `channel_surface_events` | Append-only surface lifecycle and recovery history. | target store supersede/event APIs. | target store SQL recording, Telegram tests, live display-state and supersede event history proof. | Event history runtime proof in `media-7f3.10.3`. |
 
 ## API Operation Matrix
 
 | Operation group | Paths | Required proof | Current proof | Remaining proof |
 | --- | --- | --- | --- | --- |
-| Media assets | `POST /v1/media-assets`, `POST /v1/media-assets/upload`, `GET /v1/media-assets`, `GET/DELETE /v1/media-assets/{media_asset_id}` | Success, validation failure, empty/paginated list, delete lifecycle, channel-account mismatch. | OpenAPI contract tests, Web/MCP/Telegram client tests, target API tests. | Full handler/service matrix in `media-7f3.10.2`. |
-| Collections | `GET /v1/collections/inbox`, `POST/GET /v1/collections`, `GET/PATCH /v1/collections/{collection_id}`, `PUT /items`, `DELETE /items/{media_asset_id}` | Inbox creation, list empty arrays, add/remove/reorder/archive/delete, version conflict. | Web route tests, OpenAPI route checks. | Complete mutation/conflict coverage in `media-7f3.10.2`. |
-| Selection snapshots | `POST /v1/selection-snapshots`, `GET /v1/selection-snapshots/{selection_snapshot_id}` | Ordered item validation, sealed immutability, option snapshot, invalid media diagnostics. | Web/MCP/Telegram tests, schema checks. | Invalid/cross-channel cases in `media-7f3.10.2`. |
-| Analysis runs | `POST/GET /v1/analysis-runs`, `GET /v1/analysis-runs/{analysis_run_id}`, `POST /cancel`, `POST /retry`, `GET /events` | Idempotency, run planning, prerequisite diagnostics, cancellation lifecycle, pagination/events. | target runtime tests, Web route tests, worker tests. | Full lifecycle and prerequisite matrix in `media-7f3.10.2`. |
+| Media assets | `POST /v1/media-assets`, `POST /v1/media-assets/upload`, `GET /v1/media-assets`, `GET/DELETE /v1/media-assets/{media_asset_id}` | Success, validation failure, empty/paginated list, delete lifecycle, channel-account mismatch. | OpenAPI contract tests, Web/MCP/Telegram client tests, target API tests, live channel isolation/delete/idempotency proof. | Runtime ingestion proof in `media-7f3.10.3`. |
+| Collections | `GET /v1/collections/inbox`, `POST/GET /v1/collections`, `GET/PATCH /v1/collections/{collection_id}`, `PUT /items`, `DELETE /items/{media_asset_id}` | Inbox creation, list empty arrays, add/remove/reorder/archive/delete, version conflict. | Web route tests, OpenAPI route checks, live optimistic version and active-position conflict proof. | Runtime mutation proof in `media-7f3.10.3`. |
+| Selection snapshots | `POST /v1/selection-snapshots`, `GET /v1/selection-snapshots/{selection_snapshot_id}` | Ordered item validation, sealed immutability, option snapshot, invalid media diagnostics. | Web/MCP/Telegram tests, schema checks, live immutability and copied item fact proof. | Runtime creation proof in `media-7f3.10.3`. |
+| Analysis runs | `POST/GET /v1/analysis-runs`, `GET /v1/analysis-runs/{analysis_run_id}`, `POST /cancel`, `POST /retry`, `GET /events` | Idempotency, run planning, prerequisite diagnostics, cancellation lifecycle, pagination/events. | target runtime tests, Web route tests, worker tests, live graph/queue/claim/progress/cancel/finalize/event proof. | Runtime active-run proof in `media-7f3.10.3`. |
 | Artifacts | `GET /v1/artifacts`, `GET /v1/artifacts/{artifact_id}`, `POST /refresh`, `GET /analysis-runs/{id}/artifacts`, internal download access | Preview/download metadata, unavailable states, retention and channel access. | Web artifact tests, worker artifact tests, OpenAPI tests. | Real object access in `media-7f3.10.3`. |
-| Diagnostics | `GET /v1/diagnostics`, internal run diagnostics | Subject filters, severity/code/correlation, safe context, stable failure taxonomy. | contract tests and UI diagnostics tests. | Exhaustive query matrix in `media-7f3.10.2`. |
-| Worker control plane | `/internal/v1/analysis-runs/queue`, `/steps/claim`, `/steps/progress`, `/steps/finalize`, `/steps/cancel-check`, artifact/diagnostic registration | Step-kind polling, claim leases, declared inputs, progress, cancellation, artifact_subject lineage. | worker-common/transcription/agent-runner tests. | API service edge cases in `media-7f3.10.2`; E2E in `media-7f3.10.3`. |
+| Diagnostics | `GET /v1/diagnostics`, internal run diagnostics | Subject filters, severity/code/correlation, safe context, stable failure taxonomy. | contract tests, UI diagnostics tests, live diagnostic query matrix. | Runtime diagnostic proof in `media-7f3.10.3`. |
+| Worker control plane | `/internal/v1/analysis-runs/queue`, `/steps/claim`, `/steps/progress`, `/steps/finalize`, `/steps/cancel-check`, artifact/diagnostic registration | Step-kind polling, claim leases, declared inputs, progress, cancellation, artifact_subject lineage. | worker-common/transcription/agent-runner tests, live API storage edge proof. | E2E in `media-7f3.10.3`. |
 | Channel account and surfaces | `/internal/v1/channel-accounts`, `/internal/v1/channel-surfaces`, `/active`, `/display-state`, `/events`, `/supersede` | Deterministic identity, active recovery, display-state replacement, supersede, event history. | Telegram/channel surface implementation tests. | Restart and duplicate-delivery E2E in `media-7f3.10.3`. |
 | Admin/runtime | `/v1/admin/observability`, `/v1/admin/reconcile-queue`, `/v1/ws` | Observability semantics, queue recovery, websocket/event stream sanity. | Existing tests and docs. | Coverage inventory/no-legacy gate in `media-7f3.10.4`; QA runtime audit. |
 | Deprecated compatibility | `/v1/media-items`, `/v1/selections`, legacy internal execution routes | Explicit deprecation, one-to-one mapping, excluded from target clients and normal UI. | contract staleness tests and implementation stale scans. | No-legacy regression gate in `media-7f3.10.4` and QA traceability. |
@@ -102,15 +127,15 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 
 | Failure code or class | Required target behavior | Current proof | Remaining proof |
 | --- | --- | --- | --- |
-| `media_asset_invalid` | Rejected input remains visible via diagnostic or error envelope. | contract taxonomy and adapter tests. | API/storage invalid-input matrix in `media-7f3.10.2`. |
-| `channel_account_mismatch` | Cross-channel read/mutation fails before storage mutation. | target route tests and contract docs. | Exhaustive entity matrix in `media-7f3.10.2`; runtime denial in `media-7f3.10.3`. |
-| `collection_version_conflict` | Stale collection mutation returns conflict and preserves state. | storage/API tests. | All collection mutations in `media-7f3.10.2`. |
-| `selection_snapshot_invalid` and `selection_snapshot_not_sealed` | Run creation rejects invalid or unsealed snapshots with diagnostics. | target API tests. | Full validation matrix in `media-7f3.10.2`. |
+| `media_asset_invalid` | Rejected input remains visible via diagnostic or error envelope. | contract taxonomy, adapter tests, API invalid JSON/form error tests, storage constraint failures. | Runtime invalid-input proof in `media-7f3.10.3`. |
+| `channel_account_mismatch` | Cross-channel read/mutation fails before storage mutation. | target route tests, contract docs, live media_asset/artifact channel isolation proof. | Runtime denial in `media-7f3.10.3`. |
+| `collection_version_conflict` | Stale collection mutation returns conflict and preserves state. | storage/API tests, live stale version rejection, API 409 mapping. | Runtime conflict proof in `media-7f3.10.3`. |
+| `selection_snapshot_invalid` and `selection_snapshot_not_sealed` | Run creation rejects invalid or unsealed snapshots with diagnostics. | target API tests, live immutable trigger and copied fact proof. | Runtime invalid snapshot proof in `media-7f3.10.3`. |
 | `stored_object_unavailable` | Run/artifact access records unavailable state, not silent disappearance. | worker/materialization tests. | Runtime artifact proof in `media-7f3.10.3`. |
 | `analysis_prerequisite_missing`, `analysis_prerequisite_failed`, `analysis_prerequisite_unavailable` | Prerequisite gaps surface in run diagnostics and block unsafe agent-runner raw speech processing. | worker/API planning tests. | E2E prerequisite matrix in `media-7f3.10.3`. |
 | `worker_failed` | Worker failure creates diagnostic and preserves partial evidence. | worker tests. | Cross-worker E2E in `media-7f3.10.3`. |
 | `artifact_unavailable` | Artifact preview/download reflects failed/expired/deleted state. | Web and contract tests. | Real object-store path in `media-7f3.10.3`. |
-| `retention_denied` | Retention refuses unsafe deletion and preserves run lineage. | existing retention tests. | Target storage/API retention matrix in `media-7f3.10.2`; runtime in `10.3`. |
+| `retention_denied` | Retention refuses unsafe deletion and preserves run lineage. | existing retention tests, live target stored_object retention-state proof. | Runtime retention proof in `media-7f3.10.3`. |
 | Adapter conflict/restart errors | Channel surfaces supersede or recover without domain corruption. | Telegram surface tests. | Restart runtime proof in `media-7f3.10.3`. |
 
 ## Boundary, Compatibility, And Non-Goal Matrix
@@ -129,7 +154,7 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 
 ## Bead Handoff
 
-`media-7f3.10.2` must convert this matrix into storage/API tests for clean reset, constraints, idempotency, pagination, channel isolation, lifecycle, diagnostics, and retention.
+`media-7f3.10.2` has converted this matrix into storage/API tests for clean reset, constraints, idempotency, pagination, channel isolation, lifecycle, diagnostics, and retention.
 
 `media-7f3.10.3` must convert this matrix into adapter/worker/runtime E2E tests using the deterministic channel and object-store fixture catalog.
 
