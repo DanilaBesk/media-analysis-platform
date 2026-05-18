@@ -184,6 +184,7 @@ def runTranscription(
             artifact_store,
             diagnostics=diagnostics,
             item_outcomes=item_outcomes,
+            transcript_result=transcript_result,
         )
         _assert_required_artifacts_exist(artifacts)
         api_client.register_artifacts(
@@ -656,9 +657,10 @@ def _persist_run_policy_artifacts(
     *,
     diagnostics: tuple[Mapping[str, object], ...],
     item_outcomes: tuple[Mapping[str, object], ...],
+    transcript_result: TranscriptResult | None = None,
 ) -> tuple[ArtifactDescriptor, ...]:
     writer = ArtifactWriter(analysis_run_id=execution.analysis_run_id, object_store=artifact_store)
-    manifest = _run_manifest_payload(execution, item_outcomes)
+    manifest = _run_manifest_payload(execution, item_outcomes, transcript_result=transcript_result)
     diagnostics_payload = {
         "schema_version": "analysis_run_diagnostics/v2",
         "analysis_run_id": execution.analysis_run_id,
@@ -687,13 +689,15 @@ def _persist_run_policy_artifacts(
 def _run_manifest_payload(
     execution: ClaimedAnalysisRunStep,
     item_outcomes: tuple[Mapping[str, object], ...],
+    *,
+    transcript_result: TranscriptResult | None = None,
 ) -> Mapping[str, object]:
     summary = {
         "included_count": sum(1 for item in item_outcomes if item.get("outcome") == "succeeded"),
         "skipped_count": sum(1 for item in item_outcomes if item.get("outcome") == "skipped"),
         "failed_count": sum(1 for item in item_outcomes if item.get("outcome") == "failed"),
     }
-    return {
+    manifest: dict[str, object] = {
         "schema_version": "analysis_run_manifest/v2",
         "analysis_run_id": execution.analysis_run_id,
         "analysis_run_step_id": execution.analysis_run_step_id,
@@ -706,6 +710,9 @@ def _run_manifest_payload(
         "summary": summary,
         "items": [dict(item) for item in sorted(item_outcomes, key=lambda item: int(item.get("position", 0)))],
     }
+    if transcript_result is not None and transcript_result.provider_metadata:
+        manifest["transcription_backend"] = dict(transcript_result.provider_metadata)
+    return manifest
 
 
 def _item_outcome(

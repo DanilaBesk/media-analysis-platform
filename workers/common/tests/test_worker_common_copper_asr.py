@@ -92,7 +92,8 @@ def test_transcriber_maps_copper_asr_segments(tmp_path: Path) -> None:
                 {"timestamp": [1.2, 2.5], "text": "мир"},
             ],
             "words": [],
-            "metadata": {},
+            "duration": 2.5,
+            "metadata": {"ignored_params": ["beam_size"], "diarization": {"enabled": False}},
         }
     )
     transcriber = CopperAsrHttpTranscriber(
@@ -110,6 +111,13 @@ def test_transcriber_maps_copper_asr_segments(tmp_path: Path) -> None:
         (0.0, 1.2, "Привет", "S1"),
         (1.2, 2.5, "мир", None),
     ]
+    assert result.provider_metadata == {
+        "provider": "copperasr",
+        "model": "Copperside/CoppersideASR",
+        "revision": None,
+        "duration": 2.5,
+        "metadata": {"ignored_params": ["beam_size"], "diarization": {"enabled": False}},
+    }
     assert transport.calls == [
         {
             "audio_path": audio,

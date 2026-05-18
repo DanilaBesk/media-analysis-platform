@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Mapping
 
 SourceKind = Literal["youtube_url", "telegram_video", "telegram_audio"]
 MediaKind = Literal["telegram_video", "telegram_audio"]
@@ -79,6 +79,7 @@ class TranscriptResult:
     segments: list[TranscriptSegment]
     language: str
     raw_text: str
+    provider_metadata: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

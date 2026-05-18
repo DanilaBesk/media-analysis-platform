@@ -236,6 +236,7 @@ def _transcript_from_payload(
         segments=segments,
         language=str(payload.get("language") or "unknown"),
         raw_text=raw_text,
+        provider_metadata=_provider_metadata(payload),
     )
 
 
@@ -367,6 +368,17 @@ def _safe_response_json(response: httpx.Response) -> Mapping[str, object]:
     return payload if isinstance(payload, Mapping) else {}
 
 
+def _provider_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
+    metadata = payload.get("metadata")
+    return {
+        "provider": str(payload.get("provider") or "copperasr"),
+        "model": str(payload.get("model") or "unknown"),
+        "revision": _optional_str(payload.get("revision")),
+        "duration": _json_safe_value(payload.get("duration")),
+        "metadata": _json_safe_value(metadata if isinstance(metadata, Mapping) else {}),
+    }
+
+
 def _download_youtube_audio(url: str, workspace_dir: Path) -> Path:
     output_template = workspace_dir / "source.%(ext)s"
     command = [
@@ -440,3 +452,13 @@ def _optional_str(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _json_safe_value(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    return str(value)

@@ -151,6 +151,7 @@
         <export-publishArtifacts PURPOSE="Publish transcript artifacts and artifact_subject lineage through API-owned artifact contracts." />
         <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
         <export-copperAsrBoundary PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="Build and call the CopperASR HTTP runtime through COPPER_ASR_* env, normalize ASR responses into TranscriptResult, and propagate stable asr_* failure codes without Whisper fallback." />
+        <export-copperAsrManifestMetadata PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Persist sanitized CopperASR provider, model, duration, and metadata in run_manifest while preserving transcript_plain, transcript_segmented_markdown, and transcript_docx artifacts." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
 

@@ -209,6 +209,12 @@ class RecordingTranscriber:
             segments=[TranscriptSegment(start_seconds=0.0, end_seconds=1.5, text="Hello world", speaker="Speaker 1")],
             language="ru",
             raw_text="Hello world",
+            provider_metadata={
+                "provider": "copperasr",
+                "model": "Copperside/CoppersideASR",
+                "duration": 1.5,
+                "metadata": {"ignored_params": []},
+            },
         )
 
 
@@ -306,6 +312,9 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["analysis_run_id"] == execution.analysis_run_id
     assert manifest["summary"]["included_count"] == 1
+    assert manifest["transcription_backend"]["provider"] == "copperasr"
+    assert manifest["transcription_backend"]["model"] == "Copperside/CoppersideASR"
+    assert manifest["transcription_backend"]["metadata"] == {"ignored_params": []}
     assert manifest["items"][0]["lineage"]["media_asset_id"] == "media-source-1"
     assert manifest["items"][0]["outcome"] == "succeeded"
     diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
