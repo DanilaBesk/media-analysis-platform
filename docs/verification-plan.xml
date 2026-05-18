@@ -36,6 +36,7 @@
         <item>Artifact rows link to channel_account, stored_object, analysis_run, and artifact_subject lineage while enforcing retention status.</item>
         <item>Diagnostics are persisted for invalid media, invalid selection snapshot, worker error, artifact error, and retention action.</item>
         <item>Cross-channel-account reads and mutations fail for every table family.</item>
+        <item>Channel_surface upsert can hand off one active address from a current materials panel to an analysis task surface without violating active address uniqueness or leaving two active surfaces for the same address.</item>
       </required>
     </StorageTests>
 
@@ -181,6 +182,7 @@
     <bead id="media-7f3.11.3">Run Web, Telegram, MCP, API prerequisite planning, agent-runner step-input, runtime-final E2E, compose config, target reset, no-legacy target gate, GRACE XML, and git diff checks before starting final readiness packaging.</bead>
     <bead id="media-7f3.11.4">Run final coverage inventory, GRACE XML validation, git diff checks, Beads closure verification, Dolt local commit, and Git push before closing the QA epic.</bead>
     <bead id="media-b5z">Run API/storage regressions proving repeated channel_account resolution returns the persisted conflict id, and Telegram adapter regressions proving generic backend-unavailable copy does not claim saved inbox content while post-ingest presentation failures still confirm accepted mutations.</bead>
+    <bead id="media-cjb">Run target storage regressions proving channel_surface active address handoff supersedes the previous address owner and prevents channel_surfaces_active_address_idx from surfacing as a Telegram callback backend-unavailable error.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

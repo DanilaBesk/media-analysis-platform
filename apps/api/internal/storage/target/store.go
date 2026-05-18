@@ -1480,6 +1480,24 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 
 func (s *Store) UpsertChannelSurface(ctx context.Context, surface ChannelSurfaceRecord, subjects []ChannelSurfaceSubjectRecord) (ChannelSurfaceRecord, error) {
 	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if surface.AddressFingerprint != "" {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE channel_surfaces
+SET lifecycle_status='superseded',
+    superseded_at=$6,
+    updated_at=$6,
+    version=version+1
+WHERE channel_account_id=$1
+  AND channel=$2
+  AND address_fingerprint=$3
+  AND lifecycle_status='active'
+  AND deleted_at IS NULL
+  AND NOT (surface_type=$4 AND surface_key=$5)`,
+				surface.ChannelAccountID, surface.Channel, surface.AddressFingerprint,
+				surface.SurfaceType, surface.SurfaceKey, surface.UpdatedAt); err != nil {
+				return err
+			}
+		}
 		if err := tx.QueryRowContext(ctx, `
 	INSERT INTO channel_surfaces (
 	    id, channel_account_id, channel, surface_type, surface_key, address,

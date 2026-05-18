@@ -138,6 +138,7 @@
     <Requirement id="REQ-INTERACTION-SURFACE-001">
       <Action>Persist external interaction surfaces without coupling domain entities to consumer-specific UI.</Action>
       <AcceptanceCriteria>Channel surfaces store channel_account-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. Subject links are stored separately with subject type, subject id, and subject role; event history is append-only. Domain tables must not gain Telegram-specific or consumer-specific message fields, and channel surface display state must not alter media_asset, collection, selection_snapshot, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
+      <AcceptanceCriteria>When a channel reuses one active address for a different surface key, the internal channel_surface upsert must supersede the previous active address owner before creating or updating the new active surface, so presentation rebinding cannot leak a database uniqueness failure to users.</AcceptanceCriteria>
     </Requirement>
   </FunctionalRequirements>
 
@@ -221,6 +222,7 @@
     <bead id="media-7f3.11.3" status="completed">Channel UX, Web, MCP, Telegram, report/research prerequisite, and runtime review fixed Web runtime endpoint leaks, raw JSON launch parameters, and service artifact exposure in normal result views.</bead>
     <bead id="media-7f3.11.4" status="completed">Final readiness packet records source plan, implemented scope, branch and commit state, verification commands, coverage inventory, runtime evidence, GRACE docs, Beads closure state, no-regression proof, and accepted risks.</bead>
     <bead id="media-b5z" status="completed">Telegram post-ingest refresh recovery now confirms saved inbox content only after accepted mutations, channel_surface persistence is best-effort for visible replies, generic backend errors no longer claim saved inbox content, and repeated channel_account resolution returns the persisted row id for later media uploads.</bead>
+    <bead id="media-cjb" status="completed">Channel surface upsert now hands off a reused active Telegram message address to the new logical surface instead of returning channel_surfaces_active_address_idx conflicts to callback users.</bead>
   </BeadsTrace>
 
   <NonGoals>

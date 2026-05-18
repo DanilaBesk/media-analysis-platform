@@ -451,6 +451,65 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 		}
 	})
 
+	t.Run("channel surface upsert hands off an active address to a new surface key", func(t *testing.T) {
+		_, err := store.UpsertChannelSurface(ctx, ChannelSurfaceRecord{
+			ID:                 targetTestSurfaceAddressOwnerID,
+			ChannelAccountID:   seed.ChannelAccount.ID,
+			Channel:            "telegram",
+			SurfaceType:        "current_materials_panel",
+			SurfaceKey:         "current:chat-1:user-1",
+			AddressJSON:        []byte(`{"chat_id":"chat-1","message_id":404}`),
+			AddressFingerprint: "telegram:chat-1:404",
+			DisplayStateJSON:   []byte(`{"screen":"main"}`),
+			LifecycleStatus:    "active",
+			Version:            1,
+			IdempotencyKey:     "surface:address-owner",
+			CreatedAt:          now,
+			UpdatedAt:          now,
+			LastRenderedAt:     &now,
+		}, []ChannelSurfaceSubjectRecord{{
+			SurfaceID:   targetTestSurfaceAddressOwnerID,
+			SubjectType: "collection",
+			SubjectID:   targetTestTelegramInboxID,
+			SubjectRole: "primary",
+			CreatedAt:   now,
+		}})
+		if err != nil {
+			t.Fatalf("UpsertChannelSurface(address owner) error = %v", err)
+		}
+
+		handoff, err := store.UpsertChannelSurface(ctx, ChannelSurfaceRecord{
+			ID:                 targetTestSurfaceAddressHandoffID,
+			ChannelAccountID:   seed.ChannelAccount.ID,
+			Channel:            "telegram",
+			SurfaceType:        "analysis_task_surface",
+			SurfaceKey:         "run:" + targetTestRunID + ":handoff",
+			AddressJSON:        []byte(`{"chat_id":"chat-1","message_id":404}`),
+			AddressFingerprint: "telegram:chat-1:404",
+			DisplayStateJSON:   []byte(`{"screen":"main","focused_run_id":"handoff"}`),
+			LifecycleStatus:    "active",
+			Version:            1,
+			IdempotencyKey:     "surface:address-handoff",
+			CreatedAt:          now.Add(time.Second),
+			UpdatedAt:          now.Add(time.Second),
+			LastRenderedAt:     &now,
+		}, []ChannelSurfaceSubjectRecord{{
+			SurfaceID:   targetTestSurfaceAddressHandoffID,
+			SubjectType: "analysis_run",
+			SubjectID:   targetTestRunID,
+			SubjectRole: "primary",
+			CreatedAt:   now.Add(time.Second),
+		}})
+		if err != nil {
+			t.Fatalf("UpsertChannelSurface(address handoff) error = %v", err)
+		}
+		if handoff.ID != targetTestSurfaceAddressHandoffID || handoff.SurfaceType != "analysis_task_surface" {
+			t.Fatalf("handoff surface = %#v", handoff)
+		}
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM channel_surfaces WHERE channel_account_id=$1 AND channel=$2 AND address_fingerprint=$3 AND lifecycle_status='active'`, 1, seed.ChannelAccount.ID, "telegram", "telegram:chat-1:404")
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM channel_surfaces WHERE id=$1 AND lifecycle_status='superseded'`, 1, targetTestSurfaceAddressOwnerID)
+	})
+
 	t.Run("channel surfaces enforce active uniqueness, primary subject uniqueness, version conflicts, and event history", func(t *testing.T) {
 		surface, err := store.UpsertChannelSurface(ctx, ChannelSurfaceRecord{
 			ID:                 targetTestSurfaceID,
@@ -809,4 +868,6 @@ const (
 	targetTestSurfaceDisplayEventID    = "00000000-0000-4000-8000-000000001003"
 	targetTestSurfaceStaleEventID      = "00000000-0000-4000-8000-000000001004"
 	targetTestSurfaceSupersedeEventID  = "00000000-0000-4000-8000-000000001005"
+	targetTestSurfaceAddressOwnerID    = "00000000-0000-4000-8000-000000001006"
+	targetTestSurfaceAddressHandoffID  = "00000000-0000-4000-8000-000000001007"
 )

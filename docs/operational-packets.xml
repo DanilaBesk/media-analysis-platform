@@ -35,6 +35,7 @@
     <completed-packet bead="media-7f3.11.4">final-mr-readiness-packet-target-rebuild</completed-packet>
     <completed-closure-gate bead="media-7f3.11">Pre-MR QA readiness is complete after traceability, backend/security/worker, channel/runtime, and final readiness packets.</completed-closure-gate>
     <completed-packet bead="media-b5z">telegram-post-ingest-refresh-recovery</completed-packet>
+    <completed-packet bead="media-cjb">channel-surface-active-address-handoff</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -888,6 +889,25 @@ Generic backend-unavailable Telegram copy must not claim inbox content has alrea
       <check>Focused runtime regression proves post-ingest restore_status failure sends a saved-inbox confirmation and does not include the old backend-unavailable text.</check>
       <check>Focused runtime regression proves channel_surface lookup failure does not block the inbound status reply.</check>
       <check>Full Telegram adapter tests pass.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-cjb-channel-surface-active-address-handoff" module="M-API-HTTP M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS">
+    <purpose>Prevent Telegram callback actions from surfacing backend-unavailable errors when a message changes from a current_materials_panel to an analysis_task_surface and reuses the same active channel_surface address.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/storage/target/store.go</file-1>
+      <file-2>apps/api/internal/storage/target/store_postgres_test.go</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Channel surfaces enforce a single active surface per channel_account/channel/address_fingerprint. When a channel reuses one rendered message address for a different logical surface key, storage must supersede the previous active address owner inside the same upsert transaction before inserting or updating the new active surface. The user-facing callback path must not receive a raw channel_surfaces_active_address_idx uniqueness failure for presentation rebinding.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused target Postgres regression proves active address handoff supersedes the old current_materials_panel row and leaves one active surface for the reused address.</check>
+      <check>Full target storage tests pass.</check>
+      <check>Live compose proof recreates API and shows repeated channel_surface upsert from current_materials_panel to analysis_task_surface on the same address returns HTTP 200 without channel_surfaces_active_address_idx log errors.</check>
     </verification>
   </HotfixPacket>
 
