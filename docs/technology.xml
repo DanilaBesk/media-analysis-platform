@@ -1,7 +1,7 @@
 <TechnologyStack VERSION="1.0.0">
   <Runtime>Docker Compose local deployment v2</Runtime>
   <Language>Go plus Python plus TypeScript</Language>
-  <Framework>Go HTTP API, PostgreSQL, MinIO, Redis/asynq, Python workers, React Web UI, Telegram adapter, MCP adapter</Framework>
+  <Framework>Go HTTP API, PostgreSQL, MinIO, Redis/asynq, Python workers, CopperASR runtime submodule, React Web UI, Telegram adapter, MCP adapter</Framework>
 
   <ArchitectureShape>
     <goal>Make the API the durable product authority for media accumulation, curation, execution, artifacts, diagnostics, channel recovery, idempotency, and retention.</goal>
@@ -16,6 +16,7 @@
   <TargetComponents>
     <component id="apps-api" path="apps/api" role="Go HTTP API, WebSocket server, storage orchestrator, and channel-account-scoped product authority" />
     <component id="workers-transcription" path="workers/transcription" role="Python transcription execution behind analysis_run_steps" />
+    <component id="vendor-copper-asr" path="vendor/copper-asr" role="Pinned CopperASR source submodule for the dedicated ASR runtime service" />
     <component id="workers-agent-runner" path="workers/agent-runner" role="Python report and research execution behind analysis_run_steps" />
     <component id="apps-web" path="apps/web" role="React management UI for inbox, collections, selections, runs, artifacts, and diagnostics" />
     <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Telegram capture, rendering, and recovery adapter over API-owned state" />
@@ -176,6 +177,14 @@
     <retention-rule>Artifacts can expire independently from run metadata; diagnostics explain unavailable artifacts.</retention-rule>
     <retention-rule>Deletion and export workflows must include media_asset, stored_object, collection, selection_snapshot, analysis_run, artifact, artifact_subject, diagnostic, and channel_surface records.</retention-rule>
   </LifecycleAndRetention>
+
+  <AsrRuntime>
+    <source-submodule path="vendor/copper-asr" remote="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" pinned-commit="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
+    <contract>media-analysis-platform owns queues, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, and channel surfaces. CopperASR owns ASR model lifecycle, inference, sanitized ASR errors, /health, and /transcribe.</contract>
+    <target-topology>Dedicated internal CopperASR HTTP runtime service consumed by workers/transcription through COPPER_ASR_BASE_URL.</target-topology>
+    <cleanup-policy>Whisper, faster-whisper, Podlodka, CTranslate2 conversion, WHISPER_* env, and whisper-model-cache are migration cleanup targets and must not remain active fallback behavior.</cleanup-policy>
+    <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.7, media-b8s.1.9, media-b8s.2.5, media-b8s.3.1</verification-ref>
+  </AsrRuntime>
 
   <AdapterContracts>
     <telegram>Telegram captures input, resolves channel_account scope, creates media_assets, shows inbox or collection state, creates selection_snapshots, starts analysis_run records, persists current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces, recovers active surfaces after restart, and sends artifact previews or downloads returned by the API.</telegram>

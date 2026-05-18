@@ -50,7 +50,7 @@ Initial source pin:
 - Source reviewed locally: `/Users/danila/Documents/CopperSide/copper-asr`
 - Reviewed branch: `feature/copper-asr-http-runtime`
 - Reviewed HEAD: `f2a8278fb236b2ba471083ca2debcc3e9052cd64`
-- Reviewed remote: `https://copperside.gitlab.yandexcloud.net/clara/copper-asr`
+- Reviewed remote: `https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git`
 
 Implementation rule:
 

@@ -143,7 +143,7 @@
     <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="WORKER" STATUS="implemented" OWNER="media-7f3.9.6">
       <purpose>Execute transcription steps from sealed selection material and publish artifacts through analysis_run.</purpose>
       <path>workers/transcription</path>
-      <depends>M-CONTRACTS, M-API-HTTP</depends>
+      <depends>M-CONTRACTS, M-API-HTTP, M-COPPER-ASR</depends>
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
         <export-claimRunStep PURPOSE="Claim analysis_run_steps by analysis_run_id." />
@@ -152,6 +152,19 @@
         <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
+
+    <M-COPPER-ASR NAME="CopperAsrRuntime" TYPE="SUBMODULE_RUNTIME" STATUS="pinned-source" OWNER="media-b8s.1.4">
+      <purpose>Provide the pinned CopperASR source used by the dedicated ASR runtime service for transcription steps.</purpose>
+      <path>vendor/copper-asr</path>
+      <depends>external-git-submodule</depends>
+      <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.7, media-b8s.1.9, media-b8s.2.5, media-b8s.3.1</verification-ref>
+      <annotations>
+        <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
+        <source-pin COMMIT="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
+        <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
+        <cleanup-policy PURPOSE="Whisper, faster-whisper, Podlodka, CTranslate2 conversion, WHISPER_* env, and whisper-model-cache must not remain active fallback behavior after migration." />
+      </annotations>
+    </M-COPPER-ASR>
 
     <M-WORKER-AGENT-RUNNER NAME="WorkerAgentRunner" TYPE="WORKER" STATUS="implemented" OWNER="media-7f3.9.6">
       <purpose>Execute report and research analysis from ready transcript or text-corpus artifacts and publish artifacts plus diagnostics through analysis_run.</purpose>
