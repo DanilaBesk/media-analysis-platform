@@ -184,6 +184,7 @@
     <worker-boundary path="workers/common/src/transcriber_workers_common/copper_asr.py" launcher="workers/transcription/src/transcriber_worker_transcription_main.py" env-prefix="COPPER_ASR_" />
     <artifact-contract>TranscriptResult carries provider_metadata so run_manifest can identify CopperASR provider, model, duration, and sanitized runtime metadata while visible transcript artifacts remain plain text, markdown, and DOCX.</artifact-contract>
     <target-topology>Dedicated internal CopperASR HTTP runtime service consumed by workers/transcription through COPPER_ASR_BASE_URL.</target-topology>
+    <compose-service name="copper-asr" dockerfile="infra/images/copper-asr/Dockerfile" env-file="infra/env/copper-asr.env.example" cache-volume="copper-asr-cache" tmp-volume="copper-asr-tmp" healthcheck="/health" />
     <cleanup-policy>Whisper, faster-whisper, Podlodka, CTranslate2 conversion, WHISPER_* env, and whisper-model-cache are migration cleanup targets and must not remain active fallback behavior.</cleanup-policy>
     <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.7, media-b8s.1.9, media-b8s.2.5, media-b8s.3.1</verification-ref>
   </AsrRuntime>

@@ -163,6 +163,7 @@
       <annotations>
         <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
         <source-pin COMMIT="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
+        <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" />
         <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
         <cleanup-policy PURPOSE="Whisper, faster-whisper, Podlodka, CTranslate2 conversion, WHISPER_* env, and whisper-model-cache must not remain active fallback behavior after migration." />
       </annotations>
