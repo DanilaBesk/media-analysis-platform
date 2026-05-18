@@ -710,6 +710,45 @@ async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message
 
 
 @pytest.mark.asyncio
+async def test_post_ingest_refresh_failure_confirms_saved_inbox_without_unavailable_error() -> None:
+    api, gateway, app = make_app()
+    message = FakeMessage(text="saved before refresh")
+
+    def fail_restore_status(**kwargs: Any) -> InboxStatus:
+        raise TelegramApiClientError("/v1/analysis-runs", 0, "Backend is unavailable", code="backend_unavailable")
+
+    gateway.restore_status = fail_restore_status  # type: ignore[method-assign]
+
+    await app._handle_any_message(message)
+
+    assert api.items[0]["display_name"] == "saved before refresh"
+    assert "Материал сохранён в inbox на сервере." in message.answers[-1]["text"]
+    assert "Сервис временно недоступен" not in message.answers[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_status_surface_failure_does_not_block_inbound_status_reply() -> None:
+    _, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="surface API is unavailable")
+    message = FakeMessage()
+
+    def fail_find_surface(**kwargs: Any) -> dict[str, Any] | None:
+        raise TelegramApiClientError(
+            "/internal/v1/channel-surfaces",
+            0,
+            "Backend is unavailable",
+            code="backend_unavailable",
+        )
+
+    gateway.find_current_materials_surface = fail_find_surface  # type: ignore[method-assign]
+
+    sent = await app._send_or_edit_status(message, prefer_edit=False)
+
+    assert sent is True
+    assert "surface API is unavailable" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
 async def test_status_surface_supersedes_uneditable_message_and_creates_replacement() -> None:
     edit_error = TelegramBadRequest(
         method=SimpleNamespace(__api_method__="editMessageText"),

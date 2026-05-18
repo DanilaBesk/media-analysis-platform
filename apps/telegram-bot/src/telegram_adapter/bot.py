@@ -155,6 +155,7 @@ class TelegramInboxApp:
             message,
             rejected=[record for record in records if record.status == "rejected"],
             prefer_edit=False,
+            post_ingest_records=records,
         )
 
     async def _download_message_files(self, message: Message) -> list[TelegramFileInput]:
@@ -549,6 +550,7 @@ class TelegramInboxApp:
         *,
         rejected: list[IngressRecord] | None = None,
         prefer_edit: bool = True,
+        post_ingest_records: list[IngressRecord] | None = None,
     ) -> bool:
         owner = self._owner_from_message(message)
         try:
@@ -556,6 +558,9 @@ class TelegramInboxApp:
         except Exception as exc:
             normalized = _normalize_message_error(exc)
             _log_handler_exception("status_refresh", exc, normalized=normalized, message=message)
+            if _has_accepted_ingress(post_ingest_records):
+                await self._answer_post_ingest_refresh_failure(message, post_ingest_records or [])
+                return False
             await self._answer_message_error(message, normalized)
             return False
         key = self._scope_from_message(message).state_key
@@ -578,7 +583,7 @@ class TelegramInboxApp:
             screen="main",
             focused_run_id=None,
         )
-        current_surface = self.gateway.find_current_materials_surface(owner=owner)
+        current_surface = self._find_current_materials_surface_or_none(owner=owner, scope="status_surface_lookup")
         previous_message_id = self.status_message_ids.get(key) or _surface_message_id(current_surface)
         if prefer_edit and previous_message_id is not None:
             try:
@@ -589,7 +594,7 @@ class TelegramInboxApp:
                     reply_markup=markup,
                 )
                 self.status_message_ids[key] = previous_message_id
-                self._persist_current_materials_surface(
+                self._try_persist_current_materials_surface(
                     owner=owner,
                     status=status,
                     state=state,
@@ -601,7 +606,7 @@ class TelegramInboxApp:
             except TelegramBadRequest as error:
                 if "message is not modified" in str(error).lower():
                     self.status_message_ids[key] = previous_message_id
-                    self._persist_current_materials_surface(
+                    self._try_persist_current_materials_surface(
                         owner=owner,
                         status=status,
                         state=state,
@@ -611,7 +616,7 @@ class TelegramInboxApp:
                     )
                     return True
                 if current_surface is not None:
-                    self.gateway.supersede_channel_surface(
+                    self._try_supersede_channel_surface(
                         surface=current_surface,
                         reason="message_not_editable",
                         actor_id="telegram_adapter",
@@ -620,7 +625,7 @@ class TelegramInboxApp:
                 self.status_message_ids.pop(key, None)
             except Exception:
                 if current_surface is not None:
-                    self.gateway.supersede_channel_surface(
+                    self._try_supersede_channel_surface(
                         surface=current_surface,
                         reason="message_not_editable",
                         actor_id="telegram_adapter",
@@ -629,7 +634,7 @@ class TelegramInboxApp:
                 self.status_message_ids.pop(key, None)
         sent = await message.answer(text, reply_markup=markup)
         self.status_message_ids[key] = sent.message_id
-        self._persist_current_materials_surface(
+        self._try_persist_current_materials_surface(
             owner=owner,
             status=status,
             state=state,
@@ -899,7 +904,7 @@ class TelegramInboxApp:
             if "message is not modified" not in str(error).lower():
                 raise
         self.status_message_ids[key] = callback.message.message_id
-        self._persist_current_materials_surface(
+        self._try_persist_current_materials_surface(
             owner=owner,
             status=status,
             state=state,
@@ -1081,6 +1086,74 @@ class TelegramInboxApp:
             collection=status.collection,
         )
 
+    def _find_current_materials_surface_or_none(self, *, owner: JsonObject, scope: str) -> JsonObject | None:
+        try:
+            return self.gateway.find_current_materials_surface(owner=owner)
+        except TelegramApiClientError as error:
+            _LOGGER.warning(
+                "%s scope=%s channel_surface_lookup_failed api_status=%s api_code=%s",
+                _LOG_MARKER_TELEGRAM_HANDLER_ERROR,
+                scope,
+                error.status,
+                error.code,
+            )
+            return None
+
+    def _try_persist_current_materials_surface(
+        self,
+        *,
+        owner: JsonObject,
+        status: InboxStatus,
+        state: _PageState,
+        chat_id: int,
+        message_id: int,
+        surface: JsonObject | None = None,
+    ) -> JsonObject | None:
+        try:
+            return self._persist_current_materials_surface(
+                owner=owner,
+                status=status,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                surface=surface,
+            )
+        except TelegramApiClientError as error:
+            _LOGGER.warning(
+                "%s scope=current_materials_surface_persist api_status=%s api_code=%s chat_id=%s message_id=%s",
+                _LOG_MARKER_TELEGRAM_HANDLER_ERROR,
+                error.status,
+                error.code,
+                chat_id,
+                message_id,
+            )
+            return None
+
+    def _try_supersede_channel_surface(
+        self,
+        *,
+        surface: JsonObject,
+        reason: str,
+        actor_id: str | None = None,
+        metadata: JsonObject | None = None,
+    ) -> JsonObject | None:
+        try:
+            return self.gateway.supersede_channel_surface(
+                surface=surface,
+                reason=reason,
+                actor_id=actor_id,
+                metadata=metadata,
+            )
+        except TelegramApiClientError as error:
+            _LOGGER.warning(
+                "%s scope=channel_surface_supersede api_status=%s api_code=%s surface_id=%s",
+                _LOG_MARKER_TELEGRAM_HANDLER_ERROR,
+                error.status,
+                error.code,
+                surface.get("channel_surface_id"),
+            )
+            return None
+
     def _persist_analysis_task_surface(
         self,
         *,
@@ -1194,8 +1267,24 @@ class TelegramInboxApp:
     async def _answer_message_error(self, message: Message, error: BaseException | TelegramUserErrorCode) -> None:
         await message.answer(user_error_text(error))
 
+    async def _answer_post_ingest_refresh_failure(self, message: Message, records: list[IngressRecord]) -> None:
+        accepted = [record for record in records if record.status == "accepted"]
+        rejected = [record for record in records if record.status == "rejected"]
+        if len(accepted) == 1:
+            lines = ["Материал сохранён в inbox на сервере."]
+        else:
+            lines = [f"Материалы сохранены в inbox на сервере: {len(accepted)}."]
+        lines.append("Карточку не удалось обновить. Откройте /inbox через минуту.")
+        for record in rejected:
+            lines.append(f"Отклонено: {record.label} ({rejected_reason_text(record.reason)})")
+        await message.answer("\n".join(lines))
+
     async def _answer_callback_error(self, callback: CallbackQuery, error: BaseException | TelegramUserErrorCode) -> None:
         await callback.answer(**safe_callback_answer(error))
+
+
+def _has_accepted_ingress(records: list[IngressRecord] | None) -> bool:
+    return any(record.status == "accepted" for record in records or [])
 
 
 def render_status_text(

@@ -157,6 +157,7 @@
       <rule>Telegram main-card result and diagnostics actions are scoped to the analysis_run launched from the current card focus; historical terminal runs do not create generic result actions for a new or unstarted inbox selection.</rule>
       <rule>After a successful Telegram result delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selection_snapshots, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
       <rule>Telegram may persist message mappings through the internal channel surfaces API, but the API treats those mappings as opaque channel surfaces rather than Telegram-specific domain fields.</rule>
+      <rule>After accepted Telegram input, a status refresh or channel_surface persistence failure must not turn the saved inbox mutation into a user-facing backend failure; the adapter confirms the saved material and offers /inbox recovery while logging the presentation-layer failure.</rule>
       <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
       <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics; compatibility media item and selection routes are not part of the active Telegram path.</rule>
     </Telegram>
@@ -218,6 +219,7 @@
     <bead id="media-7f3.11.2" status="completed">Backend, storage, security, object storage, diagnostics, cancellation, and worker review fixed worker workspace path sanitization, bucket-relative object-key validation, worker step write validation, and HTTP server timeout/header hardening.</bead>
     <bead id="media-7f3.11.3" status="completed">Channel UX, Web, MCP, Telegram, report/research prerequisite, and runtime review fixed Web runtime endpoint leaks, raw JSON launch parameters, and service artifact exposure in normal result views.</bead>
     <bead id="media-7f3.11.4" status="completed">Final readiness packet records source plan, implemented scope, branch and commit state, verification commands, coverage inventory, runtime evidence, GRACE docs, Beads closure state, no-regression proof, and accepted risks.</bead>
+    <bead id="media-b5z" status="completed">Telegram post-ingest refresh recovery now confirms saved inbox content instead of showing a misleading backend-unavailable message, and channel_surface persistence is best-effort for visible replies.</bead>
   </BeadsTrace>
 
   <NonGoals>

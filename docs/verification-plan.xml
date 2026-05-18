@@ -179,6 +179,7 @@
     <bead id="media-7f3.11.2">Run backend/storage/security/worker QA, focused worker-common/transcription/agent-runner regressions, focused API/storage regressions, full worker-common/transcription/agent-runner suites, API/storage tests, target reset smoke, no-legacy target gate, GRACE XML checks, and git diff checks before starting channel UX/runtime QA.</bead>
     <bead id="media-7f3.11.3">Run Web, Telegram, MCP, API prerequisite planning, agent-runner step-input, runtime-final E2E, compose config, target reset, no-legacy target gate, GRACE XML, and git diff checks before starting final readiness packaging.</bead>
     <bead id="media-7f3.11.4">Run final coverage inventory, GRACE XML validation, git diff checks, Beads closure verification, Dolt local commit, and Git push before closing the QA epic.</bead>
+    <bead id="media-b5z">Run Telegram adapter regressions proving post-ingest status refresh failures confirm saved inbox content without the backend-unavailable copy and channel_surface failures do not block the inbound status reply.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

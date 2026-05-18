@@ -34,6 +34,7 @@
     <completed-packet bead="media-7f3.11.3">qa-channel-ux-web-mcp-runtime-behavior</completed-packet>
     <completed-packet bead="media-7f3.11.4">final-mr-readiness-packet-target-rebuild</completed-packet>
     <completed-closure-gate bead="media-7f3.11">Pre-MR QA readiness is complete after traceability, backend/security/worker, channel/runtime, and final readiness packets.</completed-closure-gate>
+    <completed-packet bead="media-b5z">telegram-post-ingest-refresh-recovery</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -856,6 +857,25 @@ Telegram status text and button labels must explain refresh, collection mutation
     <verification>
       <check>Focused telegram-bot tests prove Russian-first callback copy, status text, and button semantics.</check>
       <check>Historical live restored status text for the affected Telegram owner was Russian-first and rendered the current inbox state clearly; target checks use channel_account.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-b5z-telegram-post-ingest-refresh-recovery" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS">
+    <purpose>Fix the Telegram post-ingest path where saved inbox content could be reported as a temporary service failure when status refresh or channel_surface presentation persistence failed.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram media_asset creation and inbox membership are API-owned product mutations. After accepted input, current_materials_panel refresh and channel_surface persistence are presentation/recovery work; if that presentation layer is temporarily unavailable, the adapter must confirm the saved inbox content and offer /inbox recovery instead of showing a backend-unavailable save failure.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused runtime regression proves post-ingest restore_status failure sends a saved-inbox confirmation and does not include the old backend-unavailable text.</check>
+      <check>Focused runtime regression proves channel_surface lookup failure does not block the inbound status reply.</check>
+      <check>Full Telegram adapter tests pass.</check>
     </verification>
   </HotfixPacket>
 
