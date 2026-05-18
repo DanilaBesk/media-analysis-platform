@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 	targetstore "github.com/danila/media-analysis-platform/apps/api/internal/storage/target"
 )
 
@@ -242,6 +245,20 @@ func TestTargetRuntimeServicePlansSpeechPrerequisiteForReportRuns(t *testing.T) 
 	}
 }
 
+func TestTargetRuntimeServiceMapsCrossChannelRunMissToNotFound(t *testing.T) {
+	t.Parallel()
+
+	service := NewTargetRuntimeService(&fakeTargetRuntimeStore{getAnalysisRunErr: sql.ErrNoRows})
+
+	_, err := service.GetAnalysisRun(context.Background(), TargetGetAnalysisRunRequest{
+		ChannelAccountID: "other-channel-account",
+		AnalysisRunID:    "run-1",
+	})
+	if !errors.Is(err, storage.ErrAnalysisRunNotFound) {
+		t.Fatalf("GetAnalysisRun(cross channel) error = %v, want ErrAnalysisRunNotFound", err)
+	}
+}
+
 type fakeTargetRuntimeStore struct {
 	channelAccount         targetstore.ChannelAccountRecord
 	operation              targetstore.OperationRequestRecord
@@ -252,6 +269,7 @@ type fakeTargetRuntimeStore struct {
 	selectionSnapshotItems []targetstore.SelectionSnapshotItemRecord
 	snapshotItems          []targetstore.SelectionSnapshotItemRecord
 	analysisRunGraph       targetstore.AnalysisRunGraph
+	getAnalysisRunErr      error
 	surface                targetstore.ChannelSurfaceRecord
 	surfaceSubjects        []targetstore.ChannelSurfaceSubjectRecord
 	supersede              targetstore.SupersedeChannelSurfaceParams
@@ -481,6 +499,9 @@ func (s *fakeTargetRuntimeStore) ListAnalysisRuns(_ context.Context, channelAcco
 }
 
 func (s *fakeTargetRuntimeStore) GetAnalysisRun(_ context.Context, channelAccountID, analysisRunID string) (targetstore.AnalysisRunRecord, error) {
+	if s.getAnalysisRunErr != nil {
+		return targetstore.AnalysisRunRecord{}, s.getAnalysisRunErr
+	}
 	return targetstore.AnalysisRunRecord{
 		ID:                analysisRunID,
 		ChannelAccountID:  channelAccountID,

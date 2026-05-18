@@ -140,7 +140,7 @@
     </Gate>
     <Gate id="EV-RUNTIME">
       <description>Runtime smoke proves end-to-end behavior.</description>
-      <required-evidence>Compose proof captures ingestion, selection_snapshot, run, prerequisite planning, artifact lineage, diagnostics, channel-account denial, and retention behavior.</required-evidence>
+      <required-evidence>Compose proof captures target-only channel_account ingestion, inbox listing, selection_snapshot sealing, analysis_run execution, worker artifact publication, internal artifact download access, diagnostics query shape, channel-account denial, and history preservation after media_asset soft delete.</required-evidence>
     </Gate>
   </EvidenceGates>
 
@@ -173,6 +173,7 @@
     <bead id="media-7f3.9.8">Run cleanup, OpenAPI, GRACE XML, and stale public vocabulary checks before closing the implementation epic.</bead>
     <bead id="media-7f3.10.1">Run target coverage matrix review, deterministic fixture manifest validation, and target reset smoke before starting storage/API coverage expansion.</bead>
     <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and legacy storage package tests before starting adapter/worker/runtime E2E coverage.</bead>
+    <bead id="media-7f3.10.3">Run Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download, target runtime proof, compose smoke, and GRACE XML checks before starting inventory/no-legacy gates.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

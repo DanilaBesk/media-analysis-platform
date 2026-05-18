@@ -459,12 +459,61 @@ WHERE a.id=$1
   AND a.status <> 'deleted'`, artifactID)
 	artifact, err := scanArtifact(row)
 	if err != nil {
+		if isLegacyArtifactSchemaMismatch(err) {
+			return s.getTargetArtifactByID(ctx, artifactID)
+		}
 		if err == sql.ErrNoRows {
 			return ArtifactRecord{}, ErrArtifactNotFound
 		}
 		return ArtifactRecord{}, err
 	}
 	return artifact, nil
+}
+
+func (s *SQLStateStore) getTargetArtifactByID(ctx context.Context, artifactID string) (ArtifactRecord, error) {
+	var artifact ArtifactRecord
+	var channelAccountID string
+	err := s.db.QueryRowContext(ctx, `
+SELECT a.id, COALESCE(a.channel_account_id::text,''), a.analysis_run_id::text,
+       a.kind, a.status, COALESCE(so.object_key,''), a.content_type,
+       COALESCE(a.checksum,''), a.size_bytes, a.visibility, a.preview,
+       COALESCE(so.retention_state,'active'), a.created_at, a.expires_at, a.deleted_at
+FROM artifacts a
+LEFT JOIN stored_objects so ON so.id = a.stored_object_id
+WHERE a.id=$1
+  AND a.status <> 'deleted'`, artifactID).Scan(
+		&artifact.ID,
+		&channelAccountID,
+		&artifact.AnalysisRunID,
+		&artifact.Kind,
+		&artifact.Status,
+		&artifact.ObjectKey,
+		&artifact.ContentType,
+		&artifact.Checksum,
+		&artifact.SizeBytes,
+		&artifact.Visibility,
+		&artifact.PreviewJSON,
+		&artifact.Retention.State,
+		&artifact.CreatedAt,
+		&artifact.ExpiresAt,
+		&artifact.DeletedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ArtifactRecord{}, ErrArtifactNotFound
+		}
+		return ArtifactRecord{}, err
+	}
+	artifact.Owner = OwnerScope{OwnerType: "channel_account", OwnerID: channelAccountID}
+	return artifact, nil
+}
+
+func isLegacyArtifactSchemaMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "SQLSTATE 42703") || strings.Contains(message, "SQLSTATE 42P01")
 }
 
 func (s *SQLStateStore) ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error) {

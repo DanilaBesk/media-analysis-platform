@@ -283,6 +283,9 @@ func (s *TargetRuntimeService) GetMediaAsset(ctx context.Context, req TargetGetM
 		return TargetMediaAsset{}, fmt.Errorf("target storage is required")
 	}
 	record, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, req.MediaAssetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetMediaAsset{}, storage.ErrMediaItemNotFound
+	}
 	if err != nil {
 		return TargetMediaAsset{}, err
 	}
@@ -522,6 +525,9 @@ func (s *TargetRuntimeService) GetSelectionSnapshot(ctx context.Context, req Tar
 		return TargetSelectionSnapshot{}, fmt.Errorf("target storage is required")
 	}
 	snapshot, items, err := s.store.GetSelectionSnapshot(ctx, req.ChannelAccountID, req.SelectionSnapshotID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetSelectionSnapshot{}, storage.ErrSelectionNotFound
+	}
 	if err != nil {
 		return TargetSelectionSnapshot{}, err
 	}
@@ -699,6 +705,9 @@ func (s *TargetRuntimeService) GetAnalysisRun(ctx context.Context, req TargetGet
 		return TargetAnalysisRun{}, fmt.Errorf("target storage is required")
 	}
 	record, err := s.store.GetAnalysisRun(ctx, req.ChannelAccountID, req.AnalysisRunID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetAnalysisRun{}, storage.ErrAnalysisRunNotFound
+	}
 	if err != nil {
 		return TargetAnalysisRun{}, err
 	}
@@ -794,6 +803,9 @@ func (s *TargetRuntimeService) GetArtifact(ctx context.Context, req TargetGetArt
 		return TargetArtifact{}, fmt.Errorf("target storage is required")
 	}
 	record, err := s.store.GetArtifact(ctx, req.ChannelAccountID, req.ArtifactID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetArtifact{}, storage.ErrArtifactNotFound
+	}
 	if err != nil {
 		return TargetArtifact{}, err
 	}

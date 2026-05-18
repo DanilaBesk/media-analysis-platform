@@ -590,7 +590,7 @@ class SealedSelectionSnapshotInput:
         _ensure_allowed_keys(
             mapping,
             required={"selection_snapshot_id", "items", "option_snapshot", "sealed_at"},
-            optional=set(),
+            optional={"channel_account_id", "source_collection_id", "status", "diagnostics", "created_at"},
             context="claim response selection_snapshot",
         )
         items = mapping.get("items")

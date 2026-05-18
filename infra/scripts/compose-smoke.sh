@@ -110,6 +110,17 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
   require_file "${ROOT_DIR}/infra/images/worker-agent-runner/Dockerfile"
   require_file "${RUNTIME_E2E_SCRIPT}"
+  require_file_snippet "${RUNTIME_E2E_SCRIPT}" "/internal/v1/channel-accounts"
+  require_file_snippet "${RUNTIME_E2E_SCRIPT}" "channel_account_id"
+  require_file_snippet "${RUNTIME_E2E_SCRIPT}" "/v1/media-assets"
+  require_file_snippet "${RUNTIME_E2E_SCRIPT}" "/v1/selection-snapshots"
+  require_file_snippet "${RUNTIME_E2E_SCRIPT}" "selection_snapshot_id"
+  require_file_snippet "${RUNTIME_E2E_SCRIPT}" "/internal/v1/artifacts/"
+  reject_file_snippet "${RUNTIME_E2E_SCRIPT}" "/v1/media-items"
+  reject_file_snippet "${RUNTIME_E2E_SCRIPT}" "/v1/selections"
+  reject_file_snippet "${RUNTIME_E2E_SCRIPT}" "owner_type"
+  reject_file_snippet "${RUNTIME_E2E_SCRIPT}" "owner_id"
+  reject_file_snippet "${RUNTIME_E2E_SCRIPT}" "media_item_id"
 
   for service in "${RUNTIME_SERVICES[@]}"; do
     require_service "${service}"
@@ -223,9 +234,9 @@ run_live_smoke() {
   done
 
   printf '%s starting compose stack and waiting for health convergence\n' "${MARKER}"
-  docker compose -f "${COMPOSE_FILE}" up -d --force-recreate --wait >/dev/null
-  printf '%s running runtime-final inbox-first proof\n' "${MARKER}"
-  python3 "${RUNTIME_E2E_SCRIPT}" >/dev/null
+  docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --wait >/dev/null
+  printf '%s running runtime-final target proof\n' "${MARKER}"
+  RUNTIME_E2E_POLL_TIMEOUT_SECONDS="${RUNTIME_E2E_POLL_TIMEOUT_SECONDS:-300}" python3 "${RUNTIME_E2E_SCRIPT}" >/dev/null
   printf '%s compose live smoke completed successfully\n' "${MARKER}"
 }
 

@@ -3600,6 +3600,71 @@ func TestRuntimeStoreArtifactAndOpsDiagnosticErrorBranches(t *testing.T) {
 		}
 	})
 
+	t.Run("get artifact by id falls back to target artifact schema", func(t *testing.T) {
+		t.Parallel()
+
+		schemaErr := errors.New("ERROR: column a.owner_type does not exist (SQLSTATE 42703)")
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM artifacts a",
+					columns: artifactColumns(),
+					err:     schemaErr,
+				},
+				{
+					match: "LEFT JOIN stored_objects so ON so.id = a.stored_object_id",
+					columns: []string{
+						"id",
+						"channel_account_id",
+						"analysis_run_id",
+						"kind",
+						"status",
+						"object_key",
+						"content_type",
+						"checksum",
+						"size_bytes",
+						"visibility",
+						"preview",
+						"retention_state",
+						"created_at",
+						"expires_at",
+						"deleted_at",
+					},
+					rows: [][]driver.Value{{
+						"artifact-target",
+						"channel-account-1",
+						"run-target",
+						"report",
+						ArtifactStatusAvailable,
+						"run-target/report/markdown/report.md",
+						"text/markdown; charset=utf-8",
+						"sha256:target",
+						int64(42),
+						"channel_deliverable",
+						[]byte(`{"filename":"report.md","worker_artifact_kind":"report_markdown"}`),
+						RetentionStateActive,
+						now,
+						expiresAt,
+						nil,
+					}},
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(target artifact fallback) error = %v", err)
+		}
+
+		artifact, err := store.GetArtifactByID(context.Background(), "artifact-target")
+		if err != nil {
+			t.Fatalf("GetArtifactByID(target fallback) error = %v", err)
+		}
+		if artifact.Owner.OwnerType != "channel_account" ||
+			artifact.Owner.OwnerID != "channel-account-1" ||
+			artifact.ObjectKey != "run-target/report/markdown/report.md" {
+			t.Fatalf("target fallback artifact = %#v", artifact)
+		}
+	})
+
 	t.Run("list operational diagnostics propagates query and scan errors", func(t *testing.T) {
 		t.Parallel()
 

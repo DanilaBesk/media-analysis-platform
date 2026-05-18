@@ -419,6 +419,50 @@ Target route tests must cover invalid request bodies, empty arrays, pagination c
     </verification>
   </ExecutionPacket>
 
+  <ExecutionPacket packet-id="media-7f3.10.3-adapter-worker-runtime-e2e-coverage" module="M-TELEGRAM-ADAPTER,M-WORKER-COMMON,M-WORKER-TRANSCRIPTION,M-WORKER-AGENT-RUNNER,M-WEB,M-MCP-ADAPTER,M-API-HTTP,M-INFRA,M-COVERAGE" phase="TargetRebuildCoverage" verification-ref="EV-ADAPTERS,EV-WORKERS,EV-API,EV-RUNTIME,EV-COVERAGE-MATRIX,EV-GRACE">
+    <purpose>Convert adapter, worker, Web, MCP, artifact/download, and compose runtime rows in the target coverage matrix into executable proof.</purpose>
+    <depends-on>media-7f3.10.2-target-storage-api-coverage</depends-on>
+    <write-scope>
+      <file-1>infra/scripts/runtime-final-e2e.py</file-1>
+      <file-2>infra/scripts/compose-smoke.sh</file-2>
+      <file-3>workers/common/src/transcriber_workers_common/api.py</file-3>
+      <file-4>workers/common/tests/test_api.py</file-4>
+      <file-5>apps/api/internal/storage/runtime_store_media.go</file-5>
+      <file-6>apps/api/internal/storage/runtime_store_media_test.go</file-6>
+      <file-7>apps/api/internal/api/target_runtime.go</file-7>
+      <file-8>apps/api/internal/api/target_runtime_test.go</file-8>
+      <file-9>apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql</file-9>
+      <file-10>docs/architecture/target-coverage-matrix.md</file-10>
+      <file-11>docs/requirements.xml</file-11>
+      <file-12>docs/development-plan.xml</file-12>
+      <file-13>docs/verification-plan.xml</file-13>
+      <file-14>docs/knowledge-graph.xml</file-14>
+      <file-15>docs/operational-packets.xml</file-15>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Runtime E2E must use target routes and channel_account_id scope, not deprecated media_item, selection, owner_type, owner_id, or media_item_id proof paths.
+The compose smoke must force-recreate the stack before runtime proof, tolerate cold worker dependency startup, and still require a terminal analysis_run with real artifact download bytes.
+Workers must accept target selection_snapshot metadata in claim responses and must consume sealed selection_snapshot/analysis_run_step_input facts rather than mutable collection state.
+Internal artifact download access must resolve target artifact rows produced by workers, and cross-channel run misses must return not_found instead of leaking SQL errors.
+Known follow-up: inventory/no-legacy gates must address legacy admin observability, reconcile, and retention paths that still reference removed legacy tables after target reset.
+    ]]></contract-excerpt>
+    <verification>
+      <check>python3 -m py_compile infra/scripts/runtime-final-e2e.py</check>
+      <check>bash infra/scripts/compose-smoke.sh --check-config</check>
+      <check>bash infra/scripts/compose-smoke.sh --live-smoke</check>
+      <check>PYTHONPATH=apps/telegram-bot/src uv run --with aiogram --with python-dotenv pytest apps/telegram-bot/tests -q</check>
+      <check>PYTHONPATH=workers/common/src uv run pytest workers/common/tests -q</check>
+      <check>PYTHONPATH=workers/common/src:workers/agent-runner/src uv run pytest workers/agent-runner/tests -q</check>
+      <check>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests -q</check>
+      <check>cd apps/api &amp;&amp; go test ./internal/api ./internal/storage -count=1</check>
+      <check>pnpm --dir apps/web test</check>
+      <check>pnpm --dir apps/mcp-server test</check>
+      <check>pnpm --dir apps/mcp-server typecheck</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
   <ExecutionPacket packet-id="media-5cj-server-storage-orchestration" module="M-API-STORAGE,M-API-DOMAIN,M-API-HTTP" phase="Server" verification-ref="EV-STORAGE,EV-API">
     <purpose>Implement storage and API orchestration bottom-up before adapter rewrites.</purpose>
     <depends-on>media-49h-contracts</depends-on>
@@ -515,7 +559,7 @@ MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media
     <purpose>Prove the complete target channel-aware flow after contracts, server, workers, and adapters converge.</purpose>
     <depends-on>media-7f3.9.5-telegram-target-materials-and-run-cards, media-7f3.9.6-workers-analysis-run-steps-selection-snapshots, media-7f3.9.7-web-mcp-target-vocabulary-api-operations, media-7f3.9.8-implementation-cleanup-and-grace-artifact-refresh</depends-on>
     <verification>
-      <check>Runtime smoke ingests input, lists it in inbox, seals selection_snapshot, starts analysis_run, observes events, retrieves artifacts, reads diagnostics, denies cross-channel-account access, and applies retention without corrupting run history.</check>
+      <check>infra/scripts/runtime-final-e2e.py ingests target input, lists it in inbox, seals selection_snapshot, starts analysis_run, observes events, retrieves artifacts, downloads artifact bytes through internal access, reads diagnostics shape, denies cross-channel-account access, and soft-deletes media_asset without corrupting sealed run history.</check>
       <check>Focused stale vocabulary search passes across active docs and public contracts.</check>
     </verification>
   </RuntimePacket>

@@ -169,6 +169,26 @@ def test_claim_analysis_run_shapes_payload_and_parses_execution() -> None:
     ]
 
 
+def test_claim_analysis_run_accepts_target_selection_snapshot_metadata() -> None:
+    payload = _claim_response()
+    selection_snapshot = dict(payload["selection_snapshot"])  # type: ignore[index]
+    selection_snapshot.update(
+        {
+            "channel_account_id": "channel-account-1",
+            "source_collection_id": "collection-1",
+            "status": "sealed",
+            "diagnostics": [],
+            "created_at": "2026-05-10T11:59:00Z",
+        }
+    )
+    payload["selection_snapshot"] = selection_snapshot
+
+    execution = ClaimedAnalysisRunStep.from_payload(payload)
+
+    assert execution.selection_snapshot.selection_snapshot_id == SNAPSHOT_ID
+    assert execution.selection_snapshot.items[0].media_asset_id == ASSET_ID
+
+
 def test_selection_item_materialization_classifies_final_multimodal_sources() -> None:
     cases = [
         ("text", "text", None, "text"),

@@ -226,7 +226,8 @@
     <completed bead="media-7f3.9.8">Implementation cleanup and GRACE artifact refresh closed the implementation epic.</completed>
     <completed bead="media-7f3.10.1">The target coverage matrix and deterministic fixture/reset environment are published for the full coverage wave.</completed>
     <completed bead="media-7f3.10.2">Storage/API coverage now includes live Postgres target constraints, operation idempotency replay, channel-account isolation, optimistic conflicts, immutable selection snapshots, analysis_run lifecycle/events/cancellation, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/events.</completed>
-    <remaining>Open work is tracked by media-7f3.10.3, media-7f3.10.4, and media-7f3.11. The current tree is not closed against the target rebuild until adapter/worker/runtime E2E coverage, no-legacy regression gates, and QA readiness pass.</remaining>
+    <completed bead="media-7f3.10.3">Adapter, worker, and runtime coverage now includes Telegram restart/result/cancel flows, worker sealed-input and prerequisite materialization tests, Web/MCP target vocabulary tests, API artifact/download regressions, and the compose runtime target proof.</completed>
+    <remaining>Open work is tracked by media-7f3.10.4 and media-7f3.11. The current tree is not closed against the target rebuild until inventory/no-legacy regression gates and QA readiness pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>

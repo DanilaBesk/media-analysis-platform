@@ -1,6 +1,6 @@
 # Target Coverage Matrix And Deterministic Test Environment
 
-Status: active coverage seed for `media-7f3.10.1`  
+Status: active coverage evidence through `media-7f3.10.3`
 Source plan: `docs/architecture/single-user-channel-aware-target-architecture.md`  
 Fixture manifest: `infra/fixtures/target/manifest.json`
 
@@ -10,10 +10,10 @@ This document is the target rebuild coverage map. It is not a final readiness cl
 
 | Requirement | Evidence now | Remaining gate |
 | --- | --- | --- |
-| Coverage matrix maps each source-plan requirement to implementation proof, test proof, and QA proof. | This file maps data reset, tables, API operations, user flows, failure modes, compatibility rules, non-goals, and app boundaries. `media-7f3.10.2` added storage/API proof. | `media-7f3.10.3`, `media-7f3.10.4`, `media-7f3.11.*` must turn the remaining runtime/no-legacy/QA rows into runnable proof. |
-| Deterministic DB reset can drop/recreate target schema. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`; `infra/scripts/target-reset-smoke.sh`; `TestTargetStorePostgresContracts` applies it twice to fresh Postgres and validates target/legacy table state. | Runtime compose reset remains in `media-7f3.10.3`. |
-| Deterministic seed/channel fixtures exist. | `apps/api/internal/storage/target/fixtures.go`; `infra/fixtures/target/manifest.json`; `packages/contracts/tests/test_target_fixtures.py`; `TestTargetStorePostgresContracts` consumes the deterministic local channel/inbox seed. | `media-7f3.10.3` should use these identifiers in adapter/worker/runtime E2E tests instead of ad hoc ids. |
-| Object-store fixture bytes are known. | `infra/fixtures/target/object-store/media-inputs/document-note.txt` and `infra/fixtures/target/object-store/artifacts/run-summary/report.md` with size and SHA-256 in the manifest. | Runtime artifact/download tests in `media-7f3.10.3`. |
+| Coverage matrix maps each source-plan requirement to implementation proof, test proof, and QA proof. | This file maps data reset, tables, API operations, user flows, failure modes, compatibility rules, non-goals, and app boundaries. `media-7f3.10.2` added storage/API proof. `media-7f3.10.3` added adapter, worker, and compose runtime proof. | `media-7f3.10.4` and `media-7f3.11.*` must turn the remaining inventory/no-legacy/QA rows into runnable proof and challenge any stale row assignments. |
+| Deterministic DB reset can drop/recreate target schema. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`; `infra/scripts/target-reset-smoke.sh`; `TestTargetStorePostgresContracts` applies it twice to fresh Postgres and validates target/legacy table state; `bash infra/scripts/compose-smoke.sh --live-smoke` now force-recreates the compose stack before runtime proof. | `media-7f3.10.4` must wire this into the coverage inventory/no-legacy gate. |
+| Deterministic seed/channel fixtures exist. | `apps/api/internal/storage/target/fixtures.go`; `infra/fixtures/target/manifest.json`; `packages/contracts/tests/test_target_fixtures.py`; `TestTargetStorePostgresContracts` consumes the deterministic local channel/inbox seed; `runtime-final-e2e.py` uses unique runtime channel_accounts with deterministic fixture harness output to avoid stale idempotency collisions. | QA should decide whether future CI needs fixed manifest ids for the live smoke instead of unique throwaway runtime ids. |
+| Object-store fixture bytes are known. | `infra/fixtures/target/object-store/media-inputs/document-note.txt` and `infra/fixtures/target/object-store/artifacts/run-summary/report.md` with size and SHA-256 in the manifest; `runtime-final-e2e.py` resolves internal artifact download access and downloads non-empty MinIO bytes from the real compose object path. | `media-7f3.10.4` should keep artifact/download proof visible in the inventory output. |
 | Blockers are recorded honestly. | Open rows below are explicitly assigned to future Beads instead of hidden behind percentage coverage. | QA must challenge these assignments in `media-7f3.11.1`. |
 
 ## 10.2 Storage And API Coverage Evidence
@@ -40,6 +40,23 @@ Validation commands:
 (cd apps/api && go test ./internal/storage/target -count=1)
 (cd apps/api && go test ./internal/storage -count=1)
 ```
+
+## 10.3 Adapter, Worker, And Runtime Evidence
+
+`media-7f3.10.3` converts the adapter/worker/runtime rows into executable proof without reopening the target architecture. The evidence is split by surface so missing proof does not hide behind a single green result:
+
+| Surface | Evidence |
+| --- | --- |
+| Target compose runtime | `bash infra/scripts/compose-smoke.sh --live-smoke` builds and force-recreates the compose stack, waits for health convergence, and runs `infra/scripts/runtime-final-e2e.py` against target-only public/internal routes. The runtime proof creates channel_accounts, creates a text media_asset, verifies inbox listing, seals a selection_snapshot, starts a report analysis_run, observes terminal success, resolves run events, resolves artifacts, fetches internal download access, downloads MinIO bytes, checks diagnostics shape, denies cross-channel run access with `not_found`, soft-deletes the media_asset, and proves the sealed selection_snapshot/run history remains intact. |
+| Runtime target vocabulary | `infra/scripts/compose-smoke.sh --check-config` requires `/internal/v1/channel-accounts`, `channel_account_id`, `/v1/media-assets`, `/v1/selection-snapshots`, `selection_snapshot_id`, and `/internal/v1/artifacts/` in the runtime proof script, and rejects `/v1/media-items`, `/v1/selections`, `owner_type`, `owner_id`, and `media_item_id`. |
+| Worker claim DTO compatibility | `workers/common/tests/test_api.py::test_claim_analysis_run_accepts_target_selection_snapshot_metadata` proves worker claim responses accept target selection_snapshot metadata fields returned by the live API. |
+| Internal artifact download path | `apps/api/internal/storage/runtime_store_media_test.go` covers fallback from the legacy artifact query shape to target artifact/stored_object rows, so `/internal/v1/artifacts/{artifact_id}/download-access` can resolve artifacts produced by target workers. |
+| Cross-channel miss semantics | `apps/api/internal/api/target_runtime_test.go::TestTargetRuntimeServiceMapsCrossChannelRunMissToNotFound` proves target runtime storage misses map to `not_found` instead of leaking `sql.ErrNoRows` as HTTP 500. |
+| Telegram adapter | `PYTHONPATH=apps/telegram-bot/src uv run --with aiogram --with python-dotenv pytest apps/telegram-bot/tests -q` covers restart recovery, duplicate-result prevention, active-run/no-dead-end behavior, cancel behavior, result actions, artifact delivery, diagnostics, and clear-after-result flows against the target adapter layer. |
+| Worker suites | `PYTHONPATH=workers/common/src uv run pytest workers/common/tests -q`, `PYTHONPATH=workers/common/src:workers/agent-runner/src uv run pytest workers/agent-runner/tests -q`, and `PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests -q` cover sealed selection_snapshot consumption, declared step inputs, transcript/text-corpus prerequisite materialization, partial diagnostics, artifact registration, and cancellation behavior. |
+| Web and MCP | `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` cover human-facing Web target flows and MCP target tool vocabulary, lifecycle, artifacts, diagnostics, and structured error behavior. |
+
+Known follow-up for `media-7f3.10.4`: after target reset, legacy admin/runtime background paths still need inventory/no-legacy treatment. In the live compose logs, `/v1/admin/observability` and background reconcile/retention paths can still reference removed legacy tables such as `analysis_run_tasks` and `media_items`; this is outside the `10.3` target E2E proof and must be tracked as coverage/no-legacy work rather than hidden.
 
 ## Deterministic Fixture Catalog
 
@@ -156,8 +173,8 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 
 `media-7f3.10.2` has converted this matrix into storage/API tests for clean reset, constraints, idempotency, pagination, channel isolation, lifecycle, diagnostics, and retention.
 
-`media-7f3.10.3` must convert this matrix into adapter/worker/runtime E2E tests using the deterministic channel and object-store fixture catalog.
+`media-7f3.10.3` has converted this matrix into adapter/worker/runtime E2E proof for Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download access, and compose runtime target flow.
 
-`media-7f3.10.4` must wire the inventory/no-legacy gates so this matrix cannot drift silently.
+`media-7f3.10.4` must wire the inventory/no-legacy gates so this matrix cannot drift silently, including the observed legacy admin observability/reconcile/retention table references after target reset.
 
 `media-7f3.11.*` must audit that every "remaining proof" row either became evidence, was fixed, was accepted, or is a named blocker.

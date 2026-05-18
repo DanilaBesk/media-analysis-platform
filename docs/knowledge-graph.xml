@@ -209,7 +209,7 @@
       </annotations>
     </M-MCP-ADAPTER>
 
-    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="storage-api-covered" OWNER="media-7f3.10.2">
+    <M-COVERAGE NAME="TargetCoverage" TYPE="VERIFICATION" STATUS="adapter-worker-runtime-covered" OWNER="media-7f3.10.3">
       <purpose>Own the target rebuild coverage matrix, deterministic fixture catalog, fresh schema reset smoke, and storage/API coverage evidence used by the coverage and QA epics.</purpose>
       <path>docs/architecture/target-coverage-matrix.md</path>
       <depends>M-TARGET-ARCHITECTURE, M-API-STORAGE, M-CONTRACTS</depends>
@@ -218,8 +218,12 @@
         <fixture-manifest PATH="infra/fixtures/target/manifest.json" PURPOSE="Defines stable channel_account, collection, media_asset, selection_snapshot, analysis_run, artifact, and stored_object fixture ids." />
         <fixture-objectStore PATH="infra/fixtures/target/object-store" PURPOSE="Stores deterministic object-store bytes with manifest sizes and SHA-256 hashes." />
         <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />
+        <script-runtimeFinalE2E PATH="infra/scripts/runtime-final-e2e.py" PURPOSE="Runs target-only channel_account, media_asset, selection_snapshot, analysis_run, artifact download, diagnostics, cross-channel denial, and soft-delete history proof against the compose API." />
+        <script-composeSmoke PATH="infra/scripts/compose-smoke.sh" PURPOSE="Builds and force-recreates the local compose stack, enforces runtime proof vocabulary guards, and runs the runtime-final target proof." />
         <test-fixtureValidation PATH="packages/contracts/tests/test_target_fixtures.py" PURPOSE="Validates fixture manifest vocabulary, channel identities, object-store files, sizes, and hashes." />
         <test-storageApiCoverage PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers target API success, validation errors, empty arrays, pagination clamping, and conflict mapping." />
+        <test-workerClaimTargetMetadata PATH="workers/common/tests/test_api.py" PURPOSE="Covers target selection_snapshot metadata accepted by worker claim DTO parsing." />
+        <test-runtimeArtifactAccess PATH="apps/api/internal/storage/runtime_store_media_test.go" PURPOSE="Covers internal artifact download-access fallback from legacy artifact query shape to target artifact rows." />
       </annotations>
     </M-COVERAGE>
 
