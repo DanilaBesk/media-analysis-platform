@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from pathlib import Path
 
 import pytest
@@ -764,6 +765,7 @@ def test_run_transcription_records_per_item_fetch_failure_without_silent_drop(tm
 
     diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
     diagnostics = diagnostics_call[1]["diagnostics"]
+    uuid.UUID(str(diagnostics[0]["diagnostic_id"]))
     assert diagnostics[0]["subject_id"] == "media-source-broken"
     assert diagnostics[0]["severity"] == "error"
     assert diagnostics[0]["context"]["selection_snapshot_item_id"] == "selection-snapshot-item-0"

@@ -28,12 +28,16 @@ func NewRuntimeDependencies(storageService *storage.Repository, publisher *queue
 }
 
 func NewRuntimeDependenciesWithTarget(storageService *storage.Repository, targetState TargetStateStore, publisher *queue.Publisher, _ *ws.Service, websocket WebsocketAcceptor) (Dependencies, error) {
+	return NewRuntimeDependenciesWithTargetObjectStore(storageService, targetState, nil, publisher, nil, websocket)
+}
+
+func NewRuntimeDependenciesWithTargetObjectStore(storageService *storage.Repository, targetState TargetStateStore, targetObjects storage.ObjectStore, publisher *queue.Publisher, _ *ws.Service, websocket WebsocketAcceptor) (Dependencies, error) {
 	if storageService == nil {
 		return Dependencies{}, fmt.Errorf("%w: storage repository is required", storage.ErrContractViolation)
 	}
 	var target TargetService
 	if targetState != nil {
-		target = NewTargetRuntimeService(targetState)
+		target = NewTargetRuntimeService(targetState, WithTargetObjectStore(targetObjects))
 	}
 	return Dependencies{
 		Public:    &publicRuntimeService{store: storageService, queue: publisher},

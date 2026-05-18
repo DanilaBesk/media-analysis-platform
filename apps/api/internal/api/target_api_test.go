@@ -88,6 +88,9 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 		target.mediaAssetReq.IdempotencyKey != "upload:key" {
 		t.Fatalf("upload media asset request = %#v", target.mediaAssetReq)
 	}
+	if !bytes.Equal(target.mediaAssetReq.Origin.UploadBody, []byte("hello")) {
+		t.Fatalf("upload media asset body = %q, want hello", string(target.mediaAssetReq.Origin.UploadBody))
+	}
 
 	listMedia := httptest.NewRecorder()
 	mux.ServeHTTP(listMedia, httptest.NewRequest(http.MethodGet, "/v1/media-assets?channel_account_id=channel-account-1&page_size=10", nil))

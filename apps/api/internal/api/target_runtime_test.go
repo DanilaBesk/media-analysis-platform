@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -223,6 +224,54 @@ func TestTargetRuntimeServiceReplaysMediaAssetIdempotencyKey(t *testing.T) {
 	}
 	if store.mediaAssetCreateCalls != 1 {
 		t.Fatalf("CreateMediaAssetWithInbox calls = %d, want 1", store.mediaAssetCreateCalls)
+	}
+}
+
+func TestTargetRuntimeServicePersistsUploadBodyToSourceObjectStore(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 14, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{}
+	objects := &fakeTargetObjectStore{}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs("media-asset-1", "collection-item-1")),
+		WithTargetObjectStore(objects),
+	)
+
+	asset, err := service.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+		ChannelAccountID: "channel-account-1",
+		Origin: TargetMediaAssetOrigin{
+			OriginType:       "upload",
+			OriginRef:        "sources/uploads/stored-object-1/voice.ogg",
+			StoredObjectID:   "stored-object-1",
+			ContentType:      "audio/ogg",
+			SizeBytes:        11,
+			Checksum:         "sha256:007ab34004c58b28cfd2f9746c848f29e54eac1c0c4c45c6166cbf2f71217850",
+			UploadBody:       []byte("voice-bytes"),
+			OriginalFilename: "voice.ogg",
+		},
+		Kind:        "voice",
+		DisplayName: "Голосовое из Telegram",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaAsset(upload body) error = %v", err)
+	}
+	if asset.MediaAssetID != "media-asset-1" {
+		t.Fatalf("media asset id = %q, want media-asset-1", asset.MediaAssetID)
+	}
+	if len(objects.puts) != 1 {
+		t.Fatalf("object store puts = %d, want 1", len(objects.puts))
+	}
+	put := objects.puts[0]
+	if put.bucket != storage.SourcesBucket || put.objectKey != "sources/uploads/stored-object-1/voice.ogg" || put.contentType != "audio/ogg" {
+		t.Fatalf("object store put = %#v", put)
+	}
+	if !bytes.Equal(put.body, []byte("voice-bytes")) {
+		t.Fatalf("object body = %q, want voice-bytes", string(put.body))
+	}
+	if store.mediaAssetParams.StoredObject.ObjectKey != "sources/uploads/stored-object-1/voice.ogg" {
+		t.Fatalf("stored object key = %q", store.mediaAssetParams.StoredObject.ObjectKey)
 	}
 }
 
@@ -870,4 +919,33 @@ func sequenceTargetIDs(ids ...string) func() string {
 		next++
 		return id
 	}
+}
+
+type fakeTargetObjectStore struct {
+	puts []fakeTargetObjectPut
+	err  error
+}
+
+type fakeTargetObjectPut struct {
+	bucket      string
+	objectKey   string
+	contentType string
+	body        []byte
+}
+
+func (f *fakeTargetObjectStore) PutObject(_ context.Context, bucket, objectKey, contentType string, body []byte) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.puts = append(f.puts, fakeTargetObjectPut{
+		bucket:      bucket,
+		objectKey:   objectKey,
+		contentType: contentType,
+		body:        append([]byte(nil), body...),
+	})
+	return nil
+}
+
+func (f *fakeTargetObjectStore) PresignGetObject(_ context.Context, bucket, objectKey string, _ time.Duration) (string, time.Time, error) {
+	return "http://object-store/" + bucket + "/" + objectKey, time.Time{}, nil
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -61,9 +62,10 @@ type TargetStateStore interface {
 }
 
 type TargetRuntimeService struct {
-	store  TargetStateStore
-	now    func() time.Time
-	nextID func() string
+	store   TargetStateStore
+	objects storage.ObjectStore
+	now     func() time.Time
+	nextID  func() string
 }
 
 type TargetRuntimeOption func(*TargetRuntimeService)
@@ -81,6 +83,12 @@ func WithTargetIDGenerator(nextID func() string) TargetRuntimeOption {
 		if nextID != nil {
 			s.nextID = nextID
 		}
+	}
+}
+
+func WithTargetObjectStore(objects storage.ObjectStore) TargetRuntimeOption {
+	return func(s *TargetRuntimeService) {
+		s.objects = objects
 	}
 }
 
@@ -244,6 +252,9 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 			CreatedAt:      now,
 		}
 	}
+	if err := s.persistUploadBody(ctx, &req, &params); err != nil {
+		return TargetMediaAsset{}, err
+	}
 	if err := s.store.CreateMediaAssetWithInbox(ctx, params); err != nil {
 		return TargetMediaAsset{}, err
 	}
@@ -258,6 +269,52 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}, nil
+}
+
+func (s *TargetRuntimeService) persistUploadBody(ctx context.Context, req *TargetCreateMediaAssetRequest, params *targetstore.CreateMediaAssetWithInboxParams) error {
+	if req == nil || len(req.Origin.UploadBody) == 0 {
+		return nil
+	}
+	if s.objects == nil {
+		return fmt.Errorf("%w: target upload object store is required", storage.ErrContractViolation)
+	}
+	objectKey := strings.TrimSpace(firstNonEmpty(req.Origin.OriginRef, req.Origin.ObjectRef))
+	if objectKey == "" || req.Origin.StoredObjectID == "" {
+		return fmt.Errorf("%w: upload body requires object_ref and stored_object_id", storage.ErrContractViolation)
+	}
+	contentType := strings.TrimSpace(req.Origin.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+		req.Origin.ContentType = contentType
+	}
+	size := int64(len(req.Origin.UploadBody))
+	if req.Origin.SizeBytes > 0 && req.Origin.SizeBytes != size {
+		return fmt.Errorf("%w: size_bytes does not match uploaded body", storage.ErrContractViolation)
+	}
+	req.Origin.SizeBytes = size
+	checksum := targetUploadChecksum(req.Origin.UploadBody)
+	if strings.TrimSpace(req.Origin.Checksum) == "" {
+		req.Origin.Checksum = checksum
+	} else if strings.TrimSpace(req.Origin.Checksum) != checksum {
+		return fmt.Errorf("%w: checksum does not match uploaded body", storage.ErrContractViolation)
+	}
+	if err := s.objects.PutObject(ctx, storage.SourcesBucket, objectKey, contentType, req.Origin.UploadBody); err != nil {
+		return fmt.Errorf("%w: persist target upload object: %v", storage.ErrStorageUnavailable, err)
+	}
+	params.StoredObject = targetstore.StoredObjectRecord{
+		ID:             req.Origin.StoredObjectID,
+		Bucket:         storage.SourcesBucket,
+		ObjectKey:      objectKey,
+		ContentType:    contentType,
+		SizeBytes:      req.Origin.SizeBytes,
+		Checksum:       req.Origin.Checksum,
+		StorageStatus:  "available",
+		RetentionState: "active",
+		CreatedAt:      params.MediaAsset.CreatedAt,
+	}
+	params.MediaAsset.StoredObjectID = req.Origin.StoredObjectID
+	params.MediaAsset.OriginRef = objectKey
+	return nil
 }
 
 func (s *TargetRuntimeService) ListMediaAssets(ctx context.Context, req TargetListMediaAssetsRequest) (TargetMediaAssetPage, error) {
@@ -1294,6 +1351,11 @@ func stableTargetID(seed string) string {
 	sum[6] = (sum[6] & 0x0f) | 0x50
 	sum[8] = (sum[8] & 0x3f) | 0x80
 	return uuid.UUID(sum[:16]).String()
+}
+
+func targetUploadChecksum(body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf("sha256:%x", sum[:])
 }
 
 func isSpeechMediaKind(kind string) bool {

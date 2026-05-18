@@ -119,7 +119,7 @@
 
   <PublicApiSurface>
     <endpoint method="POST" path="/v1/media-assets">Create a media_asset from text, URL, or channel-provided object reference.</endpoint>
-    <endpoint method="POST" path="/v1/media-assets/upload">Upload bytes and create a media_asset.</endpoint>
+    <endpoint method="POST" path="/v1/media-assets/upload">Upload bytes into the sources object store and create a media_asset plus stored_object metadata.</endpoint>
     <endpoint method="GET" path="/v1/media-assets">List channel-account-scoped media_asset records.</endpoint>
     <endpoint method="GET" path="/v1/media-assets/{media_asset_id}">Read one media_asset and safe origin or stored_object metadata.</endpoint>
     <endpoint method="DELETE" path="/v1/media-assets/{media_asset_id}">Mark one media_asset deleted.</endpoint>
@@ -187,7 +187,7 @@
     <contract-evidence>Schema tests must prove target DTOs and route names exist, deprecated compatibility is isolated, and stale public product vocabulary does not appear in target operations.</contract-evidence>
     <storage-evidence>Storage tests must cover target migration fragments, absence of legacy target tables, channel_account isolation, immutable selection snapshots, operation_request idempotency, step input linkage, lifecycle transitions, retention, diagnostics, channel_surface supersede rules, and artifact_subject lineage.</storage-evidence>
     <api-evidence>API tests must cover ingestion, inbox membership, collection mutation, selection_snapshot sealing, analysis_run creation, prerequisite planning, event polling, cancellation, worker artifact stored_object registration, artifact access, and diagnostics queries.</api-evidence>
-    <worker-evidence>Worker tests must cover step_kind queue polling, analysis_run_step claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, partial diagnostics, and cancellation.</worker-evidence>
+    <worker-evidence>Worker tests must cover step_kind queue polling, analysis_run_step claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, API-safe diagnostic identifiers, partial diagnostics, and cancellation.</worker-evidence>
     <adapter-evidence>Adapter tests must prove Telegram, Web, and MCP operate over the same API-owned state and do not expose grouped submission modes as durable product state. Telegram tests must also prove target channel_account media_asset, selection_snapshot, analysis_run, artifact, and diagnostic request shapes plus channel_surface restart recovery, result duplicate prevention, and supersede behavior.</adapter-evidence>
     <runtime-evidence>Runtime smoke must prove a real item can be ingested, selected, analyzed, and resolved as artifacts with diagnostics available for failures.</runtime-evidence>
   </EvidenceContracts>

@@ -36,6 +36,7 @@
     <completed-closure-gate bead="media-7f3.11">Pre-MR QA readiness is complete after traceability, backend/security/worker, channel/runtime, and final readiness packets.</completed-closure-gate>
     <completed-packet bead="media-b5z">telegram-post-ingest-refresh-recovery</completed-packet>
     <completed-packet bead="media-cjb">channel-surface-active-address-handoff</completed-packet>
+    <completed-packet bead="media-b6s">telegram-upload-object-store-and-worker-diagnostics</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>

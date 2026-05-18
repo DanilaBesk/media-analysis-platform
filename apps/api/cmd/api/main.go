@@ -127,7 +127,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	deps, err := api.NewRuntimeDependenciesWithTarget(repository, targetStateStore, publisher, eventsService, websocketHub)
+	deps, err := api.NewRuntimeDependenciesWithTargetObjectStore(repository, targetStateStore, objectStore, publisher, eventsService, websocketHub)
 	if err != nil {
 		return err
 	}

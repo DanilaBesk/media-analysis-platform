@@ -23,7 +23,7 @@
 
     <StorageTests>
       <required>
-        <item>Create media_asset from text, URL, and uploaded body with channel-account scope and stored_object/origin metadata.</item>
+        <item>Create media_asset from text, URL, and uploaded body with channel-account scope, stored_object/origin metadata, and a durable sources object-store write before worker materialization.</item>
         <item>Repeated channel_account upsert by channel and external account reference returns the persisted row id, not the caller's newly generated candidate id, before media_asset create/upload paths reference it.</item>
         <item>Target migration and required schema fragments create channel_accounts, operation_requests, stored_objects, media_assets, selection_snapshots, analysis_run_steps, analysis_run_step_inputs, artifact_subjects, diagnostics, channel_surfaces, and channel surface event tables without recreating legacy sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, or safe_adapter_context.</item>
         <item>Deterministic seed fixtures create a stable channel_account and inbox collection for fresh local reset/bootstrap tests.</item>
@@ -62,7 +62,7 @@
         <item>Agent-runner report and research steps consume ready transcript or prepared text-corpus artifact inputs and do not transcribe or discover raw speech media.</item>
         <item>Worker artifact registration creates API-owned stored_object metadata and artifact_subject lineage for analysis_run plus analysis_run_step.</item>
         <item>Missing transcript or text-corpus prerequisites produce diagnostics instead of silent failure or raw media processing in agent-runner.</item>
-        <item>Per-item and prerequisite diagnostics are recorded without mutating the selection snapshot.</item>
+        <item>Per-item and prerequisite diagnostics are recorded without mutating the selection snapshot and use UUID diagnostic_id values accepted by the target API schema.</item>
         <item>Successful execution publishes artifacts under analysis_run.</item>
         <item>Partial execution can finish as partially_succeeded when policy allows and diagnostics explain the skipped or failed items.</item>
         <item>Worker cancellation records the phase where cancellation was observed.</item>
@@ -183,6 +183,7 @@
     <bead id="media-7f3.11.4">Run final coverage inventory, GRACE XML validation, git diff checks, Beads closure verification, Dolt local commit, and Git push before closing the QA epic.</bead>
     <bead id="media-b5z">Run API/storage regressions proving repeated channel_account resolution returns the persisted conflict id, and Telegram adapter regressions proving generic backend-unavailable copy does not claim saved inbox content while post-ingest presentation failures still confirm accepted mutations.</bead>
     <bead id="media-cjb">Run target storage regressions proving channel_surface active address handoff supersedes the previous address owner and prevents channel_surfaces_active_address_idx from surfacing as a Telegram callback backend-unavailable error.</bead>
+    <bead id="media-b6s">Run target API/runtime upload regressions plus transcription worker diagnostics regression proving Telegram voice uploads materialize from object storage and missing-source failures can finalize instead of leaving active run cards.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

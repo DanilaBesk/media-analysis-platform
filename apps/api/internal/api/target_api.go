@@ -102,6 +102,7 @@ type TargetMediaAssetOrigin struct {
 	ContentType      string `json:"content_type,omitempty"`
 	SizeBytes        int64  `json:"size_bytes,omitempty"`
 	Checksum         string `json:"checksum,omitempty"`
+	UploadBody       []byte `json:"-"`
 }
 
 type TargetCreateMediaAssetRequest struct {
@@ -757,7 +758,7 @@ func (s *Server) handleUploadTargetMediaAsset(w http.ResponseWriter, r *http.Req
 		filename = "upload.bin"
 	}
 	storedObjectID := stableTargetID(strings.Join([]string{metadata.ChannelAccountID, filename, checksum}, ":"))
-	objectRef := "uploads/" + storedObjectID + "/" + filename
+	objectRef := "sources/uploads/" + storedObjectID + "/" + filename
 	displayName := firstNonEmpty(metadata.DisplayName, filename)
 	idempotencyKey := firstNonEmpty(metadata.IdempotencyKey, strings.TrimSpace(r.Header.Get("Idempotency-Key")))
 	asset, err := s.deps.Target.CreateMediaAsset(r.Context(), TargetCreateMediaAssetRequest{
@@ -771,6 +772,7 @@ func (s *Server) handleUploadTargetMediaAsset(w http.ResponseWriter, r *http.Req
 			ContentType:      contentType,
 			SizeBytes:        int64(len(body)),
 			Checksum:         checksum,
+			UploadBody:       body,
 		},
 		Kind:           metadata.Kind,
 		DisplayName:    displayName,

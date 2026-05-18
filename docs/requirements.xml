@@ -223,6 +223,7 @@
     <bead id="media-7f3.11.4" status="completed">Final readiness packet records source plan, implemented scope, branch and commit state, verification commands, coverage inventory, runtime evidence, GRACE docs, Beads closure state, no-regression proof, and accepted risks.</bead>
     <bead id="media-b5z" status="completed">Telegram post-ingest refresh recovery now confirms saved inbox content only after accepted mutations, channel_surface persistence is best-effort for visible replies, generic backend errors no longer claim saved inbox content, and repeated channel_account resolution returns the persisted row id for later media uploads.</bead>
     <bead id="media-cjb" status="completed">Channel surface upsert now hands off a reused active Telegram message address to the new logical surface instead of returning channel_surfaces_active_address_idx conflicts to callback users.</bead>
+    <bead id="media-b6s" status="completed">Telegram voice upload runs now persist multipart bytes to the sources object store before creating available media_asset metadata, and transcription worker diagnostics use UUID diagnostic_id values so source failures can finalize instead of leaving active task cards.</bead>
   </BeadsTrace>
 
   <NonGoals>

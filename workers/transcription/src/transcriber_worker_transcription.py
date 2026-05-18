@@ -29,6 +29,7 @@ import json
 import logging
 import shutil
 import subprocess
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -388,7 +389,11 @@ def _unsupported_selection_item_diagnostic(
     if materialized_path is not None:
         context["materialized_path"] = str(materialized_path)
     return {
-        "diagnostic_id": f"{execution.analysis_run_step_id}:{materialization.position}:unsupported-transcription-source",
+        "diagnostic_id": _selection_item_diagnostic_id(
+            execution,
+            materialization,
+            "unsupported-transcription-source",
+        ),
         "subject_type": "media_asset",
         "subject_id": materialization.media_asset_id,
         "severity": "warning",
@@ -412,7 +417,11 @@ def _failed_selection_item_diagnostic(
     if materialization.deterministic_filename:
         context["materialized_filename"] = materialization.deterministic_filename
     return {
-        "diagnostic_id": f"{execution.analysis_run_step_id}:{materialization.position}:source-materialization-failed",
+        "diagnostic_id": _selection_item_diagnostic_id(
+            execution,
+            materialization,
+            "source-materialization-failed",
+        ),
         "subject_type": "media_asset",
         "subject_id": materialization.media_asset_id,
         "severity": "error",
@@ -440,6 +449,23 @@ def _lineage_context(execution: ClaimedAnalysisRunStep, materialization: Selecti
         "original_filename": materialization.labels.original_filename,
     }
     return context
+
+
+def _selection_item_diagnostic_id(
+    execution: ClaimedAnalysisRunStep,
+    materialization: SelectionItemMaterialization,
+    reason: str,
+) -> str:
+    seed = ":".join(
+        (
+            execution.analysis_run_step_id,
+            materialization.selection_snapshot_item_id,
+            str(materialization.position),
+            materialization.media_asset_id,
+            reason,
+        )
+    )
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"media-analysis-platform:diagnostic:{seed}"))
 
 
 def _materialize_single_selection_item(
