@@ -1319,6 +1319,9 @@ func (s *Server) handleListActiveTargetChannelSurfaces(w http.ResponseWriter, r 
 	cursor, pageSize := parsePageRequest(r)
 	page, err := s.deps.Target.ListChannelSurfaces(r.Context(), TargetListChannelSurfacesRequest{
 		ChannelAccountID: strings.TrimSpace(r.URL.Query().Get("channel_account_id")),
+		SubjectType:      strings.TrimSpace(r.URL.Query().Get("subject_type")),
+		SubjectID:        strings.TrimSpace(r.URL.Query().Get("subject_id")),
+		LifecycleStatus:  strings.TrimSpace(r.URL.Query().Get("lifecycle_status")),
 		ActiveOnly:       true,
 		Cursor:           cursor,
 		PageSize:         pageSize,

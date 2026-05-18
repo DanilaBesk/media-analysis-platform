@@ -38,6 +38,7 @@
     <completed-packet bead="media-cjb">channel-surface-active-address-handoff</completed-packet>
     <completed-packet bead="media-b6s">telegram-upload-object-store-and-worker-diagnostics</completed-packet>
     <completed-packet bead="media-t8q">telegram-upload-legacy-stored-object-id-collision</completed-packet>
+    <completed-packet bead="media-l5w">telegram-result-active-surface-filter-and-asr-runtime-diagnosis</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -55,6 +56,25 @@ Run the focused checks assigned to the packet and prove stale public product voc
       ]]></verification-excerpt>
     </ExecutionPacket>
   </ExecutionPacketTemplate>
+
+  <HotfixPacket id="telegram-result-active-surface-filter-and-asr-runtime-diagnosis" status="completed" bead="media-l5w">
+    <purpose>Fix false Telegram result-delivery duplicate detection and record the current transcription runtime cause for unexpected CPU load.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/api/target_api.go</file-1>
+      <file-2>apps/api/internal/api/target_api_test.go</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The internal active channel_surface list preserves channel_account_id, subject_type, subject_id, lifecycle_status, cursor, and page_size query constraints. Telegram result duplicate checks for artifact subjects must not treat unrelated active current_materials_panel or analysis_task_surface records as delivered result_artifact_surface records.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused API regression fails if /internal/v1/channel-surfaces/active drops subject_type or subject_id before calling TargetRuntimeService.</check>
+      <check>Live compose proof shows the old API returned current_materials_panel for an artifact-subject active lookup, while the fixed API returns an empty list until a result_artifact_surface exists.</check>
+      <check>Runtime evidence records that the current worker compose path runs faster-whisper with WHISPER_DEVICE=cpu and no installed copper_asr/gigaam package.</check>
+    </verification>
+  </HotfixPacket>
 
   <ArchitecturePacket packet-id="media-36a-grace-inbox-first" module="GRACE-DOCS" phase="Design" verification-ref="EV-GRACE">
     <purpose>Rewrite GRACE requirements, technology, development, verification, knowledge graph, and operational packet artifacts around the final inbox-first model.</purpose>

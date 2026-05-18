@@ -401,11 +401,14 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 	}
 
 	listActiveSurfaces := httptest.NewRecorder()
-	mux.ServeHTTP(listActiveSurfaces, httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/active?channel_account_id=channel-account-1&page_size=10", nil))
+	mux.ServeHTTP(listActiveSurfaces, httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/active?channel_account_id=channel-account-1&subject_type=artifact&subject_id=artifact-1&page_size=10", nil))
 	assertTargetStatus(t, listActiveSurfaces, http.StatusOK)
 	assertNoLegacyTargetVocabulary(t, listActiveSurfaces.Body.String())
 	if !target.listActiveSurfacesReq.ActiveOnly {
 		t.Fatalf("list active surfaces request = %#v", target.listActiveSurfacesReq)
+	}
+	if target.listActiveSurfacesReq.SubjectType != "artifact" || target.listActiveSurfacesReq.SubjectID != "artifact-1" {
+		t.Fatalf("list active surfaces subject filters were dropped: %#v", target.listActiveSurfacesReq)
 	}
 
 	replaceDisplay := httptest.NewRecorder()

@@ -160,6 +160,7 @@
       <rule>Telegram may persist message mappings through the internal channel surfaces API, but the API treats those mappings as opaque channel surfaces rather than Telegram-specific domain fields.</rule>
       <rule>After accepted Telegram input, a status refresh or channel_surface persistence failure must not turn the saved inbox mutation into a user-facing backend failure; the adapter confirms the saved material and offers /inbox recovery while logging the presentation-layer failure.</rule>
       <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
+      <rule>Internal active channel_surface listing must honor subject_type and subject_id filters so current materials or task-card surfaces cannot be mistaken for delivered result artifact surfaces.</rule>
       <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics; compatibility media item and selection routes are not part of the active Telegram path.</rule>
       <rule>Repeated Telegram chat/user channel_account resolution must return the persisted channel_account row id from the API conflict path before media_asset create or upload requests reference that id.</rule>
     </Telegram>
@@ -225,6 +226,7 @@
     <bead id="media-cjb" status="completed">Channel surface upsert now hands off a reused active Telegram message address to the new logical surface instead of returning channel_surfaces_active_address_idx conflicts to callback users.</bead>
     <bead id="media-b6s" status="completed">Telegram voice upload runs now persist multipart bytes to the sources object store before creating available media_asset metadata, and transcription worker diagnostics use UUID diagnostic_id values so source failures can finalize instead of leaving active task cards.</bead>
     <bead id="media-t8q" status="completed">Target uploads now use a source-key-versioned stored_object_id seed so rows created with the older uploads/ object-key contract cannot make repeated Telegram file uploads fail with stored_objects_pkey and generic service-unavailable errors.</bead>
+    <bead id="media-l5w" status="completed">Active channel_surface result checks now preserve artifact subject filters so Telegram does not claim a transcript was already sent when only the current materials card exists. Runtime evidence showed the current compose transcription path uses faster-whisper on CPU, not CopperASR/GigaAM ONNX.</bead>
   </BeadsTrace>
 
   <NonGoals>

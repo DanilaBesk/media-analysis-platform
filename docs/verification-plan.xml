@@ -185,6 +185,7 @@
     <bead id="media-cjb">Run target storage regressions proving channel_surface active address handoff supersedes the previous address owner and prevents channel_surfaces_active_address_idx from surfacing as a Telegram callback backend-unavailable error.</bead>
     <bead id="media-b6s">Run target API/runtime upload regressions plus transcription worker diagnostics regression proving Telegram voice uploads materialize from object storage and missing-source failures can finalize instead of leaving active run cards.</bead>
     <bead id="media-t8q">Run target upload regression proving sources/uploads object keys do not reuse legacy uploads/ stored_object_id seeds and therefore avoid stored_objects_pkey collisions on repeated Telegram file uploads.</bead>
+    <bead id="media-l5w">Run target API regression proving /internal/v1/channel-surfaces/active preserves subject filters; run Telegram result-delivery regressions; capture live compose proof that artifact-subject active lookup no longer returns the current materials card; document the active transcription backend/runtime evidence.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>
