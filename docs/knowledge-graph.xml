@@ -164,12 +164,13 @@
       </annotations>
     </M-WORKER-AGENT-RUNNER>
 
-    <M-WEB NAME="Web" TYPE="ADAPTER" STATUS="planned" OWNER="media-7wo">
+    <M-WEB NAME="Web" TYPE="ADAPTER" STATUS="implemented" OWNER="media-7f3.9.7">
       <purpose>Provide a simple human-facing management UI over API-owned materials, groups, current selection, progress, results, errors, downloads, and retention.</purpose>
       <path>apps/web</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-ADAPTERS</verification-ref>
       <annotations>
+        <export-targetApiClient PURPOSE="Call target media_asset, selection_snapshot, analysis_run, artifact, and diagnostic routes with channel_account_id scope." />
         <view-materials PURPOSE="Browse and filter user materials with clear human labels." />
         <view-selectionBuilder PURPOSE="Create immutable selections from ordered items while hiding internal snapshot terminology." />
         <view-runDetail PURPOSE="Show progress, results, errors, and downloads without load-bearing internal vocabulary." />
@@ -192,14 +193,15 @@
       </annotations>
     </M-TELEGRAM-ADAPTER>
 
-    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="ADAPTER" STATUS="planned" OWNER="media-uhi">
+    <M-MCP-ADAPTER NAME="McpAdapter" TYPE="ADAPTER" STATUS="implemented" OWNER="media-7f3.9.7">
       <purpose>Expose MCP tools over the same API-owned product state.</purpose>
       <path>apps/mcp-server</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-ADAPTERS</verification-ref>
       <annotations>
-        <tool-addMedia PURPOSE="Create media_asset records." />
-        <tool-createSelection PURPOSE="Seal selection_snapshots." />
+        <tool-createMediaAsset PURPOSE="Create media_asset records through target channel_account_id schemas." />
+        <tool-listMediaAssets PURPOSE="List and search media_asset records through target API operations." />
+        <tool-createSelectionSnapshot PURPOSE="Seal selection_snapshots." />
         <tool-runAnalysis PURPOSE="Create analysis_run records." />
         <tool-getDiagnostics PURPOSE="Read diagnostics for media_asset, selection_snapshot, run, and artifact subjects." />
       </annotations>

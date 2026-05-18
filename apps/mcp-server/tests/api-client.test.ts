@@ -283,7 +283,7 @@ test("createMcpAdapterApiClient treats explicit null content-type headers as mis
         json: async () => {
           throw new Error("json should not be called");
         },
-      }) as Response,
+      }) as unknown as Response,
   });
 
   assert.deepEqual(

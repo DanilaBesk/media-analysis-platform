@@ -84,7 +84,7 @@
         <item>Internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals appear only in explicit admin/debug contexts.</item>
       </Web>
       <MCP>
-        <item>Tools add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, and get_diagnostics share API behavior with Web and Telegram while allowing technical target vocabulary in tool schemas.</item>
+        <item>Tools create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, create_selection_snapshot, get_selection_snapshot, run_analysis, get_run, list_artifacts, and get_diagnostics share API behavior with Web and Telegram while using target vocabulary and channel_account_id schemas.</item>
       </MCP>
     </AdapterTests>
 

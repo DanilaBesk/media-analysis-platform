@@ -180,13 +180,14 @@
       <step id="media-7f3.9.5-3">Create selection_snapshots from current collection media_asset_ids and start analysis_runs with selection_snapshot_id.</step>
       <step id="media-7f3.9.5-4">Read analysis_runs, artifacts, diagnostics, and cancellation through channel_account_id while preserving channel_surface recovery from media-7f3.9.4.</step>
     </Telegram>
-    <Web bead="media-7wo">
+    <Web bead="media-7f3.9.7">
       <step>Build simple human-facing views for materials, groups, current selection, progress, results, downloads, errors, and retention actions over the public API.</step>
+      <step>Call target API routes for media_assets, selection_snapshots, analysis_runs, artifacts, and diagnostics through channel_account_id while preserving legacy adapter method names only as temporary component-facing compatibility inside the Web client.</step>
       <step>Do not expose execution-only submission screens as the primary product surface.</step>
       <step>Do not use internal API names, opaque ids, channel surface terms, step names, or diagnostic internals as normal UI copy outside explicit admin/debug views.</step>
     </Web>
-    <MCP bead="media-uhi">
-      <step>Expose tools add_media, list_media, create_collection, update_collection_items, create_selection, run_analysis, get_run, list_artifacts, get_diagnostics, and apply_retention_action.</step>
+    <MCP bead="media-7f3.9.7">
+      <step>Expose target tools create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, create_selection_snapshot, get_selection_snapshot, run_analysis, get_run, list_artifacts, get_artifact, refresh_artifact, and get_diagnostics.</step>
       <step>Use the same public contracts and channel-account access failures as Web and Telegram, while allowing technical target vocabulary in tool schemas.</step>
     </MCP>
   </AdapterPlan>

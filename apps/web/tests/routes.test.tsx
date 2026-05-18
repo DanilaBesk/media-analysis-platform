@@ -46,6 +46,34 @@ function secondMediaItem() {
   });
 }
 
+function mediaAsset(overrides = {}) {
+  return {
+    media_asset_id: "asset-1",
+    channel_account_id: "web-console",
+    kind: "text",
+    status: "ready",
+    display_name: "Call note",
+    origin: { origin_type: "text", text: "Call note" },
+    diagnostics_count: 0,
+    created_at: "2026-05-10T00:00:00Z",
+    updated_at: "2026-05-10T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function selectionSnapshot(overrides = {}) {
+  return {
+    selection_snapshot_id: "snapshot-1",
+    channel_account_id: "web-console",
+    status: "sealed",
+    items: [],
+    option_snapshot: {},
+    created_at: "2026-05-10T00:00:00Z",
+    sealed_at: "2026-05-10T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function collection(overrides = {}) {
   return {
     collection_id: "collection-1",
@@ -161,6 +189,13 @@ function analysisRun(overrides = {}) {
 function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
   const softDeletedAt = "2026-05-10T01:00:00Z";
   const apiClient: WebUiApiClient = {
+    listMediaAssets: vi.fn().mockResolvedValue({
+      items: [mediaAsset()],
+      page: { page_size: 50, has_more: false },
+    }),
+    getMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
+    addMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ media_asset_id: "asset-2", display_name: "Fresh note" })),
+    removeMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ status: "deleted", deleted_at: softDeletedAt })),
     listMediaItems: vi.fn().mockResolvedValue({
       items: [mediaItem(), secondMediaItem()],
       page: { page_size: 50, has_more: false },
@@ -194,13 +229,15 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
       sealed_at: "2026-05-10T00:00:00Z",
     }),
     getSelection: vi.fn(),
+    createSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot({ selection_snapshot_id: "snapshot-2" })),
+    getSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot()),
     createAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ analysis_run_id: "run-2", status: "queued" })),
     listAnalysisRuns: vi.fn().mockResolvedValue({
       items: [analysisRun()],
       page: { page_size: 25, has_more: false },
     }),
     getAnalysisRun: vi.fn().mockResolvedValue(analysisRun()),
-    cancelAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ status: "cancel_requested" })),
+    cancelAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ status: "Остановка" })),
     retryAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ analysis_run_id: "run-3", status: "queued" })),
     listAnalysisRunEvents: vi.fn().mockResolvedValue({
       items: [
@@ -278,7 +315,7 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
         {
           diagnostic_id: "diagnostic-source",
           owner,
-          subject: { subject_type: "source", subject_id: "source-1" },
+          subject: { subject_type: "stored_object", subject_id: "source-1" },
           severity: "warning",
           code: "source_unavailable",
           message: "Source warning kept with lineage",
@@ -350,19 +387,20 @@ describe("createWebUiRoutes", () => {
   it("renders the inbox-first surface and adds text media through the API boundary", async () => {
     const runtime = renderRoute("/");
 
-    expect(await screen.findByRole("heading", { name: "Inbox" })).toBeVisible();
-    const primaryNav = within(screen.getByRole("navigation", { name: "Primary" }));
+    expect(await screen.findByRole("heading", { name: "Материалы" })).toBeVisible();
+    const primaryNav = within(screen.getByRole("navigation", { name: "Основная навигация" }));
     expect(primaryNav.getAllByRole("link")).toHaveLength(5);
-    expect(primaryNav.getByRole("link", { name: "Inbox" })).toHaveAttribute("href", "/");
-    expect(primaryNav.getByRole("link", { name: "Collections" })).toHaveAttribute("href", "/collections");
-    expect(primaryNav.getByRole("link", { name: "Run builder" })).toHaveAttribute("href", "/runs");
-    expect(primaryNav.getByRole("link", { name: "Artifacts" })).toHaveAttribute("href", "/artifacts");
-    expect(primaryNav.getByRole("link", { name: "Admin" })).toHaveAttribute("href", "/diagnostics");
+    expect(primaryNav.getByRole("link", { name: "Материалы" })).toHaveAttribute("href", "/");
+    expect(primaryNav.getByRole("link", { name: "Группы" })).toHaveAttribute("href", "/collections");
+    expect(primaryNav.getByRole("link", { name: "Подборка" })).toHaveAttribute("href", "/runs");
+    expect(primaryNav.getByRole("link", { name: "Результаты" })).toHaveAttribute("href", "/artifacts");
+    expect(primaryNav.getByRole("link", { name: "Проверки" })).toHaveAttribute("href", "/diagnostics");
+    expect(primaryNav.queryByText(/Inbox|Collections|Run builder|Artifacts|Admin/i)).toBeNull();
     expect(await screen.findByText("Call note")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Display name"), { target: { value: "Fresh note" } });
-    fireEvent.change(screen.getByLabelText("Text"), { target: { value: "New meeting note" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    fireEvent.change(screen.getByLabelText("Название"), { target: { value: "Fresh note" } });
+    fireEvent.change(screen.getByLabelText("Текст"), { target: { value: "New meeting note" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
@@ -377,32 +415,32 @@ describe("createWebUiRoutes", () => {
 
   it("exposes explicit soft-delete from the inbox surface", async () => {
     const runtime = renderRoute("/");
-    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Soft delete Call note" }));
+    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Удалить Call note" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
     });
-    expect(await within(runtime.container).findByText("Soft-deleted Call note")).toBeVisible();
+    expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
   });
 
   it("shows the retained soft-delete outcome on the media detail surface", async () => {
     const runtime = renderRoute("/inbox/media-1");
-    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Soft delete Call note" }));
+    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Удалить Call note" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.removeMediaItem).toHaveBeenCalledWith(owner, "media-1");
     });
-    expect(await within(runtime.container).findByText("Soft-deleted Call note")).toBeVisible();
-    expect(within(runtime.container).getByText("soft_deleted")).toBeVisible();
-    expect(within(runtime.container).getByText("10 May 2026, 04:00")).toBeVisible();
+    expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
+    expect(within(runtime.container).getAllByText("Удалено").length).toBeGreaterThan(0);
+    expect(within(runtime.container).getByText("10 мая 2026 г., 04:00")).toBeVisible();
   });
 
   it("creates a collection from selected inbox items", async () => {
     const runtime = renderRoute("/");
 
-    fireEvent.click(await screen.findByLabelText("Select Call note"));
-    fireEvent.change(screen.getByLabelText("New collection"), { target: { value: "Important set" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create collection" }));
+    fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
+    fireEvent.change(screen.getByLabelText("Новая группа"), { target: { value: "Important set" } });
+    fireEvent.click(screen.getByRole("button", { name: "Создать группу" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(owner, {
@@ -415,26 +453,26 @@ describe("createWebUiRoutes", () => {
   it("offers keyboard-reachable bulk selection controls for selection-heavy flows", async () => {
     renderRoute("/runs");
 
-    const selectAll = await screen.findByRole("button", { name: "Select all" });
+    const selectAll = await screen.findByRole("button", { name: "Выбрать все" });
     selectAll.focus();
     expect(selectAll).toHaveFocus();
     fireEvent.click(selectAll);
 
-    expect(screen.getByRole("button", { name: "Create run from 2 items" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Запустить: 2" })).toBeEnabled();
 
-    const clearSelection = screen.getByRole("button", { name: "Clear selection" });
+    const clearSelection = screen.getByRole("button", { name: "Очистить" });
     clearSelection.focus();
     expect(clearSelection).toHaveFocus();
     fireEvent.click(clearSelection);
 
-    expect(screen.getByRole("button", { name: "Create run from 0 items" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Запустить: 0" })).toBeDisabled();
   });
 
   it("edits a collection by adding an inbox item", async () => {
     const runtime = renderRoute("/collections");
 
-    fireEvent.change(await screen.findByLabelText("Add inbox item"), { target: { value: "media-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+    fireEvent.change(await screen.findByLabelText("Добавить материал"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
@@ -482,8 +520,8 @@ describe("createWebUiRoutes", () => {
     });
     const collectionView = render(<RouterProvider router={router} />);
 
-    fireEvent.change(await screen.findByLabelText("Add inbox item"), { target: { value: "media-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+    fireEvent.change(await screen.findByLabelText("Добавить материал"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
@@ -501,7 +539,7 @@ describe("createWebUiRoutes", () => {
     });
     render(<RouterProvider router={detailRouter} />);
 
-    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Краткое содержание" })).toBeVisible();
     expect(screen.getByText("#1 Call note")).toBeVisible();
     expect(screen.queryByText("Interview audio")).toBeNull();
   });
@@ -509,9 +547,9 @@ describe("createWebUiRoutes", () => {
   it("creates a sealed selection before queuing a run", async () => {
     const runtime = renderRoute("/runs");
 
-    fireEvent.click(await screen.findByLabelText("Select Call note"));
-    fireEvent.change(screen.getByLabelText("Run type"), { target: { value: "summary" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+    fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
+    fireEvent.change(screen.getByLabelText("Что сделать"), { target: { value: "summary" } });
+    fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.createSelection).toHaveBeenCalledWith(
@@ -540,32 +578,32 @@ describe("createWebUiRoutes", () => {
   it("renders run detail with events, artifacts, and diagnostics", async () => {
     renderRoute("/runs/run-1");
 
-    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
-    expect(await screen.findByText("analysis_run.progress")).toBeVisible();
-    expect(await screen.findByText("transcribing: Running transcription pipeline")).toBeVisible();
-    expect(await screen.findByText("worker_failed")).toBeVisible();
-    expect(await screen.findAllByText("source_unavailable")).toHaveLength(2);
-    expect(await screen.findByText("succeeded")).toBeVisible();
-    expect(await screen.findByRole("link", { name: "summary" })).toHaveAttribute("href", "/artifacts/artifact-1");
+    expect(await screen.findByRole("heading", { name: "Краткое содержание" })).toBeVisible();
+    expect(await screen.findByText("Прогресс")).toBeVisible();
+    expect(await screen.findByText("Расшифровка: Running transcription pipeline")).toBeVisible();
+    expect(await screen.findByText("Сбой обработки")).toBeVisible();
+    expect(await screen.findAllByText("Материал недоступен")).toHaveLength(2);
+    expect((await screen.findAllByText("Готово")).length).toBeGreaterThan(0);
+    expect(await screen.findByRole("link", { name: "Краткое содержание" })).toHaveAttribute("href", "/artifacts/artifact-1");
   });
 
   it("opens markdown artifact previews from the artifact browser", async () => {
     const runtime = renderRoute("/artifacts/artifact-1");
 
-    expect(await screen.findByRole("heading", { name: "Artifact browser" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Файлы и отчеты" })).toBeVisible();
     expect(await screen.findByText(/Interview notes/)).toBeVisible();
-    expect(await screen.findByRole("link", { name: "Open artifact" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Открыть результат" })).toHaveAttribute(
       "href",
       "https://minio.local/artifact-1.txt",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh access" }));
+    fireEvent.click(screen.getByRole("button", { name: "Обновить ссылку" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.refreshArtifact).toHaveBeenCalledWith(owner, "artifact-1");
     });
     await waitFor(() => {
-      expect(screen.getByRole("link", { name: "Open artifact" })).toHaveAttribute(
+      expect(screen.getByRole("link", { name: "Открыть результат" })).toHaveAttribute(
         "href",
         "https://minio.local/refreshed-artifact-1.txt",
       );
@@ -576,9 +614,9 @@ describe("createWebUiRoutes", () => {
     renderRoute("/artifacts/artifact-manifest");
 
     expect(await screen.findByText(/analysis_run_manifest\/v2/)).toBeVisible();
-    expect(await screen.findByText("artifact_preview_ready")).toBeVisible();
-    expect(await screen.findAllByText("artifact_preview_ready")).toHaveLength(1);
-    expect(await screen.findByRole("link", { name: "run_manifest" })).toHaveAttribute(
+    expect(await screen.findByText("Предпросмотр готов")).toBeVisible();
+    expect(await screen.findAllByText("Предпросмотр готов")).toHaveLength(1);
+    expect(await screen.findByRole("link", { name: "План запуска" })).toHaveAttribute(
       "href",
       "/artifacts/artifact-manifest",
     );
@@ -587,28 +625,28 @@ describe("createWebUiRoutes", () => {
   it("does not register the old jobs entrypoint", async () => {
     renderRoute("/jobs/job-123");
 
-    expect(await screen.findByRole("heading", { name: "Surface not found" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "Open inbox" })).toHaveAttribute("href", "/");
+    expect(await screen.findByRole("heading", { name: "Страница не найдена" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "К материалам" })).toHaveAttribute("href", "/");
   });
 
   it("exposes final admin lifecycle operations and observability", async () => {
     const runtime = renderRoute("/diagnostics");
 
     expect(await screen.findByText("42s")).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Limit"), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "Reconcile queue" }));
+    fireEvent.change(screen.getByLabelText("Лимит"), { target: { value: "10" } });
+    fireEvent.click(screen.getByRole("button", { name: "Синхронизировать" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(10);
     });
-    expect(await screen.findByText("Reconciled 2 run tasks")).toBeVisible();
+    expect(await screen.findByText("Синхронизировано: 2")).toBeVisible();
   });
 
   it("filters retention diagnostics through the existing admin contract", async () => {
     const runtime = renderRoute("/diagnostics");
 
-    fireEvent.change(await screen.findByLabelText("Subject"), { target: { value: "retention" } });
-    fireEvent.change(screen.getByLabelText("Severity"), { target: { value: "error" } });
+    fireEvent.change(await screen.findByLabelText("Объект"), { target: { value: "retention" } });
+    fireEvent.change(screen.getByLabelText("Уровень"), { target: { value: "error" } });
 
     await waitFor(() => {
       expect(runtime.apiClient.listDiagnostics).toHaveBeenLastCalledWith(owner, {
@@ -617,21 +655,21 @@ describe("createWebUiRoutes", () => {
         pageSize: 50,
       });
     });
-    expect(await screen.findByText("retention_hold_pending")).toBeVisible();
+    expect(await screen.findByText("Удаление ожидает разрешения")).toBeVisible();
   });
 
   it("covers inbox validation and alternate ingest modes", async () => {
     const runtime = renderRoute("/");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add to inbox" }));
-    expect(await screen.findByText("Text is required.")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "Добавить" }));
+    expect(await screen.findByText("Добавьте текст.")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "URL" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
-    expect(await screen.findByText("URL is required.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Ссылка" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByText("Добавьте ссылку.")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://example.test/source" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    fireEvent.change(screen.getByLabelText("Ссылка"), { target: { value: "https://example.test/source" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
       expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
         owner,
@@ -643,17 +681,17 @@ describe("createWebUiRoutes", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "File/media" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
-    expect(await screen.findByText("Choose a file first.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Файл" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByText("Выберите файл.")).toBeVisible();
 
-    const fileInput = screen.getByLabelText("File");
+    const fileInput = screen.getByLabelText("Файл");
     fireEvent.change(fileInput, {
       target: {
         files: [new File(["voice"], "sample.wav", { type: "audio/wav", lastModified: 1700000000000 })],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
       expect(runtime.apiClient.addMediaItem).toHaveBeenCalledWith(
         owner,
@@ -674,12 +712,12 @@ describe("createWebUiRoutes", () => {
   it("covers collection management no-op and archive branches", async () => {
     const runtime = renderRoute("/collections");
 
-    const renameInput = await screen.findByLabelText("Rename Research set");
+    const renameInput = await screen.findByLabelText("Переименовать Research set");
     fireEvent.blur(renameInput, { target: { value: "Research set" } });
     fireEvent.blur(renameInput, { target: { value: "   " } });
     expect(runtime.apiClient.updateCollection).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    fireEvent.click(screen.getByRole("button", { name: "В архив" }));
     await waitFor(() => {
       expect(runtime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-1", {
         expectedVersion: 3,
@@ -687,17 +725,17 @@ describe("createWebUiRoutes", () => {
       });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Убрать" }));
     await waitFor(() => {
       expect(runtime.apiClient.removeCollectionItem).toHaveBeenCalledWith(owner, "collection-1", "media-1", 3);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.click(screen.getByRole("button", { name: "Создать" }));
     await waitFor(() => {
       expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(
         owner,
         expect.objectContaining({
-          name: "Collection 2",
+          name: "Группа 2",
           items: [],
         }),
       );
@@ -707,9 +745,9 @@ describe("createWebUiRoutes", () => {
   it("covers run-builder validation and run-detail lifecycle branches", async () => {
     const runtime = renderRoute("/runs");
 
-    fireEvent.click(await screen.findByLabelText("Select Call note"));
-    fireEvent.change(screen.getByLabelText("Params"), { target: { value: "{not-json" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+    fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
+    fireEvent.change(screen.getByLabelText("Параметры"), { target: { value: "{not-json" } });
+    fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
     expect(await screen.findByText(/Expected property name/)).toBeVisible();
 
     const detailRuntime = renderRoute("/runs/run-1", {
@@ -734,20 +772,20 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    const cancelButton = await within(detailRuntime.container).findByRole("button", { name: "Cancel" });
+    const cancelButton = await within(detailRuntime.container).findByRole("button", { name: "Остановить" });
     expect(cancelButton).toBeDisabled();
 
-    expect(await within(detailRuntime.container).findByText("No events recorded.")).toBeVisible();
-    expect(within(detailRuntime.container).getByText("No artifacts available.")).toBeVisible();
-    expect(within(detailRuntime.container).getByText("No diagnostics.")).toBeVisible();
-    expect(within(detailRuntime.container).getByText("No source-level diagnostics.")).toBeVisible();
-    expect(within(detailRuntime.container).getByText("Selected as")).toBeVisible();
+    expect(await within(detailRuntime.container).findByText("Событий пока нет.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("Результатов пока нет.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("Проверок пока нет.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("Проверок по материалам нет.")).toBeVisible();
+    expect(within(detailRuntime.container).getByText("Выбран в подборке")).toBeVisible();
 
-    fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Retry" }));
+    fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Повторить" }));
     await waitFor(() => {
       expect(detailRuntime.apiClient.retryAnalysisRun).toHaveBeenCalledWith(owner, "run-1");
     });
-    expect(await within(detailRuntime.container).findByText(/Retry queued/)).toBeVisible();
+    expect(await within(detailRuntime.container).findByText(/Повторный запуск добавлен в очередь/)).toBeVisible();
   });
 
   it("covers artifact and diagnostics fallback surfaces", async () => {
@@ -763,8 +801,8 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await screen.findByText("No artifacts available.")).toBeVisible();
-    expect(screen.getByText("Choose an artifact from the list.")).toBeVisible();
+    expect(await screen.findByText("Результатов пока нет.")).toBeVisible();
+    expect(screen.getByText("Выберите результат из списка.")).toBeVisible();
 
     runtime.unmount();
 
@@ -776,8 +814,8 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await screen.findByText("Observability snapshot is not loaded.")).toBeVisible();
-    expect(screen.getByText("No diagnostics.")).toBeVisible();
+    expect(await screen.findByText("Снимок состояния не загружен.")).toBeVisible();
+    expect(screen.getByText("Проверок пока нет.")).toBeVisible();
   });
 
   it("covers inbox action fallback errors", async () => {
@@ -786,16 +824,16 @@ describe("createWebUiRoutes", () => {
       createCollection: vi.fn().mockRejectedValue("boom"),
     });
 
-    fireEvent.change(await screen.findByLabelText("Text"), { target: { value: "error case" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
-    expect(await screen.findByText("Unable to add media.")).toBeVisible();
+    fireEvent.change(await screen.findByLabelText("Текст"), { target: { value: "error case" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByText("Не удалось добавить материал.")).toBeVisible();
 
-    fireEvent.click(screen.getByLabelText("Select Call note"));
-    fireEvent.click(screen.getByRole("button", { name: "Create collection" }));
-    expect(await screen.findByText("Unable to create collection.")).toBeVisible();
+    fireEvent.click(screen.getByLabelText("Выбрать Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Создать группу" }));
+    expect(await screen.findByText("Не удалось создать группу.")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
-    expect(await screen.findByText("Choose a target collection.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Добавить выбранное" }));
+    expect(await screen.findByText("Выберите группу.")).toBeVisible();
   });
 
   it("covers collection management fallback errors", async () => {
@@ -806,65 +844,65 @@ describe("createWebUiRoutes", () => {
       replaceCollectionItems: vi.fn().mockRejectedValue("boom"),
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
-    expect(await screen.findByText("Unable to create collection.")).toBeVisible();
+    fireEvent.click(await screen.findByRole("button", { name: "Создать" }));
+    expect(await screen.findByText("Не удалось создать группу.")).toBeVisible();
 
-    fireEvent.blur(screen.getByLabelText("Rename Research set"), { target: { value: "Renamed" } });
-    expect(await screen.findByText("Unable to rename collection.")).toBeVisible();
+    fireEvent.blur(screen.getByLabelText("Переименовать Research set"), { target: { value: "Renamed" } });
+    expect(await screen.findByText("Не удалось переименовать группу.")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
-    expect(await screen.findByText("Unable to remove item.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Убрать" }));
+    expect(await screen.findByText("Не удалось убрать материал.")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Add inbox item"), { target: { value: "media-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
-    expect(await screen.findByText("Unable to add item.")).toBeVisible();
+    fireEvent.change(screen.getByLabelText("Добавить материал"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByText("Не удалось добавить материал.")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
-    expect(await screen.findByText("Unable to update collection.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "В архив" }));
+    expect(await screen.findByText("Не удалось обновить группу.")).toBeVisible();
   });
 
   it("covers run, artifact, diagnostics, and media-detail fallback errors", async () => {
     renderRoute("/runs", {
       createSelection: vi.fn().mockRejectedValue("boom"),
     });
-    fireEvent.click(await screen.findByLabelText("Select Call note"));
-    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
-    expect(await screen.findByText("Unable to create run.")).toBeVisible();
+    fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
+    expect(await screen.findByText("Не удалось запустить обработку.")).toBeVisible();
 
     const detailRuntime = renderRoute("/runs/run-1", {
       getAnalysisRun: vi.fn().mockResolvedValue(analysisRun()),
       cancelAnalysisRun: vi.fn().mockRejectedValue("boom"),
       retryAnalysisRun: vi.fn().mockRejectedValue("boom"),
     });
-    fireEvent.click(await within(detailRuntime.container).findByRole("button", { name: "Cancel" }));
-    expect(await within(detailRuntime.container).findByText("Unable to cancel run.")).toBeVisible();
-    fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Retry" }));
-    expect(await within(detailRuntime.container).findByText("Unable to retry run.")).toBeVisible();
+    fireEvent.click(await within(detailRuntime.container).findByRole("button", { name: "Остановить" }));
+    expect(await within(detailRuntime.container).findByText("Не удалось остановить запуск.")).toBeVisible();
+    fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Повторить" }));
+    expect(await within(detailRuntime.container).findByText("Не удалось повторить запуск.")).toBeVisible();
     detailRuntime.unmount();
 
     renderRoute("/artifacts/artifact-1", {
       listArtifacts: vi.fn().mockRejectedValue("boom"),
       getArtifact: vi.fn().mockRejectedValue("boom"),
     });
-    expect(await screen.findByText("Unable to load artifacts.")).toBeVisible();
+    expect(await screen.findByText("Не удалось загрузить результаты.")).toBeVisible();
 
     const diagnosticsRuntime = renderRoute("/diagnostics", {
       listDiagnostics: vi.fn().mockRejectedValue("boom"),
       getObservabilitySnapshot: vi.fn().mockRejectedValue("boom"),
       reconcileAnalysisRunQueue: vi.fn().mockRejectedValue("boom"),
     });
-    expect(await within(diagnosticsRuntime.container).findByText("Unable to load diagnostics.")).toBeVisible();
-    fireEvent.click(within(diagnosticsRuntime.container).getByRole("button", { name: "Reconcile queue" }));
-    expect(await within(diagnosticsRuntime.container).findByText("Unable to reconcile queue.")).toBeVisible();
+    expect(await within(diagnosticsRuntime.container).findByText("Не удалось загрузить проверки.")).toBeVisible();
+    fireEvent.click(within(diagnosticsRuntime.container).getByRole("button", { name: "Синхронизировать" }));
+    expect(await within(diagnosticsRuntime.container).findByText("Не удалось синхронизировать очередь.")).toBeVisible();
     diagnosticsRuntime.unmount();
 
     renderRoute("/inbox/media-1", {
       getMediaItem: vi.fn().mockRejectedValue("boom"),
       removeMediaItem: vi.fn().mockRejectedValue("boom"),
     });
-    expect(await screen.findByText("Unable to load media item.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Soft delete media item" }));
-    expect(await screen.findByText("Unable to remove media item.")).toBeVisible();
+    expect(await screen.findByText("Не удалось загрузить материал.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Удалить материал" }));
+    expect(await screen.findByText("Не удалось удалить материал.")).toBeVisible();
   });
 
   it("covers inbox helper fallbacks, selection toggles, and source labels", async () => {
@@ -897,15 +935,15 @@ describe("createWebUiRoutes", () => {
 
     expect(await screen.findByText("URL source")).toBeVisible();
     expect(screen.getByText("https://example.test/file")).toBeVisible();
-    expect(screen.getByText("binary")).toBeVisible();
+    expect(screen.getByText("Данные")).toBeVisible();
     expect(screen.queryByText("in inbox")).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select all" }));
-    expect(screen.getByRole("button", { name: "Clear selection" })).toBeEnabled();
-    fireEvent.click(screen.getByLabelText("Select URL source"));
-    expect(screen.getByRole("button", { name: "Create collection" })).toHaveTextContent("Create collection");
-    fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
-    expect(screen.getByRole("button", { name: "Clear selection" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать все" }));
+    expect(screen.getByRole("button", { name: "Очистить" })).toBeEnabled();
+    fireEvent.click(screen.getByLabelText("Выбрать URL source"));
+    expect(screen.getByRole("button", { name: "Создать группу" })).toHaveTextContent("Создать группу");
+    fireEvent.click(screen.getByRole("button", { name: "Очистить" }));
+    expect(screen.getByRole("button", { name: "Очистить" })).toBeDisabled();
 
     runtime.unmount();
 
@@ -916,15 +954,15 @@ describe("createWebUiRoutes", () => {
       listAnalysisRuns: vi.fn().mockResolvedValue({ items: [], page: { page_size: 25, has_more: false } }),
     });
 
-    expect(await screen.findByText("Unable to load the workspace.")).toBeVisible();
+    expect(await screen.findByText("Не удалось загрузить рабочую область.")).toBeVisible();
   });
 
   it("covers inbox add-to-collection success and file-kind fanout", async () => {
     const runtime = renderRoute("/");
 
-    fireEvent.click(await screen.findByLabelText("Select Interview audio"));
-    fireEvent.change(screen.getByLabelText("Existing collection"), { target: { value: "collection-1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+    fireEvent.click(await screen.findByLabelText("Выбрать Interview audio"));
+    fireEvent.change(screen.getByLabelText("Существующая группа"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить выбранное" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
@@ -935,13 +973,13 @@ describe("createWebUiRoutes", () => {
         ],
       });
     });
-    expect(await screen.findByText("Updated Research set")).toBeVisible();
+    expect(await screen.findByText("Обновлена группа: Research set")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "File/media" }));
-    fireEvent.change(screen.getByLabelText("File"), {
+    fireEvent.click(screen.getByRole("button", { name: "Файл" }));
+    fireEvent.change(screen.getByLabelText("Файл"), {
       target: { files: [new File(["video"], "clip.mp4", { type: "video/mp4" })] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
       expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
         1,
@@ -950,13 +988,13 @@ describe("createWebUiRoutes", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Add to inbox" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Добавить" })).toBeEnabled();
     });
 
-    fireEvent.change(screen.getByLabelText("File"), {
+    fireEvent.change(screen.getByLabelText("Файл"), {
       target: { files: [new File(["image"], "cover.png", { type: "image/png" })] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
       expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
         2,
@@ -965,13 +1003,13 @@ describe("createWebUiRoutes", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Add to inbox" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Добавить" })).toBeEnabled();
     });
 
-    fireEvent.change(screen.getByLabelText("File"), {
+    fireEvent.change(screen.getByLabelText("Файл"), {
       target: { files: [new File(["data"], "blob.bin", { type: "" })] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.addMediaItem).toHaveBeenNthCalledWith(
@@ -1063,10 +1101,10 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await screen.findByText(/selection .*item-1/)).toBeVisible();
-    expect(screen.getByText("failed")).toBeVisible();
-    expect(screen.getByText("None")).toBeVisible();
-    expect(screen.getAllByText("legacy_source_warning")).toHaveLength(2);
+    expect(await screen.findByText("Выбран в подборке")).toBeVisible();
+    expect(screen.getByText("Ошибка")).toBeVisible();
+    expect(screen.getByText("Нет")).toBeVisible();
+    expect(screen.getAllByText("Предупреждение по материалу")).toHaveLength(2);
     expect(screen.queryByText(/analysis_run.progress/)).toBeNull();
   });
 
@@ -1127,12 +1165,12 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await screen.findByText("Structured data")).toBeVisible();
-    expect(screen.getByText("Execution logs")).toBeVisible();
-    expect(screen.getByText("custom blob")).toBeVisible();
+    expect((await screen.findAllByText("Данные")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Журнал").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("custom blob").length).toBeGreaterThan(0);
     expect(screen.getByText("{invalid-json")).toBeVisible();
     expect(screen.getAllByText("2.4 MB")).toHaveLength(2);
-    expect(screen.queryByRole("link", { name: "Open artifact" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Открыть результат" })).toBeNull();
   });
 
   it("covers non-record manifest previews, missing collection labels, and generic run load fallback", async () => {
@@ -1163,7 +1201,7 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await within(runRuntime.container).findByText("Unable to load run.")).toBeVisible();
+    expect(await within(runRuntime.container).findByText("Не удалось загрузить запуск.")).toBeVisible();
     runRuntime.unmount();
   });
 
@@ -1184,26 +1222,26 @@ describe("createWebUiRoutes", () => {
       ),
     });
 
-    fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Curated set" } });
-    fireEvent.change(screen.getByLabelText("First item"), { target: { value: "media-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    fireEvent.change(await screen.findByLabelText("Название"), { target: { value: "Curated set" } });
+    fireEvent.change(screen.getByLabelText("Первый материал"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Создать" }));
     await waitFor(() => {
       expect(collectionsRuntime.apiClient.createCollection).toHaveBeenCalledWith(owner, {
         name: "Curated set",
         items: ["media-2"],
       });
     });
-    expect(screen.getByText("media-opaque")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(screen.getByText("Материал")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     await waitFor(() => {
-      expect(collectionsRuntime.apiClient.listCollections.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(vi.mocked(collectionsRuntime.apiClient.listCollections).mock.calls.length).toBeGreaterThanOrEqual(2);
     });
     collectionsRuntime.unmount();
 
     const runsRuntime = renderRoute("/runs");
-    fireEvent.change(await screen.findByLabelText("Collection"), { target: { value: "collection-1" } });
-    fireEvent.click(screen.getByLabelText("Select Call note"));
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.change(await screen.findByLabelText("Группа"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByLabelText("Выбрать Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(runsRuntime.apiClient.listAnalysisRuns).toHaveBeenCalledTimes(2);
     });
@@ -1225,29 +1263,29 @@ describe("createWebUiRoutes", () => {
       refreshArtifact: vi.fn().mockRejectedValue("boom"),
     });
 
-    expect(await screen.findByText("No inline preview is available for this artifact.")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Предпросмотр недоступен.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(artifactRuntime.apiClient.listArtifacts).toHaveBeenCalledTimes(2);
     });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh access" }));
-    expect(await screen.findByText("Unable to refresh artifact access.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Обновить ссылку" }));
+    expect(await screen.findByText("Не удалось обновить ссылку.")).toBeVisible();
     artifactRuntime.unmount();
 
     const diagnosticsRuntime = renderRoute("/diagnostics");
-    fireEvent.change(await screen.findByLabelText("Limit"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.change(await screen.findByLabelText("Лимит"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(diagnosticsRuntime.apiClient.listDiagnostics).toHaveBeenCalledTimes(2);
     });
-    fireEvent.click(screen.getByRole("button", { name: "Reconcile queue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Синхронизировать" }));
     await waitFor(() => {
       expect(diagnosticsRuntime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(1);
     });
     diagnosticsRuntime.unmount();
 
     const mediaRuntime = renderRoute("/inbox/media-1");
-    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(mediaRuntime.apiClient.getMediaItem).toHaveBeenCalledTimes(2);
     });
@@ -1256,7 +1294,7 @@ describe("createWebUiRoutes", () => {
   it("covers inbox refresh, archived collection activation, and successful rename refresh", async () => {
     const inboxRuntime = renderRoute("/");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Refresh" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(inboxRuntime.apiClient.listMediaItems).toHaveBeenCalledTimes(2);
       expect(inboxRuntime.apiClient.getInboxCollection).toHaveBeenCalledTimes(2);
@@ -1286,7 +1324,7 @@ describe("createWebUiRoutes", () => {
       ),
     });
 
-    const archivedRename = await screen.findByLabelText("Rename Archived set");
+    const archivedRename = await screen.findByLabelText("Переименовать Archived set");
     fireEvent.blur(archivedRename, { target: { value: "Reactivated set" } });
     await waitFor(() => {
       expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-archived", {
@@ -1298,7 +1336,7 @@ describe("createWebUiRoutes", () => {
       expect(archivedRuntime.apiClient.listCollections).toHaveBeenCalledTimes(2);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Activate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Вернуть" }));
     await waitFor(() => {
       expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-archived", {
         expectedVersion: 3,
@@ -1309,20 +1347,20 @@ describe("createWebUiRoutes", () => {
 
   it("covers run-detail refresh and successful cancel lifecycle", async () => {
     const runtime = renderRoute("/runs/run-1", {
-      cancelAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ status: "cancel_requested" })),
+      cancelAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ status: "Остановка" })),
     });
 
-    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Refresh" }));
+    fireEvent.click(await within(runtime.container).findByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(runtime.apiClient.getAnalysisRun).toHaveBeenCalledTimes(2);
     });
 
-    fireEvent.click(within(runtime.container).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(runtime.container).getByRole("button", { name: "Остановить" }));
     await waitFor(() => {
       expect(runtime.apiClient.cancelAnalysisRun).toHaveBeenCalledWith(owner, "run-1");
     });
-    expect(await within(runtime.container).findByText("Cancel requested")).toBeVisible();
-    expect(within(runtime.container).getByText("cancel_requested")).toBeVisible();
+    expect(await within(runtime.container).findByText("Остановка запрошена")).toBeVisible();
+    expect(within(runtime.container).getByText("Остановка")).toBeVisible();
   });
 
   it("covers text preview fallback, kilobyte sizing, and nullable download availability", async () => {
@@ -1359,8 +1397,8 @@ describe("createWebUiRoutes", () => {
     });
 
     expect(await screen.findByText("2.0 KB")).toBeVisible();
-    expect(screen.getByText("No inline preview is available for this artifact.")).toBeVisible();
-    expect(screen.getByRole("link", { name: "Open artifact" })).toHaveAttribute(
+    expect(screen.getByText("Предпросмотр недоступен.")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Открыть результат" })).toHaveAttribute(
       "href",
       "https://minio.local/artifact-text-preview.log",
     );
@@ -1378,8 +1416,8 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findByText("#1 Call note")).toBeVisible();
     expect(screen.getByText("0")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Params"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create run from 1 items" }));
+    fireEvent.change(screen.getByLabelText("Параметры"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
 
     await waitFor(() => {
       expect(runtime.apiClient.createSelection).toHaveBeenCalledWith(
@@ -1443,13 +1481,13 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    const outcomeTable = await within(runtime.container).findByText("included");
+    const outcomeTable = await within(runtime.container).findByText("включено");
     const metrics = within(outcomeTable.closest(".metric-strip") as HTMLElement);
     expect(metrics.getAllByText("0")).toHaveLength(3);
-    const selectionItem = screen.getByText("selection item");
+    const selectionItem = screen.getByText("Элемент подборки");
     expect(selectionItem).toBeVisible();
     const outcomeRow = selectionItem.closest(".outcome-row") as HTMLElement;
-    expect(within(outcomeRow).getByText("skipped")).toBeVisible();
+    expect(within(outcomeRow).getByText("Пропущено")).toBeVisible();
   });
 
   it("covers concrete Error message branches across route surfaces", async () => {
@@ -1460,17 +1498,17 @@ describe("createWebUiRoutes", () => {
       replaceCollectionItems: vi.fn().mockRejectedValue(new Error("Collection add exploded")),
     });
 
-    fireEvent.click(await screen.findByRole("button", { name: "Create" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Создать" }));
     expect(await screen.findByText("Collection create exploded")).toBeVisible();
 
-    fireEvent.blur(screen.getByLabelText("Rename Research set"), { target: { value: "Renamed with error" } });
+    fireEvent.blur(screen.getByLabelText("Переименовать Research set"), { target: { value: "Renamed with error" } });
     expect(await screen.findByText("Collection update exploded")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Убрать" }));
     expect(await screen.findByText("Collection remove exploded")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Add inbox item"), { target: { value: "media-2" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add item" }));
+    fireEvent.change(screen.getByLabelText("Добавить материал"), { target: { value: "media-2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     expect(await screen.findByText("Collection add exploded")).toBeVisible();
   });
 
@@ -1497,15 +1535,15 @@ describe("createWebUiRoutes", () => {
       removeMediaItem: vi.fn().mockRejectedValue(new Error("Inbox removal exploded")),
     });
 
-    fireEvent.click(await screen.findByLabelText("Select Call note"));
-    fireEvent.click(screen.getByRole("button", { name: "Create collection" }));
+    fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
+    fireEvent.click(screen.getByRole("button", { name: "Создать группу" }));
     expect(await screen.findByText("Inbox collection create exploded")).toBeVisible();
 
-    fireEvent.change(screen.getByLabelText("Existing collection"), { target: { value: "collection-1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
+    fireEvent.change(screen.getByLabelText("Существующая группа"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить выбранное" }));
     expect(await screen.findByText("Inbox collection update exploded")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Soft delete Call note" }));
+    fireEvent.click(screen.getByRole("button", { name: "Удалить Call note" }));
     expect(await screen.findByText("Inbox removal exploded")).toBeVisible();
     inboxRuntime.unmount();
 
@@ -1520,8 +1558,8 @@ describe("createWebUiRoutes", () => {
       updateCollection: vi.fn().mockRejectedValue(new Error("Archive update exploded")),
     });
 
-    expect(await screen.findByLabelText("Rename Research set")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(await screen.findByLabelText("Переименовать Research set")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "В архив" }));
     expect(await screen.findByText("Archive update exploded")).toBeVisible();
   });
 
@@ -1581,8 +1619,8 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await within(manifestFallbackRuntime.container).findByText("Selected as")).toBeVisible();
-    const progressEvent = await within(manifestFallbackRuntime.container).findByText("analysis_run.progress");
+    expect(await within(manifestFallbackRuntime.container).findByText("Выбран в подборке")).toBeVisible();
+    const progressEvent = await within(manifestFallbackRuntime.container).findByText("Прогресс");
     const progressEntry = progressEvent.closest(".timeline-entry") as HTMLElement;
     expect(progressEntry).toBeVisible();
     expect(progressEntry).not.toHaveTextContent("false");
@@ -1602,9 +1640,9 @@ describe("createWebUiRoutes", () => {
       retryAnalysisRun: vi.fn().mockRejectedValue(new Error("Run retry exploded")),
     });
 
-    fireEvent.click(await within(runActionRuntime.container).findByRole("button", { name: "Cancel" }));
+    fireEvent.click(await within(runActionRuntime.container).findByRole("button", { name: "Остановить" }));
     expect(await within(runActionRuntime.container).findByText("Run cancel exploded")).toBeVisible();
-    fireEvent.click(within(runActionRuntime.container).getByRole("button", { name: "Retry" }));
+    fireEvent.click(within(runActionRuntime.container).getByRole("button", { name: "Повторить" }));
     expect(await within(runActionRuntime.container).findByText("Run retry exploded")).toBeVisible();
     runActionRuntime.unmount();
 
@@ -1629,22 +1667,22 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await within(artifactRefreshRuntime.container).findByText("No diagnostics.")).toBeVisible();
-    fireEvent.click(within(artifactRefreshRuntime.container).getByRole("button", { name: "Refresh access" }));
+    expect(await within(artifactRefreshRuntime.container).findByText("Проверок пока нет.")).toBeVisible();
+    fireEvent.click(within(artifactRefreshRuntime.container).getByRole("button", { name: "Обновить ссылку" }));
     expect(await within(artifactRefreshRuntime.container).findByText("Artifact refresh exploded")).toBeVisible();
   });
 
   it("covers file-reset, diagnostics, and media-detail concrete Error branches", async () => {
     const inboxRuntime = renderRoute("/");
 
-    fireEvent.click(await screen.findByRole("button", { name: "File/media" }));
-    fireEvent.change(screen.getByLabelText("File"), {
+    fireEvent.click(await screen.findByRole("button", { name: "Файл" }));
+    fireEvent.change(screen.getByLabelText("Файл"), {
       target: {
         files: [],
       },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Add to inbox" }));
-    expect(await screen.findByText("Choose a file first.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
+    expect(await screen.findByText("Выберите файл.")).toBeVisible();
     inboxRuntime.unmount();
 
     const diagnosticsLoaderRuntime = renderRoute("/diagnostics", {
@@ -1658,7 +1696,7 @@ describe("createWebUiRoutes", () => {
       reconcileAnalysisRunQueue: vi.fn().mockRejectedValue(new Error("Queue reconcile exploded")),
     });
 
-    fireEvent.click(await within(diagnosticsRuntime.container).findByRole("button", { name: "Reconcile queue" }));
+    fireEvent.click(await within(diagnosticsRuntime.container).findByRole("button", { name: "Синхронизировать" }));
     expect(await within(diagnosticsRuntime.container).findByText("Queue reconcile exploded")).toBeVisible();
     diagnosticsRuntime.unmount();
 
@@ -1673,7 +1711,7 @@ describe("createWebUiRoutes", () => {
       removeMediaItem: vi.fn().mockRejectedValue(new Error("Media removal exploded")),
     });
 
-    fireEvent.click(await within(mediaRuntime.container).findByRole("button", { name: "Soft delete Call note" }));
+    fireEvent.click(await within(mediaRuntime.container).findByRole("button", { name: "Удалить Call note" }));
     expect(await within(mediaRuntime.container).findByText("Media removal exploded")).toBeVisible();
   });
 
@@ -1683,13 +1721,13 @@ describe("createWebUiRoutes", () => {
       removeMediaItem: vi.fn().mockRejectedValue("boom"),
     });
 
-    fireEvent.click(await screen.findByLabelText("Select Call note"));
-    fireEvent.change(screen.getByLabelText("Existing collection"), { target: { value: "collection-1" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add selected" }));
-    expect(await screen.findByText("Unable to update collection.")).toBeVisible();
+    fireEvent.click(await screen.findByLabelText("Выбрать Call note"));
+    fireEvent.change(screen.getByLabelText("Существующая группа"), { target: { value: "collection-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Добавить выбранное" }));
+    expect(await screen.findByText("Не удалось обновить группу.")).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Soft delete Call note" }));
-    expect(await screen.findByText("Unable to remove media.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Удалить Call note" }));
+    expect(await screen.findByText("Не удалось удалить материал.")).toBeVisible();
     inboxRuntime.unmount();
 
     const listCollections = vi
@@ -1711,11 +1749,11 @@ describe("createWebUiRoutes", () => {
     });
 
     expect(await screen.findByText("Research set")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(runBuilderRuntime.apiClient.listCollections).toHaveBeenCalledTimes(2);
     });
-    expect(await screen.findByText("collection-1")).toBeVisible();
+    expect(await screen.findByText("Выбранная группа")).toBeVisible();
   });
 
   it("covers non-object manifest payload fallback", async () => {
@@ -1751,7 +1789,7 @@ describe("createWebUiRoutes", () => {
       }),
     });
 
-    expect(await within(runtime.container).findByText("Selected as")).toBeVisible();
+    expect(await within(runtime.container).findByText("Выбран в подборке")).toBeVisible();
     expect(within(runtime.container).queryByText("Outcome")).toBeNull();
   });
 });

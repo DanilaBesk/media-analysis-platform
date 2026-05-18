@@ -162,10 +162,10 @@
     </Telegram>
     <Web>
       <rule>Web is a simple human-facing management surface for browsing materials, creating groups, curating the current selection, launching analysis, and reviewing results, progress, errors, and downloads.</rule>
-      <rule>Web calls the public API but normal UI copy must avoid load-bearing internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals outside explicit admin/debug views.</rule>
+      <rule>Web calls the target public API for media_assets, selection_snapshots, analysis_runs, artifacts, and diagnostics, but normal UI copy must avoid load-bearing internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals outside explicit admin/debug views.</rule>
     </Web>
     <MCP>
-      <rule>MCP exposes tool calls for add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</rule>
+      <rule>MCP exposes target tool calls for create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</rule>
     </MCP>
   </AdapterBoundaries>
 
@@ -188,6 +188,7 @@
     <bead id="media-7f3.9.4" status="completed">Telegram now persists current_materials_panel, analysis_task_surface, and result_artifact_surface records through channel_surfaces, restores active surfaces after restart, supersedes uneditable messages, and prevents duplicate result delivery with result artifact surfaces.</bead>
     <bead id="media-7f3.9.5" status="completed">Telegram active flows now create media_assets, read channel-account-scoped collections, create selection_snapshots, start analysis_runs by selection_snapshot_id, and read artifacts/diagnostics through target channel_account_id requests.</bead>
     <bead id="media-7f3.9.6" status="completed">Active workers now poll and claim analysis_run_steps by step_kind, consume selection_snapshot/analysis_run_step_inputs, publish artifacts/diagnostics/progress/finalization by analysis_run_step_id, and record worker artifacts as stored_objects plus artifact_subject lineage.</bead>
+    <bead id="media-7f3.9.7" status="completed">Web now calls target public operations with human-facing Russian copy, and MCP exposes target tool names plus channel_account_id schemas.</bead>
     <bead id="media-5cj" status="completed">Historical server storage/API orchestration exists for the earlier inbox-first chain and is superseded by the media-7f3 target rebuild.</bead>
     <bead id="media-sfx" status="completed">Worker execution now runs behind analysis_run with sealed selection consumption.</bead>
     <bead id="media-7al" status="completed">Telegram now operates over explicit selection/run semantics on the API-owned inbox.</bead>

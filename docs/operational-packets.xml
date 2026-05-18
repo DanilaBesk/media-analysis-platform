@@ -22,6 +22,7 @@
     <completed-packet bead="media-7f3.9.4">channel-surfaces-restart-recovery</completed-packet>
     <completed-packet bead="media-7f3.9.5">telegram-target-materials-and-run-cards</completed-packet>
     <completed-packet bead="media-7f3.9.6">workers-analysis-run-steps-selection-snapshots</completed-packet>
+    <completed-packet bead="media-7f3.9.7">web-mcp-target-vocabulary-api-operations</completed-packet>
     <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.9, media-7f3.10, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
@@ -321,6 +322,37 @@ Artifact registration records stored_objects, artifacts, and artifact_subject li
     </verification>
   </ExecutionPacket>
 
+  <ExecutionPacket packet-id="media-7f3.9.7-web-mcp-target-vocabulary-api-operations" module="M-WEB,M-MCP-ADAPTER,M-API-HTTP" phase="TargetRebuildAdapters" verification-ref="EV-ADAPTERS,EV-API,EV-GRACE">
+    <purpose>Migrate Web and MCP to target vocabulary and target API operations while keeping Web copy human-facing.</purpose>
+    <depends-on>media-7f3.9.3, media-7f3.9.6</depends-on>
+    <write-scope>
+      <file-1>apps/web/src/lib/api</file-1>
+      <file-2>apps/web/src/app</file-2>
+      <file-3>apps/web/src/features/media</file-3>
+      <file-4>apps/web/tests</file-4>
+      <file-5>apps/mcp-server/src/tools</file-5>
+      <file-6>apps/mcp-server/tests</file-6>
+      <file-7>apps/api/internal/api</file-7>
+      <file-8>docs/requirements.xml</file-8>
+      <file-9>docs/development-plan.xml</file-9>
+      <file-10>docs/verification-plan.xml</file-10>
+      <file-11>docs/knowledge-graph.xml</file-11>
+      <file-12>docs/operational-packets.xml</file-12>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Web API client calls target public routes for media_assets, selection_snapshots, analysis_runs, artifacts, diagnostics, and channel_account_id scope, while normal Web UI copy says materials, groups, selection, progress, results, checks, and downloads instead of load-bearing internal names or raw ids.
+MCP exposes target technical tools create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. Deprecated media_item, selection, owner, and legacy route terms are compatibility-only implementation context.
+    ]]></contract-excerpt>
+    <verification>
+      <check>pnpm exec tsc --noEmit in apps/web</check>
+      <check>pnpm test -- api-client.test.ts routes.test.tsx media-item-list.test.tsx reconciliation.test.tsx runtime-context.test.tsx in apps/web</check>
+      <check>pnpm typecheck and pnpm test in apps/mcp-server</check>
+      <check>go test ./internal/api -count=1 in apps/api</check>
+      <check>Focused stale-vocabulary searches across Web visible copy and MCP active tool contracts.</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+    </verification>
+  </ExecutionPacket>
+
   <ExecutionPacket packet-id="media-5cj-server-storage-orchestration" module="M-API-STORAGE,M-API-DOMAIN,M-API-HTTP" phase="Server" verification-ref="EV-STORAGE,EV-API">
     <purpose>Implement storage and API orchestration bottom-up before adapter rewrites.</purpose>
     <depends-on>media-49h-contracts</depends-on>
@@ -390,7 +422,7 @@ Telegram turns messages, files, URLs, media groups, voice, audio, video, photos,
       <file-2>Web tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-Web manages materials, groups, current selection, progress, results, errors, downloads, search, and retention actions over the public API. Normal Web UI copy is intentionally simple and human-facing; internal API terms, raw ids, channel surface concepts, step names, run manifests, and diagnostic internals are reserved for explicit admin/debug views. Current visible technical labels to remove from normal UI include Run builder, Artifacts, Diagnostics, Run manifest, Selection snapshot, Analysis run, and Media item.
+Web manages materials, groups, current selection, progress, results, errors, downloads, search, and retention actions over the public API. Normal Web UI copy is intentionally simple and human-facing; internal API terms, raw ids, channel surface concepts, step names, run manifests, and diagnostic internals are reserved for explicit admin/debug views. media-7f3.9.7 migrates the active Web client to target API operations while preserving this human-facing copy rule.
     ]]></contract-excerpt>
     <verification>
       <check>Web tests prove collection edits after run creation do not alter run selection snapshots.</check>
@@ -406,7 +438,7 @@ Web manages materials, groups, current selection, progress, results, errors, dow
       <file-2>MCP tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-MCP tools: add_media, list_media, search_media, get_media, remove_media, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection, get_selection, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. MCP may expose target technical vocabulary because it is a tool contract context, but it must not use deprecated compatibility names as new target tool semantics.
+MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. MCP may expose target technical vocabulary because it is a tool contract context, but it must not use deprecated compatibility names as new target tool semantics.
     ]]></contract-excerpt>
     <verification>
       <check>MCP tests prove tool behavior matches API channel-account access, lifecycle, retention, and diagnostics envelopes.</check>

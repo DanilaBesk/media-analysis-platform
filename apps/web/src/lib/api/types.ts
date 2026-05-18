@@ -1,4 +1,5 @@
 export type OwnerType = "user" | "telegram" | "web" | "mcp" | "service";
+export type ChannelAccountId = string;
 export type MediaKind =
   | "text"
   | "url"
@@ -10,7 +11,9 @@ export type MediaKind =
   | "video"
   | "document";
 export type SourceOriginType = "text" | "url" | "object";
+export type MediaAssetOriginType = "text" | "url" | "upload" | "telegram_file" | "object";
 export type MediaItemStatus = "validating" | "ready" | "quarantined" | "deleted";
+export type MediaAssetStatus = MediaItemStatus;
 export type CollectionKind = "inbox" | "user";
 export type CollectionStatus = "active" | "archived" | "deleted";
 export type SelectionStatus = "sealed" | "invalidated";
@@ -40,13 +43,14 @@ export type ArtifactKind =
 export type ArtifactStatus = "pending" | "available" | "failed" | "expired" | "deleted";
 export type DiagnosticSeverity = "info" | "warning" | "error";
 export type DiagnosticSubjectType =
-  | "media_item"
-  | "source"
+  | "media_asset"
+  | "stored_object"
   | "collection"
-  | "selection"
+  | "selection_snapshot"
   | "analysis_run"
+  | "analysis_run_step"
   | "artifact"
-  | "adapter"
+  | "channel"
   | "retention";
 
 export interface OwnerScope {
@@ -85,6 +89,37 @@ export interface MediaSourceMetadata {
   size_bytes?: number | null;
   mime_type?: string | null;
   expires_at?: string | null;
+}
+
+export interface MediaAssetOrigin {
+  origin_type: MediaAssetOriginType;
+  origin_ref?: string | null;
+  object_ref?: string | null;
+  original_filename?: string | null;
+  stored_object_id?: string | null;
+  content_type?: string | null;
+  size_bytes?: number | null;
+  checksum?: string | null;
+  text?: string;
+  url?: string;
+  language_hint?: string;
+}
+
+export interface MediaAssetSummary {
+  media_asset_id: string;
+  channel_account_id: ChannelAccountId;
+  kind: MediaKind;
+  status: MediaAssetStatus;
+  display_name: string;
+  origin: MediaAssetOrigin;
+  diagnostics_count?: number;
+  created_at: string;
+  updated_at: string;
+  deleted_at?: string | null;
+}
+
+export interface MediaAsset extends MediaAssetSummary {
+  diagnostics?: DiagnosticSummary[];
 }
 
 export interface MediaItemSummary {
@@ -128,8 +163,10 @@ export interface MediaItem extends MediaItemSummary {
 
 export interface CollectionItem {
   media_item_id: string;
+  media_asset_id?: string;
   position: number;
   media_item?: MediaItem;
+  media_asset?: MediaAsset;
   added_by?: string | null;
   added_at: string;
 }
@@ -137,6 +174,7 @@ export interface CollectionItem {
 export interface Collection {
   collection_id: string;
   owner: OwnerScope;
+  channel_account_id?: ChannelAccountId;
   kind: CollectionKind;
   name: string;
   status: CollectionStatus;
@@ -151,8 +189,12 @@ export interface Collection {
 export interface SelectionItemSnapshot {
   position: number;
   media_item_id: string;
+  media_asset_id?: string;
+  selection_snapshot_item_id?: string;
   kind: MediaKind;
   source_snapshot: MediaSourceMetadata;
+  origin_snapshot?: MediaAssetOrigin;
+  storage_snapshot?: Record<string, unknown>;
   display_name: string;
   status_at_selection: MediaItemStatus;
   metadata_snapshot?: Record<string, unknown>;
@@ -162,12 +204,39 @@ export interface SelectionItemSnapshot {
 
 export interface Selection {
   selection_id: string;
+  selection_snapshot_id?: string;
   owner: OwnerScope;
+  channel_account_id?: ChannelAccountId;
   status: SelectionStatus;
   source_collection_id?: string | null;
   items: SelectionItemSnapshot[];
   option_snapshot?: Record<string, unknown>;
   created_by: string;
+  diagnostics?: DiagnosticSummary[];
+  created_at: string;
+  sealed_at: string;
+}
+
+export interface SelectionSnapshotItem {
+  selection_snapshot_item_id: string;
+  position: number;
+  media_asset_id: string;
+  kind: MediaKind;
+  display_name: string;
+  origin_snapshot: MediaAssetOrigin;
+  storage_snapshot?: Record<string, unknown>;
+  metadata_snapshot?: Record<string, unknown>;
+  status_at_selection: MediaAssetStatus;
+  diagnostics?: DiagnosticSummary[];
+}
+
+export interface SelectionSnapshot {
+  selection_snapshot_id: string;
+  channel_account_id: ChannelAccountId;
+  status: SelectionStatus;
+  source_collection_id?: string | null;
+  items: SelectionSnapshotItem[];
+  option_snapshot?: Record<string, unknown>;
   diagnostics?: DiagnosticSummary[];
   created_at: string;
   sealed_at: string;
@@ -232,7 +301,9 @@ export interface RunProgressPayload {
 export interface AnalysisRunSummary {
   analysis_run_id: string;
   owner: OwnerScope;
+  channel_account_id?: ChannelAccountId;
   selection_id: string;
+  selection_snapshot_id?: string;
   run_type: RunType;
   status: AnalysisRunStatus;
   version: number;
@@ -294,6 +365,12 @@ export interface AddMediaItemDraft {
       };
 }
 
+export interface AddMediaAssetDraft {
+  kind: MediaKind;
+  displayName: string;
+  origin: MediaAssetOrigin;
+}
+
 export interface CollectionDraft {
   name: string;
   items: string[];
@@ -307,8 +384,15 @@ export interface SelectionDraft {
   createdBy?: string;
 }
 
+export interface SelectionSnapshotDraft {
+  sourceCollectionId?: string;
+  items: Array<{ media_asset_id: string; position: number }>;
+  optionSnapshot?: Record<string, unknown>;
+}
+
 export interface RunDraft {
   selectionId: string;
+  selectionSnapshotId?: string;
   runType: RunType;
   params?: Record<string, unknown>;
   delivery: DeliveryPreference;
@@ -322,5 +406,5 @@ export interface UpdateCollectionDraft {
 
 export interface ReplaceCollectionItemsDraft {
   expectedVersion: number;
-  items: Array<{ media_item_id: string; position: number }>;
+  items: Array<{ media_item_id?: string; media_asset_id?: string; position: number }>;
 }

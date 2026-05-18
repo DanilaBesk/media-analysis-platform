@@ -4,11 +4,11 @@ import { NavLink } from "react-router-dom";
 import { useWebUiRuntime } from "./runtime-context";
 
 const NAV_ITEMS = [
-  { to: "/", label: "Inbox", end: true },
-  { to: "/collections", label: "Collections" },
-  { to: "/runs", label: "Run builder" },
-  { to: "/artifacts", label: "Artifacts" },
-  { to: "/diagnostics", label: "Admin" },
+  { to: "/", label: "Материалы", end: true },
+  { to: "/collections", label: "Группы" },
+  { to: "/runs", label: "Подборка" },
+  { to: "/artifacts", label: "Результаты" },
+  { to: "/diagnostics", label: "Проверки" },
 ];
 
 export function AppShell({ children }: PropsWithChildren): JSX.Element {
@@ -18,8 +18,8 @@ export function AppShell({ children }: PropsWithChildren): JSX.Element {
     <div className="app-shell">
       <header className="app-shell__header">
         <div>
-          <p className="app-shell__eyebrow">Media Analysis</p>
-          <h1>Inbox</h1>
+          <p className="app-shell__eyebrow">Анализ медиа</p>
+          <h1>Материалы</h1>
         </div>
         <dl className="app-shell__env">
           <div>
@@ -27,13 +27,13 @@ export function AppShell({ children }: PropsWithChildren): JSX.Element {
             <dd>{env.apiBaseUrl}</dd>
           </div>
           <div>
-            <dt>Events</dt>
+            <dt>События</dt>
             <dd>{env.wsUrl}</dd>
           </div>
         </dl>
       </header>
 
-      <nav className="app-shell__nav" aria-label="Primary">
+      <nav className="app-shell__nav" aria-label="Основная навигация">
         {NAV_ITEMS.map((item) => (
           <NavLink end={item.end} key={item.to} to={item.to}>
             {item.label}

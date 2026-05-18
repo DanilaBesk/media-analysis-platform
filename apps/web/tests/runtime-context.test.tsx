@@ -47,7 +47,7 @@ describe("WebUiRuntimeProvider", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("Media Analysis")).toBeVisible();
+    expect(screen.getByText("Анализ медиа")).toBeVisible();
     expect(screen.getByText("http://localhost:8080")).toBeVisible();
     expect(screen.getByText("ws://localhost:8080/v1/ws")).toBeVisible();
     expect(screen.getByText("Child content")).toBeVisible();

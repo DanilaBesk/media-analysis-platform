@@ -3,8 +3,9 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 
 import { MediaItemList } from "../src/features/media/media-workspace";
+import type { MediaItemSummary } from "../src/lib/api/types";
 
-const items = [
+const items: MediaItemSummary[] = [
   {
     media_item_id: "media-1",
     owner: { owner_type: "web", owner_id: "u-1" },
@@ -31,8 +32,8 @@ describe("MediaItemList", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.queryByLabelText("Selection controls")).toBeNull();
-    expect(screen.queryByLabelText("Select First note")).toBeNull();
+    expect(screen.queryByLabelText("Управление подборкой")).toBeNull();
+    expect(screen.queryByLabelText("Выбрать First note")).toBeNull();
     expect(screen.getByRole("link", { name: "First note" })).toBeVisible();
   });
 
@@ -43,6 +44,6 @@ describe("MediaItemList", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByText("No media items match this owner.")).toBeVisible();
+    expect(screen.getByText("Материалов пока нет.")).toBeVisible();
   });
 });

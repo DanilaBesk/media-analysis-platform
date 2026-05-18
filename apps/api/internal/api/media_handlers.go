@@ -619,6 +619,10 @@ func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRefreshArtifactLink(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleGetTargetArtifact(w, r)
+		return
+	}
 	artifact, err := s.deps.Public.RefreshArtifactLink(r.Context(), ownerFromQuery(r), r.PathValue("artifact_id"))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))

@@ -109,19 +109,182 @@ function diagnosticsForSubject(diagnostics: Diagnostic[], subjectId: string): Di
   return diagnostics.filter((diagnostic) => diagnosticSubject(diagnostic).subject_id === subjectId);
 }
 
-function artifactGroupLabel(kind: ArtifactSummary["kind"]): string {
+function artifactGroupLabel(kind: string): string {
   switch (kind) {
+    case "transcript":
+      return "Расшифровка";
+    case "summary":
+      return "Краткое содержание";
+    case "report":
+      return "Отчет";
+    case "deep_research":
+      return "Глубокое исследование";
     case "run_manifest":
-      return "Run manifest";
+      return "План запуска";
     case "run_diagnostics":
     case "diagnostic_bundle":
-      return "Diagnostics";
+      return "Проверки";
     case "structured_data":
-      return "Structured data";
+      return "Данные";
     case "execution_log":
-      return "Execution logs";
+      return "Журнал";
+    case "source_manifest":
+      return "Список материалов";
+    case "preview":
+      return "Предпросмотр";
     default:
       return kind.replace(/_/g, " ");
+  }
+}
+
+function eventLabel(eventType: string): string {
+  switch (eventType) {
+    case "analysis_run.created":
+      return "Запуск создан";
+    case "analysis_run.progress":
+      return "Прогресс";
+    case "analysis_run.completed":
+      return "Запуск завершен";
+    case "analysis_run.failed":
+      return "Ошибка запуска";
+    case "diagnostic.recorded":
+      return "Проверка записана";
+    case "artifact.available":
+      return "Результат готов";
+    default:
+      return "Событие";
+  }
+}
+
+function runTypeLabel(runType: string): string {
+  switch (runType) {
+    case "transcription":
+      return "Расшифровка";
+    case "summary":
+      return "Краткое содержание";
+    case "report":
+      return "Отчет";
+    case "deep_research":
+      return "Глубокое исследование";
+    case "custom":
+      return "Свой сценарий";
+    default:
+      return runType.replace(/_/g, " ");
+  }
+}
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case "queued":
+      return "В очереди";
+    case "running":
+      return "В работе";
+    case "cancel_requested":
+      return "Остановка";
+    case "pending":
+      return "Готовится";
+    case "validating":
+      return "Проверяется";
+    case "partially_succeeded":
+      return "Частично готово";
+    case "succeeded":
+    case "included":
+    case "ready":
+    case "available":
+    case "active":
+      return "Готово";
+    case "skipped":
+      return "Пропущено";
+    case "failed":
+      return "Ошибка";
+    case "canceled":
+      return "Отменено";
+    case "expired":
+      return "Истекло";
+    case "deleted":
+    case "soft_deleted":
+      return "Удалено";
+    case "archived":
+      return "В архиве";
+    case "quarantined":
+      return "На проверке";
+    case "warning":
+      return "Предупреждение";
+    case "info":
+      return "Инфо";
+    case "error":
+      return "Ошибка";
+    default:
+      return status.replace(/_/g, " ");
+  }
+}
+
+function kindLabel(kind: string): string {
+  switch (kind) {
+    case "text":
+      return "Текст";
+    case "url":
+      return "Ссылка";
+    case "audio":
+    case "voice":
+      return "Аудио";
+    case "video":
+      return "Видео";
+    case "image":
+    case "photo":
+      return "Изображение";
+    case "document":
+    case "file":
+      return "Файл";
+    case "object":
+    case "upload":
+    case "telegram_file":
+      return "Файл";
+    case "binary":
+      return "Данные";
+    default:
+      return kind.replace(/_/g, " ");
+  }
+}
+
+function diagnosticSubjectLabel(subjectType: string): string {
+  switch (subjectType) {
+    case "media_asset":
+    case "media_item":
+      return "материал";
+    case "collection":
+      return "группа";
+    case "selection_snapshot":
+    case "selection":
+      return "подборка";
+    case "analysis_run":
+      return "запуск";
+    case "artifact":
+      return "результат";
+    case "adapter":
+    case "channel":
+      return "канал";
+    case "retention":
+      return "хранение";
+    default:
+      return subjectType.replace(/_/g, " ");
+  }
+}
+
+function diagnosticCodeLabel(code: string): string {
+  switch (code) {
+    case "worker_failed":
+      return "Сбой обработки";
+    case "source_unavailable":
+      return "Материал недоступен";
+    case "artifact_preview_ready":
+      return "Предпросмотр готов";
+    case "retention_hold_pending":
+      return "Удаление ожидает разрешения";
+    case "legacy_source_warning":
+      return "Предупреждение по материалу";
+    default:
+      return "Проверка";
   }
 }
 
@@ -151,9 +314,9 @@ function previewText(artifact: Artifact): string {
 
 function formatDate(value?: string | null): string {
   if (!value) {
-    return "Not set";
+    return "Нет данных";
   }
-  return new Intl.DateTimeFormat("en-GB", {
+  return new Intl.DateTimeFormat("ru-RU", {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(value));
@@ -172,11 +335,19 @@ function formatBytes(value?: number | null): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function compactId(value: string): string {
-  if (value.length <= 14) {
-    return value;
+function evidenceGateLabel(state: string): string {
+  switch (state) {
+    case "not_required":
+      return "Не требуется";
+    case "pending":
+      return "Ожидает проверки";
+    case "passed":
+      return "Пройдена";
+    case "failed":
+      return "Есть ошибки";
+    default:
+      return statusLabel(state);
   }
-  return `${value.slice(0, 8)}...${value.slice(-6)}`;
 }
 
 function runEventProgressText(event: RunEvent): string {
@@ -185,7 +356,26 @@ function runEventProgressText(event: RunEvent): string {
   }
   const stage = typeof event.payload.stage === "string" ? event.payload.stage : "";
   const message = typeof event.payload.message === "string" ? event.payload.message : "";
-  return [stage, message].filter(Boolean).join(": ");
+  return [stage ? stageLabel(stage) : "", message].filter(Boolean).join(": ");
+}
+
+function stageLabel(stage: string): string {
+  switch (stage) {
+    case "queued":
+      return "Ожидает очереди";
+    case "transcribing":
+      return "Расшифровка";
+    case "summarizing":
+      return "Краткое содержание";
+    case "reporting":
+      return "Отчет";
+    case "deep_research":
+      return "Глубокое исследование";
+    case "artifact_upload":
+      return "Сохранение результата";
+    default:
+      return "Прогресс";
+  }
 }
 
 function sourceLabel(item: MediaItemSummary): string {
@@ -193,12 +383,23 @@ function sourceLabel(item: MediaItemSummary): string {
     return item.source.external_uri;
   }
   if (item.source.object_key) {
-    return item.source.object_key;
+    return "Загруженный файл";
   }
   if (item.source.text_ref) {
-    return item.source.text_ref;
+    return "Встроенный текст";
   }
-  return item.source.origin_type;
+  return kindLabel(item.source.origin_type);
+}
+
+function selectionSummaryLabel(run: AnalysisRun): string {
+  const count = run.selection.items.length;
+  if (count === 1) {
+    return "1 материал";
+  }
+  if (count > 1 && count < 5) {
+    return `${count} материала`;
+  }
+  return `${count} материалов`;
 }
 
 function useMessage(): [string, (message: string) => void] {
@@ -230,7 +431,7 @@ function useInboxData() {
       setCollections(collectionsResponse.items);
       setRuns(runsResponse.items);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load the workspace.");
+      setError(err instanceof Error ? err.message : "Не удалось загрузить рабочую область.");
     } finally {
       setLoading(false);
     }
@@ -287,18 +488,18 @@ export function MediaItemList({
   onRemove?: (mediaItemId: string) => void;
 }): JSX.Element {
   if (items.length === 0) {
-    return <p className="muted-text">No media items match this owner.</p>;
+    return <p className="muted-text">Материалов пока нет.</p>;
   }
 
   return (
     <div className="data-list">
       {onToggle && onSelectAll && onClearSelection ? (
-        <div className="selection-toolbar" aria-label="Selection controls">
+        <div className="selection-toolbar" aria-label="Управление подборкой">
           <button className="secondary-button" onClick={onSelectAll} type="button">
-            Select all
+            Выбрать все
           </button>
           <button className="secondary-button" disabled={selected.size === 0} onClick={onClearSelection} type="button">
-            Clear selection
+            Очистить
           </button>
         </div>
       ) : null}
@@ -307,7 +508,7 @@ export function MediaItemList({
           {onToggle ? (
             <label className="select-cell">
               <input
-                aria-label={`Select ${item.display_name}`}
+                aria-label={`Выбрать ${item.display_name}`}
                 checked={selected.has(item.media_item_id)}
                 onChange={() => onToggle(item.media_item_id)}
                 type="checkbox"
@@ -322,30 +523,30 @@ export function MediaItemList({
           </div>
           <dl className="row-meta">
             <div>
-              <dt>Kind</dt>
-              <dd>{item.kind}</dd>
+              <dt>Тип</dt>
+              <dd>{kindLabel(item.kind)}</dd>
             </div>
             <div>
-              <dt>Status</dt>
+              <dt>Состояние</dt>
               <dd>
                 <span className="status-pill" data-status={item.status}>
-                  {item.status}
+                  {statusLabel(item.status)}
                 </span>
               </dd>
             </div>
             <div>
-              <dt>Added</dt>
+              <dt>Добавлен</dt>
               <dd>{formatDate(item.created_at)}</dd>
             </div>
           </dl>
           {onRemove ? (
             <button
-              aria-label={`Soft delete ${item.display_name}`}
+              aria-label={`Удалить ${item.display_name}`}
               className="icon-button danger"
               onClick={() => onRemove(item.media_item_id)}
               type="button"
             >
-              Soft delete
+              Удалить
             </button>
           ) : null}
         </article>
@@ -374,7 +575,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
       let draft: AddMediaItemDraft;
       if (mode === "text") {
         if (text.trim() === "") {
-          throw new Error("Text is required.");
+          throw new Error("Добавьте текст.");
         }
         draft = {
           kind: "text",
@@ -384,7 +585,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         };
       } else if (mode === "url") {
         if (url.trim() === "") {
-          throw new Error("URL is required.");
+          throw new Error("Добавьте ссылку.");
         }
         draft = {
           kind: "url",
@@ -394,7 +595,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         };
       } else {
         if (!file) {
-          throw new Error("Choose a file first.");
+          throw new Error("Выберите файл.");
         }
         draft = {
           kind: file.type.startsWith("audio/")
@@ -416,14 +617,14 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         };
       }
       const item = await apiClient.addMediaItem(DEFAULT_OWNER, draft);
-      setMessage(`Added ${item.display_name}`);
+      setMessage(`Добавлено: ${item.display_name}`);
       setDisplayName("");
       setText("");
       setUrl("");
       setFile(null);
       await onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to add media.");
+      setError(err instanceof Error ? err.message : "Не удалось добавить материал.");
     } finally {
       setPending(false);
     }
@@ -431,9 +632,9 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
 
   return (
     <section className="surface">
-      <SectionHeader eyebrow="Ingest" title="Add media" />
+      <SectionHeader eyebrow="Добавление" title="Новый материал" />
       <form className="form-grid" onSubmit={(event) => void submit(event)}>
-        <div className="segmented" role="group" aria-label="Ingest source">
+        <div className="segmented" role="group" aria-label="Тип материала">
           {(["text", "url", "file"] as const).map((entry) => (
             <button
               aria-pressed={mode === entry}
@@ -442,29 +643,29 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
               onClick={() => setMode(entry)}
               type="button"
             >
-              {entry === "file" ? "File/media" : entry.toUpperCase()}
+              {entry === "file" ? "Файл" : entry === "url" ? "Ссылка" : "Текст"}
             </button>
           ))}
         </div>
         <label>
-          Display name
+          Название
           <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
         </label>
         {mode === "text" ? (
           <label>
-            Text
+            Текст
             <textarea rows={5} value={text} onChange={(event) => setText(event.target.value)} />
           </label>
         ) : null}
         {mode === "url" ? (
           <label>
-            URL
+            Ссылка
             <input value={url} onChange={(event) => setUrl(event.target.value)} />
           </label>
         ) : null}
         {mode === "file" ? (
           <label>
-            File
+            Файл
             <input
               onChange={(event) => setFile(event.target.files?.[0] ?? null)}
               type="file"
@@ -472,7 +673,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
           </label>
         ) : null}
         <button disabled={pending} type="submit">
-          {pending ? "Adding..." : "Add to inbox"}
+          {pending ? "Добавляем..." : "Добавить"}
         </button>
         {message ? <p className="success-text">{message}</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
@@ -519,15 +720,15 @@ export function InboxRouteShell(): JSX.Element {
     setActionMessage("");
     try {
       const collection = await apiClient.createCollection(DEFAULT_OWNER, {
-        name: collectionName.trim() || `Selection ${new Date().toISOString().slice(0, 10)}`,
+        name: collectionName.trim() || `Подборка ${new Date().toISOString().slice(0, 10)}`,
         items: Array.from(selected),
       });
       setSelected(new Set());
       setCollectionName("");
-      setActionMessage(`Created ${collection.name}`);
+      setActionMessage(`Создана группа: ${collection.name}`);
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to create collection.");
+      setActionError(err instanceof Error ? err.message : "Не удалось создать группу.");
     } finally {
       setActionPending(false);
     }
@@ -536,7 +737,7 @@ export function InboxRouteShell(): JSX.Element {
   const addToCollection = async () => {
     const collection = collections.find((candidate) => candidate.collection_id === targetCollectionId);
     if (!collection) {
-      setActionError("Choose a target collection.");
+      setActionError("Выберите группу.");
       return;
     }
     setActionPending(true);
@@ -550,10 +751,10 @@ export function InboxRouteShell(): JSX.Element {
         items: merged.map((media_item_id, position) => ({ media_item_id, position })),
       });
       setSelected(new Set());
-      setActionMessage(`Updated ${collection.name}`);
+      setActionMessage(`Обновлена группа: ${collection.name}`);
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to update collection.");
+      setActionError(err instanceof Error ? err.message : "Не удалось обновить группу.");
     } finally {
       setActionPending(false);
     }
@@ -570,10 +771,10 @@ export function InboxRouteShell(): JSX.Element {
         next.delete(mediaItemId);
         return next;
       });
-      setActionMessage(`Soft-deleted ${removed.display_name}`);
+      setActionMessage(`Удалено: ${removed.display_name}`);
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to remove media.");
+      setActionError(err instanceof Error ? err.message : "Не удалось удалить материал.");
     } finally {
       setActionPending(false);
     }
@@ -585,31 +786,31 @@ export function InboxRouteShell(): JSX.Element {
         <SectionHeader
           action={
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
           }
-          eyebrow="Inbox"
-          title="Media inbox"
+          eyebrow="Материалы"
+          title="Все материалы"
         />
-        {loading ? <p className="muted-text">Loading inbox...</p> : null}
+        {loading ? <p className="muted-text">Загружаем материалы...</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
         {inbox ? (
           <div className="metric-strip">
             <div>
               <strong>{inbox.items.length}</strong>
-              <span>in inbox</span>
+              <span>в списке</span>
             </div>
             <div>
               <strong>{mediaItems.length}</strong>
-              <span>media items</span>
+              <span>материалов</span>
             </div>
             <div>
               <strong>{collections.length}</strong>
-              <span>collections</span>
+              <span>групп</span>
             </div>
             <div>
               <strong>{activeRuns.length}</strong>
-              <span>active runs</span>
+              <span>в работе</span>
             </div>
           </div>
         ) : null}
@@ -626,19 +827,19 @@ export function InboxRouteShell(): JSX.Element {
       <aside className="side-stack">
         <IngestPanel onCreated={refresh} />
         <section className="surface">
-          <SectionHeader eyebrow="Selection" title={`${selected.size} selected`} />
+          <SectionHeader eyebrow="Подборка" title={`Выбрано: ${selected.size}`} />
           <div className="form-grid">
             <label>
-              New collection
+              Новая группа
               <input value={collectionName} onChange={(event) => setCollectionName(event.target.value)} />
             </label>
             <button disabled={actionPending || selected.size === 0} onClick={() => void createCollection()} type="button">
-              Create collection
+              Создать группу
             </button>
             <label>
-              Existing collection
+              Существующая группа
               <select value={targetCollectionId} onChange={(event) => setTargetCollectionId(event.target.value)}>
-                <option value="">Choose collection</option>
+                <option value="">Выберите группу</option>
                 {collections
                   .filter((collection) => collection.kind === "user" && collection.status === "active")
                   .map((collection) => (
@@ -649,7 +850,7 @@ export function InboxRouteShell(): JSX.Element {
               </select>
             </label>
             <button disabled={actionPending || selected.size === 0} onClick={() => void addToCollection()} type="button">
-              Add selected
+              Добавить выбранное
             </button>
             {actionMessage ? <p className="success-text">{actionMessage}</p> : null}
             {actionError ? <p className="error-text">{actionError}</p> : null}
@@ -676,15 +877,15 @@ export function CollectionsRouteShell(): JSX.Element {
     setMessage("");
     try {
       const collection = await apiClient.createCollection(DEFAULT_OWNER, {
-        name: name.trim() || `Collection ${userCollections.length + 1}`,
+        name: name.trim() || `Группа ${userCollections.length + 1}`,
         items: selectedMediaId ? [selectedMediaId] : [],
       });
-      setMessage(`Created ${collection.name}`);
+      setMessage(`Создана группа: ${collection.name}`);
       setName("");
       setSelectedMediaId("");
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to create collection.");
+      setActionError(err instanceof Error ? err.message : "Не удалось создать группу.");
     }
   };
 
@@ -700,7 +901,7 @@ export function CollectionsRouteShell(): JSX.Element {
       });
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to rename collection.");
+      setActionError(err instanceof Error ? err.message : "Не удалось переименовать группу.");
     }
   };
 
@@ -715,7 +916,7 @@ export function CollectionsRouteShell(): JSX.Element {
       );
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to remove item.");
+      setActionError(err instanceof Error ? err.message : "Не удалось убрать материал.");
     }
   };
 
@@ -731,7 +932,7 @@ export function CollectionsRouteShell(): JSX.Element {
       setAddTargets((current) => ({ ...current, [collection.collection_id]: "" }));
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to add item.");
+      setActionError(err instanceof Error ? err.message : "Не удалось добавить материал.");
     }
   };
 
@@ -744,23 +945,23 @@ export function CollectionsRouteShell(): JSX.Element {
       });
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Unable to update collection.");
+      setActionError(err instanceof Error ? err.message : "Не удалось обновить группу.");
     }
   };
 
   return (
     <div className="page-grid">
       <section className="surface">
-        <SectionHeader eyebrow="Collections" title="Manage collections" />
+        <SectionHeader eyebrow="Группы" title="Управление группами" />
         <div className="form-grid form-grid--inline">
           <label>
-            Name
+            Название
             <input value={name} onChange={(event) => setName(event.target.value)} />
           </label>
           <label>
-            First item
+            Первый материал
             <select value={selectedMediaId} onChange={(event) => setSelectedMediaId(event.target.value)}>
-              <option value="">None</option>
+              <option value="">Без материала</option>
               {mediaItems.map((item) => (
                 <option key={item.media_item_id} value={item.media_item_id}>
                   {item.display_name}
@@ -769,7 +970,7 @@ export function CollectionsRouteShell(): JSX.Element {
             </select>
           </label>
           <button onClick={() => void create()} type="button">
-            Create
+            Создать
           </button>
         </div>
         {message ? <p className="success-text">{message}</p> : null}
@@ -780,47 +981,47 @@ export function CollectionsRouteShell(): JSX.Element {
         <SectionHeader
           action={
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
           }
-          eyebrow="Library"
-          title="Collections list"
+          eyebrow="Группы"
+          title="Список групп"
         />
-        {loading ? <p className="muted-text">Loading collections...</p> : null}
+        {loading ? <p className="muted-text">Загружаем группы...</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
         <div className="collection-grid">
           {userCollections.map((collection) => (
             <article className="surface surface--flat" key={collection.collection_id}>
               <div className="collection-title">
                 <input
-                  aria-label={`Rename ${collection.name}`}
+                  aria-label={`Переименовать ${collection.name}`}
                   defaultValue={collection.name}
                   onBlur={(event) => void rename(collection, event.target.value)}
                 />
                 <span className="status-pill" data-status={collection.status}>
-                  {collection.status}
+                  {statusLabel(collection.status)}
                 </span>
               </div>
               <p className="muted-text">
-                {collection.items.length} items, version {collection.version}
+                Материалов: {collection.items.length}
               </p>
               <div className="mini-list">
                 {collection.items.map((item) => (
                   <div className="mini-row" key={item.media_item_id}>
-                    <span>{item.media_item?.display_name ?? compactId(item.media_item_id)}</span>
+                    <span>{item.media_item?.display_name ?? "Материал"}</span>
                     <button
                       className="text-button danger"
                       onClick={() => void removeItem(collection, item.media_item_id)}
                       type="button"
                     >
-                      Remove
+                      Убрать
                     </button>
                   </div>
                 ))}
               </div>
               <div className="form-grid form-grid--compact">
                 <label>
-                  Add inbox item
+                  Добавить материал
                   <select
                     value={addTargets[collection.collection_id] ?? ""}
                     onChange={(event) =>
@@ -830,7 +1031,7 @@ export function CollectionsRouteShell(): JSX.Element {
                       }))
                     }
                   >
-                    <option value="">Choose item</option>
+                    <option value="">Выберите материал</option>
                     {mediaItems
                       .filter((item) => !collection.items.some((entry) => entry.media_item_id === item.media_item_id))
                       .map((item) => (
@@ -846,7 +1047,7 @@ export function CollectionsRouteShell(): JSX.Element {
                   onClick={() => void addItem(collection)}
                   type="button"
                 >
-                  Add item
+                  Добавить
                 </button>
               </div>
               <div className="button-row">
@@ -855,10 +1056,10 @@ export function CollectionsRouteShell(): JSX.Element {
                   onClick={() => void setArchiveState(collection, collection.status === "archived" ? "active" : "archived")}
                   type="button"
                 >
-                  {collection.status === "archived" ? "Activate" : "Archive"}
+                  {collection.status === "archived" ? "Вернуть" : "В архив"}
                 </button>
                 <Link className="button-link" to={`/runs?collection=${collection.collection_id}`}>
-                  Build run
+                  Запустить
                 </Link>
               </div>
             </article>
@@ -949,10 +1150,10 @@ export function RunsRouteShell(): JSX.Element {
         delivery: { strategy: "polling" },
       });
       setLastPlan({ selectionId: selection.selection_id, runId: run.analysis_run_id });
-      setMessage(`Run queued: ${compactId(run.analysis_run_id)}`);
+      setMessage("Запуск добавлен в очередь");
       await refresh();
     } catch (err) {
-      setRunError(err instanceof Error ? err.message : "Unable to create run.");
+      setRunError(err instanceof Error ? err.message : "Не удалось запустить обработку.");
     } finally {
       setPending(false);
     }
@@ -961,12 +1162,12 @@ export function RunsRouteShell(): JSX.Element {
   return (
     <div className="page-grid page-grid--builder">
       <section className="surface surface--main">
-        <SectionHeader eyebrow="Run builder" title="Create immutable selection" />
+        <SectionHeader eyebrow="Подборка" title="Запустить обработку" />
         <div className="form-grid form-grid--inline">
           <label>
-            Collection
+            Группа
             <select value={sourceCollectionId} onChange={(event) => setSourceCollectionId(event.target.value)}>
-              <option value="">Manual selection</option>
+              <option value="">Выбрать вручную</option>
               {collections
                 .filter((collection) => collection.kind === "user" && collection.status === "active")
                 .map((collection) => (
@@ -977,17 +1178,17 @@ export function RunsRouteShell(): JSX.Element {
             </select>
           </label>
           <label>
-            Run type
+            Что сделать
             <select value={runType} onChange={(event) => setRunType(event.target.value as RunType)}>
-              <option value="transcription">Transcription</option>
-              <option value="summary">Summary</option>
-              <option value="report">Report</option>
-              <option value="deep_research">Deep research</option>
-              <option value="custom">Custom</option>
+              <option value="transcription">Расшифровать</option>
+              <option value="summary">Краткое содержание</option>
+              <option value="report">Отчет</option>
+              <option value="deep_research">Глубокое исследование</option>
+              <option value="custom">Свой сценарий</option>
             </select>
           </label>
           <label>
-            Params
+            Параметры
             <textarea rows={4} value={paramsText} onChange={(event) => setParamsText(event.target.value)} />
           </label>
         </div>
@@ -1000,7 +1201,7 @@ export function RunsRouteShell(): JSX.Element {
         />
         <div className="button-row">
           <button disabled={pending || selected.size === 0} onClick={() => void createRun()} type="button">
-            {pending ? "Creating..." : `Create run from ${selected.size} items`}
+            {pending ? "Запускаем..." : `Запустить: ${selected.size}`}
           </button>
           {message ? <p className="success-text">{message}</p> : null}
           {runError ? <p className="error-text">{runError}</p> : null}
@@ -1011,34 +1212,34 @@ export function RunsRouteShell(): JSX.Element {
         <SectionHeader
           action={
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
           }
-          eyebrow="Runs"
-          title="Recent runs"
+          eyebrow="Запуски"
+          title="Последние запуски"
         />
-        {loading ? <p className="muted-text">Loading runs...</p> : null}
+        {loading ? <p className="muted-text">Загружаем запуски...</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
         <RunList runs={runs} />
       </section>
       <section className="surface">
-        <SectionHeader eyebrow="Frozen plan" title={`${selected.size} sources`} />
+        <SectionHeader eyebrow="План" title={`Материалов: ${selected.size}`} />
         <dl className="detail-grid detail-grid--single">
           <div>
-            <dt>Source</dt>
+            <dt>Основа</dt>
             <dd>
               {sourceCollectionId
-                ? collections.find((collection) => collection.collection_id === sourceCollectionId)?.name ?? compactId(sourceCollectionId)
-                : "Manual selection"}
+                ? collections.find((collection) => collection.collection_id === sourceCollectionId)?.name ?? "Выбранная группа"
+                : "Выбрано вручную"}
             </dd>
           </div>
           <div>
-            <dt>Run type</dt>
-            <dd>{runType}</dd>
+            <dt>Действие</dt>
+            <dd>{runTypeLabel(runType)}</dd>
           </div>
           <div>
-            <dt>Selection mode</dt>
-            <dd>sealed before queue</dd>
+            <dt>Готовность</dt>
+            <dd>Подборка зафиксирована</dd>
           </div>
         </dl>
         {selectedItems.length > 0 ? (
@@ -1048,24 +1249,24 @@ export function RunsRouteShell(): JSX.Element {
                 <span>
                   #{index + 1} {item.display_name}
                 </span>
-                <span className="muted-text">{item.kind}</span>
+                <span className="muted-text">{kindLabel(item.kind)}</span>
               </div>
             ))}
           </div>
         ) : (
-          <p className="muted-text">Select media or choose a collection.</p>
+          <p className="muted-text">Выберите материалы или группу.</p>
         )}
         {lastPlan ? (
           <dl className="detail-grid detail-grid--single">
             <div>
-              <dt>Last selection</dt>
-              <dd>{compactId(lastPlan.selectionId)}</dd>
+              <dt>Последняя подборка</dt>
+              <dd>Зафиксирована</dd>
             </div>
             <div>
-              <dt>Last run</dt>
+              <dt>Последний запуск</dt>
               <dd>
                 <Link className="text-link" to={`/runs/${lastPlan.runId}`}>
-                  {compactId(lastPlan.runId)}
+                  Открыть запуск
                 </Link>
               </dd>
             </div>
@@ -1078,7 +1279,7 @@ export function RunsRouteShell(): JSX.Element {
 
 function RunList({ runs }: { runs: AnalysisRunSummary[] }): JSX.Element {
   if (runs.length === 0) {
-    return <p className="muted-text">No runs for this owner.</p>;
+    return <p className="muted-text">Запусков пока нет.</p>;
   }
   return (
     <div className="data-list">
@@ -1086,25 +1287,25 @@ function RunList({ runs }: { runs: AnalysisRunSummary[] }): JSX.Element {
         <article className="data-row" key={run.analysis_run_id}>
           <div className="row-main">
             <Link className="text-link" to={`/runs/${run.analysis_run_id}`}>
-              {run.run_type}
+              {runTypeLabel(run.run_type)}
             </Link>
-            <p className="muted-text">{compactId(run.analysis_run_id)}</p>
+            <p className="muted-text">{formatDate(run.created_at)}</p>
           </div>
           <dl className="row-meta">
             <div>
-              <dt>Status</dt>
+              <dt>Состояние</dt>
               <dd>
                 <span className="status-pill" data-status={run.status}>
-                  {run.status}
+                  {statusLabel(run.status)}
                 </span>
               </dd>
             </div>
             <div>
-              <dt>Artifacts</dt>
+              <dt>Результаты</dt>
               <dd>{run.artifact_count ?? 0}</dd>
             </div>
             <div>
-              <dt>Created</dt>
+              <dt>Создан</dt>
               <dd>{formatDate(run.created_at)}</dd>
             </div>
           </dl>
@@ -1136,10 +1337,10 @@ export function RunDetailRouteShell(): JSX.Element {
       ]);
       const subjects: DiagnosticSubject[] = [
         { subject_type: "analysis_run", subject_id: analysisRunId },
-        { subject_type: "selection", subject_id: runResponse.selection_id },
+        { subject_type: "selection_snapshot", subject_id: runResponse.selection_snapshot_id ?? runResponse.selection_id },
         ...runResponse.selection.items.flatMap((item) => [
-          { subject_type: "media_item", subject_id: item.media_item_id },
-          { subject_type: "source", subject_id: item.source_snapshot.source_id },
+          { subject_type: "media_asset", subject_id: item.media_item_id },
+          { subject_type: "stored_object", subject_id: item.source_snapshot.source_id },
         ]),
       ].filter((subject) => subject.subject_id);
       const diagnosticResponses = await Promise.all(
@@ -1156,7 +1357,7 @@ export function RunDetailRouteShell(): JSX.Element {
       setArtifacts(artifactsResponse.items);
       setDiagnostics(uniqueDiagnostics(diagnosticResponses.flatMap((response) => response.items)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load run.");
+      setError(err instanceof Error ? err.message : "Не удалось загрузить запуск.");
     } finally {
       setLoading(false);
     }
@@ -1187,20 +1388,20 @@ export function RunDetailRouteShell(): JSX.Element {
     try {
       const next = await apiClient.cancelAnalysisRun(DEFAULT_OWNER, analysisRunId);
       setRun(next);
-      setMessage("Cancel requested");
+      setMessage("Остановка запрошена");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to cancel run.");
+      setError(err instanceof Error ? err.message : "Не удалось остановить запуск.");
     }
   };
 
   const retry = async () => {
     setMessage("");
     try {
-      const next = await apiClient.retryAnalysisRun(DEFAULT_OWNER, analysisRunId);
-      setMessage(`Retry queued: ${compactId(next.analysis_run_id)}`);
+      await apiClient.retryAnalysisRun(DEFAULT_OWNER, analysisRunId);
+      setMessage("Повторный запуск добавлен в очередь");
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to retry run.");
+      setError(err instanceof Error ? err.message : "Не удалось повторить запуск.");
     }
   };
 
@@ -1212,74 +1413,74 @@ export function RunDetailRouteShell(): JSX.Element {
         <SectionHeader
           action={
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
           }
-          eyebrow="Run detail"
-          title={run ? run.run_type : compactId(analysisRunId)}
+          eyebrow="Запуск"
+          title={run ? runTypeLabel(run.run_type) : "Загрузка"}
         />
-        {loading ? <p className="muted-text">Loading run...</p> : null}
+        {loading ? <p className="muted-text">Загружаем запуск...</p> : null}
         {error ? <p className="error-text">{error}</p> : null}
         {message ? <p className="success-text">{message}</p> : null}
         {run ? (
           <>
             <dl className="detail-grid">
               <div>
-                <dt>Status</dt>
+                <dt>Состояние</dt>
                 <dd>
                   <span className="status-pill" data-status={run.status}>
-                    {run.status}
+                    {statusLabel(run.status)}
                   </span>
                 </dd>
               </div>
               <div>
-                <dt>Selection</dt>
-                <dd>{compactId(run.selection_id)}</dd>
+                <dt>Подборка</dt>
+                <dd>{selectionSummaryLabel(run)}</dd>
               </div>
               <div>
-                <dt>Version</dt>
+                <dt>Версия</dt>
                 <dd>{run.version}</dd>
               </div>
               <div>
-                <dt>Evidence gate</dt>
-                <dd>{run.evidence_gate_state}</dd>
+                <dt>Проверка готовности</dt>
+                <dd>{evidenceGateLabel(run.evidence_gate_state)}</dd>
               </div>
               <div>
-                <dt>Created</dt>
+                <dt>Создан</dt>
                 <dd>{formatDate(run.created_at)}</dd>
               </div>
               <div>
-                <dt>Completed</dt>
+                <dt>Завершен</dt>
                 <dd>{formatDate(run.completed_at)}</dd>
               </div>
             </dl>
             <div className="button-row">
               <button disabled={!ACTIVE_RUN_STATUSES.has(run.status)} onClick={() => void cancel()} type="button">
-                Cancel
+                Остановить
               </button>
               <button className="secondary-button" onClick={() => void retry()} type="button">
-                Retry
+                Повторить
               </button>
             </div>
             <section className="subsection">
-              <h3>Selection snapshot</h3>
+              <h3>Подборка</h3>
               <div className="mini-list">
                 {run.selection.items.map((item) => (
                   <div className="mini-row" key={`${item.media_item_id}-${item.position}`}>
                     <span>
                       #{item.position + 1} {item.display_name}
                     </span>
-                    <span className="muted-text">{item.kind}</span>
+                    <span className="muted-text">{kindLabel(item.kind)}</span>
                   </div>
                 ))}
               </div>
             </section>
             <section className="subsection">
-              <h3>Item outcomes</h3>
+              <h3>Итоги по материалам</h3>
               <RunOutcomeList run={run} manifest={manifest} diagnostics={diagnostics} />
             </section>
             <section className="subsection">
-              <h3>Source diagnostics</h3>
+              <h3>Проверки по материалам</h3>
               <SourceDiagnosticsList run={run} diagnostics={diagnostics} />
             </section>
           </>
@@ -1288,15 +1489,15 @@ export function RunDetailRouteShell(): JSX.Element {
 
       <aside className="side-stack">
         <section className="surface">
-          <SectionHeader eyebrow="Events" title="Run events" />
+          <SectionHeader eyebrow="События" title="Ход работы" />
           <EventList events={events} />
         </section>
         <section className="surface">
-          <SectionHeader eyebrow="Artifacts" title="Run artifacts" />
+          <SectionHeader eyebrow="Результаты" title="Файлы и отчеты" />
           <ArtifactList artifacts={artifacts} />
         </section>
         <section className="surface">
-          <SectionHeader eyebrow="Diagnostics" title="Run diagnostics" />
+          <SectionHeader eyebrow="Проверки" title="Ошибки и предупреждения" />
           <DiagnosticList diagnostics={diagnostics} />
         </section>
       </aside>
@@ -1320,46 +1521,43 @@ function RunOutcomeList({
           <div className="metric-strip metric-strip--compact">
             <div>
               <strong>{manifest.summary.included_count ?? 0}</strong>
-              <span>included</span>
+              <span>включено</span>
             </div>
             <div>
               <strong>{manifest.summary.skipped_count ?? 0}</strong>
-              <span>skipped</span>
+              <span>пропущено</span>
             </div>
             <div>
               <strong>{manifest.summary.failed_count ?? 0}</strong>
-              <span>failed</span>
+              <span>ошибок</span>
             </div>
           </div>
         ) : null}
         <div className="data-list">
           {manifest.items.map((item) => {
-            const sourceId = item.lineage?.source_id ?? "";
             return (
               <article className="data-row outcome-row" key={`${item.media_item_id}-${item.position}`}>
                 <div className="row-main">
                   <strong>
-                    #{item.position + 1} {compactId(item.media_item_id)}
+                    #{item.position + 1} Материал
                   </strong>
-                  <p className="muted-text">
-                    {sourceId ? `source ${compactId(sourceId)}` : item.selection_item_id ? `selection ${compactId(item.selection_item_id)}` : "selection item"}
-                  </p>
+                  <p className="muted-text">{item.selection_item_id ? "Выбран в подборке" : "Элемент подборки"}</p>
                 </div>
                 <dl className="row-meta">
                   <div>
-                    <dt>Outcome</dt>
+                    <dt>Итог</dt>
                     <dd>
                       <span className="status-pill" data-status={item.outcome}>
-                        {item.outcome}
+                        {statusLabel(item.outcome)}
                       </span>
                     </dd>
                   </div>
                   <div>
-                    <dt>Artifacts</dt>
-                    <dd>{item.artifact_kinds?.join(", ") || "None"}</dd>
+                    <dt>Результаты</dt>
+                    <dd>{item.artifact_kinds?.map((kind) => artifactGroupLabel(kind as ArtifactSummary["kind"])).join(", ") || "Нет"}</dd>
                   </div>
                   <div>
-                    <dt>Diagnostics</dt>
+                    <dt>Проверки</dt>
                     <dd>{item.diagnostic_ids?.length ?? diagnosticsForSubject(diagnostics, item.media_item_id).length}</dd>
                   </div>
                 </dl>
@@ -1382,19 +1580,19 @@ function RunOutcomeList({
               <strong>
                 #{item.position + 1} {item.display_name}
               </strong>
-              <p className="muted-text">{compactId(item.media_item_id)}</p>
+              <p className="muted-text">Выбран в подборке</p>
             </div>
             <dl className="row-meta">
               <div>
-                <dt>Selected as</dt>
-                <dd>{item.status_at_selection}</dd>
+                <dt>Состояние</dt>
+                <dd>{statusLabel(item.status_at_selection)}</dd>
               </div>
               <div>
-                <dt>Source</dt>
-                <dd>{compactId(item.source_snapshot.source_id)}</dd>
+                <dt>Откуда</dt>
+                <dd>{kindLabel(item.source_snapshot.origin_type)}</dd>
               </div>
               <div>
-                <dt>Diagnostics</dt>
+                <dt>Проверки</dt>
                 <dd>{itemDiagnostics.length + sourceDiagnostics.length}</dd>
               </div>
             </dl>
@@ -1419,7 +1617,7 @@ function SourceDiagnosticsList({
   });
 
   if (entries.every((entry) => entry.diagnostics.length === 0)) {
-    return <p className="muted-text">No source-level diagnostics.</p>;
+    return <p className="muted-text">Проверок по материалам нет.</p>;
   }
 
   return (
@@ -1430,9 +1628,7 @@ function SourceDiagnosticsList({
           <article className="data-row source-diagnostic-row" key={entry.item.media_item_id}>
             <div className="row-main">
               <strong>{entry.item.display_name}</strong>
-              <p className="muted-text">
-                media {compactId(entry.item.media_item_id)} / source {compactId(entry.item.source_snapshot.source_id)}
-              </p>
+              <p className="muted-text">{kindLabel(entry.item.source_snapshot.origin_type)}</p>
             </div>
             <DiagnosticList diagnostics={entry.diagnostics} />
           </article>
@@ -1443,21 +1639,21 @@ function SourceDiagnosticsList({
 
 function EventList({ events }: { events: RunEvent[] }): JSX.Element {
   if (events.length === 0) {
-    return <p className="muted-text">No events recorded.</p>;
+    return <p className="muted-text">Событий пока нет.</p>;
   }
   return (
     <div className="timeline-list">
       {events.map((event) => (
         <article className="timeline-entry" key={event.event_id}>
-          <strong>{event.event_type}</strong>
-          <span className="muted-text">version {event.version}</span>
+          <strong>{eventLabel(event.event_type)}</strong>
+          <span className="muted-text">версия {event.version}</span>
           <span className="muted-text">{formatDate(event.emitted_at)}</span>
           {runEventProgressText(event) ? (
             <span className="muted-text">{runEventProgressText(event)}</span>
           ) : null}
           {event.status ? (
             <span className="status-pill" data-status={event.status}>
-              {event.status}
+              {statusLabel(event.status)}
             </span>
           ) : null}
         </article>
@@ -1468,7 +1664,7 @@ function EventList({ events }: { events: RunEvent[] }): JSX.Element {
 
 function ArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Element {
   if (artifacts.length === 0) {
-    return <p className="muted-text">No artifacts available.</p>;
+    return <p className="muted-text">Результатов пока нет.</p>;
   }
   return (
     <div className="data-list">
@@ -1476,17 +1672,17 @@ function ArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Elem
         <article className="data-row" key={artifact.artifact_id}>
           <div className="row-main">
             <Link className="text-link" to={`/artifacts/${artifact.artifact_id}`}>
-              {artifact.kind}
+              {artifactGroupLabel(artifact.kind)}
             </Link>
             <p className="muted-text">{artifact.content_type}</p>
           </div>
           <dl className="row-meta">
             <div>
-              <dt>Status</dt>
-              <dd>{artifact.status}</dd>
+              <dt>Состояние</dt>
+              <dd>{statusLabel(artifact.status)}</dd>
             </div>
             <div>
-              <dt>Size</dt>
+              <dt>Размер</dt>
               <dd>{formatBytes(artifact.size_bytes)}</dd>
             </div>
           </dl>
@@ -1498,7 +1694,7 @@ function ArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Elem
 
 function GroupedArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): JSX.Element {
   if (artifacts.length === 0) {
-    return <p className="muted-text">No artifacts available.</p>;
+    return <p className="muted-text">Результатов пока нет.</p>;
   }
 
   const groups = artifacts.reduce<Record<string, ArtifactSummary[]>>((acc, artifact) => {
@@ -1516,7 +1712,7 @@ function GroupedArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): J
             <div className="artifact-group__header">
               <strong>{label}</strong>
               <Link className="text-link" to={`/runs/${analysisRunId}`}>
-                {compactId(analysisRunId)}
+                Открыть запуск
               </Link>
             </div>
             <ArtifactList artifacts={group} />
@@ -1529,21 +1725,21 @@ function GroupedArtifactList({ artifacts }: { artifacts: ArtifactSummary[] }): J
 
 function DiagnosticList({ diagnostics }: { diagnostics: Diagnostic[] }): JSX.Element {
   if (diagnostics.length === 0) {
-    return <p className="muted-text">No diagnostics.</p>;
+    return <p className="muted-text">Проверок пока нет.</p>;
   }
   return (
     <div className="data-list">
       {diagnostics.map((diagnostic) => (
         <article className="data-row diagnostic-row" key={diagnostic.diagnostic_id}>
           <div className="row-main">
-            <strong>{diagnostic.code}</strong>
+            <strong>{diagnosticCodeLabel(diagnostic.code)}</strong>
             <p className="muted-text">{diagnostic.message}</p>
             <p className="muted-text">
-              {diagnosticSubject(diagnostic).subject_type} {compactId(diagnosticSubject(diagnostic).subject_id)}
+              {diagnosticSubjectLabel(diagnosticSubject(diagnostic).subject_type)}
             </p>
           </div>
           <span className="status-pill" data-status={diagnostic.severity}>
-            {diagnostic.severity}
+            {statusLabel(diagnostic.severity)}
           </span>
         </article>
       ))}
@@ -1582,7 +1778,7 @@ export function ArtifactsRouteShell(): JSX.Element {
         setDiagnostics([]);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load artifacts.");
+      setError(err instanceof Error ? err.message : "Не удалось загрузить результаты.");
     }
   }, [apiClient, artifactId]);
 
@@ -1601,11 +1797,11 @@ export function ArtifactsRouteShell(): JSX.Element {
     try {
       const refreshed = await apiClient.refreshArtifact(DEFAULT_OWNER, artifactId);
       setArtifact(refreshed);
-      setMessage("Artifact access refreshed");
+      setMessage("Ссылка обновлена");
       const artifactsResponse = await apiClient.listArtifacts(DEFAULT_OWNER, { pageSize: 50 });
       setArtifacts(artifactsResponse.items);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to refresh artifact access.");
+      setError(err instanceof Error ? err.message : "Не удалось обновить ссылку.");
     } finally {
       setRefreshingArtifact(false);
     }
@@ -1617,54 +1813,54 @@ export function ArtifactsRouteShell(): JSX.Element {
         <SectionHeader
           action={
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
           }
-          eyebrow="Artifacts"
-          title="Artifact browser"
+          eyebrow="Результаты"
+          title="Файлы и отчеты"
         />
         {error ? <p className="error-text">{error}</p> : null}
         {message ? <p className="success-text">{message}</p> : null}
         <GroupedArtifactList artifacts={artifacts} />
       </section>
       <section className="surface">
-        <SectionHeader eyebrow="Preview" title={artifact ? artifact.kind : "Select artifact"} />
+        <SectionHeader eyebrow="Просмотр" title={artifact ? artifactGroupLabel(artifact.kind) : "Выберите результат"} />
         {artifact ? (
           <div className="artifact-preview">
             <dl className="detail-grid">
               <div>
-                <dt>Status</dt>
-                <dd>{artifact.status}</dd>
+                <dt>Состояние</dt>
+                <dd>{statusLabel(artifact.status)}</dd>
               </div>
               <div>
-                <dt>Content</dt>
+                <dt>Тип содержимого</dt>
                 <dd>{artifact.content_type}</dd>
               </div>
               <div>
-                <dt>Size</dt>
+                <dt>Размер</dt>
                 <dd>{formatBytes(artifact.size_bytes)}</dd>
               </div>
               <div>
-                <dt>Run</dt>
+                <dt>Запуск</dt>
                 <dd>
                   <Link className="text-link" to={`/runs/${artifact.analysis_run_id}`}>
-                    {compactId(artifact.analysis_run_id)}
+                    Открыть запуск
                   </Link>
                 </dd>
               </div>
               <div>
-                <dt>Format</dt>
+                <dt>Формат</dt>
                 <dd>{artifact.preview?.format ?? previewFormat(artifact)}</dd>
               </div>
             </dl>
             {previewFormat(artifact) !== "none" && previewText(artifact) ? (
               <pre data-format={previewFormat(artifact)}>{previewText(artifact)}</pre>
             ) : (
-              <p className="muted-text">No inline preview is available for this artifact.</p>
+              <p className="muted-text">Предпросмотр недоступен.</p>
             )}
             {(artifact.download?.available ?? Boolean(artifact.download?.url)) && artifact.download?.url ? (
               <a className="button-link" href={artifact.download.url} rel="noreferrer" target="_blank">
-                Open artifact
+                Открыть результат
               </a>
             ) : null}
             <div className="button-row">
@@ -1674,16 +1870,16 @@ export function ArtifactsRouteShell(): JSX.Element {
                 onClick={() => void refreshArtifact()}
                 type="button"
               >
-                {refreshingArtifact ? "Refreshing..." : "Refresh access"}
+                {refreshingArtifact ? "Обновляем..." : "Обновить ссылку"}
               </button>
             </div>
             <section className="subsection">
-              <h3>Artifact diagnostics</h3>
+              <h3>Проверки результата</h3>
               <DiagnosticList diagnostics={artifactDiagnostics} />
             </section>
           </div>
         ) : (
-          <p className="muted-text">Choose an artifact from the list.</p>
+          <p className="muted-text">Выберите результат из списка.</p>
         )}
       </section>
     </div>
@@ -1715,7 +1911,7 @@ export function DiagnosticsRouteShell(): JSX.Element {
       setDiagnostics(response.items);
       setObservability(snapshot);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load diagnostics.");
+      setError(err instanceof Error ? err.message : "Не удалось загрузить проверки.");
     }
   }, [apiClient, severity, subjectType]);
 
@@ -1729,10 +1925,10 @@ export function DiagnosticsRouteShell(): JSX.Element {
     setReconcilePending(true);
     try {
       const response = await apiClient.reconcileAnalysisRunQueue(reconcileLimit);
-      setMessage(`Reconciled ${response.reconciled} run tasks`);
+      setMessage(`Синхронизировано: ${response.reconciled}`);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to reconcile queue.");
+      setError(err instanceof Error ? err.message : "Не удалось синхронизировать очередь.");
     } finally {
       setReconcilePending(false);
     }
@@ -1744,33 +1940,34 @@ export function DiagnosticsRouteShell(): JSX.Element {
         <SectionHeader
           action={
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
           }
-          eyebrow="Admin"
-          title="Diagnostics"
+          eyebrow="Администрирование"
+          title="Проверки"
         />
         <div className="form-grid form-grid--inline">
           <label>
-            Subject
+            Объект
             <select value={subjectType} onChange={(event) => setSubjectType(event.target.value)}>
-              <option value="">Any</option>
-              <option value="media_item">Media item</option>
-              <option value="collection">Collection</option>
-              <option value="selection">Selection</option>
-              <option value="analysis_run">Analysis run</option>
-              <option value="artifact">Artifact</option>
-              <option value="adapter">Adapter</option>
-              <option value="retention">Retention</option>
+              <option value="">Любой</option>
+              <option value="media_asset">Материал</option>
+              <option value="stored_object">Файл</option>
+              <option value="collection">Группа</option>
+              <option value="selection_snapshot">Подборка</option>
+              <option value="analysis_run">Запуск</option>
+              <option value="artifact">Результат</option>
+              <option value="channel">Канал</option>
+              <option value="retention">Хранение</option>
             </select>
           </label>
           <label>
-            Severity
+            Уровень
             <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
-              <option value="">Any</option>
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="error">Error</option>
+              <option value="">Любой</option>
+              <option value="info">Инфо</option>
+              <option value="warning">Предупреждение</option>
+              <option value="error">Ошибка</option>
             </select>
           </label>
         </div>
@@ -1780,39 +1977,39 @@ export function DiagnosticsRouteShell(): JSX.Element {
       </section>
       <aside className="side-stack">
         <section className="surface">
-          <SectionHeader eyebrow="Observability" title="Queue state" />
+          <SectionHeader eyebrow="Наблюдение" title="Состояние очереди" />
           {observability ? (
             <dl className="detail-grid detail-grid--single">
               <div>
-                <dt>Queue tasks</dt>
+                <dt>Задач в очереди</dt>
                 <dd>{observability.queue_tasks}</dd>
               </div>
               <div>
-                <dt>Queue lag</dt>
+                <dt>Задержка</dt>
                 <dd>{observability.queue_lag_seconds}s</dd>
               </div>
               <div>
-                <dt>Cleanup failures</dt>
+                <dt>Ошибки очистки</dt>
                 <dd>{observability.cleanup_failures}</dd>
               </div>
               <div>
-                <dt>Artifact resolution failures</dt>
+                <dt>Ошибки результатов</dt>
                 <dd>{observability.artifact_resolution_failures}</dd>
               </div>
               <div>
-                <dt>Generated</dt>
+                <dt>Обновлено</dt>
                 <dd>{formatDate(observability.generated_at)}</dd>
               </div>
             </dl>
           ) : (
-            <p className="muted-text">Observability snapshot is not loaded.</p>
+            <p className="muted-text">Снимок состояния не загружен.</p>
           )}
         </section>
         <section className="surface">
-          <SectionHeader eyebrow="Lifecycle" title="Queue reconcile" />
+          <SectionHeader eyebrow="Обслуживание" title="Синхронизация очереди" />
           <div className="form-grid">
             <label>
-              Limit
+              Лимит
               <input
                 min={1}
                 max={100}
@@ -1822,7 +2019,7 @@ export function DiagnosticsRouteShell(): JSX.Element {
               />
             </label>
             <button disabled={reconcilePending} onClick={() => void reconcileQueue()} type="button">
-              {reconcilePending ? "Reconciling..." : "Reconcile queue"}
+              {reconcilePending ? "Синхронизируем..." : "Синхронизировать"}
             </button>
           </div>
         </section>
@@ -1844,7 +2041,7 @@ export function MediaItemDetailRouteShell(): JSX.Element {
     try {
       setItem(await apiClient.getMediaItem(DEFAULT_OWNER, mediaItemId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load media item.");
+      setError(err instanceof Error ? err.message : "Не удалось загрузить материал.");
     }
   }, [apiClient, mediaItemId]);
 
@@ -1859,9 +2056,9 @@ export function MediaItemDetailRouteShell(): JSX.Element {
     try {
       const removed = await apiClient.removeMediaItem(DEFAULT_OWNER, mediaItemId);
       setItem(removed);
-      setMessage(`Soft-deleted ${removed.display_name}`);
+      setMessage(`Удалено: ${removed.display_name}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to remove media item.");
+      setError(err instanceof Error ? err.message : "Не удалось удалить материал.");
     } finally {
       setRemoving(false);
     }
@@ -1873,56 +2070,56 @@ export function MediaItemDetailRouteShell(): JSX.Element {
         action={
           <>
             <button className="secondary-button" onClick={() => void refresh()} type="button">
-              Refresh
+              Обновить
             </button>
             <button
-              aria-label={item ? `Soft delete ${item.display_name}` : "Soft delete media item"}
+              aria-label={item ? `Удалить ${item.display_name}` : "Удалить материал"}
               className="secondary-button danger"
               disabled={removing}
               onClick={() => void removeMediaItem()}
               type="button"
             >
-              {removing ? "Soft-deleting..." : "Soft delete"}
+              {removing ? "Удаляем..." : "Удалить"}
             </button>
           </>
         }
-        eyebrow="Media item"
-        title={item?.display_name ?? compactId(mediaItemId)}
+        eyebrow="Материал"
+        title={item?.display_name ?? "Материал"}
       />
       {error ? <p className="error-text">{error}</p> : null}
       {message ? <p className="success-text">{message}</p> : null}
       {item ? (
         <dl className="detail-grid">
           <div>
-            <dt>Kind</dt>
-            <dd>{item.kind}</dd>
+            <dt>Тип</dt>
+            <dd>{kindLabel(item.kind)}</dd>
           </div>
           <div>
-            <dt>Status</dt>
-            <dd>{item.status}</dd>
+            <dt>Состояние</dt>
+            <dd>{statusLabel(item.status)}</dd>
           </div>
           <div>
-            <dt>Retention</dt>
-            <dd>{item.retention.state}</dd>
+            <dt>Хранение</dt>
+            <dd>{statusLabel(item.retention.state)}</dd>
           </div>
           <div>
-            <dt>Deleted</dt>
+            <dt>Удален</dt>
             <dd>{formatDate(item.retention.deleted_at ?? item.deleted_at)}</dd>
           </div>
           <div>
-            <dt>Origin</dt>
-            <dd>{item.source.origin_type}</dd>
+            <dt>Тип источника</dt>
+            <dd>{kindLabel(item.source.origin_type)}</dd>
           </div>
           <div>
-            <dt>Created</dt>
+            <dt>Создан</dt>
             <dd>{formatDate(item.created_at)}</dd>
           </div>
           <div>
-            <dt>Size</dt>
+            <dt>Размер</dt>
             <dd>{formatBytes(item.source.size_bytes)}</dd>
           </div>
           <div>
-            <dt>Source</dt>
+            <dt>Откуда</dt>
             <dd>{sourceLabel(item)}</dd>
           </div>
         </dl>
@@ -1934,9 +2131,9 @@ export function MediaItemDetailRouteShell(): JSX.Element {
 export function RouteNotFoundShell(): JSX.Element {
   return (
     <section className="surface surface--main">
-      <SectionHeader eyebrow="404" title="Surface not found" />
+      <SectionHeader eyebrow="404" title="Страница не найдена" />
       <Link className="button-link" to="/">
-        Open inbox
+        К материалам
       </Link>
     </section>
   );

@@ -292,6 +292,15 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 		t.Fatalf("get artifact request = %#v", target.getArtifactReq)
 	}
 
+	refreshArtifact := httptest.NewRecorder()
+	mux.ServeHTTP(refreshArtifact, jsonRequest(http.MethodPost, "/v1/artifacts/artifact-1/refresh?channel_account_id=channel-account-1", nil))
+	assertTargetStatus(t, refreshArtifact, http.StatusOK)
+	assertNoLegacyTargetVocabulary(t, refreshArtifact.Body.String())
+	assertTargetEnvelopeID(t, refreshArtifact.Body.Bytes(), "artifact", "artifact_id", "artifact-1")
+	if target.getArtifactReq.ChannelAccountID != "channel-account-1" || target.getArtifactReq.ArtifactID != "artifact-1" {
+		t.Fatalf("refresh artifact request = %#v", target.getArtifactReq)
+	}
+
 	listDiagnostics := httptest.NewRecorder()
 	mux.ServeHTTP(listDiagnostics, httptest.NewRequest(http.MethodGet, "/v1/diagnostics?channel_account_id=channel-account-1&subject_type=analysis_run&subject_id=run-1&page_size=10", nil))
 	assertTargetStatus(t, listDiagnostics, http.StatusOK)

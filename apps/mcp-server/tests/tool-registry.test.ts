@@ -39,21 +39,15 @@ import {
 import { createDomainMcpTools } from "../src/tools/mapped-tools.ts";
 import { McpAdapterToolError } from "../src/tools/protocol.ts";
 
-const OWNER = {
-  owner_type: "mcp",
-  owner_id: "assistant",
-  adapter_identity: {
-    mcp_caller_id: "codex",
-  },
-};
-const OWNER_QUERY = "owner_type=mcp&owner_id=assistant";
+const CHANNEL_ACCOUNT_ID = "00000000-0000-4000-8000-000000000010";
+const CHANNEL_QUERY = `channel_account_id=${CHANNEL_ACCOUNT_ID}`;
 
-function withOwnerQuery(path: string): string {
+function withChannelQuery(path: string): string {
   if (!path.includes("?")) {
-    return `${path}?${OWNER_QUERY}`;
+    return `${path}?${CHANNEL_QUERY}`;
   }
   const [basePath, query] = path.split("?", 2);
-  return `${basePath}?${OWNER_QUERY}&${query}`;
+  return `${basePath}?${CHANNEL_QUERY}&${query}`;
 }
 
 const MEDIA_ID = "00000000-0000-4000-8000-000000000001";
@@ -65,19 +59,19 @@ const JSON_ARTIFACT_ID = "00000000-0000-4000-8000-000000000006";
 const TEXT_ARTIFACT_ID = "00000000-0000-4000-8000-000000000007";
 
 const REQUIRED_TOOLS = [
-  "add_media",
-  "list_media",
-  "search_media",
-  "get_media",
-  "remove_media",
+  "create_media_asset",
+  "list_media_assets",
+  "search_media_assets",
+  "get_media_asset",
+  "delete_media_asset",
   "get_inbox",
   "create_collection",
   "list_collections",
   "get_collection",
   "update_collection",
   "update_collection_items",
-  "create_selection",
-  "get_selection",
+  "create_selection_snapshot",
+  "get_selection_snapshot",
   "run_analysis",
   "list_runs",
   "get_run",
@@ -119,7 +113,7 @@ test("createMcpDomainRuntime exposes the required final domain tools", () => {
   assert.equal(
     runtime
       .listTools()
-      .some((tool) => /transcription|batch|old route|dual path/i.test(tool.name + tool.description)),
+      .some((tool) => /media_item|selection_id|owner scope|transcription|batch|old route|dual path/i.test(tool.name + tool.description)),
     false,
   );
   // END_BLOCK_BLOCK_VERIFY_DOMAIN_TOOL_LIST
@@ -132,24 +126,24 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       requests.push(request);
-      if (request.path === "/v1/media-items") {
+      if (request.path === "/v1/media-assets") {
         return {
           status: 201,
           data: {
-            media_item: {
-              media_item_id: MEDIA_ID,
+            media_asset: {
+              media_asset_id: MEDIA_ID,
               status: "ready",
             },
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery("/v1/media-items?query=meeting&cursor=c1&page_size=10&kind=text&status=ready")) {
+      if (request.path === withChannelQuery("/v1/media-assets?query=meeting&cursor=c1&page_size=10&kind=text&status=ready")) {
         return {
           status: 200,
           data: {
             items: [
               {
-                media_item_id: MEDIA_ID,
+                media_asset_id: MEDIA_ID,
               },
             ],
             page: {
@@ -160,7 +154,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/collections/${COLLECTION_ID}`)) {
+      if (request.path === withChannelQuery(`/v1/collections/${COLLECTION_ID}`)) {
         return {
           status: 200,
           data: {
@@ -206,7 +200,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`)) {
+      if (request.path === `/v1/analysis-runs/${RUN_ID}/retry`) {
         return {
           status: 202,
           data: {
@@ -217,7 +211,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`)) {
+      if (request.path === withChannelQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`)) {
         return {
           status: 200,
           data: {
@@ -235,7 +229,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`)) {
+      if (request.path === withChannelQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`)) {
         return {
           status: 200,
           data: {
@@ -247,7 +241,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`)) {
+      if (request.path === withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`)) {
         return {
           status: 200,
           data: {
@@ -263,7 +257,7 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery("/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning")) {
+      if (request.path === withChannelQuery("/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning")) {
         return {
           status: 200,
           data: {
@@ -292,18 +286,18 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
     },
   });
 
-  const addResult = await runtime.callTool("add_media", {
-    owner: OWNER,
+  const addResult = await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "text",
-    source: {
+    origin: {
       origin_type: "text",
       text: "Meeting transcript fragment",
     },
     display_name: "Meeting notes",
     idempotency_key: "add-media-1",
   });
-  const searchResult = await runtime.callTool("search_media", {
-    owner: OWNER,
+  const searchResult = await runtime.callTool("search_media_assets", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     query: "meeting",
     cursor: "c1",
     page_size: 10,
@@ -312,49 +306,49 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
   });
   const updateCollectionResult = await runtime.callTool("update_collection", {
     collection_id: COLLECTION_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     expected_version: 1,
     name: "Research clips",
   });
   const updateItemsResult = await runtime.callTool("update_collection_items", {
     collection_id: COLLECTION_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     expected_version: 1,
     items: [
       {
-        media_item_id: MEDIA_ID,
+        media_asset_id: MEDIA_ID,
         position: 0,
       },
     ],
   });
   const runResult = await runtime.callTool("run_analysis", {
-    owner: OWNER,
-    selection_id: SELECTION_ID,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    selection_snapshot_id: SELECTION_ID,
     run_type: "summary",
   });
   const retryResult = await runtime.callTool("retry_run", {
     analysis_run_id: RUN_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     idempotency_key: "retry-run-1",
   });
   const eventsResult = await runtime.callTool("list_run_events", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
     cursor: "e1",
     page_size: 3,
   });
   const artifactsResult = await runtime.callTool("list_artifacts", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
     cursor: "next",
     page_size: 5,
   });
   const refreshArtifactResult = await runtime.callTool("refresh_artifact", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
   });
   const diagnosticsResult = await runtime.callTool("get_diagnostics", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     subject_type: "analysis_run",
     subject_id: RUN_ID,
     severity: "warning",
@@ -365,15 +359,15 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
   assert.equal(logs.length, 10);
   assert.ok((logs[0] ?? "").startsWith(MCP_TOOL_MAPPING_MARKER));
   assert.deepEqual(addResult.structuredContent, {
-    media_item: {
-      media_item_id: MEDIA_ID,
+    media_asset: {
+      media_asset_id: MEDIA_ID,
       status: "ready",
     },
   });
   assert.deepEqual(searchResult.structuredContent, {
     items: [
       {
-        media_item_id: MEDIA_ID,
+        media_asset_id: MEDIA_ID,
       },
     ],
     page: {
@@ -452,15 +446,15 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
   });
   assert.deepEqual(requests, [
     {
-      path: "/v1/media-items",
+      path: "/v1/media-assets",
       method: "POST",
       headers: {
         "Idempotency-Key": "add-media-1",
       },
       body: {
-        owner: OWNER,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
         kind: "text",
-        source: {
+        origin: {
           origin_type: "text",
           text: "Meeting transcript fragment",
         },
@@ -468,13 +462,13 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
       },
     },
     {
-      path: withOwnerQuery("/v1/media-items?query=meeting&cursor=c1&page_size=10&kind=text&status=ready"),
+      path: withChannelQuery("/v1/media-assets?query=meeting&cursor=c1&page_size=10&kind=text&status=ready"),
     },
     {
       path: `/v1/collections/${COLLECTION_ID}`,
       method: "PATCH",
       body: {
-        owner: OWNER,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
         expected_version: 1,
         name: "Research clips",
       },
@@ -483,11 +477,11 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
       path: `/v1/collections/${COLLECTION_ID}/items`,
       method: "POST",
       body: {
-        owner: OWNER,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
         expected_version: 1,
         items: [
           {
-            media_item_id: MEDIA_ID,
+            media_asset_id: MEDIA_ID,
             position: 0,
           },
         ],
@@ -498,33 +492,33 @@ test("createMcpDomainRuntime maps representative domain tools to inbox-first API
       method: "POST",
       headers: undefined,
       body: {
-        owner: OWNER,
-        selection_id: SELECTION_ID,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
+        selection_snapshot_id: SELECTION_ID,
         run_type: "summary",
       },
     },
     {
-      path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
+      path: `/v1/analysis-runs/${RUN_ID}/retry`,
       method: "POST",
       headers: {
         "Idempotency-Key": "retry-run-1",
       },
       body: {
-        owner: OWNER,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
       },
     },
     {
-      path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
+      path: withChannelQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
     },
     {
-      path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`),
+      path: withChannelQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=next&page_size=5`),
     },
     {
-      path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+      path: withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       method: "POST",
     },
     {
-      path: withOwnerQuery(
+      path: withChannelQuery(
         "/v1/diagnostics?cursor=d1&page_size=2&subject_type=analysis_run&subject_id=00000000-0000-4000-8000-000000000004&severity=warning",
       ),
     },
@@ -537,36 +531,36 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
   const requests: McpAdapterApiRequest[] = [];
   const responseByPath = new Map<string, unknown>([
     [
-      "/v1/media-items",
+      "/v1/media-assets",
       {
-        media_item: {
-          media_item_id: MEDIA_ID,
+        media_asset: {
+          media_asset_id: MEDIA_ID,
           status: "ready",
         },
       },
     ],
     [
-      withOwnerQuery("/v1/media-items?cursor=m1&page_size=25&kind=text&status=ready"),
+      withChannelQuery("/v1/media-assets?cursor=m1&page_size=25&kind=text&status=ready"),
       {
-        items: [{ media_item_id: MEDIA_ID }],
+        items: [{ media_asset_id: MEDIA_ID }],
         page: { page_size: 25, has_more: false },
       },
     ],
     [
-      withOwnerQuery("/v1/media-items?query=meeting&kind=url"),
+      withChannelQuery("/v1/media-assets?query=meeting&kind=url"),
       {
-        items: [{ media_item_id: MEDIA_ID }],
+        items: [{ media_asset_id: MEDIA_ID }],
         page: { page_size: 50, has_more: false },
       },
     ],
-    [withOwnerQuery(`/v1/media-items/${MEDIA_ID}`), { media_item: { media_item_id: MEDIA_ID } }],
+    [withChannelQuery(`/v1/media-assets/${MEDIA_ID}`), { media_asset: { media_asset_id: MEDIA_ID } }],
     [
-      withOwnerQuery("/v1/collections/inbox?cursor=i1&page_size=10"),
+      withChannelQuery("/v1/collections/inbox?cursor=i1&page_size=10"),
       {
         collection: {
           collection_id: COLLECTION_ID,
           kind: "inbox",
-          items: [{ media_item_id: MEDIA_ID, position: 0 }],
+          items: [{ media_asset_id: MEDIA_ID, position: 0 }],
         },
       },
     ],
@@ -581,18 +575,18 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      withOwnerQuery("/v1/collections?cursor=c1&page_size=10"),
+      withChannelQuery("/v1/collections?cursor=c1&page_size=10"),
       {
         items: [{ collection_id: COLLECTION_ID }],
         page: { page_size: 10, has_more: false },
       },
     ],
     [
-      withOwnerQuery(`/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`),
+      withChannelQuery(`/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`),
       {
         collection: {
           collection_id: COLLECTION_ID,
-          items: [{ media_item_id: MEDIA_ID, position: 0 }],
+          items: [{ media_asset_id: MEDIA_ID, position: 0 }],
         },
       },
     ],
@@ -616,15 +610,15 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      "/v1/selections",
+      "/v1/selection-snapshots",
       {
-        selection: {
-          selection_id: SELECTION_ID,
+        selection_snapshot: {
+          selection_snapshot_id: SELECTION_ID,
           source_collection_id: COLLECTION_ID,
         },
       },
     ],
-    [withOwnerQuery(`/v1/selections/${SELECTION_ID}`), { selection: { selection_id: SELECTION_ID } }],
+    [withChannelQuery(`/v1/selection-snapshots/${SELECTION_ID}`), { selection_snapshot: { selection_snapshot_id: SELECTION_ID } }],
     [
       "/v1/analysis-runs",
       {
@@ -635,15 +629,15 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      withOwnerQuery("/v1/analysis-runs?cursor=r1&page_size=10&status=queued"),
+      withChannelQuery("/v1/analysis-runs?cursor=r1&page_size=10&status=queued"),
       {
         items: [{ analysis_run_id: RUN_ID }],
         page: { page_size: 10, has_more: false },
       },
     ],
-    [withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`), { analysis_run: { analysis_run_id: RUN_ID } }],
+    [withChannelQuery(`/v1/analysis-runs/${RUN_ID}`), { analysis_run: { analysis_run_id: RUN_ID } }],
     [
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+      `/v1/analysis-runs/${RUN_ID}/cancel`,
       {
         analysis_run: {
           analysis_run_id: RUN_ID,
@@ -652,7 +646,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
+      `/v1/analysis-runs/${RUN_ID}/retry`,
       {
         analysis_run: {
           analysis_run_id: "00000000-0000-4000-8000-000000000006",
@@ -661,22 +655,22 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
+      withChannelQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
       {
         items: [{ event_id: "event-1", event_type: "run.started" }],
         page: { page_size: 3, has_more: false },
       },
     ],
     [
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`),
+      withChannelQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`),
       {
         items: [{ artifact_id: ARTIFACT_ID }],
         page: { page_size: 3, has_more: false },
       },
     ],
-    [withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`), { artifact: { artifact_id: ARTIFACT_ID } }],
+    [withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}`), { artifact: { artifact_id: ARTIFACT_ID } }],
     [
-      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+      withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       {
         artifact: {
           artifact_id: ARTIFACT_ID,
@@ -690,7 +684,7 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       },
     ],
     [
-      withOwnerQuery(`/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`),
+      withChannelQuery(`/v1/diagnostics?subject_type=media_asset&subject_id=${MEDIA_ID}&severity=info`),
       {
         items: [{ diagnostic_id: "diagnostic-1" }],
         page: { page_size: 50, has_more: false },
@@ -704,8 +698,8 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
         return {
           status: 201,
           data: {
-            media_item: {
-              media_item_id: "00000000-0000-4000-8000-000000000007",
+            media_asset: {
+              media_asset_id: "00000000-0000-4000-8000-000000000007",
               status: "ready",
             },
           } as TPayload,
@@ -723,10 +717,10 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
   };
   const runtime = createMcpDomainRuntime({ apiClient });
 
-  await runtime.callTool("add_media", {
-    owner: OWNER,
+  await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "text",
-    source: {
+    origin: {
       origin_type: "text",
       text: "Meeting transcript fragment",
       language_hint: "en",
@@ -735,17 +729,17 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
       source: "mcp-lifecycle-test",
     },
   });
-  await runtime.callTool("add_media", {
-    owner: OWNER,
+  await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "url",
-    source: {
+    origin: {
       origin_type: "url",
       url: "https://example.test/research-note",
     },
     display_name: "Research note",
   });
-  await runtime.callTool("add_media", {
-    owner: OWNER,
+  await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "audio",
     file: {
       filename: "clip.mp3",
@@ -755,126 +749,126 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     collection_id: COLLECTION_ID,
     display_name: "Interview clip",
   });
-  await runtime.callTool("list_media", {
-    owner: OWNER,
+  await runtime.callTool("list_media_assets", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     cursor: "m1",
     page_size: 25,
     kind: "text",
     status: "ready",
   });
-  await runtime.callTool("search_media", {
-    owner: OWNER,
+  await runtime.callTool("search_media_assets", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     query: "meeting",
     kind: "url",
   });
-  await runtime.callTool("get_media", {
-    owner: OWNER,
-    media_item_id: MEDIA_ID,
+  await runtime.callTool("get_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    media_asset_id: MEDIA_ID,
   });
   await runtime.callTool("get_inbox", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     cursor: "i1",
     page_size: 10,
   });
   await runtime.callTool("create_collection", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     name: "Research clips",
     items: [MEDIA_ID],
   });
   await runtime.callTool("list_collections", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     cursor: "c1",
     page_size: 10,
   });
   await runtime.callTool("get_collection", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     collection_id: COLLECTION_ID,
     cursor: "ci1",
     page_size: 5,
   });
   await runtime.callTool("update_collection", {
     collection_id: COLLECTION_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     expected_version: 1,
     name: "Research clips v2",
   });
   await runtime.callTool("update_collection_items", {
     collection_id: COLLECTION_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     expected_version: 2,
-    items: [{ media_item_id: MEDIA_ID, position: 0 }],
+    items: [{ media_asset_id: MEDIA_ID, position: 0 }],
   });
-  await runtime.callTool("create_selection", {
-    owner: OWNER,
+  await runtime.callTool("create_selection_snapshot", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     source_collection_id: COLLECTION_ID,
-    items: [{ media_item_id: MEDIA_ID, position: 0 }],
+    items: [{ media_asset_id: MEDIA_ID, position: 0 }],
   });
-  await runtime.callTool("get_selection", {
-    owner: OWNER,
-    selection_id: SELECTION_ID,
+  await runtime.callTool("get_selection_snapshot", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    selection_snapshot_id: SELECTION_ID,
   });
   await runtime.callTool("run_analysis", {
-    owner: OWNER,
-    selection_id: SELECTION_ID,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    selection_snapshot_id: SELECTION_ID,
     run_type: "summary",
   });
   await runtime.callTool("list_runs", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     cursor: "r1",
     page_size: 10,
     status: "queued",
   });
   await runtime.callTool("get_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
   await runtime.callTool("cancel_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
     message: "user requested stop",
   });
   await runtime.callTool("retry_run", {
     analysis_run_id: RUN_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
   await runtime.callTool("list_run_events", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
     cursor: "e1",
     page_size: 3,
   });
   await runtime.callTool("list_artifacts", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
     cursor: "a1",
     page_size: 3,
   });
   await runtime.callTool("get_artifact", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
   });
   await runtime.callTool("refresh_artifact", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
   });
   await runtime.callTool("get_diagnostics", {
-    owner: OWNER,
-    subject_type: "media_item",
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    subject_type: "media_asset",
     subject_id: MEDIA_ID,
     severity: "info",
   });
-  await runtime.callTool("remove_media", {
-    owner: OWNER,
-    media_item_id: MEDIA_ID,
+  await runtime.callTool("delete_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    media_asset_id: MEDIA_ID,
   });
 
   assert.equal(requests.length, 25);
   const fileRequest = requests[2];
-  assert.equal(fileRequest?.path, "/v1/media-items");
+  assert.equal(fileRequest?.path, "/v1/media-assets");
   assert.equal(fileRequest?.method, "POST");
   assert.ok(fileRequest?.body instanceof FormData);
   assert.deepEqual(JSON.parse(String(fileRequest.body.get("metadata"))), {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "audio",
     collection_id: COLLECTION_ID,
     display_name: "Interview clip",
@@ -883,37 +877,37 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
   assert.deepEqual(
     requests.map((request) => request.path),
     [
-      "/v1/media-items",
-      "/v1/media-items",
-      "/v1/media-items",
-      withOwnerQuery("/v1/media-items?cursor=m1&page_size=25&kind=text&status=ready"),
-      withOwnerQuery("/v1/media-items?query=meeting&kind=url"),
-      withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
-      withOwnerQuery("/v1/collections/inbox?cursor=i1&page_size=10"),
+      "/v1/media-assets",
+      "/v1/media-assets",
+      "/v1/media-assets",
+      withChannelQuery("/v1/media-assets?cursor=m1&page_size=25&kind=text&status=ready"),
+      withChannelQuery("/v1/media-assets?query=meeting&kind=url"),
+      withChannelQuery(`/v1/media-assets/${MEDIA_ID}`),
+      withChannelQuery("/v1/collections/inbox?cursor=i1&page_size=10"),
       "/v1/collections",
-      withOwnerQuery("/v1/collections?cursor=c1&page_size=10"),
-      withOwnerQuery(`/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`),
+      withChannelQuery("/v1/collections?cursor=c1&page_size=10"),
+      withChannelQuery(`/v1/collections/${COLLECTION_ID}?cursor=ci1&page_size=5`),
       `/v1/collections/${COLLECTION_ID}`,
       `/v1/collections/${COLLECTION_ID}/items`,
-      "/v1/selections",
-      withOwnerQuery(`/v1/selections/${SELECTION_ID}`),
+      "/v1/selection-snapshots",
+      withChannelQuery(`/v1/selection-snapshots/${SELECTION_ID}`),
       "/v1/analysis-runs",
-      withOwnerQuery("/v1/analysis-runs?cursor=r1&page_size=10&status=queued"),
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`),
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
-      withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`),
-      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
-      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
-      withOwnerQuery(`/v1/diagnostics?subject_type=media_item&subject_id=${MEDIA_ID}&severity=info`),
-      withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
+      withChannelQuery("/v1/analysis-runs?cursor=r1&page_size=10&status=queued"),
+      withChannelQuery(`/v1/analysis-runs/${RUN_ID}`),
+      `/v1/analysis-runs/${RUN_ID}/cancel`,
+      `/v1/analysis-runs/${RUN_ID}/retry`,
+      withChannelQuery(`/v1/analysis-runs/${RUN_ID}/events?cursor=e1&page_size=3`),
+      withChannelQuery(`/v1/analysis-runs/${RUN_ID}/artifacts?cursor=a1&page_size=3`),
+      withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+      withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+      withChannelQuery(`/v1/diagnostics?subject_type=media_asset&subject_id=${MEDIA_ID}&severity=info`),
+      withChannelQuery(`/v1/media-assets/${MEDIA_ID}`),
     ],
   );
   assert.deepEqual(requests[0]?.body, {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "text",
-    source: {
+    origin: {
       origin_type: "text",
       text: "Meeting transcript fragment",
       language_hint: "en",
@@ -923,18 +917,19 @@ test("createMcpDomainRuntime covers the full inbox-first media lifecycle without
     },
   });
   assert.deepEqual(requests[1]?.body, {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "url",
-    source: {
+    origin: {
       origin_type: "url",
       url: "https://example.test/research-note",
     },
     display_name: "Research note",
   });
   assert.deepEqual(requests[17], {
-    path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+    path: `/v1/analysis-runs/${RUN_ID}/cancel`,
     method: "POST",
     body: {
+      channel_account_id: CHANNEL_ACCOUNT_ID,
       message: "user requested stop",
     },
   });
@@ -947,7 +942,7 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
   const requests: McpAdapterApiRequest[] = [];
   const artifactByPath = new Map<string, unknown>([
     [
-      withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+      withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}`),
       {
         artifact: {
           artifact_id: ARTIFACT_ID,
@@ -964,7 +959,7 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
       },
     ],
     [
-      withOwnerQuery(`/v1/artifacts/${TEXT_ARTIFACT_ID}`),
+      withChannelQuery(`/v1/artifacts/${TEXT_ARTIFACT_ID}`),
       {
         artifact: {
           artifact_id: TEXT_ARTIFACT_ID,
@@ -981,7 +976,7 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
       },
     ],
     [
-      withOwnerQuery(`/v1/artifacts/${JSON_ARTIFACT_ID}`),
+      withChannelQuery(`/v1/artifacts/${JSON_ARTIFACT_ID}`),
       {
         artifact: {
           artifact_id: JSON_ARTIFACT_ID,
@@ -1015,18 +1010,18 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
   });
 
   const markdownResult = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
     format: "markdown",
     max_chars: 20,
   });
   const textResult = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: TEXT_ARTIFACT_ID,
     format: "text",
   });
   const jsonResult = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: JSON_ARTIFACT_ID,
     format: "json",
   });
@@ -1083,9 +1078,9 @@ test("createMcpDomainRuntime returns text, markdown, and json artifact previews"
     },
   });
   assert.deepEqual(requests.map((request) => request.path), [
-    withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
-    withOwnerQuery(`/v1/artifacts/${TEXT_ARTIFACT_ID}`),
-    withOwnerQuery(`/v1/artifacts/${JSON_ARTIFACT_ID}`),
+    withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+    withChannelQuery(`/v1/artifacts/${TEXT_ARTIFACT_ID}`),
+    withChannelQuery(`/v1/artifacts/${JSON_ARTIFACT_ID}`),
   ]);
   // END_BLOCK_BLOCK_VERIFY_ARTIFACT_PREVIEWS
 });
@@ -1100,8 +1095,8 @@ test("createMcpDomainRuntime supports real SDK listTools and callTool protocol f
         return {
           status: 200,
           data: {
-            media_item: {
-              media_item_id: MEDIA_ID,
+            media_asset: {
+              media_asset_id: MEDIA_ID,
               status: "ready",
             },
           } as TPayload,
@@ -1121,10 +1116,10 @@ test("createMcpDomainRuntime supports real SDK listTools and callTool protocol f
 
     const toolsResult = await client.listTools();
     const callResult = await client.callTool({
-      name: "get_media",
+      name: "get_media_asset",
       arguments: {
-        owner: OWNER,
-        media_item_id: MEDIA_ID,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
+        media_asset_id: MEDIA_ID,
       },
     });
 
@@ -1147,14 +1142,14 @@ test("createMcpDomainRuntime supports real SDK listTools and callTool protocol f
         ?.outputSchema?.properties?.artifact_preview,
     );
     assert.deepEqual(callResult.structuredContent, {
-      media_item: {
-        media_item_id: MEDIA_ID,
+      media_asset: {
+        media_asset_id: MEDIA_ID,
         status: "ready",
       },
     });
     assert.deepEqual(requests, [
       {
-        path: withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
+        path: withChannelQuery(`/v1/media-assets/${MEDIA_ID}`),
       },
     ]);
   } finally {
@@ -1170,12 +1165,12 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       requests.push(request);
-      if (request.path === withOwnerQuery(`/v1/media-items/${MEDIA_ID}`) && request.method === "DELETE") {
+      if (request.path === withChannelQuery(`/v1/media-assets/${MEDIA_ID}`) && request.method === "DELETE") {
         return {
           status: 200,
           data: {
-            media_item: {
-              media_item_id: MEDIA_ID,
+            media_asset: {
+              media_asset_id: MEDIA_ID,
               status: "deleted",
               retention: {
                 state: "soft_deleted",
@@ -1185,7 +1180,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`) && request.method === "POST") {
+      if (request.path === withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`) && request.method === "POST") {
         return {
           status: 200,
           data: {
@@ -1208,7 +1203,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error")) {
+      if (request.path === withChannelQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error")) {
         return {
           status: 200,
           data: {
@@ -1235,24 +1230,24 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   };
   const runtime = createMcpDomainRuntime({ apiClient });
 
-  const removeResult = await runtime.callTool("remove_media", {
-    owner: OWNER,
-    media_item_id: MEDIA_ID,
+  const removeResult = await runtime.callTool("delete_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    media_asset_id: MEDIA_ID,
   });
   const refreshResult = await runtime.callTool("refresh_artifact", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
   });
   const diagnosticsResult = await runtime.callTool("get_diagnostics", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     page_size: 5,
     subject_type: "retention",
     severity: "error",
   });
 
   assert.deepEqual(removeResult.structuredContent, {
-    media_item: {
-      media_item_id: MEDIA_ID,
+    media_asset: {
+      media_asset_id: MEDIA_ID,
       status: "deleted",
       retention: {
         state: "soft_deleted",
@@ -1297,15 +1292,15 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   });
   assert.deepEqual(requests, [
     {
-      path: withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
+      path: withChannelQuery(`/v1/media-assets/${MEDIA_ID}`),
       method: "DELETE",
     },
     {
-      path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+      path: withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
       method: "POST",
     },
     {
-      path: withOwnerQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error"),
+      path: withChannelQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error"),
     },
   ]);
   // END_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_PARITY
@@ -1317,7 +1312,7 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
     apiClient: {
       request: async () => {
         throw new McpAdapterApiClientError(
-          withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+          `/v1/analysis-runs/${RUN_ID}/cancel`,
           409,
           "upstream rejected cancellation",
           "run_cancel_not_allowed",
@@ -1326,12 +1321,12 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
     },
   });
 
-  const validationResult = await runtime.callTool("get_media", {
-    owner: OWNER,
+  const validationResult = await runtime.callTool("get_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
-  const ownerValidationResult = await runtime.callTool("list_media", {});
+  const channelValidationResult = await runtime.callTool("list_media_assets", {});
   const upstreamResult = await runtime.callTool("cancel_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
   const unknownToolResult = await runtime.callTool("missing_tool");
@@ -1347,14 +1342,14 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
       details: {
         issues: [
           {
-            path: "media_item_id",
+            path: "media_asset_id",
             message: "Invalid input: expected string, received undefined",
           },
         ],
       },
     },
   });
-  assert.deepEqual(ownerValidationResult.structuredContent, {
+  assert.deepEqual(channelValidationResult.structuredContent, {
     error: {
       code: "mcp_contract_violation",
       message: "Tool input did not match the domain contract.",
@@ -1364,8 +1359,8 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
       details: {
         issues: [
           {
-            path: "owner",
-            message: "Invalid input: expected object, received undefined",
+            path: "channel_account_id",
+            message: "Invalid input: expected string, received undefined",
           },
         ],
       },
@@ -1379,7 +1374,7 @@ test("createMcpDomainRuntime keeps adapter validation and upstream failures stru
       retryable: false,
       action: "inspect_run_state_before_retry",
       details: {
-        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+        path: `/v1/analysis-runs/${RUN_ID}/cancel`,
         status: 409,
       },
     },
@@ -1409,7 +1404,7 @@ test("createMcpDomainRuntime treats missing known-tool arguments as an empty con
     },
   });
 
-  const result = await runtime.callTool("list_media");
+  const result = await runtime.callTool("list_media_assets");
 
   assert.deepEqual(result.structuredContent, {
     error: {
@@ -1421,8 +1416,8 @@ test("createMcpDomainRuntime treats missing known-tool arguments as an empty con
       details: {
         issues: [
           {
-            path: "owner",
-            message: "Invalid input: expected object, received undefined",
+            path: "channel_account_id",
+            message: "Invalid input: expected string, received undefined",
           },
         ],
       },
@@ -1440,10 +1435,10 @@ test("createMcpDomainRuntime shapes mapped-tool refine contract failures", async
     },
   });
 
-  const addMediaResult = await runtime.callTool("add_media", {
-    owner: OWNER,
+  const addMediaResult = await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "document",
-    source: {
+    origin: {
       origin_type: "text",
       text: "duplicate source",
     },
@@ -1454,7 +1449,7 @@ test("createMcpDomainRuntime shapes mapped-tool refine contract failures", async
     },
   });
   const updateCollectionResult = await runtime.callTool("update_collection", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     collection_id: COLLECTION_ID,
     expected_version: 1,
   });
@@ -1470,7 +1465,7 @@ test("createMcpDomainRuntime shapes mapped-tool refine contract failures", async
         issues: [
           {
             path: "",
-            message: "Exactly one of source or file is required",
+            message: "Exactly one of origin or file is required",
           },
         ],
       },
@@ -1500,7 +1495,7 @@ test("createMcpDomainRuntime preserves upstream API details diagnostics and conf
     apiClient: {
       request: async () => {
         throw new McpAdapterApiClientError(
-          withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+          `/v1/analysis-runs/${RUN_ID}/cancel`,
           409,
           "upstream rejected cancellation",
           "run_cancel_not_allowed",
@@ -1525,7 +1520,7 @@ test("createMcpDomainRuntime preserves upstream API details diagnostics and conf
   });
 
   const upstreamResult = await runtime.callTool("cancel_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
 
@@ -1538,7 +1533,7 @@ test("createMcpDomainRuntime preserves upstream API details diagnostics and conf
       action: "inspect_run_state_before_retry",
       correlation_id: "corr-9000",
       details: {
-        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+        path: `/v1/analysis-runs/${RUN_ID}/cancel`,
         status: 409,
         upstream_details: {
           run_state: "running",
@@ -1562,19 +1557,19 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
   const runtime = createMcpDomainRuntime({
     apiClient: {
       request: async (request: McpAdapterApiRequest) => {
-        if (request.path === withOwnerQuery(`/v1/media-items/${MEDIA_ID}`) && request.method === "DELETE") {
+        if (request.path === withChannelQuery(`/v1/media-assets/${MEDIA_ID}`) && request.method === "DELETE") {
           throw new McpAdapterApiClientError(
-            withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
+            withChannelQuery(`/v1/media-assets/${MEDIA_ID}`),
             404,
-            "media item not found for this owner scope",
+            "media item not found for this channel account",
             "not_found",
           );
         }
-        if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`) && request.method === "POST") {
+        if (request.path === withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`) && request.method === "POST") {
           throw new McpAdapterApiClientError(
-            withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+            withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
             404,
-            "artifact not found for this owner scope",
+            "artifact not found for this channel account",
             "not_found",
           );
         }
@@ -1583,24 +1578,24 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
     },
   });
 
-  const removeResult = await runtime.callTool("remove_media", {
-    owner: OWNER,
-    media_item_id: MEDIA_ID,
+  const removeResult = await runtime.callTool("delete_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    media_asset_id: MEDIA_ID,
   });
   const refreshResult = await runtime.callTool("refresh_artifact", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
   });
 
   assert.deepEqual(removeResult.structuredContent, {
     error: {
       code: "not_found",
-      message: "media item not found for this owner scope",
+      message: "media item not found for this channel account",
       category: "upstream_api",
       retryable: false,
       action: "check_resource_id_owner_scope",
       details: {
-        path: withOwnerQuery(`/v1/media-items/${MEDIA_ID}`),
+        path: withChannelQuery(`/v1/media-assets/${MEDIA_ID}`),
         status: 404,
       },
     },
@@ -1608,12 +1603,12 @@ test("createMcpDomainRuntime keeps denied retention-touching paths structured", 
   assert.deepEqual(refreshResult.structuredContent, {
     error: {
       code: "not_found",
-      message: "artifact not found for this owner scope",
+      message: "artifact not found for this channel account",
       category: "upstream_api",
       retryable: false,
       action: "check_resource_id_owner_scope",
       details: {
-        path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
+        path: withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}/refresh`),
         status: 404,
       },
     },
@@ -1644,7 +1639,7 @@ test("createMcpDomainRuntime returns actionable retry hints for preview failures
   });
 
   const result = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
     format: "markdown",
   });
@@ -1670,7 +1665,7 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
   const runtime = createMcpDomainRuntime({
     apiClient: {
       request: async (request: McpAdapterApiRequest) => {
-        if (request.path === withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`)) {
+        if (request.path === withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}`)) {
           throw new McpAdapterApiClientError(
             request.path,
             424,
@@ -1678,7 +1673,7 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
             "artifact_resolution_failed",
           );
         }
-        if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`)) {
+        if (request.path === `/v1/analysis-runs/${RUN_ID}/retry`) {
           throw new McpAdapterApiClientError(
             request.path,
             409,
@@ -1694,22 +1689,22 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
             "collection_version_conflict",
           );
         }
-        if (request.path === withOwnerQuery("/v1/media-items")) {
+        if (request.path === withChannelQuery("/v1/media-assets")) {
           throw new McpAdapterApiClientError(
             request.path,
             400,
-            "owner scope is invalid",
+            "channel account is invalid",
             "invalid_request",
           );
         }
-        if (request.path === withOwnerQuery("/v1/analysis-runs")) {
+        if (request.path === withChannelQuery("/v1/analysis-runs")) {
           throw new McpAdapterApiClientError(
             request.path,
             503,
             "analysis service is unavailable",
           );
         }
-        if (request.path === withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`)) {
+        if (request.path === withChannelQuery(`/v1/analysis-runs/${RUN_ID}`)) {
           throw new McpAdapterApiClientError(
             request.path,
             418,
@@ -1722,27 +1717,27 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
   });
 
   const artifactResult = await runtime.callTool("get_artifact", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: ARTIFACT_ID,
   });
   const retryResult = await runtime.callTool("retry_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
   const conflictResult = await runtime.callTool("update_collection", {
     collection_id: COLLECTION_ID,
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     expected_version: 1,
     name: "Renamed collection",
   });
-  const invalidRequestResult = await runtime.callTool("list_media", {
-    owner: OWNER,
+  const invalidRequestResult = await runtime.callTool("list_media_assets", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
   const retryLaterResult = await runtime.callTool("list_runs", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
   const inspectResult = await runtime.callTool("get_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
 
@@ -1754,7 +1749,7 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
       retryable: true,
       action: "refresh_artifact_then_retry_preview",
       details: {
-        path: withOwnerQuery(`/v1/artifacts/${ARTIFACT_ID}`),
+        path: withChannelQuery(`/v1/artifacts/${ARTIFACT_ID}`),
         status: 424,
       },
     },
@@ -1767,7 +1762,7 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
       retryable: false,
       action: "wait_for_terminal_run_before_retry",
       details: {
-        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/retry`),
+        path: `/v1/analysis-runs/${RUN_ID}/retry`,
         status: 409,
       },
     },
@@ -1788,12 +1783,12 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
   assert.deepEqual(invalidRequestResult.structuredContent, {
     error: {
       code: "invalid_request",
-      message: "owner scope is invalid",
+      message: "channel account is invalid",
       category: "upstream_api",
       retryable: false,
       action: "fix_request",
       details: {
-        path: withOwnerQuery("/v1/media-items"),
+        path: withChannelQuery("/v1/media-assets"),
         status: 400,
       },
     },
@@ -1806,7 +1801,7 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
       retryable: true,
       action: "retry_later",
       details: {
-        path: withOwnerQuery("/v1/analysis-runs"),
+        path: withChannelQuery("/v1/analysis-runs"),
         status: 503,
       },
     },
@@ -1819,7 +1814,7 @@ test("createMcpDomainRuntime covers the remaining upstream API hint branches", a
       retryable: false,
       action: "inspect_upstream_error",
       details: {
-        path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}`),
+        path: withChannelQuery(`/v1/analysis-runs/${RUN_ID}`),
         status: 418,
       },
     },
@@ -1838,9 +1833,9 @@ test("createMcpDomainRuntime shapes malformed success envelopes as contract erro
     },
   });
 
-  const result = await runtime.callTool("get_media", {
-    owner: OWNER,
-    media_item_id: MEDIA_ID,
+  const result = await runtime.callTool("get_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    media_asset_id: MEDIA_ID,
   });
 
   assert.deepEqual(result.structuredContent, {
@@ -1870,9 +1865,9 @@ test("createMcpDomainRuntime rethrows unknown execution errors", async () => {
 
   await assert.rejects(
     () =>
-      runtime.callTool("get_media", {
-        owner: OWNER,
-        media_item_id: MEDIA_ID,
+      runtime.callTool("get_media_asset", {
+        channel_account_id: CHANNEL_ACCOUNT_ID,
+        media_asset_id: MEDIA_ID,
       }),
     /socket closed/,
   );
@@ -1887,7 +1882,7 @@ test("createMcpDomainRuntime shapes missing and invalid artifact preview text br
   const runtime = createMcpDomainRuntime({
     apiClient: {
       request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
-        if (request.path === withOwnerQuery(`/v1/artifacts/${missingTextArtifactID}`)) {
+        if (request.path === withChannelQuery(`/v1/artifacts/${missingTextArtifactID}`)) {
           return {
             status: 200,
             data: {
@@ -1901,7 +1896,7 @@ test("createMcpDomainRuntime shapes missing and invalid artifact preview text br
             } as TPayload,
           };
         }
-        if (request.path === withOwnerQuery(`/v1/artifacts/${invalidJsonArtifactID}`)) {
+        if (request.path === withChannelQuery(`/v1/artifacts/${invalidJsonArtifactID}`)) {
           return {
             status: 200,
             data: {
@@ -1922,11 +1917,11 @@ test("createMcpDomainRuntime shapes missing and invalid artifact preview text br
   });
 
   const missingTextResult = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: missingTextArtifactID,
   });
   const invalidJsonResult = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: invalidJsonArtifactID,
     format: "json",
   });
@@ -1960,11 +1955,7 @@ test("createMcpDomainRuntime shapes missing and invalid artifact preview text br
   // END_BLOCK_BLOCK_VERIFY_ARTIFACT_PREVIEW_EDGE_BRANCHES
 });
 
-test("createMcpDomainRuntime omits optional contract fields on minimal calls and preserves tenant-scoped queries", async () => {
-  const tenantOwner = {
-    ...OWNER,
-    tenant_id: "tenant-1",
-  };
+test("createMcpDomainRuntime omits optional contract fields on minimal calls and preserves channel-scoped queries", async () => {
   const requests: McpAdapterApiRequest[] = [];
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
@@ -1983,8 +1974,8 @@ test("createMcpDomainRuntime omits optional contract fields on minimal calls and
     apiClient,
   });
 
-  const addFileResult = await runtime.callTool("add_media", {
-    owner: OWNER,
+  const addFileResult = await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "document",
     file: {
       filename: "brief.txt",
@@ -1992,74 +1983,74 @@ test("createMcpDomainRuntime omits optional contract fields on minimal calls and
       content_base64: Buffer.from("brief").toString("base64"),
     },
   });
-  await runtime.callTool("list_media", {
-    owner: tenantOwner,
+  await runtime.callTool("list_media_assets", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
   await runtime.callTool("get_inbox", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
   await runtime.callTool("create_collection", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     name: "Minimal collection",
   });
   await runtime.callTool("update_collection", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     collection_id: COLLECTION_ID,
     expected_version: 2,
     status: "archived",
   });
-  await runtime.callTool("create_selection", {
-    owner: OWNER,
+  await runtime.callTool("create_selection_snapshot", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     items: [
       {
-        media_item_id: MEDIA_ID,
+        media_asset_id: MEDIA_ID,
         position: 0,
       },
     ],
   });
   await runtime.callTool("run_analysis", {
-    owner: OWNER,
-    selection_id: SELECTION_ID,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    selection_snapshot_id: SELECTION_ID,
     run_type: "summary",
   });
   await runtime.callTool("cancel_run", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
   await runtime.callTool("list_artifacts", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     analysis_run_id: RUN_ID,
   });
   await runtime.callTool("get_diagnostics", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
   });
 
   assert.deepEqual(addFileResult.structuredContent, {
     ok: true,
-    path: "/v1/media-items",
+    path: "/v1/media-assets",
     method: "POST",
   });
   assert.equal(requests.length, 10);
-  assert.equal(requests[0]?.path, "/v1/media-items");
+  assert.equal(requests[0]?.path, "/v1/media-assets");
   assert.equal(requests[0]?.method, "POST");
   assert.equal(requests[0]?.headers, undefined);
   assert.ok(requests[0]?.body instanceof FormData);
   const metadataPayload = JSON.parse(String((requests[0]?.body as FormData).get("metadata")));
   assert.deepEqual(metadataPayload, {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "document",
   });
   assert.equal(
     requests[1]?.path,
-    "/v1/media-items?owner_type=mcp&owner_id=assistant&tenant_id=tenant-1",
+    withChannelQuery("/v1/media-assets"),
   );
-  assert.equal(requests[2]?.path, withOwnerQuery("/v1/collections/inbox"));
+  assert.equal(requests[2]?.path, withChannelQuery("/v1/collections/inbox"));
   assert.deepEqual(requests[3], {
     path: "/v1/collections",
     method: "POST",
     headers: undefined,
     body: {
-      owner: OWNER,
+      channel_account_id: CHANNEL_ACCOUNT_ID,
       name: "Minimal collection",
     },
   });
@@ -2067,23 +2058,24 @@ test("createMcpDomainRuntime omits optional contract fields on minimal calls and
     path: `/v1/collections/${COLLECTION_ID}`,
     method: "PATCH",
     body: {
-      owner: OWNER,
+      channel_account_id: CHANNEL_ACCOUNT_ID,
       expected_version: 2,
       status: "archived",
     },
   });
   assert.deepEqual(requests[5], {
-    path: "/v1/selections",
+    path: "/v1/selection-snapshots",
     method: "POST",
     headers: undefined,
     body: {
-      owner: OWNER,
+      channel_account_id: CHANNEL_ACCOUNT_ID,
       items: [
         {
-          media_item_id: MEDIA_ID,
+          media_asset_id: MEDIA_ID,
           position: 0,
         },
       ],
+      created_via_channel_account_id: CHANNEL_ACCOUNT_ID,
     },
   });
   assert.deepEqual(requests[6], {
@@ -2091,50 +2083,45 @@ test("createMcpDomainRuntime omits optional contract fields on minimal calls and
     method: "POST",
     headers: undefined,
     body: {
-      owner: OWNER,
-      selection_id: SELECTION_ID,
+      channel_account_id: CHANNEL_ACCOUNT_ID,
+      selection_snapshot_id: SELECTION_ID,
       run_type: "summary",
     },
   });
   assert.deepEqual(requests[7], {
-    path: withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/cancel`),
+    path: `/v1/analysis-runs/${RUN_ID}/cancel`,
     method: "POST",
-    body: {},
+    body: {
+      channel_account_id: CHANNEL_ACCOUNT_ID,
+    },
   });
-  assert.equal(requests[8]?.path, withOwnerQuery(`/v1/analysis-runs/${RUN_ID}/artifacts`));
-  assert.equal(requests[9]?.path, withOwnerQuery("/v1/diagnostics"));
+  assert.equal(requests[8]?.path, withChannelQuery(`/v1/analysis-runs/${RUN_ID}/artifacts`));
+  assert.equal(requests[9]?.path, withChannelQuery("/v1/diagnostics"));
 });
 
 test("createMcpDomainRuntime preserves fully populated optional payload branches", async () => {
-  const richOwner = {
-    ...OWNER,
-    adapter_identity: {
-      ...OWNER.adapter_identity,
-      service_name: "mcp-suite",
-    },
-  };
   const requests: McpAdapterApiRequest[] = [];
   const richArtifactID = "00000000-0000-4000-8000-000000000008";
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       requests.push(request);
-      if (request.path === "/v1/media-items") {
+      if (request.path === "/v1/media-assets") {
         return {
           status: 201,
           data: {
-            media_item: {
-              media_item_id: MEDIA_ID,
+            media_asset: {
+              media_asset_id: MEDIA_ID,
               status: "ready",
             },
           } as TPayload,
         };
       }
-      if (request.path === "/v1/selections") {
+      if (request.path === "/v1/selection-snapshots") {
         return {
           status: 201,
           data: {
-            selection: {
-              selection_id: SELECTION_ID,
+            selection_snapshot: {
+              selection_snapshot_id: SELECTION_ID,
               duplicate_policy: "allow",
             },
           } as TPayload,
@@ -2151,7 +2138,7 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/artifacts/${richArtifactID}`)) {
+      if (request.path === withChannelQuery(`/v1/artifacts/${richArtifactID}`)) {
         return {
           status: 200,
           data: {
@@ -2172,11 +2159,11 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
   };
   const runtime = createMcpDomainRuntime({ apiClient });
 
-  const addObjectResult = await runtime.callTool("add_media", {
-    owner: richOwner,
+  const addObjectResult = await runtime.callTool("create_media_asset", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "document",
-    source: {
-      origin_type: "object",
+    origin: {
+      origin_type: "upload",
       object_ref: "minio://bucket/reports/brief.json",
       original_filename: "brief.json",
       content_type: "application/json",
@@ -2193,25 +2180,23 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
     },
     idempotency_key: "media-rich-1",
   });
-  const selectionResult = await runtime.callTool("create_selection", {
-    owner: richOwner,
+  const selectionResult = await runtime.callTool("create_selection_snapshot", {
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     source_collection_id: COLLECTION_ID,
     items: [
       {
-        media_item_id: MEDIA_ID,
+        media_asset_id: MEDIA_ID,
         position: 0,
       },
     ],
     option_snapshot: {
       mode: "full",
     },
-    duplicate_policy: "allow",
-    created_by: "codex",
     idempotency_key: "selection-rich-1",
   });
   const runResult = await runtime.callTool("run_analysis", {
-    owner: richOwner,
-    selection_id: SELECTION_ID,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
+    selection_snapshot_id: SELECTION_ID,
     run_type: "custom",
     params: {
       harness_name: "mcp-suite",
@@ -2225,21 +2210,21 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
     idempotency_key: "run-rich-1",
   });
   const previewResult = await runtime.callTool("get_artifact_preview", {
-    owner: richOwner,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: richArtifactID,
     format: "text",
     max_chars: 12,
   });
 
   assert.deepEqual(addObjectResult.structuredContent, {
-    media_item: {
-      media_item_id: MEDIA_ID,
+    media_asset: {
+      media_asset_id: MEDIA_ID,
       status: "ready",
     },
   });
   assert.deepEqual(selectionResult.structuredContent, {
-    selection: {
-      selection_id: SELECTION_ID,
+    selection_snapshot: {
+      selection_snapshot_id: SELECTION_ID,
       duplicate_policy: "allow",
     },
   });
@@ -2263,16 +2248,16 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
   });
   assert.deepEqual(requests, [
     {
-      path: "/v1/media-items",
+      path: "/v1/media-assets",
       method: "POST",
       headers: {
         "Idempotency-Key": "media-rich-1",
       },
       body: {
-        owner: richOwner,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
         kind: "document",
-        source: {
-          origin_type: "object",
+        origin: {
+          origin_type: "upload",
           object_ref: "minio://bucket/reports/brief.json",
           original_filename: "brief.json",
           content_type: "application/json",
@@ -2290,25 +2275,24 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
       },
     },
     {
-      path: "/v1/selections",
+      path: "/v1/selection-snapshots",
       method: "POST",
       headers: {
         "Idempotency-Key": "selection-rich-1",
       },
       body: {
-        owner: richOwner,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
         source_collection_id: COLLECTION_ID,
         items: [
           {
-            media_item_id: MEDIA_ID,
+            media_asset_id: MEDIA_ID,
             position: 0,
           },
         ],
         option_snapshot: {
           mode: "full",
         },
-        duplicate_policy: "allow",
-        created_by: "codex",
+        created_via_channel_account_id: CHANNEL_ACCOUNT_ID,
       },
     },
     {
@@ -2318,8 +2302,8 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
         "Idempotency-Key": "run-rich-1",
       },
       body: {
-        owner: richOwner,
-        selection_id: SELECTION_ID,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
+        selection_snapshot_id: SELECTION_ID,
         run_type: "custom",
         params: {
           harness_name: "mcp-suite",
@@ -2333,12 +2317,12 @@ test("createMcpDomainRuntime preserves fully populated optional payload branches
       },
     },
     {
-      path: withOwnerQuery(`/v1/artifacts/${richArtifactID}`),
+      path: withChannelQuery(`/v1/artifacts/${richArtifactID}`),
     },
   ]);
 });
 
-test("createDomainMcpTools skips null and empty owner-scoped query values", async () => {
+test("createDomainMcpTools skips null and empty channel-scoped query values", async () => {
   const requests: McpAdapterApiRequest[] = [];
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
@@ -2353,29 +2337,21 @@ test("createDomainMcpTools skips null and empty owner-scoped query values", asyn
     },
   };
   const tools = createDomainMcpTools(apiClient);
-  const listMedia = tools.find((tool) => tool.name === "list_media");
+  const listMedia = tools.find((tool) => tool.name === "list_media_assets");
   const getDiagnostics = tools.find((tool) => tool.name === "get_diagnostics");
 
   assert.ok(listMedia);
   assert.ok(getDiagnostics);
 
   await listMedia.execute({
-    owner: {
-      owner_type: "mcp",
-      owner_id: "assistant",
-      tenant_id: "",
-    } as any,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     cursor: "",
     page_size: null as any,
     kind: "",
     status: undefined,
   });
   await getDiagnostics.execute({
-    owner: {
-      owner_type: "mcp",
-      owner_id: "assistant",
-      tenant_id: null,
-    } as any,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     cursor: undefined,
     page_size: "",
     subject_type: null,
@@ -2385,10 +2361,10 @@ test("createDomainMcpTools skips null and empty owner-scoped query values", asyn
 
   assert.deepEqual(requests, [
     {
-      path: "/v1/media-items?owner_type=mcp&owner_id=assistant",
+      path: withChannelQuery("/v1/media-assets"),
     },
     {
-      path: "/v1/diagnostics?owner_type=mcp&owner_id=assistant",
+      path: withChannelQuery("/v1/diagnostics"),
     },
   ]);
 });
@@ -2398,7 +2374,7 @@ test("createMcpDomainRuntime falls back to requested artifact id when preview me
   const runtime = createMcpDomainRuntime({
     apiClient: {
       request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
-        assert.equal(request.path, withOwnerQuery(`/v1/artifacts/${sparseArtifactID}`));
+        assert.equal(request.path, withChannelQuery(`/v1/artifacts/${sparseArtifactID}`));
         return {
           status: 200,
           data: {
@@ -2415,7 +2391,7 @@ test("createMcpDomainRuntime falls back to requested artifact id when preview me
   });
 
   const result = await runtime.callTool("get_artifact_preview", {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: sparseArtifactID,
     format: "text",
     max_chars: 20,
@@ -2438,7 +2414,7 @@ test("createDomainMcpTools applies preview defaults when direct execution omits 
   const artifactID = "00000000-0000-4000-8000-000000000010";
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
-      assert.equal(request.path, withOwnerQuery(`/v1/artifacts/${artifactID}`));
+      assert.equal(request.path, withChannelQuery(`/v1/artifacts/${artifactID}`));
       return {
         status: 200,
         data: {
@@ -2462,7 +2438,7 @@ test("createDomainMcpTools applies preview defaults when direct execution omits 
   assert.ok(previewTool);
 
   const result = await previewTool.execute({
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     artifact_id: artifactID,
   } as any);
 
@@ -2488,18 +2464,18 @@ test("createDomainMcpTools preserves multipart adapter_origin metadata and null 
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       requests.push(request);
-      if (request.path === "/v1/media-items") {
+      if (request.path === "/v1/media-assets") {
         return {
           status: 201,
           data: {
-            media_item: {
-              media_item_id: MEDIA_ID,
+            media_asset: {
+              media_asset_id: MEDIA_ID,
               status: "ready",
             },
           } as TPayload,
         };
       }
-      if (request.path === withOwnerQuery(`/v1/artifacts/${artifactID}`)) {
+      if (request.path === withChannelQuery(`/v1/artifacts/${artifactID}`)) {
         return {
           status: 200,
           data: {
@@ -2517,14 +2493,14 @@ test("createDomainMcpTools preserves multipart adapter_origin metadata and null 
     },
   };
   const tools = createDomainMcpTools(apiClient);
-  const addMedia = tools.find((tool) => tool.name === "add_media");
+  const addMedia = tools.find((tool) => tool.name === "create_media_asset");
   const previewTool = tools.find((tool) => tool.name === "get_artifact_preview");
 
   assert.ok(addMedia);
   assert.ok(previewTool);
 
   await addMedia.execute({
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "document",
     file: {
       filename: "brief.txt",
@@ -2536,7 +2512,7 @@ test("createDomainMcpTools preserves multipart adapter_origin metadata and null 
   await assert.rejects(
     () =>
       previewTool.execute({
-        owner: OWNER,
+        channel_account_id: CHANNEL_ACCOUNT_ID,
         artifact_id: artifactID,
         format: "json",
         max_chars: 4000,
@@ -2556,11 +2532,11 @@ test("createDomainMcpTools preserves multipart adapter_origin metadata and null 
     },
   );
 
-  assert.equal(requests[0]?.path, "/v1/media-items");
+  assert.equal(requests[0]?.path, "/v1/media-assets");
   assert.ok(requests[0]?.body instanceof FormData);
   const metadataPayload = JSON.parse(String((requests[0]?.body as FormData).get("metadata")));
   assert.deepEqual(metadataPayload, {
-    owner: OWNER,
+    channel_account_id: CHANNEL_ACCOUNT_ID,
     kind: "document",
     adapter_origin: "telegram-import",
   });

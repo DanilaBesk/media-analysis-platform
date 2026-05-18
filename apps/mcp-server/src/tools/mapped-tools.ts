@@ -15,7 +15,7 @@
 //
 // START_MODULE_MAP
 //   validate-domain-inputs - Use Zod schemas aligned with the public inbox-first contracts.
-//   map-tools-to-api - Route domain tools to /v1/media-items, /v1/collections, /v1/selections, /v1/analysis-runs, /v1/artifacts, and /v1/diagnostics.
+//   map-tools-to-api - Route domain tools to /v1/media-assets, /v1/collections, /v1/selection-snapshots, /v1/analysis-runs, /v1/artifacts, and /v1/diagnostics.
 //   shape-tool-results - Preserve API envelopes in structured MCP responses without adding adapter-side orchestration.
 // END_MODULE_MAP
 
@@ -92,41 +92,19 @@ const artifactPreviewOutputSchema = z
   })
   .strict();
 
-const EXAMPLE_OWNER = {
-  owner_type: "mcp",
-  owner_id: "assistant",
-  adapter_identity: {
-    mcp_caller_id: "codex",
-  },
-};
+const EXAMPLE_CHANNEL_ACCOUNT_ID = "00000000-0000-4000-8000-000000000010";
 
-const EXAMPLE_MEDIA_ID = "00000000-0000-4000-8000-000000000001";
+const EXAMPLE_MEDIA_ASSET_ID = "00000000-0000-4000-8000-000000000001";
 const EXAMPLE_COLLECTION_ID = "00000000-0000-4000-8000-000000000002";
-const EXAMPLE_SELECTION_ID = "00000000-0000-4000-8000-000000000003";
+const EXAMPLE_SELECTION_SNAPSHOT_ID = "00000000-0000-4000-8000-000000000003";
 const EXAMPLE_RUN_ID = "00000000-0000-4000-8000-000000000004";
 const EXAMPLE_ARTIFACT_ID = "00000000-0000-4000-8000-000000000005";
 
-const ownerSchema = z
-  .object({
-    owner_type: z
-      .enum(["user", "telegram", "web", "mcp", "service"])
-      .describe("Contract owner scope type for the stored media or workflow object."),
-    owner_id: z.string().min(1).describe("Stable owner identifier in the adapter domain."),
-    tenant_id: z.string().min(1).nullable().optional(),
-    adapter_identity: z
-      .object({
-        telegram_chat_id: z.string().min(1).optional(),
-        telegram_user_id: z.string().min(1).optional(),
-        web_session_id: z.string().min(1).optional(),
-        mcp_caller_id: z.string().min(1).optional(),
-        service_name: z.string().min(1).optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
+const channelAccountIdSchema = z
+  .uuid()
+  .describe("Stable channel_account_id resolved by the API for this MCP caller.");
 
-const sourceSchema = z.discriminatedUnion("origin_type", [
+const originSchema = z.discriminatedUnion("origin_type", [
   z
     .object({
       origin_type: z.literal("text"),
@@ -142,7 +120,7 @@ const sourceSchema = z.discriminatedUnion("origin_type", [
     .strict(),
   z
     .object({
-      origin_type: z.literal("object"),
+      origin_type: z.enum(["upload", "telegram_file"]),
       object_ref: z.string().min(1).describe("Object-store reference already available to the API."),
       original_filename: z.string().min(1).optional(),
       content_type: z.string().min(1).optional(),
@@ -161,7 +139,7 @@ const fileUploadSchema = z
 
 const collectionItemInputSchema = z
   .object({
-    media_item_id: z.uuid(),
+    media_asset_id: z.uuid(),
     position: z.number().int().min(0),
   })
   .strict();
@@ -177,8 +155,8 @@ const paginationInputShape = {
   page_size: z.number().int().min(1).optional(),
 };
 
-const ownerScopedPaginationInputShape = {
-  owner: ownerSchema,
+const channelScopedPaginationInputShape = {
+  channel_account_id: channelAccountIdSchema,
   ...paginationInputShape,
 };
 
@@ -191,122 +169,122 @@ const collectionStatusSchema = z.enum(["active", "archived", "deleted"]);
 
 function defaultExamplesForTool(name: string): readonly DomainMcpToolExample[] {
   const argsByTool: Record<string, JsonObject> = {
-    add_media: {
-      owner: EXAMPLE_OWNER,
+    create_media_asset: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       kind: "text",
-      source: {
+      origin: {
         origin_type: "text",
         text: "Meeting transcript fragment",
       },
       display_name: "Meeting notes",
     },
-    list_media: {
-      owner: EXAMPLE_OWNER,
+    list_media_assets: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       page_size: 25,
       kind: "text",
       status: "ready",
     },
-    search_media: {
-      owner: EXAMPLE_OWNER,
+    search_media_assets: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       query: "meeting",
       kind: "text",
     },
-    get_media: {
-      owner: EXAMPLE_OWNER,
-      media_item_id: EXAMPLE_MEDIA_ID,
+    get_media_asset: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
+      media_asset_id: EXAMPLE_MEDIA_ASSET_ID,
     },
-    remove_media: {
-      owner: EXAMPLE_OWNER,
-      media_item_id: EXAMPLE_MEDIA_ID,
+    delete_media_asset: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
+      media_asset_id: EXAMPLE_MEDIA_ASSET_ID,
     },
     get_inbox: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       page_size: 10,
     },
     create_collection: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       name: "Research clips",
-      items: [EXAMPLE_MEDIA_ID],
+      items: [EXAMPLE_MEDIA_ASSET_ID],
     },
     list_collections: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       page_size: 10,
     },
     get_collection: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       collection_id: EXAMPLE_COLLECTION_ID,
       page_size: 10,
     },
     update_collection: {
       collection_id: EXAMPLE_COLLECTION_ID,
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       expected_version: 1,
       name: "Research clips v2",
     },
     update_collection_items: {
       collection_id: EXAMPLE_COLLECTION_ID,
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       expected_version: 1,
-      items: [{ media_item_id: EXAMPLE_MEDIA_ID, position: 0 }],
+      items: [{ media_asset_id: EXAMPLE_MEDIA_ASSET_ID, position: 0 }],
     },
-    create_selection: {
-      owner: EXAMPLE_OWNER,
+    create_selection_snapshot: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       source_collection_id: EXAMPLE_COLLECTION_ID,
-      items: [{ media_item_id: EXAMPLE_MEDIA_ID, position: 0 }],
+      items: [{ media_asset_id: EXAMPLE_MEDIA_ASSET_ID, position: 0 }],
     },
-    get_selection: {
-      owner: EXAMPLE_OWNER,
-      selection_id: EXAMPLE_SELECTION_ID,
+    get_selection_snapshot: {
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
+      selection_snapshot_id: EXAMPLE_SELECTION_SNAPSHOT_ID,
     },
     run_analysis: {
-      owner: EXAMPLE_OWNER,
-      selection_id: EXAMPLE_SELECTION_ID,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
+      selection_snapshot_id: EXAMPLE_SELECTION_SNAPSHOT_ID,
       run_type: "summary",
     },
     list_runs: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       page_size: 10,
       status: "queued",
     },
     get_run: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       analysis_run_id: EXAMPLE_RUN_ID,
     },
     cancel_run: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       analysis_run_id: EXAMPLE_RUN_ID,
       message: "user requested stop",
     },
     retry_run: {
       analysis_run_id: EXAMPLE_RUN_ID,
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
     },
     list_run_events: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       analysis_run_id: EXAMPLE_RUN_ID,
       page_size: 10,
     },
     list_artifacts: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       analysis_run_id: EXAMPLE_RUN_ID,
       page_size: 10,
     },
     get_artifact: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       artifact_id: EXAMPLE_ARTIFACT_ID,
     },
     get_artifact_preview: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       artifact_id: EXAMPLE_ARTIFACT_ID,
       format: "markdown",
       max_chars: 4000,
     },
     refresh_artifact: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       artifact_id: EXAMPLE_ARTIFACT_ID,
     },
     get_diagnostics: {
-      owner: EXAMPLE_OWNER,
+      channel_account_id: EXAMPLE_CHANNEL_ACCOUNT_ID,
       subject_type: "analysis_run",
       subject_id: EXAMPLE_RUN_ID,
       severity: "warning",
@@ -462,11 +440,9 @@ function queryPath(path: string, params: Record<string, unknown>): string {
   return [path, query].filter(Boolean).join("?");
 }
 
-function ownerQueryPath(path: string, owner: JsonObject, params: Record<string, unknown> = {}): string {
+function channelQueryPath(path: string, channelAccountID: unknown, params: Record<string, unknown> = {}): string {
   return queryPath(path, {
-    owner_type: owner.owner_type,
-    owner_id: owner.owner_id,
-    ...(typeof owner.tenant_id === "string" && owner.tenant_id.length > 0 ? { tenant_id: owner.tenant_id } : {}),
+    channel_account_id: channelAccountID,
     ...params,
   });
 }
@@ -479,7 +455,7 @@ function idempotencyHeaders(args: JsonObject): Record<string, string> | undefine
 
 function toFormData(args: JsonObject): FormData {
   const metadata = {
-    owner: args.owner,
+    channel_account_id: args.channel_account_id,
     kind: args.kind,
     ...(args.collection_id ? { collection_id: args.collection_id } : {}),
     ...(args.display_name ? { display_name: args.display_name } : {}),
@@ -535,11 +511,11 @@ function makeTool(
 export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpTool[] {
   return [
     makeTool(apiClient, {
-      name: "add_media",
-      title: "Add Media",
+      name: "create_media_asset",
+      title: "Create Media Asset",
       description:
-        "Persist one owner-scoped text, URL, object-backed, or multipart file media item without starting analysis.",
-      apiPathHint: "POST /v1/media-items",
+        "Persist one channel-account-scoped text, URL, object-backed, or multipart file media asset without starting analysis.",
+      apiPathHint: "POST /v1/media-assets",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -548,9 +524,9 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           kind: z.enum(["text", "url", "file", "photo", "image", "audio", "voice", "video", "document"]),
-          source: sourceSchema.optional(),
+          origin: originSchema.optional(),
           file: fileUploadSchema.optional(),
           collection_id: z.uuid().optional(),
           display_name: z.string().min(1).optional(),
@@ -560,20 +536,20 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
           idempotency_key: idempotencyKeySchema.optional(),
         })
         .strict()
-        .refine((args) => Boolean(args.source) !== Boolean(args.file), {
-          message: "Exactly one of source or file is required",
+        .refine((args) => Boolean(args.origin) !== Boolean(args.file), {
+          message: "Exactly one of origin or file is required",
         }),
       async call(client, args) {
         const response = await client.request({
-          path: "/v1/media-items",
+          path: "/v1/media-assets",
           method: "POST",
           headers: idempotencyHeaders(args),
           body: args.file
             ? toFormData(args)
             : {
-                owner: args.owner,
+                channel_account_id: args.channel_account_id,
                 kind: args.kind,
-                source: args.source,
+                origin: args.origin,
                 ...(args.collection_id ? { collection_id: args.collection_id } : {}),
                 ...(args.display_name ? { display_name: args.display_name } : {}),
                 ...(args.adapter_origin ? { adapter_origin: args.adapter_origin } : {}),
@@ -585,10 +561,10 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
     }),
     makeTool(apiClient, {
-      name: "list_media",
-      title: "List Media",
-      description: "List persisted media items with contract filters and cursor pagination.",
-      apiPathHint: "GET /v1/media-items",
+      name: "list_media_assets",
+      title: "List Media Assets",
+      description: "List persisted media assets with contract filters and cursor pagination.",
+      apiPathHint: "GET /v1/media-assets",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -597,26 +573,25 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           ...paginationInputShape,
           ...mediaFilterInputShape,
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, ...query } = args;
+        const { channel_account_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath("/v1/media-items", owner, query),
+            path: channelQueryPath("/v1/media-assets", channel_account_id, query),
           }),
         );
       },
     }),
     makeTool(apiClient, {
-      name: "search_media",
-      title: "Search Media",
-      description: "Search persisted media items through owner-scoped media filters and cursor pagination.",
-      apiPathHint: "GET /v1/media-items",
+      name: "search_media_assets",
+      title: "Search Media Assets",
+      description: "Search persisted media assets through channel-scoped filters and cursor pagination.",
+      apiPathHint: "GET /v1/media-assets",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
@@ -625,60 +600,57 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           query: z.string().min(1),
           ...paginationInputShape,
           ...mediaFilterInputShape,
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, ...query } = args;
+        const { channel_account_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath("/v1/media-items", owner, query),
+            path: channelQueryPath("/v1/media-assets", channel_account_id, query),
           }),
         );
       },
     }),
     makeTool(apiClient, {
-      name: "get_media",
-      title: "Get Media",
-      description: "Read one media item with safe source metadata and diagnostics summary.",
-      apiPathHint: "GET /v1/media-items/{media_item_id}",
+      name: "get_media_asset",
+      title: "Get Media Asset",
+      description: "Read one media asset with safe origin metadata and diagnostics summary.",
+      apiPathHint: "GET /v1/media-assets/{media_asset_id}",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, media_item_id: z.uuid() }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, media_asset_id: z.uuid() }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/media-items/${pathSegment(String(args.media_item_id))}`, owner),
+            path: channelQueryPath(`/v1/media-assets/${pathSegment(String(args.media_asset_id))}`, args.channel_account_id),
           }),
         );
       },
     }),
     makeTool(apiClient, {
-      name: "remove_media",
-      title: "Remove Media",
-      description: "Soft-delete one media item through the API retention contract.",
-      apiPathHint: "DELETE /v1/media-items/{media_item_id}",
+      name: "delete_media_asset",
+      title: "Delete Media Asset",
+      description: "Mark one media asset deleted through the API retention contract.",
+      apiPathHint: "DELETE /v1/media-assets/{media_asset_id}",
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, media_item_id: z.uuid() }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, media_asset_id: z.uuid() }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/media-items/${pathSegment(String(args.media_item_id))}`, owner),
+            path: channelQueryPath(`/v1/media-assets/${pathSegment(String(args.media_asset_id))}`, args.channel_account_id),
             method: "DELETE",
           }),
         );
@@ -687,7 +659,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
     makeTool(apiClient, {
       name: "get_inbox",
       title: "Get Inbox",
-      description: "Read the caller's default inbox collection with ordered media item membership.",
+      description: "Read the caller's default inbox collection with ordered media asset membership.",
       apiPathHint: "GET /v1/collections/inbox",
       annotations: {
         readOnlyHint: true,
@@ -695,13 +667,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object(ownerScopedPaginationInputShape).strict(),
+      inputSchema: z.object(channelScopedPaginationInputShape).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, ...query } = args;
+        const { channel_account_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath("/v1/collections/inbox", owner, query),
+            path: channelQueryPath("/v1/collections/inbox", channel_account_id, query),
           }),
         );
       },
@@ -709,7 +680,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
     makeTool(apiClient, {
       name: "create_collection",
       title: "Create Collection",
-      description: "Create a mutable owner-scoped collection, optionally seeded with media item ids.",
+      description: "Create a mutable channel-scoped collection, optionally seeded with media asset ids.",
       apiPathHint: "POST /v1/collections",
       annotations: {
         readOnlyHint: false,
@@ -719,7 +690,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           name: z.string().min(1),
           items: z.array(z.uuid()).optional(),
           idempotency_key: idempotencyKeySchema.optional(),
@@ -732,7 +703,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
             method: "POST",
             headers: idempotencyHeaders(args),
             body: {
-              owner: args.owner,
+              channel_account_id: args.channel_account_id,
               name: args.name,
               ...(args.items ? { items: args.items } : {}),
             },
@@ -751,13 +722,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object(ownerScopedPaginationInputShape).strict(),
+      inputSchema: z.object(channelScopedPaginationInputShape).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, ...query } = args;
+        const { channel_account_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath("/v1/collections", owner, query),
+            path: channelQueryPath("/v1/collections", channel_account_id, query),
           }),
         );
       },
@@ -773,13 +743,12 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, collection_id: z.uuid(), ...paginationInputShape }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, collection_id: z.uuid(), ...paginationInputShape }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, collection_id, ...query } = args;
+        const { channel_account_id, collection_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/collections/${pathSegment(String(collection_id))}`, owner, query),
+            path: channelQueryPath(`/v1/collections/${pathSegment(String(collection_id))}`, channel_account_id, query),
           }),
         );
       },
@@ -798,7 +767,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       inputSchema: z
         .object({
           collection_id: z.uuid(),
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           expected_version: z.number().int().min(0),
           name: z.string().min(1).optional(),
           status: collectionStatusSchema.optional(),
@@ -808,13 +777,13 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
           message: "At least one of name or status is required",
         }),
       async call(client, args) {
-        const { collection_id, owner, expected_version, name, status } = args;
+        const { collection_id, channel_account_id, expected_version, name, status } = args;
         return successFromResponse(
           await client.request({
             path: `/v1/collections/${pathSegment(String(collection_id))}`,
             method: "PATCH",
             body: {
-              owner,
+              channel_account_id,
               expected_version,
               ...(name ? { name } : {}),
               ...(status ? { status } : {}),
@@ -837,19 +806,19 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       inputSchema: z
         .object({
           collection_id: z.uuid(),
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           expected_version: z.number().int().min(0),
           items: z.array(collectionItemInputSchema),
         })
         .strict(),
       async call(client, args) {
-        const { collection_id, owner, expected_version, items } = args;
+        const { collection_id, channel_account_id, expected_version, items } = args;
         return successFromResponse(
           await client.request({
             path: `/v1/collections/${pathSegment(String(collection_id))}/items`,
             method: "POST",
             body: {
-              owner,
+              channel_account_id,
               expected_version,
               items,
             },
@@ -858,10 +827,10 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
     }),
     makeTool(apiClient, {
-      name: "create_selection",
-      title: "Create Selection",
-      description: "Create and seal an immutable selection snapshot from explicit media item references.",
-      apiPathHint: "POST /v1/selections",
+      name: "create_selection_snapshot",
+      title: "Create Selection Snapshot",
+      description: "Create and seal an immutable selection snapshot from explicit media asset references.",
+      apiPathHint: "POST /v1/selection-snapshots",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -870,50 +839,49 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           source_collection_id: z.uuid().optional(),
           items: z.array(collectionItemInputSchema).min(1),
           option_snapshot: jsonObjectSchema.optional(),
-          duplicate_policy: z.enum(["reject", "allow"]).optional(),
-          created_by: z.string().min(1).optional(),
           idempotency_key: idempotencyKeySchema.optional(),
         })
         .strict(),
       async call(client, args) {
         return successFromResponse(
           await client.request({
-            path: "/v1/selections",
+            path: "/v1/selection-snapshots",
             method: "POST",
             headers: idempotencyHeaders(args),
             body: {
-              owner: args.owner,
+              channel_account_id: args.channel_account_id,
               ...(args.source_collection_id ? { source_collection_id: args.source_collection_id } : {}),
               items: args.items,
               ...(args.option_snapshot ? { option_snapshot: args.option_snapshot } : {}),
-              ...(args.duplicate_policy ? { duplicate_policy: args.duplicate_policy } : {}),
-              ...(args.created_by ? { created_by: args.created_by } : {}),
+              created_via_channel_account_id: args.channel_account_id,
             },
           }),
         );
       },
     }),
     makeTool(apiClient, {
-      name: "get_selection",
-      title: "Get Selection",
+      name: "get_selection_snapshot",
+      title: "Get Selection Snapshot",
       description: "Read an immutable selection snapshot exactly as sealed by the API.",
-      apiPathHint: "GET /v1/selections/{selection_id}",
+      apiPathHint: "GET /v1/selection-snapshots/{selection_snapshot_id}",
       annotations: {
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, selection_id: z.uuid() }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, selection_snapshot_id: z.uuid() }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/selections/${pathSegment(String(args.selection_id))}`, owner),
+            path: channelQueryPath(
+              `/v1/selection-snapshots/${pathSegment(String(args.selection_snapshot_id))}`,
+              args.channel_account_id,
+            ),
           }),
         );
       },
@@ -921,7 +889,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
     makeTool(apiClient, {
       name: "run_analysis",
       title: "Run Analysis",
-      description: "Queue analysis from a sealed selection using the final analysis-run contract.",
+      description: "Queue analysis from a sealed selection snapshot using the target analysis-run contract.",
       apiPathHint: "POST /v1/analysis-runs",
       annotations: {
         readOnlyHint: false,
@@ -931,8 +899,8 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
-          selection_id: z.uuid(),
+          channel_account_id: channelAccountIdSchema,
+          selection_snapshot_id: z.uuid(),
           run_type: z.enum(["transcription", "summary", "report", "deep_research", "custom"]),
           params: jsonObjectSchema.optional(),
           delivery: z
@@ -952,8 +920,8 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
             method: "POST",
             headers: idempotencyHeaders(args),
             body: {
-              owner: args.owner,
-              selection_id: args.selection_id,
+              channel_account_id: args.channel_account_id,
+              selection_snapshot_id: args.selection_snapshot_id,
               run_type: args.run_type,
               ...(args.params ? { params: args.params } : {}),
               ...(args.delivery ? { delivery: args.delivery } : {}),
@@ -965,7 +933,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
     makeTool(apiClient, {
       name: "list_runs",
       title: "List Runs",
-      description: "List owner-scoped analysis runs with status filtering and pagination.",
+      description: "List channel-scoped analysis runs with status filtering and pagination.",
       apiPathHint: "GET /v1/analysis-runs",
       annotations: {
         readOnlyHint: true,
@@ -975,7 +943,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           ...paginationInputShape,
           status: z
             .enum([
@@ -992,11 +960,10 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, ...query } = args;
+        const { channel_account_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath("/v1/analysis-runs", owner, query),
+            path: channelQueryPath("/v1/analysis-runs", channel_account_id, query),
           }),
         );
       },
@@ -1012,12 +979,11 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, analysis_run_id: z.uuid() }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, analysis_run_id: z.uuid() }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}`, owner),
+            path: channelQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}`, args.channel_account_id),
           }),
         );
       },
@@ -1035,18 +1001,20 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           analysis_run_id: z.uuid(),
           message: z.string().min(1).optional(),
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/cancel`, owner),
+            path: `/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/cancel`,
             method: "POST",
-            body: args.message ? { message: args.message } : {},
+            body: {
+              channel_account_id: args.channel_account_id,
+              ...(args.message ? { message: args.message } : {}),
+            },
           }),
         );
       },
@@ -1065,19 +1033,18 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       inputSchema: z
         .object({
           analysis_run_id: z.uuid(),
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           idempotency_key: idempotencyKeySchema.optional(),
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/retry`, owner),
+            path: `/v1/analysis-runs/${pathSegment(String(args.analysis_run_id))}/retry`,
             method: "POST",
             headers: idempotencyHeaders(args),
             body: {
-              owner,
+              channel_account_id: args.channel_account_id,
             },
           }),
         );
@@ -1094,15 +1061,14 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, analysis_run_id, ...query } = args;
+        const { channel_account_id, analysis_run_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(
+            path: channelQueryPath(
               `/v1/analysis-runs/${pathSegment(String(analysis_run_id))}/events`,
-              owner,
+              channel_account_id,
               query,
             ),
           }),
@@ -1120,15 +1086,14 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, analysis_run_id: z.uuid(), ...paginationInputShape }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, analysis_run_id, ...query } = args;
+        const { channel_account_id, analysis_run_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(
+            path: channelQueryPath(
               `/v1/analysis-runs/${pathSegment(String(analysis_run_id))}/artifacts`,
-              owner,
+              channel_account_id,
               query,
             ),
           }),
@@ -1146,12 +1111,11 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, artifact_id: z.uuid() }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, artifact_id: z.uuid() }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}`, owner),
+            path: channelQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}`, args.channel_account_id),
           }),
         );
       },
@@ -1171,16 +1135,15 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           artifact_id: z.uuid(),
           format: z.enum(["text", "markdown", "json"]).default("text"),
           max_chars: z.number().int().min(1).max(20000).default(4000),
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         const response = await client.request({
-          path: ownerQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}`, owner),
+          path: channelQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}`, args.channel_account_id),
         });
         return shapeArtifactPreview(args, artifactFromResponse(response));
       },
@@ -1188,7 +1151,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
     makeTool(apiClient, {
       name: "refresh_artifact",
       title: "Refresh Artifact",
-      description: "Refresh owner-scoped artifact preview and download handles before retrying preview or download access.",
+      description: "Refresh channel-scoped artifact preview and download handles before retrying preview or download access.",
       apiPathHint: "POST /v1/artifacts/{artifact_id}/refresh",
       annotations: {
         readOnlyHint: false,
@@ -1196,12 +1159,11 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         idempotentHint: true,
         openWorldHint: true,
       },
-      inputSchema: z.object({ owner: ownerSchema, artifact_id: z.uuid() }).strict(),
+      inputSchema: z.object({ channel_account_id: channelAccountIdSchema, artifact_id: z.uuid() }).strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}/refresh`, owner),
+            path: channelQueryPath(`/v1/artifacts/${pathSegment(String(args.artifact_id))}/refresh`, args.channel_account_id),
             method: "POST",
           }),
         );
@@ -1210,7 +1172,7 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
     makeTool(apiClient, {
       name: "get_diagnostics",
       title: "Get Diagnostics",
-      description: "Query owner-scoped diagnostics by subject, severity, and cursor pagination.",
+      description: "Query channel-scoped diagnostics by subject, severity, and cursor pagination.",
       apiPathHint: "GET /v1/diagnostics",
       annotations: {
         readOnlyHint: true,
@@ -1220,17 +1182,18 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
       },
       inputSchema: z
         .object({
-          owner: ownerSchema,
+          channel_account_id: channelAccountIdSchema,
           ...paginationInputShape,
           subject_type: z
             .enum([
-              "media_item",
-              "source",
+              "media_asset",
+              "stored_object",
               "collection",
-              "selection",
+              "selection_snapshot",
               "analysis_run",
+              "analysis_run_step",
               "artifact",
-              "adapter",
+              "channel",
               "retention",
             ])
             .optional(),
@@ -1239,11 +1202,10 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
         })
         .strict(),
       async call(client, args) {
-        const owner = asRecord(args.owner, "owner");
-        const { owner: _owner, ...query } = args;
+        const { channel_account_id, ...query } = args;
         return successFromResponse(
           await client.request({
-            path: ownerQueryPath("/v1/diagnostics", owner, query),
+            path: channelQueryPath("/v1/diagnostics", channel_account_id, query),
           }),
         );
       },

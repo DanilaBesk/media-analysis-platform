@@ -34,13 +34,7 @@ import type {
   McpAdapterApiRequest,
 } from "../src/client/api-client.ts";
 
-const OWNER = {
-  owner_type: "mcp",
-  owner_id: "assistant",
-  adapter_identity: {
-    mcp_caller_id: "codex",
-  },
-};
+const CHANNEL_ACCOUNT_ID = "00000000-0000-4000-8000-000000000010";
 const MEDIA_ID = "00000000-0000-4000-8000-000000000001";
 
 test("bootstrapMcpServerRuntime composes the bounded SDK runtime surface", () => {
@@ -72,13 +66,13 @@ test("bootstrapMcpServerRuntime exposes domain tool entrypoints and mapping mark
   const apiClient: McpAdapterApiClient = {
     request: async <TPayload = unknown>(request: McpAdapterApiRequest) => {
       assert.deepEqual(request, {
-        path: `/v1/media-items/${MEDIA_ID}?owner_type=mcp&owner_id=assistant`,
+        path: `/v1/media-assets/${MEDIA_ID}?channel_account_id=${CHANNEL_ACCOUNT_ID}`,
       });
       return {
         status: 200,
         data: {
-          media_item: {
-            media_item_id: MEDIA_ID,
+          media_asset: {
+            media_asset_id: MEDIA_ID,
             status: "ready",
           },
         } as TPayload,
@@ -99,16 +93,16 @@ test("bootstrapMcpServerRuntime exposes domain tool entrypoints and mapping mark
 
   assert.equal(listMcpTools(runtime).length, 24);
   const result = await callMcpTool(runtime, {
-    name: "get_media",
+    name: "get_media_asset",
     arguments: {
-      owner: OWNER,
-      media_item_id: MEDIA_ID,
+      channel_account_id: CHANNEL_ACCOUNT_ID,
+      media_asset_id: MEDIA_ID,
     },
   });
 
   assert.deepEqual(result.structuredContent, {
-    media_item: {
-      media_item_id: MEDIA_ID,
+    media_asset: {
+      media_asset_id: MEDIA_ID,
       status: "ready",
     },
   });
@@ -136,7 +130,7 @@ test("describeMcpServerRuntime exposes readiness with registered domain tools", 
 
 test("bootstrapMcpServerRuntime reads API_BASE_URL from process env when options are omitted", () => {
   // START_BLOCK_BLOCK_VERIFY_PROCESS_ENV_BOOTSTRAP
-  const runtimeGlobal = globalThis as typeof globalThis & {
+  const runtimeGlobal = globalThis as unknown as {
     process?: { env?: Record<string, string | undefined> };
   };
   const originalProcess = runtimeGlobal.process;
@@ -160,7 +154,7 @@ test("bootstrapMcpServerRuntime reads API_BASE_URL from process env when options
 });
 
 test("bootstrapMcpServerRuntime falls back to packet defaults when process is missing", () => {
-  const runtimeGlobal = globalThis as typeof globalThis & {
+  const runtimeGlobal = globalThis as unknown as {
     process?: { env?: Record<string, string | undefined> };
   };
   const originalProcess = runtimeGlobal.process;

@@ -16,7 +16,7 @@ const tenantOwner: OwnerScope = {
   owner_type: "web",
   owner_id: "web-console",
   tenant_id: " tenant-a ",
-  adapter_identity: "web-ui",
+  adapter_identity: { adapter: "web-ui" },
 };
 
 function jsonResponse(payload: unknown, status = 200): Response {
@@ -34,7 +34,127 @@ function textResponse(payload: string, status = 500): Response {
 }
 
 describe("createWebUiApiClient", () => {
-  it("adds text media through the final media item endpoint", async () => {
+  it("uses target media asset and selection snapshot endpoints with channel identity", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          items: [{ media_asset_id: "asset-1", display_name: "Inbox note" }],
+          page: { page_size: 25, has_more: false },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          media_asset: {
+            media_asset_id: "asset-2",
+            channel_account_id: "web-console",
+            kind: "text",
+            status: "ready",
+            display_name: "Note",
+            origin: { origin_type: "text", text: "Meeting note" },
+            created_at: "2026-05-18T00:00:00Z",
+            updated_at: "2026-05-18T00:00:00Z",
+          },
+        }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          selection_snapshot: {
+            selection_snapshot_id: "snapshot-1",
+            channel_account_id: "web-console",
+            status: "sealed",
+            items: [],
+            option_snapshot: {},
+            created_at: "2026-05-18T00:00:00Z",
+            sealed_at: "2026-05-18T00:00:00Z",
+          },
+        }, 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          analysis_run: {
+            analysis_run_id: "run-1",
+            channel_account_id: "web-console",
+            selection_snapshot_id: "snapshot-1",
+            run_type: "summary",
+            status: "queued",
+            version: 1,
+            evidence_gate_state: "not_required",
+            artifacts: [],
+            diagnostics: [],
+            created_at: "2026-05-18T00:00:00Z",
+          },
+        }, 201),
+      );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+
+    await expect(
+      (client as any).listMediaAssets("web-console", { pageSize: 25, kind: "text", status: "ready" }),
+    ).resolves.toMatchObject({ items: [expect.objectContaining({ media_asset_id: "asset-1" })] });
+    await expect(
+      (client as any).addMediaAsset("web-console", {
+        kind: "text",
+        displayName: "Note",
+        origin: { origin_type: "text", text: "Meeting note" },
+      }),
+    ).resolves.toMatchObject({ media_asset_id: "asset-2" });
+    const snapshot = await (client as any).createSelectionSnapshot("web-console", {
+      sourceCollectionId: "collection-1",
+      items: [{ media_asset_id: "asset-2", position: 0 }],
+      optionSnapshot: { language: "ru" },
+    });
+    await expect(
+      (client as any).createAnalysisRun("web-console", {
+        selectionSnapshotId: snapshot.selection_snapshot_id,
+        runType: "summary",
+        delivery: { strategy: "polling" },
+      }),
+    ).resolves.toMatchObject({ analysis_run_id: "run-1" });
+
+    expect(fetchImpl.mock.calls.map((call) => [String(call[0]), (call[1] as RequestInit | undefined)?.body])).toEqual([
+      [
+        "http://localhost:8080/v1/media-assets?channel_account_id=web-console&page_size=25&kind=text&status=ready",
+        undefined,
+      ],
+      [
+        "http://localhost:8080/v1/media-assets",
+        JSON.stringify({
+          channel_account_id: "web-console",
+          kind: "text",
+          origin: { origin_type: "text", text: "Meeting note" },
+          collection_id: undefined,
+          display_name: "Note",
+        }),
+      ],
+      [
+        "http://localhost:8080/v1/selection-snapshots",
+        JSON.stringify({
+          channel_account_id: "web-console",
+          source_collection_id: "collection-1",
+          items: [{ media_asset_id: "asset-2", position: 0 }],
+          option_snapshot: { language: "ru" },
+          created_via_channel_account_id: "web-console",
+        }),
+      ],
+      [
+        "http://localhost:8080/v1/analysis-runs",
+        JSON.stringify({
+          channel_account_id: "web-console",
+          selection_snapshot_id: "snapshot-1",
+          run_type: "summary",
+          params: undefined,
+          delivery: { strategy: "polling" },
+          created_via_channel_id: "web-console",
+        }),
+      ],
+    ]);
+  });
+
+  it("adds text media through the target media asset endpoint", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({
         media_item: {
@@ -66,16 +186,14 @@ describe("createWebUiApiClient", () => {
     ).resolves.toEqual(expect.objectContaining({ media_item_id: "media-1" }));
 
     expect(fetchImpl).toHaveBeenCalledWith(
-      new URL("v1/media-items", "http://localhost:8080/api/"),
+      new URL("v1/media-assets", "http://localhost:8080/api/"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          owner,
+          channel_account_id: "web-console",
           kind: "text",
-          source: { origin_type: "text", text: "Meeting note" },
-          collection_id: undefined,
+          origin: { origin_type: "text", text: "Meeting note" },
           display_name: "Note",
-          adapter_origin: "web",
         }),
       }),
     );
@@ -138,26 +256,25 @@ describe("createWebUiApiClient", () => {
     ).resolves.toEqual(expect.objectContaining({ analysis_run_id: "run-1", run_type: "summary" }));
 
     expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://localhost:8080/v1/selections",
+      "http://localhost:8080/v1/selection-snapshots",
       "http://localhost:8080/v1/analysis-runs",
     ]);
     expect(fetchImpl).toHaveBeenNthCalledWith(
       1,
-      new URL("v1/selections", "http://localhost:8080/"),
+      new URL("v1/selection-snapshots", "http://localhost:8080/"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          owner,
+          channel_account_id: "web-console",
           source_collection_id: "collection-1",
-          items: [{ media_item_id: "media-1", position: 0 }],
-          duplicate_policy: "reject",
-          created_by: "web",
+          items: [{ media_asset_id: "media-1", position: 0 }],
+          created_via_channel_account_id: "web-console",
         }),
       }),
     );
   });
 
-  it("uses owner-scoped collection, artifact, and diagnostic reads", async () => {
+  it("uses channel-scoped collection, artifact, and diagnostic reads", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ items: [], page: { page_size: 50, has_more: false } }))
@@ -179,9 +296,9 @@ describe("createWebUiApiClient", () => {
     });
 
     expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://localhost:8080/root/v1/collections?owner_type=web&owner_id=web-console&page_size=50",
-      "http://localhost:8080/root/v1/artifacts/artifact-1?owner_type=web&owner_id=web-console",
-      "http://localhost:8080/root/v1/diagnostics?owner_type=web&owner_id=web-console&page_size=50&subject_type=analysis_run&subject_id=run-1&severity=warning",
+      "http://localhost:8080/root/v1/collections?channel_account_id=web-console&page_size=50",
+      "http://localhost:8080/root/v1/artifacts/artifact-1?channel_account_id=web-console",
+      "http://localhost:8080/root/v1/diagnostics?channel_account_id=web-console&page_size=50&subject_type=analysis_run&subject_id=run-1&severity=warning",
     ]);
   });
 
@@ -299,11 +416,11 @@ describe("createWebUiApiClient", () => {
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), (call[1] as RequestInit | undefined)?.body])).toEqual([
       [
-        "http://localhost:8080/v1/analysis-runs/run-1/cancel?owner_type=web&owner_id=web-console",
-        JSON.stringify({}),
+        "http://localhost:8080/v1/analysis-runs/run-1/cancel",
+        JSON.stringify({ channel_account_id: "web-console" }),
       ],
       [
-        "http://localhost:8080/v1/artifacts/artifact-1/refresh?owner_type=web&owner_id=web-console",
+        "http://localhost:8080/v1/artifacts/artifact-1/refresh?channel_account_id=web-console",
         JSON.stringify({}),
       ],
       ["http://localhost:8080/v1/admin/reconcile-queue", JSON.stringify({ limit: 10 })],
@@ -331,7 +448,7 @@ describe("createWebUiApiClient", () => {
 
     await expect(client.listMediaItems(owner)).rejects.toMatchObject({
       name: "WebUiApiClientError",
-      path: "/v1/media-items?owner_type=web&owner_id=web-console",
+      path: "/v1/media-assets?channel_account_id=web-console",
       status: 400,
       code: "invalid_request",
       message: "invalid owner",
@@ -366,7 +483,7 @@ describe("createWebUiApiClient", () => {
 
     expect(fetchImpl).toHaveBeenCalledWith(
       new URL(
-        "v1/media-items?owner_type=web&owner_id=web-console&tenant_id=tenant-a&cursor=cursor-1&page_size=25&query=note+search&kind=text&status=ready",
+        "v1/media-assets?channel_account_id=web-console&cursor=cursor-1&page_size=25&query=note+search&kind=text&status=ready",
         "http://localhost:8080/root/",
       ),
       expect.objectContaining({
@@ -375,7 +492,7 @@ describe("createWebUiApiClient", () => {
     );
   });
 
-  it("reads media and collection envelopes through owner-scoped GET requests", async () => {
+  it("reads media and collection envelopes through channel-scoped GET requests", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ media_item: { media_item_id: "media-1", display_name: "Inbox note" } }))
@@ -415,11 +532,11 @@ describe("createWebUiApiClient", () => {
     await expect(client.getAnalysisRun(owner, "run-1")).resolves.toMatchObject({ analysis_run_id: "run-1", version: 7 });
 
     expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://localhost:8080/v1/media-items/media-1?owner_type=web&owner_id=web-console",
-      "http://localhost:8080/v1/collections/inbox?owner_type=web&owner_id=web-console",
-      "http://localhost:8080/v1/collections/collection-1?owner_type=web&owner_id=web-console&cursor=cursor-2&page_size=10",
-      "http://localhost:8080/v1/selections/selection-1?owner_type=web&owner_id=web-console",
-      "http://localhost:8080/v1/analysis-runs/run-1?owner_type=web&owner_id=web-console",
+      "http://localhost:8080/v1/media-assets/media-1?channel_account_id=web-console",
+      "http://localhost:8080/v1/collections/inbox?channel_account_id=web-console",
+      "http://localhost:8080/v1/collections/collection-1?channel_account_id=web-console&cursor=cursor-2&page_size=10",
+      "http://localhost:8080/v1/selection-snapshots/selection-1?channel_account_id=web-console",
+      "http://localhost:8080/v1/analysis-runs/run-1?channel_account_id=web-console",
     ]);
   });
 
@@ -457,12 +574,7 @@ describe("createWebUiApiClient", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
-            owner: {
-              owner_type: "web",
-              owner_id: "web-console",
-              tenant_id: "tenant-a",
-              adapter_identity: "web-ui",
-            },
+            channel_account_id: "web-console",
             name: "Alpha",
             items: ["media-1"],
           }),
@@ -473,12 +585,7 @@ describe("createWebUiApiClient", () => {
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({
-            owner: {
-              owner_type: "web",
-              owner_id: "web-console",
-              tenant_id: "tenant-a",
-              adapter_identity: "web-ui",
-            },
+            channel_account_id: "web-console",
             expected_version: 3,
             name: "Beta",
             status: "archived",
@@ -490,19 +597,14 @@ describe("createWebUiApiClient", () => {
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
-            owner: {
-              owner_type: "web",
-              owner_id: "web-console",
-              tenant_id: "tenant-a",
-              adapter_identity: "web-ui",
-            },
+            channel_account_id: "web-console",
             expected_version: 4,
-            items: [{ media_item_id: "media-2", position: 0 }],
+            items: [{ media_asset_id: "media-2", position: 0 }],
           }),
         }),
       ],
       [
-        "http://localhost:8080/v1/collections/collection-1/items/media-2?owner_type=web&owner_id=web-console&expected_version=5",
+        "http://localhost:8080/v1/collections/collection-1/items/media-2?channel_account_id=web-console&expected_version=5",
         expect.objectContaining({
           method: "DELETE",
         }),
@@ -510,7 +612,7 @@ describe("createWebUiApiClient", () => {
     ]);
   });
 
-  it("lists and retries analysis runs with filters and owner body", async () => {
+  it("lists and retries analysis runs with filters and channel body", async () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ items: [{ analysis_run_id: "run-1" }], page: { page_size: 25, has_more: false } }))
@@ -551,22 +653,15 @@ describe("createWebUiApiClient", () => {
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), (call[1] as RequestInit | undefined)?.body])).toEqual([
       [
-        "http://localhost:8080/v1/analysis-runs?owner_type=web&owner_id=web-console&cursor=cursor-3&page_size=25&status=running&run_type=summary",
+        "http://localhost:8080/v1/analysis-runs?channel_account_id=web-console&cursor=cursor-3&page_size=25&status=running&run_type=summary",
         undefined,
       ],
       [
-        "http://localhost:8080/v1/analysis-runs/run-2/retry?owner_type=web&owner_id=web-console&tenant_id=tenant-a",
-        JSON.stringify({
-          owner: {
-            owner_type: "web",
-            owner_id: "web-console",
-            tenant_id: "tenant-a",
-            adapter_identity: "web-ui",
-          },
-        }),
+        "http://localhost:8080/v1/analysis-runs/run-2/retry",
+        JSON.stringify({ channel_account_id: "web-console" }),
       ],
       [
-        "http://localhost:8080/v1/analysis-runs/run-2/events?owner_type=web&owner_id=web-console&cursor=cursor-4&page_size=10",
+        "http://localhost:8080/v1/analysis-runs/run-2/events?channel_account_id=web-console&cursor=cursor-4&page_size=10",
         undefined,
       ],
     ]);
@@ -603,9 +698,9 @@ describe("createWebUiApiClient", () => {
     });
 
     expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
-      "http://localhost:8080/api/v1/artifacts?owner_type=web&owner_id=web-console&page_size=50&analysis_run_id=run-1",
-      "http://localhost:8080/api/v1/diagnostics?owner_type=web&owner_id=web-console&cursor=cursor-5&page_size=50&subject_type=artifact&subject_id=artifact-1&severity=error",
-      "http://localhost:8080/api/v1/diagnostics?owner_type=web&owner_id=web-console",
+      "http://localhost:8080/api/v1/artifacts?channel_account_id=web-console&page_size=50&analysis_run_id=run-1",
+      "http://localhost:8080/api/v1/diagnostics?channel_account_id=web-console&cursor=cursor-5&page_size=50&subject_type=artifact&subject_id=artifact-1&severity=error",
+      "http://localhost:8080/api/v1/diagnostics?channel_account_id=web-console",
     ]);
   });
 
@@ -624,13 +719,13 @@ describe("createWebUiApiClient", () => {
     });
 
     await expect(envelopeClient.getMediaItem(owner, "media-1")).rejects.toThrowError(
-      "API response does not include media_item",
+      "API response does not include media_asset",
     );
     await expect(failingClient.listCollections(owner)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 502,
-      path: "/v1/collections?owner_type=web&owner_id=web-console",
-      message: "API request failed for /v1/collections?owner_type=web&owner_id=web-console",
+      path: "/v1/collections?channel_account_id=web-console",
+      message: "API request failed for /v1/collections?channel_account_id=web-console",
     });
   });
 
@@ -667,16 +762,13 @@ describe("createWebUiApiClient", () => {
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), call[1]])).toEqual([
       [
-        "http://localhost:8080/v1/media-items",
+        "http://localhost:8080/v1/media-assets",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
-            owner,
+            channel_account_id: "web-console",
             kind: "text",
-            source: { origin_type: "text", text: "Meeting note" },
-            collection_id: undefined,
-            display_name: undefined,
-            adapter_origin: "web",
+            origin: { origin_type: "text", text: "Meeting note" },
           }),
         }),
       ],
@@ -685,28 +777,24 @@ describe("createWebUiApiClient", () => {
         expect.objectContaining({
           method: "PATCH",
           body: JSON.stringify({
-            owner,
+            channel_account_id: "web-console",
             expected_version: 4,
-            name: undefined,
-            status: undefined,
           }),
         }),
       ],
       [
-        "http://localhost:8080/v1/selections",
+        "http://localhost:8080/v1/selection-snapshots",
         expect.objectContaining({
           method: "POST",
           body: JSON.stringify({
-            owner,
-            source_collection_id: undefined,
-            items: [{ media_item_id: "media-1", position: 0 }],
-            duplicate_policy: "allow",
-            created_by: "web",
+            channel_account_id: "web-console",
+            items: [{ media_asset_id: "media-1", position: 0 }],
+            created_via_channel_account_id: "web-console",
           }),
         }),
       ],
       [
-        "http://localhost:8080/v1/media-items/media-1?owner_type=web&owner_id=web-console",
+        "http://localhost:8080/v1/media-assets/media-1?channel_account_id=web-console",
         expect.objectContaining({
           method: "DELETE",
         }),
@@ -747,16 +835,16 @@ describe("createWebUiApiClient", () => {
     await expect(client.listMediaItems(owner)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 400,
-      path: "/v1/media-items?owner_type=web&owner_id=web-console",
+      path: "/v1/media-assets?channel_account_id=web-console",
       code: undefined,
-      message: "API request failed for /v1/media-items?owner_type=web&owner_id=web-console",
+      message: "API request failed for /v1/media-assets?channel_account_id=web-console",
     });
     await expect(client.listCollections(owner)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 400,
-      path: "/v1/collections?owner_type=web&owner_id=web-console",
+      path: "/v1/collections?channel_account_id=web-console",
       code: undefined,
-      message: "API request failed for /v1/collections?owner_type=web&owner_id=web-console",
+      message: "API request failed for /v1/collections?channel_account_id=web-console",
     });
     await expect(client.reconcileAnalysisRunQueue()).resolves.toBeUndefined();
   });
@@ -788,7 +876,7 @@ describe("createWebUiApiClient", () => {
       subscription.close();
 
       expect(fetchImpl).toHaveBeenCalledWith(
-        new URL("v1/collections?owner_type=web&owner_id=web-console", "http://localhost:8080/root/"),
+        new URL("v1/collections?channel_account_id=web-console", "http://localhost:8080/root/"),
         expect.any(Object),
       );
       expect(webSocketSpy).toHaveBeenCalledWith("ws://localhost:8080/v1/ws");

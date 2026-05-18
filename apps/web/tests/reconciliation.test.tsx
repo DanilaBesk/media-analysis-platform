@@ -12,6 +12,32 @@ const owner = {
   owner_id: "web-console",
 };
 
+function mediaAsset() {
+  return {
+    media_asset_id: "asset-1",
+    channel_account_id: "web-console",
+    kind: "text" as const,
+    status: "ready" as const,
+    display_name: "Call note",
+    origin: { origin_type: "text" as const, text: "Call note" },
+    diagnostics_count: 0,
+    created_at: "2026-05-10T00:00:00Z",
+    updated_at: "2026-05-10T00:00:00Z",
+  };
+}
+
+function selectionSnapshot() {
+  return {
+    selection_snapshot_id: "snapshot-1",
+    channel_account_id: "web-console",
+    status: "sealed" as const,
+    items: [],
+    option_snapshot: {},
+    created_at: "2026-05-10T00:00:00Z",
+    sealed_at: "2026-05-10T00:00:00Z",
+  };
+}
+
 function runSnapshot(version = 2) {
   return {
     analysis_run_id: "run-1",
@@ -55,6 +81,13 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
       wsUrl: "ws://localhost:8080/v1/ws",
     },
     apiClient: {
+      listMediaAssets: vi.fn().mockResolvedValue({
+        items: [mediaAsset()],
+        page: { page_size: 50, has_more: false },
+      }),
+      getMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
+      addMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
+      removeMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
       listMediaItems: vi.fn(),
       getMediaItem: vi.fn(),
       addMediaItem: vi.fn(),
@@ -66,6 +99,8 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
       updateCollection: vi.fn(),
       replaceCollectionItems: vi.fn(),
       removeCollectionItem: vi.fn(),
+      createSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot()),
+      getSelectionSnapshot: vi.fn().mockResolvedValue(selectionSnapshot()),
       createSelection: vi.fn(),
       getSelection: vi.fn(),
       createAnalysisRun: vi.fn(),
@@ -130,7 +165,7 @@ describe("run detail reconciliation", () => {
       }),
     });
 
-    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Краткое содержание" })).toBeVisible();
     expect(runtime.apiClient.getAnalysisRun).toHaveBeenCalledTimes(1);
 
     act(() => {
@@ -160,7 +195,7 @@ describe("run detail reconciliation", () => {
       }),
     });
 
-    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Краткое содержание" })).toBeVisible();
     act(() => {
       emit?.({
         event_id: "event-2",
@@ -205,6 +240,6 @@ describe("run detail reconciliation", () => {
     expect(consoleSpy).toHaveBeenCalledWith("%s analysis_run_id=%s", RECONCILE_STATE_MARKER, "run-1");
 
     pendingRun.resolve(runSnapshot());
-    expect(await screen.findByRole("heading", { name: "summary" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Краткое содержание" })).toBeVisible();
   });
 });
