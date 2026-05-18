@@ -22,6 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from transcriber_workers_common.api import InternalApiConfig
+from transcriber_workers_common.copper_asr import CopperAsrHttpTranscriber
 from transcriber_workers_common.runtime import WorkerRuntimeConfig
 
 import transcriber_worker_transcription_main as launcher
@@ -107,3 +108,22 @@ def test_build_runner_keeps_selection_runs_on_transcription_worker(monkeypatch, 
 
 def test_launcher_has_no_hidden_worker_dependency_path_bootstrap() -> None:
     assert not hasattr(launcher, "_ensure_worker_dependency_paths")
+
+
+def test_build_transcriber_uses_copper_asr_env() -> None:
+    transcriber = launcher._build_transcriber(
+        {
+            "COPPER_ASR_BASE_URL": "http://copper-asr-test:8000",
+            "COPPER_ASR_CLIENT_TIMEOUT_S": "42",
+            "COPPER_ASR_LANGUAGE": "ru",
+            "COPPER_ASR_PAUSE_THRESHOLD_S": "1.75",
+            "COPPER_ASR_DIARIZATION": "false",
+            "WHISPER_MODEL": "must-not-be-read",
+        }
+    )
+
+    assert isinstance(transcriber, CopperAsrHttpTranscriber)
+    assert transcriber.config.base_url == "http://copper-asr-test:8000"
+    assert transcriber.config.timeout_seconds == 42
+    assert transcriber.config.pause_threshold_seconds == 1.75
+    assert transcriber.config.diarization is False

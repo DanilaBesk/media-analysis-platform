@@ -44,6 +44,7 @@ from transcriber_workers_common.api import (
     SelectionItemLabels,
     SelectionItemSnapshot,
 )
+from transcriber_workers_common.copper_asr import CopperAsrTranscriptionError
 from transcriber_workers_common.domain import SourceCandidate, TranscriptResult, TranscriptSegment
 import transcriber_worker_transcription as worker_module
 from transcriber_worker_transcription import (
@@ -214,6 +215,18 @@ class RecordingTranscriber:
 class FailingTranscriber:
     def transcribe(self, source: SourceCandidate, workspace_dir: Path) -> TranscriptResult:
         raise RuntimeError("whisper crashed")
+
+
+class FailingCopperAsrTranscriber:
+    def transcribe(self, source: SourceCandidate, workspace_dir: Path) -> TranscriptResult:
+        raise CopperAsrTranscriptionError(
+            "CopperASR invalid_audio: Invalid or unsupported audio",
+            diagnostic_code="asr_invalid_audio",
+            provider_code="invalid_audio",
+            status_code=422,
+            retryable=False,
+            request_id="req-1",
+        )
 
 
 def test_ordered_worker_input_parses_source_label_from_claim_payload() -> None:
@@ -975,6 +988,45 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
             "progress_message": "Transcription failed",
             "error_code": "transcription_failed",
             "error_message": "whisper crashed",
+        },
+    )
+
+
+def test_run_transcription_uses_copper_asr_diagnostic_code(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-1",
+            source_kind="uploaded_file",
+            display_name="Audio: call.ogg",
+            original_filename="call.ogg",
+            object_key="uploads/call.ogg",
+        )
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/call.ogg": b"audio"})
+    artifact_store = InMemoryArtifactStore()
+
+    with pytest.raises(CopperAsrTranscriptionError, match="invalid_audio"):
+        runTranscription(
+            execution.analysis_run_id,
+            workspace_root=tmp_path,
+            api_client=api_client,
+            source_store=source_store,
+            artifact_store=artifact_store,
+            transcriber=FailingCopperAsrTranscriber(),
+        )
+
+    assert api_client.calls[-1] == (
+        "finalize_analysis_run",
+        {
+            "analysis_run_id": execution.analysis_run_id,
+            "analysis_run_step_id": execution.analysis_run_step_id,
+            "outcome": "failed",
+            "progress_stage": "failed",
+            "progress_message": "Transcription failed",
+            "error_code": "asr_invalid_audio",
+            "error_message": "CopperASR invalid_audio: Invalid or unsupported audio",
         },
     )
 

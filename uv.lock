@@ -631,6 +631,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "faster-whisper" },
+    { name = "httpx" },
     { name = "onnxruntime" },
     { name = "python-docx" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
@@ -651,6 +652,7 @@ dev = [
 requires-dist = [
     { name = "accelerate", specifier = ">=1.12.0" },
     { name = "faster-whisper", specifier = ">=1.2.0" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "onnxruntime", specifier = "<1.26" },
     { name = "python-docx", specifier = ">=1.2.0" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.9.0" },

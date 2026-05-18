@@ -830,4 +830,7 @@ def _safe_workspace_token(value: str) -> str:
 def _classify_error_code(error: Exception) -> str:
     if isinstance(error, SourceMaterializationError):
         return "source_fetch_failed"
+    diagnostic_code = getattr(error, "diagnostic_code", None)
+    if isinstance(diagnostic_code, str) and diagnostic_code.strip():
+        return diagnostic_code.strip()
     return "transcription_failed"
