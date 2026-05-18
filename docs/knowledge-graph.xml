@@ -230,6 +230,20 @@
       </annotations>
     </M-COVERAGE>
 
+    <M-QA-READINESS NAME="TargetQaReadiness" TYPE="VERIFICATION" STATUS="traceability-audited" OWNER="media-7f3.11.1">
+      <purpose>Own pre-MR QA traceability, backend/security/worker review, channel UX/runtime review, and final readiness packaging after implementation and coverage epics close.</purpose>
+      <path>docs/architecture/target-qa-traceability-audit.md</path>
+      <depends>M-TARGET-ARCHITECTURE, M-COVERAGE, M-CONTRACTS, M-API-HTTP, M-TELEGRAM-ADAPTER, M-WEB, M-MCP-ADAPTER, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER</depends>
+      <verification-ref>EV-COVERAGE-MATRIX,EV-COVERAGE-INVENTORY,EV-STALENESS</verification-ref>
+      <annotations>
+        <audit-traceability PATH="docs/architecture/target-qa-traceability-audit.md" PURPOSE="Maps source-plan sections to implementation evidence, test evidence, GRACE artifacts, Beads state, findings, accepted notes, and remaining QA owners." />
+        <finding-staleClosureCoverageDocs PURPOSE="Fixed stale README, final closure matrix, and historical cutover checklist wording that still claimed old 100 percent baselines or an open coverage epic." />
+        <remaining-backendWorkerReview OWNER="media-7f3.11.2" PURPOSE="Backend, storage, security, diagnostics, retention, and worker review remains open." />
+        <remaining-channelRuntimeReview OWNER="media-7f3.11.3" PURPOSE="Telegram, Web, MCP, UX copy, runtime behavior, stale callback, recovery, duplicate delivery, and artifact access review remains open." />
+        <remaining-finalReadiness OWNER="media-7f3.11.4" PURPOSE="Final MR readiness packet remains open." />
+      </annotations>
+    </M-QA-READINESS>
+
     <CrossLinks>
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-CONTRACTS" relation="defines-target-contract-vocabulary-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-API-STORAGE" relation="defines-target-table-set-for" />
@@ -241,6 +255,7 @@
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-TRANSCRIPTION" relation="defines-step-and-snapshot-execution-contract-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-AGENT-RUNNER" relation="defines-step-and-snapshot-execution-contract-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-COVERAGE" relation="defines-source-plan-requirements-for" />
+      <CrossLink from="M-TARGET-ARCHITECTURE" to="M-QA-READINESS" relation="defines-qa-readiness-source-for" />
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />
       <CrossLink from="M-API-DOMAIN" to="M-API-STORAGE" relation="persists-product-state-through" />
       <CrossLink from="M-API-DOMAIN" to="M-API-QUEUE" relation="schedules-internal-execution-through" />
@@ -252,6 +267,7 @@
       <CrossLink from="M-TELEGRAM-ADAPTER" to="M-API-HTTP" relation="manages-api-owned-state-through" />
       <CrossLink from="M-MCP-ADAPTER" to="M-API-HTTP" relation="manages-api-owned-state-through" />
       <CrossLink from="M-COVERAGE" to="M-API-STORAGE" relation="uses-reset-and-fixture-contracts-from" />
+      <CrossLink from="M-QA-READINESS" to="M-COVERAGE" relation="audits-coverage-evidence-from" />
     </CrossLinks>
   </Project>
 </KnowledgeGraph>

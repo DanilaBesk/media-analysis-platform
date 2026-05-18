@@ -175,6 +175,7 @@
     <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and legacy storage package tests before starting adapter/worker/runtime E2E coverage.</bead>
     <bead id="media-7f3.10.3">Run Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download, target runtime proof, compose smoke, and GRACE XML checks before starting inventory/no-legacy gates.</bead>
     <bead id="media-7f3.10.4">Run full coverage inventory, no-legacy target gate, admin target-reset regression tests, live admin observability/reconcile proof, GRACE XML checks, and git diff checks before starting QA traceability.</bead>
+    <bead id="media-7f3.11.1">Run source-plan to artifact traceability audit, Beads graph status audit, GRACE XML checks, no-legacy target gate, contract fixture tests, stale closure wording scan, and git diff checks before starting backend/security/worker QA.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

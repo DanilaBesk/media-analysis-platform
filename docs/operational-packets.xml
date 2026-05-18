@@ -29,7 +29,8 @@
     <completed-packet bead="media-7f3.10.3">adapter-worker-runtime-e2e-coverage</completed-packet>
     <completed-packet bead="media-7f3.10.4">coverage-inventory-no-legacy-gates</completed-packet>
     <completed-closure-gate bead="media-7f3.10">Coverage epic audit is closed after committed and pushed proof for target coverage, deterministic reset, runtime E2E, inventory, and no-legacy gates.</completed-closure-gate>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.11 QA; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-packet bead="media-7f3.11.1">qa-traceability-audit-source-plan-beads-graph</completed-packet>
+    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.11.2, media-7f3.11.3, and media-7f3.11.4 QA; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -499,6 +500,42 @@ After target reset, admin observability, reconcile, retention, orphan detection,
       <check>go test ./internal/api ./internal/storage -count=1 in apps/api</check>
       <check>Live API restart proof for /v1/admin/observability and POST /v1/admin/reconcile-queue after target reset.</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.11.1-qa-traceability-audit-source-plan-beads-graph" module="M-QA-READINESS,M-COVERAGE,M-TARGET-ARCHITECTURE" phase="TargetRebuildQA" verification-ref="EV-COVERAGE-MATRIX,EV-COVERAGE-INVENTORY,EV-STALENESS,EV-GRACE">
+    <purpose>Audit the implementation and proof graph against the source plan before backend/security/runtime QA starts.</purpose>
+    <depends-on>media-7f3.10.4-coverage-inventory-no-legacy-gates</depends-on>
+    <write-scope>
+      <file-1>docs/architecture/target-qa-traceability-audit.md</file-1>
+      <file-2>README.md</file-2>
+      <file-3>docs/architecture/final-closure-matrix.md</file-3>
+      <file-4>docs/architecture/cutover-checklist.md</file-4>
+      <file-5>docs/requirements.xml</file-5>
+      <file-6>docs/development-plan.xml</file-6>
+      <file-7>docs/verification-plan.xml</file-7>
+      <file-8>docs/knowledge-graph.xml</file-8>
+      <file-9>docs/operational-packets.xml</file-9>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Every source-plan area must map to implementation evidence, test evidence, GRACE artifacts, Beads state, and either a closed proof slice or an explicit remaining QA owner.
+Stale flat Beads must remain superseded by the media-7f3.9, media-7f3.10, and media-7f3.11 graph.
+Old compatibility names may appear only in deprecated compatibility, migration, historical, or admin/debug contexts.
+Coverage wording must preserve per-surface native metrics and pass/fail-only gates rather than reintroducing fake 100 percent repo-wide claims.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>The audit fixed stale README, final closure matrix, and historical cutover checklist wording that still described media-7f3.10 as open or listed older 100 percent coverage baselines.</note>
+      <note>Remaining QA owners are media-7f3.11.2 for backend/storage/security/workers, media-7f3.11.3 for channel UX/Web/MCP/runtime, and media-7f3.11.4 for the final readiness packet.</note>
+    </implementation-notes>
+    <verification>
+      <check>bd context</check>
+      <check>bd ready --json</check>
+      <check>bd list --all --limit 0 --json</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>bash infra/scripts/no-legacy-target-gate.sh</check>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py packages/contracts/tests/test_target_fixtures.py -q</check>
+      <check>Focused stale closure wording scan for old media-7f3.10-open and fake 100 percent closure claims.</check>
       <check>git diff --check</check>
     </verification>
   </ExecutionPacket>

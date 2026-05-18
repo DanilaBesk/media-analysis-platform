@@ -37,7 +37,7 @@ docs/architecture/final-closure-matrix.md
 
 ## Coverage Inventory Gate
 
-Use the executable inventory before calling the repo "fully covered":
+Use the executable inventory before claiming the current coverage evidence is fresh:
 
 ```bash
 bash infra/scripts/coverage-inventory.sh
@@ -71,20 +71,20 @@ Use one executable inventory command before making any claim about test closure:
 bash infra/scripts/coverage-inventory.sh
 ```
 
-Current measurable baselines from the active tree:
+Current measurable baselines from the latest inventory run recorded in the active tree:
 
-- Go `apps/api/internal/api`: `100%`
-- Go `apps/api/internal/storage`: `100%`
-- Python `workers/common/src/transcriber_workers_common`: `100%`
-- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `100%`
-- Python `workers/transcription/src/transcriber_worker_transcription.py`: `100%`
-- Python `apps/telegram-bot/src/telegram_adapter`: `100%`
+- Go `apps/api/internal/api`: `67.0%` statement coverage.
+- Go `apps/api/internal/storage`: `98.5%` statement coverage.
+- Python `workers/common/src/transcriber_workers_common`: `99%` statement coverage.
+- Python `workers/agent-runner/src/transcriber_worker_agent_runner.py`: `97%` statement coverage.
+- Python `workers/transcription/src/transcriber_worker_transcription.py`: `99%` statement coverage.
+- Python `apps/telegram-bot/src/telegram_adapter`: `89%` statement coverage.
 - Node `apps/mcp-server/src`: `100%`
-- Web `apps/web/src`: `100%` lines, branches, and functions
+- Web `apps/web/src`: `97.86%` statements/lines, `91.86%` branches, and `100%` functions
 
 Current truth:
 
-- All declared measurable coverage surfaces are now at `100%`.
+- `media-7f3.10` is closed with per-surface coverage proof; not every percentage-emitting surface is at `100%`, and the semantic coverage claim is backed by source-plan proof rather than a single line-coverage threshold.
 - Runtime smoke, contract verification, and XML integrity remain separate non-percentage gates.
 
 ## Legacy Removal Gate

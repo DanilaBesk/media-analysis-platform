@@ -148,8 +148,8 @@ bash infra/scripts/coverage-inventory.sh
 
 Expected gate:
 - Script runs end to end.
-- Every declared measurable surface emits `100%`.
-- Any missing metric or non-`100%` regression remains an explicit failing gap instead of being hidden.
+- Every declared measurable surface emits its native metric, and pass/fail-only probes run separately.
+- Any missing metric, command failure, or failing probe remains an explicit gap instead of being hidden behind a repo-wide percentage.
 
 ## Current Measurable Baselines
 
@@ -158,5 +158,5 @@ The executable percentage baselines are owned by `bash infra/scripts/coverage-in
 ## Remaining Closure Truth
 
 - XML integrity, contract tests, fixture validation, target reset smoke, and runtime-final compose proof remain separate acceptance gates and must still be cited alongside the coverage inventory.
-- `media-7f3.10` and `media-7f3.11` remain open until the target coverage matrix rows have actual proof, gaps, accepted risks, or blockers.
+- `media-7f3.10` is closed with committed coverage proof; `media-7f3.11` remains open until QA challenges the matrix rows and records actual proof, gaps, accepted risks, or blockers.
 - Any future claim of full closure must cite this runbook and the actual command outputs, not proxy signals.
