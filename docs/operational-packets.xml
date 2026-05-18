@@ -32,7 +32,8 @@
     <completed-packet bead="media-7f3.11.1">qa-traceability-audit-source-plan-beads-graph</completed-packet>
     <completed-packet bead="media-7f3.11.2">qa-backend-storage-security-workers</completed-packet>
     <completed-packet bead="media-7f3.11.3">qa-channel-ux-web-mcp-runtime-behavior</completed-packet>
-    <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.11.4 final readiness QA; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
+    <completed-packet bead="media-7f3.11.4">final-mr-readiness-packet-target-rebuild</completed-packet>
+    <completed-closure-gate bead="media-7f3.11">Pre-MR QA readiness is complete after traceability, backend/security/worker, channel/runtime, and final readiness packets.</completed-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -624,6 +625,34 @@ Report and research execution must start from ready transcript/text-corpus artif
       <check>bash infra/scripts/no-legacy-target-gate.sh</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.11.4-final-mr-readiness-packet-target-rebuild" module="M-QA-READINESS,M-COVERAGE,M-TARGET-ARCHITECTURE,M-INFRA" phase="TargetRebuildQA" verification-ref="EV-COVERAGE-INVENTORY,EV-RUNTIME,EV-STALENESS,EV-GRACE">
+    <purpose>Prepare the final readiness packet for the target rebuild after traceability, backend/storage/security/worker, and channel UX/runtime QA are closed.</purpose>
+    <depends-on>media-7f3.11.3-qa-channel-ux-web-mcp-runtime-behavior</depends-on>
+    <write-scope>
+      <file-1>docs/architecture/target-final-readiness-packet.md</file-1>
+      <file-2>docs/requirements.xml</file-2>
+      <file-3>docs/development-plan.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/knowledge-graph.xml</file-5>
+      <file-6>docs/operational-packets.xml</file-6>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Final readiness packet must list source plan, implemented scope, branch/commit state, commands run and results, typecheck/build/lint or equivalents, unit/integration/E2E/runtime evidence, docs/GRACE updates, Beads closure state, no-regression proof for critical flows, and remaining blockers or accepted risks.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>Published docs/architecture/target-final-readiness-packet.md as the final MR/readiness artifact.</note>
+      <note>Updated GRACE docs to mark media-7f3.11 and media-7f3.11.4 complete after final packet evidence.</note>
+      <note>Recorded no Dolt remote as an accepted process note rather than inventing a remote.</note>
+    </implementation-notes>
+    <verification>
+      <check>bash infra/scripts/coverage-inventory.sh</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+      <check>bd show media-7f3.11 --json</check>
+      <check>git status --short --branch</check>
     </verification>
   </ExecutionPacket>
 

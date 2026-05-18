@@ -233,7 +233,8 @@
     <completed bead="media-7f3.11.1">QA traceability audit is published in docs/architecture/target-qa-traceability-audit.md and fixes stale closure/coverage wording found during the audit.</completed>
     <completed bead="media-7f3.11.2">Backend/storage/security/worker QA is published in docs/architecture/target-backend-storage-worker-qa.md and fixed worker workspace, object-key, worker-step write, and HTTP server hardening findings.</completed>
     <completed bead="media-7f3.11.3">Channel UX/runtime QA is published in docs/architecture/target-channel-ux-runtime-qa.md and fixed Web endpoint, raw params, and service artifact visibility drift while preserving Telegram/MCP/runtime proof.</completed>
-    <remaining>Open work is tracked by media-7f3.11.4. The current tree is not closed against the target rebuild until the final readiness packet passes.</remaining>
+    <completed bead="media-7f3.11.4">Final readiness packet is published in docs/architecture/target-final-readiness-packet.md with source plan, implemented scope, branch/commit state, coverage inventory, runtime proof, GRACE state, Beads closure, no-regression proof, and accepted risks.</completed>
+    <completed bead="media-7f3.11">Pre-MR QA epic is closed after all four QA/readiness children are complete.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>
