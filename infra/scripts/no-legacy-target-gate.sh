@@ -104,5 +104,6 @@ reject_regex \
   apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql
 
 uv run pytest packages/contracts/tests/test_contract_surfaces.py::test_target_operations_do_not_reintroduce_compatibility_names -q
+uv run pytest workers/common/tests/test_no_legacy_asr_runtime.py -q
 
 printf '%s target no-legacy gate completed successfully\n' "${MARKER}"

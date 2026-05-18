@@ -49,7 +49,7 @@
 - `apps/telegram-bot/src/telegram_adapter` - compose-owned Telegram adapter over the API
 - `workers/transcription/src/transcriber_worker_transcription.py` - transcription worker runtime and local source materialization
 - `workers/agent-runner/src/transcriber_worker_agent_runner.py` - report/deep-research agent_run worker runtime
-- `workers/common/src/transcriber_workers_common/transcribers.py` - shared YouTube/subtitles/Whisper helpers
+- `workers/common/src/transcriber_workers_common/copper_asr.py` - shared CopperASR HTTP client and response normalization
 - `workers/common/src/transcriber_workers_common/documents.py` - transcript/report document rendering helpers
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->

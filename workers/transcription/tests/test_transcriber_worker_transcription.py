@@ -220,7 +220,7 @@ class RecordingTranscriber:
 
 class FailingTranscriber:
     def transcribe(self, source: SourceCandidate, workspace_dir: Path) -> TranscriptResult:
-        raise RuntimeError("whisper crashed")
+        raise RuntimeError("asr crashed")
 
 
 class FailingCopperAsrTranscriber:
@@ -977,7 +977,7 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
     source_store = FakeSourceStore({"uploads/call.ogg": b"audio"})
     artifact_store = InMemoryArtifactStore()
 
-    with pytest.raises(RuntimeError, match="whisper crashed"):
+    with pytest.raises(RuntimeError, match="asr crashed"):
         runTranscription(
             execution.analysis_run_id,
             workspace_root=tmp_path,
@@ -996,7 +996,7 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
             "progress_stage": "failed",
             "progress_message": "Transcription failed",
             "error_code": "transcription_failed",
-            "error_message": "whisper crashed",
+            "error_message": "asr crashed",
         },
     )
 

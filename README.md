@@ -92,8 +92,8 @@ docker build -f vendor/copper-asr/Dockerfile vendor/copper-asr
 ```
 
 The active migration target is a dedicated CopperASR runtime service consumed
-by the transcription worker. Do not add a Whisper/faster-whisper fallback while
-working through `media-b8s.*`.
+by the transcription worker. Do not add a legacy ASR fallback while working
+through `media-b8s.*`.
 
 ## Архитектура
 

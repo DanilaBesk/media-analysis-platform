@@ -347,7 +347,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         "job-1",
         analysis_run_step_id="exec-1",
         progress_stage="transcribing",
-        progress_message="running whisper",
+        progress_message="running asr",
     )
     client.register_artifacts("job-1", analysis_run_step_id="exec-1", artifacts=[artifact])
     client.register_diagnostics(
@@ -372,7 +372,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
             "payload": {
                 "analysis_run_step_id": "exec-1",
                 "progress_stage": "transcribing",
-                "progress_message": "running whisper",
+                "progress_message": "running asr",
             },
         },
         {

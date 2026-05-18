@@ -150,7 +150,7 @@
         <export-processStepInputs PURPOSE="Process declared selection_snapshot_item inputs from sealed selection_snapshot facts without reading mutable collection state." />
         <export-publishArtifacts PURPOSE="Publish transcript artifacts and artifact_subject lineage through API-owned artifact contracts." />
         <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
-        <export-copperAsrBoundary PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="Build and call the CopperASR HTTP runtime through COPPER_ASR_* env, normalize ASR responses into TranscriptResult, and propagate stable asr_* failure codes without Whisper fallback." />
+        <export-copperAsrBoundary PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="Build and call the CopperASR HTTP runtime through COPPER_ASR_* env, normalize ASR responses into TranscriptResult, and propagate stable asr_* failure codes without legacy ASR fallback." />
         <export-copperAsrManifestMetadata PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Persist sanitized CopperASR provider, model, duration, and metadata in run_manifest while preserving transcript_plain, transcript_segmented_markdown, and transcript_docx artifacts." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
@@ -165,7 +165,7 @@
         <source-pin COMMIT="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
         <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" />
         <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
-        <cleanup-policy PURPOSE="Whisper, faster-whisper, Podlodka, CTranslate2 conversion, WHISPER_* env, and whisper-model-cache must not remain active fallback behavior after migration." />
+        <cleanup-policy PURPOSE="Legacy ASR imports, model-conversion helpers, provider-specific env, and old model-cache volumes must not remain active fallback behavior after migration." />
       </annotations>
     </M-COPPER-ASR>
 

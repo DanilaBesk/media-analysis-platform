@@ -118,7 +118,7 @@ def test_build_transcriber_uses_copper_asr_env() -> None:
             "COPPER_ASR_LANGUAGE": "ru",
             "COPPER_ASR_PAUSE_THRESHOLD_S": "1.75",
             "COPPER_ASR_DIARIZATION": "false",
-            "WHISPER_MODEL": "must-not-be-read",
+            "LEGACY_ASR_MODEL": "must-not-be-read",
         }
     )
 

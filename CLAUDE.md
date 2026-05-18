@@ -63,7 +63,7 @@ uv run pytest
 - `src/media_analysis_platform/bot.py` contains the legacy Telegram adapter runtime, handlers, callbacks, and media-group flow.
 - `apps/telegram-bot/src/telegram_adapter` contains the compose-owned Telegram adapter boundary over the API.
 - `workers/transcription/src/transcriber_worker_transcription.py` owns transcription worker execution, local source materialization, and transcript artifact persistence.
-- `workers/common/src/transcriber_workers_common/transcribers.py` handles transcript acquisition via YouTube subtitles first, then Whisper fallback.
+- `workers/common/src/transcriber_workers_common/copper_asr.py` handles the CopperASR HTTP client boundary, URL audio materialization, response normalization, and provider diagnostics.
 - `workers/agent-runner/src/transcriber_worker_agent_runner.py` executes report/deep-research `agent_run` jobs through the configured provider or fixture harness.
 - `workers/common/src/transcriber_workers_common/documents.py` renders transcript/report outputs.
 

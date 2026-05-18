@@ -72,7 +72,7 @@ The internal active channel_surface list preserves channel_account_id, subject_t
     <verification>
       <check>Focused API regression fails if /internal/v1/channel-surfaces/active drops subject_type or subject_id before calling TargetRuntimeService.</check>
       <check>Live compose proof shows the old API returned current_materials_panel for an artifact-subject active lookup, while the fixed API returns an empty list until a result_artifact_surface exists.</check>
-      <check>Runtime evidence records that the current worker compose path runs faster-whisper with WHISPER_DEVICE=cpu and no installed copper_asr/gigaam package.</check>
+      <check>Runtime evidence records that the pre-migration worker compose path used the legacy CPU ASR backend and no installed CopperASR/GigaAM package.</check>
     </verification>
   </HotfixPacket>
 

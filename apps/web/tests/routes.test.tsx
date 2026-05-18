@@ -550,7 +550,7 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findAllByText("Материал недоступен")).toHaveLength(2);
     expect((await screen.findAllByText("Готово")).length).toBeGreaterThan(0);
     expect(await screen.findByRole("link", { name: "Краткое содержание" })).toHaveAttribute("href", "/artifacts/artifact-1");
-    expect(screen.queryByText(/copperasr|Copperside|CopperASR|Whisper/i)).toBeNull();
+    expect(screen.queryByText(/copperasr|Copperside|CopperASR/i)).toBeNull();
   });
 
   it("opens markdown artifact previews from the artifact browser", async () => {

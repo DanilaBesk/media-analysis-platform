@@ -226,7 +226,7 @@
     <bead id="media-cjb" status="completed">Channel surface upsert now hands off a reused active Telegram message address to the new logical surface instead of returning channel_surfaces_active_address_idx conflicts to callback users.</bead>
     <bead id="media-b6s" status="completed">Telegram voice upload runs now persist multipart bytes to the sources object store before creating available media_asset metadata, and transcription worker diagnostics use UUID diagnostic_id values so source failures can finalize instead of leaving active task cards.</bead>
     <bead id="media-t8q" status="completed">Target uploads now use a source-key-versioned stored_object_id seed so rows created with the older uploads/ object-key contract cannot make repeated Telegram file uploads fail with stored_objects_pkey and generic service-unavailable errors.</bead>
-    <bead id="media-l5w" status="completed">Active channel_surface result checks now preserve artifact subject filters so Telegram does not claim a transcript was already sent when only the current materials card exists. Runtime evidence showed the current compose transcription path uses faster-whisper on CPU, not CopperASR/GigaAM ONNX.</bead>
+    <bead id="media-l5w" status="completed">Active channel_surface result checks now preserve artifact subject filters so Telegram does not claim a transcript was already sent when only the current materials card exists. Runtime evidence showed the pre-migration compose transcription path used the legacy CPU ASR backend, not CopperASR/GigaAM ONNX.</bead>
   </BeadsTrace>
 
   <NonGoals>

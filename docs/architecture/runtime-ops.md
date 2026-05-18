@@ -38,4 +38,4 @@ docker compose -f infra/docker-compose.yml logs --tail=120 worker-agent-runner
   compose workers set `UV_PROJECT_ENVIRONMENT=/tmp/uv-project-env` so container Python packages do not depend on the host `.venv`.
 
 - Empty transcription smoke input:
-  use speech-like audio for acceptance runs; a pure sine wave can legitimately produce `Whisper returned an empty transcript`.
+  use speech-like audio for acceptance runs; a pure sine wave can legitimately produce an empty-transcript ASR diagnostic.
