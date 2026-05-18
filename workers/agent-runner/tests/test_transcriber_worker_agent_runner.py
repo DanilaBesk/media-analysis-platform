@@ -34,10 +34,12 @@ import pytest
 import transcriber_worker_agent_runner as agent_runner
 from transcriber_workers_common.api import (
     AgentRunRequestAccessResult,
+    AnalysisRunStepInput,
     CancelCheckResult,
-    ClaimedAnalysisRunExecution,
+    ClaimedAnalysisRunStep,
     MediaSourceSnapshot,
     SealedSelectionInput,
+    SelectionItemLabels,
     SelectionItemSnapshot,
 )
 from transcriber_worker_agent_runner import (
@@ -60,7 +62,7 @@ from transcriber_worker_agent_runner import (
 class RecordingApiClient:
     def __init__(
         self,
-        execution: ClaimedAnalysisRunExecution,
+        execution: ClaimedAnalysisRunStep,
         *,
         cancel_requested: bool = False,
         request_digest_sha256: str = "digest",
@@ -72,15 +74,15 @@ class RecordingApiClient:
         self.request_access_expires_at = request_access_expires_at
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunExecution:
-        self.calls.append(("claim_analysis_run", {"analysis_run_id": analysis_run_id, "worker_kind": worker_kind, "task_type": task_type}))
+    def claim_analysis_run_step(self, analysis_run_id: str, *, worker_kind: str, step_kind: str) -> ClaimedAnalysisRunStep:
+        self.calls.append(("claim_analysis_run_step", {"analysis_run_id": analysis_run_id, "worker_kind": worker_kind, "step_kind": step_kind}))
         return self.execution
 
     def publish_progress(
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         progress_stage: str,
         progress_message: str | None = None,
     ) -> None:
@@ -89,32 +91,32 @@ class RecordingApiClient:
                 "publish_progress",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "progress_stage": progress_stage,
                     "progress_message": progress_message,
                 },
             )
         )
 
-    def register_artifacts(self, analysis_run_id: str, *, execution_id: str, artifacts) -> None:
+    def register_artifacts(self, analysis_run_id: str, *, analysis_run_step_id: str, artifacts) -> None:
         self.calls.append(
             (
                 "register_artifacts",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "artifacts": tuple(artifacts),
                 },
             )
         )
 
-    def register_diagnostics(self, analysis_run_id: str, *, execution_id: str, diagnostics) -> None:
+    def register_diagnostics(self, analysis_run_id: str, *, analysis_run_step_id: str, diagnostics) -> None:
         self.calls.append(
             (
                 "register_diagnostics",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "diagnostics": tuple(diagnostics),
                 },
             )
@@ -124,7 +126,7 @@ class RecordingApiClient:
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         outcome: str,
         progress_stage: str | None = None,
         progress_message: str | None = None,
@@ -136,7 +138,7 @@ class RecordingApiClient:
                 "finalize_analysis_run",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "outcome": outcome,
                     "progress_stage": progress_stage,
                     "progress_message": progress_message,
@@ -146,14 +148,14 @@ class RecordingApiClient:
             )
         )
 
-    def check_cancel(self, analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
-        self.calls.append(("check_cancel", {"analysis_run_id": analysis_run_id, "execution_id": execution_id}))
+    def check_cancel(self, analysis_run_id: str, *, analysis_run_step_id: str) -> CancelCheckResult:
+        self.calls.append(("check_cancel", {"analysis_run_id": analysis_run_id, "analysis_run_step_id": analysis_run_step_id}))
         if self.cancel_requested:
             return CancelCheckResult(cancel_requested=True, status="cancel_requested")
         return CancelCheckResult(cancel_requested=False, status="running")
 
-    def resolve_agent_run_request_access(self, analysis_run_id: str, *, execution_id: str) -> AgentRunRequestAccessResult:
-        self.calls.append(("resolve_agent_run_request_access", {"analysis_run_id": analysis_run_id, "execution_id": execution_id}))
+    def resolve_agent_run_request_access(self, analysis_run_id: str, *, analysis_run_step_id: str) -> AgentRunRequestAccessResult:
+        self.calls.append(("resolve_agent_run_request_access", {"analysis_run_id": analysis_run_id, "analysis_run_step_id": analysis_run_step_id}))
         return AgentRunRequestAccessResult(
             provider="minio_presigned_url",
             url="https://minio.local/private/request.json",
@@ -288,8 +290,8 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
     )
 
     assert api_client.calls[0] == (
-        "claim_analysis_run",
-        {"analysis_run_id": execution.analysis_run_id, "worker_kind": "agent_runner", "task_type": "selection.analysis"},
+        "claim_analysis_run_step",
+        {"analysis_run_id": execution.analysis_run_id, "worker_kind": "agent_runner", "step_kind": "report.analysis"},
     )
     assert registry.requests == [
         (
@@ -315,8 +317,8 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["analysis_run_id"] == execution.analysis_run_id
     assert manifest["summary"] == {"included_count": 1, "skipped_count": 0, "failed_count": 0}
-    assert manifest["items"][0]["lineage"]["selection_item_id"] == "selection-item-agent"
-    assert manifest["items"][0]["lineage"]["media_item_id"] == "media-agent"
+    assert manifest["items"][0]["lineage"]["selection_snapshot_item_id"] == "selection-snapshot-item-agent"
+    assert manifest["items"][0]["lineage"]["media_asset_id"] == "media-agent"
     assert manifest["items"][0]["artifact_kinds"] == ["agent_result_json", "execution_log"]
     diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
     assert diagnostics_bundle["diagnostics"] == []
@@ -353,14 +355,14 @@ def test_run_agent_harness_registers_non_fatal_diagnostics_without_partial_polic
                     "diagnostics": [
                         {
                             "diagnostic_id": "exec-agent:0:source-skipped",
-                            "subject_type": "media_item",
+                            "subject_type": "media_asset",
                             "subject_id": "media-agent",
                             "severity": "warning",
                             "code": "source_unavailable",
                             "message": "Reference URL was skipped",
                             "context": {
-                                "selection_item_id": "selection-item-agent",
-                                "media_item_id": "media-agent",
+                                "selection_snapshot_item_id": "selection-snapshot-item-agent",
+                                "media_asset_id": "media-agent",
                                 "position": 0,
                                 "role": "reference",
                             },
@@ -383,7 +385,7 @@ def test_run_agent_harness_registers_non_fatal_diagnostics_without_partial_polic
     assert diagnostics[0]["severity"] == "warning"
     assert diagnostics[0]["subject_id"] == "media-agent"
     assert diagnostics[0]["context"]["analysis_run_id"] == execution.analysis_run_id
-    assert diagnostics[0]["context"]["selection_id"] == execution.selection.selection_id
+    assert diagnostics[0]["context"]["selection_snapshot_id"] == execution.selection_snapshot.selection_snapshot_id
     diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
     assert diagnostics_bundle["diagnostics"] == list(diagnostics)
     assert api_client.calls[-1][1]["outcome"] == "succeeded"
@@ -419,14 +421,14 @@ def test_run_agent_harness_partial_success_policy_retains_artifacts_for_successf
                     "diagnostics": [
                         {
                             "diagnostic_id": "exec-agent:1:reference-skipped",
-                            "subject_type": "media_item",
+                            "subject_type": "media_asset",
                             "subject_id": "media-agent-1",
                             "severity": "warning",
                             "code": "source_unavailable",
                             "message": "One reference item was skipped",
                             "context": {
-                                "selection_item_id": "selection-item-agent-1",
-                                "media_item_id": "media-agent-1",
+                                "selection_snapshot_item_id": "selection-snapshot-item-agent-1",
+                                "media_asset_id": "media-agent-1",
                                 "position": 1,
                                 "role": "reference",
                             },
@@ -446,14 +448,14 @@ def test_run_agent_harness_partial_success_policy_retains_artifacts_for_successf
 
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["summary"] == {"included_count": 1, "skipped_count": 1, "failed_count": 0}
-    assert manifest["items"][0]["selection_item_id"] == "selection-item-agent"
+    assert manifest["items"][0]["selection_snapshot_item_id"] == "selection-snapshot-item-agent"
     assert manifest["items"][0]["artifact_kinds"] == [
         "agent_result_json",
         "execution_log",
         "report_markdown",
     ]
     assert manifest["items"][0]["diagnostic_ids"] == []
-    assert manifest["items"][1]["selection_item_id"] == "selection-item-agent-1"
+    assert manifest["items"][1]["selection_snapshot_item_id"] == "selection-snapshot-item-agent-1"
     assert manifest["items"][1]["artifact_kinds"] == []
     assert manifest["items"][1]["diagnostic_ids"] == ["exec-agent:1:reference-skipped"]
     assert manifest["items"][1]["outcome"] == "skipped"
@@ -554,7 +556,7 @@ def test_run_agent_harness_unsupported_harness_fails_with_stable_error_code(tmp_
         "finalize_analysis_run",
         {
             "analysis_run_id": execution.analysis_run_id,
-            "execution_id": execution.execution_id,
+            "analysis_run_step_id": execution.analysis_run_step_id,
             "outcome": "failed",
             "progress_stage": "failed",
             "progress_message": "Agent harness failed",
@@ -651,7 +653,10 @@ def test_run_agent_harness_claude_code_runs_container_local_with_private_request
     result_payload = json.loads(artifact_store.calls[0]["content"])
     assert result_payload["output_text"] == "claude-code result\n"
     assert result_payload["request_ref"] == "agentreq_digest"
-    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"analysis_run_id": "job-agent", "execution_id": "exec-agent"})
+    assert api_client.calls[1] == (
+        "resolve_agent_run_request_access",
+        {"analysis_run_id": "job-agent", "analysis_run_step_id": "exec-agent"},
+    )
     assert api_client.calls[-1][1]["outcome"] == "succeeded"
 
 
@@ -751,6 +756,92 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
         "run_manifest",
         "run_diagnostics",
     ]
+
+
+def test_run_agent_harness_claude_code_materializes_declared_step_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_id = "77777777-7777-7777-7777-777777777777"
+    envelope_body, digest = _fake_request_access_envelope(
+        {
+            "schema_version": "agent_run_request_envelope/v1",
+            "harness_name": "claude-code",
+            "request": {
+                "operation": "report",
+                "expected_output_artifacts": ["report_markdown"],
+                "prompt": "Build a report from declared step inputs.",
+            },
+        }
+    )
+    execution = _execution(
+        {"harness_name": "claude-code", "request": {"operation": "report"}},
+        step_inputs=(
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="88888888-8888-8888-8888-888888888888",
+                analysis_run_step_id="exec-agent",
+                input_kind="transcript_artifact",
+                position=0,
+                required=True,
+                selection_snapshot_item_id="selection-snapshot-item-agent",
+                artifact_id=artifact_id,
+                metadata={"artifact_kind": "transcript_segmented_markdown", "filename": "transcript.md"},
+            ),
+        ),
+    )
+    api_client = RecordingApiClient(execution, request_digest_sha256=digest)
+    artifact_store = InMemoryArtifactStore()
+    runner = FakeClaudeCodeRunner(stdout="# Report\n\nStep input used.\n")
+    monkeypatch.setenv("API_BASE_URL", "http://api.local")
+
+    def fake_urlopen(value, timeout: float):
+        url = _request_url(value)
+        if url == "https://minio.local/private/request.json":
+            return FakeHTTPResponse(envelope_body)
+        if url == f"http://api.local/internal/v1/artifacts/{artifact_id}/download-access":
+            return FakeHTTPResponse(
+                json.dumps(
+                    {
+                        "artifact_id": artifact_id,
+                        "analysis_run_id": "parent-job",
+                        "artifact_kind": "transcript_segmented_markdown",
+                        "filename": "transcript.md",
+                        "mime_type": "text/markdown; charset=utf-8",
+                        "size_bytes": 23,
+                        "created_at": "2026-04-26T00:00:00Z",
+                        "download": {
+                            "provider": "minio_presigned_url",
+                            "url": "https://minio.local/presigned/transcript.md",
+                            "expires_at": "2099-01-01T00:00:00Z",
+                        },
+                    }
+                ).encode("utf-8")
+            )
+        if url == "https://minio.local/presigned/transcript.md":
+            return FakeHTTPResponse(b"# Transcript\n\nDeclared input\n")
+        raise AssertionError(f"unexpected urlopen target: {url}")
+
+    monkeypatch.setattr(agent_runner.urlrequest, "urlopen", fake_urlopen)
+
+    result = runAgentHarness(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        artifact_store=artifact_store,
+        harness_registry=DefaultAgentHarnessRegistry(
+            claude_code_harness=AgentClaudeCodeHarness(
+                AgentClaudeCodeConfig(provider_api_key="secret-token", config_dir=tmp_path / "claude-config"),
+                runner=runner,
+            )
+        ),
+        lease_client=LocalAgentHarnessLeaseClient({"claude-code": 1}),
+    )
+
+    assert "Input artifacts:" in runner.calls[0]["input"]
+    assert "transcript.md" in runner.calls[0]["input"]
+    materialized = result.harness_result.result_payload["materialized_input_artifacts"]
+    assert materialized[0]["artifact_kind"] == "transcript_segmented_markdown"
+    assert Path(materialized[0]["local_path"]).read_bytes() == b"# Transcript\n\nDeclared input\n"
 
 
 def test_run_agent_harness_claude_code_deep_research_persists_requested_markdown(
@@ -862,7 +953,10 @@ def test_run_agent_harness_accepts_generic_operation_envelope_with_declared_summ
         lease_client=LocalAgentHarnessLeaseClient({"claude-code": 1}),
     )
 
-    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"analysis_run_id": "job-agent", "execution_id": "exec-agent"})
+    assert api_client.calls[1] == (
+        "resolve_agent_run_request_access",
+        {"analysis_run_id": "job-agent", "analysis_run_step_id": "exec-agent"},
+    )
     register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
     assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
         "agent_result_json",
@@ -896,7 +990,10 @@ def test_run_agent_harness_request_access_policy_can_require_access_by_operation
         harness_registry=registry,
     )
 
-    assert api_client.calls[1] == ("resolve_agent_run_request_access", {"analysis_run_id": "job-agent", "execution_id": "exec-agent"})
+    assert api_client.calls[1] == (
+        "resolve_agent_run_request_access",
+        {"analysis_run_id": "job-agent", "analysis_run_step_id": "exec-agent"},
+    )
     assert registry.requests[0][1].request_access == {
         "provider": "minio_presigned_url",
         "url": "https://minio.local/private/request.json",
@@ -1303,7 +1400,7 @@ def test_run_agent_harness_cancels_before_dispatch(tmp_path: Path) -> None:
         "finalize_analysis_run",
         {
             "analysis_run_id": execution.analysis_run_id,
-            "execution_id": execution.execution_id,
+            "analysis_run_step_id": execution.analysis_run_step_id,
             "outcome": "canceled",
             "progress_stage": "canceled",
             "progress_message": "Cancellation requested",
@@ -1319,10 +1416,12 @@ def test_run_agent_harness_cancels_before_artifact_upload(tmp_path: Path) -> Non
     artifact_store = InMemoryArtifactStore()
     check_count = 0
 
-    def delayed_cancel(analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
+    def delayed_cancel(analysis_run_id: str, *, analysis_run_step_id: str) -> CancelCheckResult:
         nonlocal check_count
         check_count += 1
-        api_client.calls.append(("check_cancel", {"analysis_run_id": analysis_run_id, "execution_id": execution_id}))
+        api_client.calls.append(
+            ("check_cancel", {"analysis_run_id": analysis_run_id, "analysis_run_step_id": analysis_run_step_id})
+        )
         return CancelCheckResult(cancel_requested=check_count >= 2, status="cancel_requested")
 
     api_client.check_cancel = delayed_cancel
@@ -1667,7 +1766,7 @@ def test_agent_runner_helper_branches_cover_diagnostics_artifact_skip_and_cancel
                         "diagnostic_id": "diag-4",
                         "code": "kept",
                         "message": "kept",
-                        "context": {"selection_item_id": "selection-item-agent"},
+                        "context": {"selection_snapshot_item_id": "selection-snapshot-item-agent"},
                     },
                 ]
             },
@@ -1683,10 +1782,10 @@ def test_agent_runner_helper_branches_cover_diagnostics_artifact_skip_and_cancel
             "code": "kept",
             "message": "kept",
             "context": {
-                "selection_item_id": "selection-item-agent",
+                "selection_snapshot_item_id": "selection-snapshot-item-agent",
                 "analysis_run_id": execution.analysis_run_id,
-                "selection_id": execution.selection.selection_id,
-                "execution_id": execution.execution_id,
+                "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
+                "analysis_run_step_id": execution.analysis_run_step_id,
                 "harness_name": "fixture",
             },
         },
@@ -1735,19 +1834,27 @@ def test_agent_runner_helper_branches_cover_diagnostics_artifact_skip_and_cancel
     assert cancellation_hook() is True
 
 
-def _execution(params: dict[str, object], *, item_count: int = 1) -> ClaimedAnalysisRunExecution:
+def _execution(
+    params: dict[str, object],
+    *,
+    item_count: int = 1,
+    step_inputs: tuple[AnalysisRunStepInput, ...] = (),
+) -> ClaimedAnalysisRunStep:
     items = []
     for position in range(item_count):
         suffix = "" if position == 0 else f"-{position}"
         role = "primary" if position == 0 else "reference"
         items.append(
             SelectionItemSnapshot(
-                selection_item_id=f"selection-item-agent{suffix}",
+                selection_snapshot_item_id=f"selection-snapshot-item-agent{suffix}",
                 position=position,
-                media_item_id=f"media-agent{suffix}",
+                media_asset_id=f"media-agent{suffix}",
                 kind="text",
                 media_kind="text",
                 role=role,
+                labels=SelectionItemLabels(display_label=f"Agent context{suffix}"),
+                origin_snapshot={"origin_type": "text", "text": f"selection-agent/source-agent{suffix}"},
+                storage_snapshot={},
                 source_snapshot=MediaSourceSnapshot(
                     source_id=f"source-agent{suffix}",
                     origin_type="text",
@@ -1756,20 +1863,20 @@ def _execution(params: dict[str, object], *, item_count: int = 1) -> ClaimedAnal
                 display_name=f"Agent context{suffix}",
                 status_at_selection="ready",
                 metadata_snapshot={},
-                retention_snapshot={"state": "active"},
             )
         )
 
-    return ClaimedAnalysisRunExecution(
-        execution_id="exec-agent",
+    return ClaimedAnalysisRunStep(
+        analysis_run_step_id="exec-agent",
         analysis_run_id="job-agent",
         run_type="custom",
-        selection=SealedSelectionInput(
-            selection_id="selection-agent",
+        selection_snapshot=SealedSelectionInput(
+            selection_snapshot_id="selection-agent",
             items=tuple(items),
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
         ),
+        analysis_run_step_inputs=step_inputs,
         params=params,
         claimed_at="2026-05-10T12:01:00Z",
     )

@@ -13,6 +13,7 @@
       "maxLength": 160
     },
     "ownerType": {
+      "deprecated": true,
       "type": "string",
       "enum": [
         "user",
@@ -37,6 +38,7 @@
       ]
     },
     "sourceOriginType": {
+      "deprecated": true,
       "type": "string",
       "enum": [
         "text",
@@ -45,11 +47,31 @@
       ]
     },
     "mediaItemStatus": {
+      "deprecated": true,
       "type": "string",
       "enum": [
         "validating",
         "ready",
         "quarantined",
+        "deleted"
+      ]
+    },
+    "mediaAssetStatus": {
+      "type": "string",
+      "enum": [
+        "ingesting",
+        "available",
+        "invalid",
+        "quarantined",
+        "deleted"
+      ]
+    },
+    "storedObjectStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "available",
+        "missing",
         "deleted"
       ]
     },
@@ -69,6 +91,14 @@
       ]
     },
     "selectionStatus": {
+      "deprecated": true,
+      "type": "string",
+      "enum": [
+        "sealed",
+        "invalidated"
+      ]
+    },
+    "selectionSnapshotStatus": {
       "type": "string",
       "enum": [
         "sealed",
@@ -79,6 +109,7 @@
       "type": "string",
       "enum": [
         "queued",
+        "claiming",
         "running",
         "cancel_requested",
         "partially_succeeded",
@@ -86,6 +117,18 @@
         "failed",
         "canceled",
         "expired"
+      ]
+    },
+    "analysisRunStepStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "queued",
+        "claimed",
+        "succeeded",
+        "partially_succeeded",
+        "failed",
+        "canceled"
       ]
     },
     "runType": {
@@ -148,8 +191,8 @@
     "artifactVisibility": {
       "type": "string",
       "enum": [
-        "owner",
-        "private_execution"
+        "private",
+        "channel_deliverable"
       ]
     },
     "diagnosticSeverity": {
@@ -163,12 +206,22 @@
     "diagnosticSubjectType": {
       "type": "string",
       "enum": [
+        "media_asset",
+        "stored_object",
+        "collection",
+        "selection_snapshot",
+        "selection_snapshot_item",
+        "analysis_run",
+        "analysis_run_step",
+        "artifact",
+        "artifact_subject",
+        "diagnostic",
+        "channel_account",
+        "channel_surface",
+        "operation_request",
         "media_item",
         "source",
-        "collection",
         "selection",
-        "analysis_run",
-        "artifact",
         "adapter",
         "retention"
       ]
@@ -176,6 +229,14 @@
     "diagnosticCode": {
       "type": "string",
       "enum": [
+        "media_asset_invalid",
+        "channel_account_mismatch",
+        "selection_snapshot_invalid",
+        "selection_snapshot_not_sealed",
+        "stored_object_unavailable",
+        "analysis_prerequisite_missing",
+        "analysis_prerequisite_failed",
+        "analysis_prerequisite_unavailable",
         "media_item_invalid",
         "owner_mismatch",
         "collection_version_conflict",
@@ -189,6 +250,17 @@
         "orphan_object_cleanup_failed",
         "retention_denied",
         "adapter_conflict"
+      ]
+    },
+    "channelSurfaceSubjectType": {
+      "type": "string",
+      "enum": [
+        "media_asset",
+        "collection",
+        "selection_snapshot",
+        "analysis_run",
+        "artifact",
+        "diagnostic"
       ]
     },
     "retentionState": {

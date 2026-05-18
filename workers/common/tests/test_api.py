@@ -33,7 +33,7 @@ import pytest
 
 import transcriber_workers_common.api as api_module
 from transcriber_workers_common.api import (
-    ClaimedAnalysisRunExecution,
+    ClaimedAnalysisRunStep,
     InternalApiConfig,
     InternalApiUnavailableError,
     AnalysisRunControlClient,
@@ -42,10 +42,10 @@ from transcriber_workers_common.api import (
 from transcriber_workers_common.artifacts import ArtifactDescriptor
 
 RUN_ID = "11111111-1111-1111-1111-111111111111"
-EXECUTION_ID = "22222222-2222-2222-2222-222222222222"
-SELECTION_ID = "33333333-3333-3333-3333-333333333333"
-MEDIA_ID = "44444444-4444-4444-4444-444444444444"
-SOURCE_ID = "55555555-5555-5555-5555-555555555555"
+STEP_ID = "22222222-2222-2222-2222-222222222222"
+SNAPSHOT_ID = "33333333-3333-3333-3333-333333333333"
+ASSET_ID = "44444444-4444-4444-4444-444444444444"
+OBJECT_ID = "55555555-5555-5555-5555-555555555555"
 
 
 class StubTransport:
@@ -62,50 +62,72 @@ class StubTransport:
 
 
 def _selection_item(*, position: int = 0, origin_type: str = "object", kind: str = "audio") -> dict[str, object]:
-    source = {
-        "source_id": SOURCE_ID,
-        "origin_type": origin_type,
-        "external_uri": "https://example.test/source" if origin_type == "url" else None,
-        "object_key": "media/run-1/source.wav" if origin_type == "object" else None,
-        "text_ref": "text:abc123" if origin_type == "text" else None,
-        "checksum": "sha256:demo",
-        "size_bytes": 42 if origin_type == "object" else None,
-        "mime_type": "audio/wav" if origin_type == "object" else None,
-        "expires_at": None,
-    }
+    if origin_type == "text":
+        origin_snapshot = {"origin_type": "text", "text": "inline text"}
+        storage_snapshot: dict[str, object] = {}
+    elif origin_type == "url":
+        origin_snapshot = {"origin_type": "url", "url": "https://example.test/source"}
+        storage_snapshot = {}
+    else:
+        origin_snapshot = {
+            "origin_type": "telegram_file",
+            "object_ref": "media/run-1/source.wav",
+            "content_type": "audio/wav",
+            "size_bytes": 42,
+        }
+        storage_snapshot = {
+            "stored_object_id": OBJECT_ID,
+            "bucket": "sources",
+            "object_key": "media/run-1/source.wav",
+            "content_type": "audio/wav",
+            "size_bytes": 42,
+            "checksum": "sha256:demo",
+            "storage_status": "available",
+            "retention_state": "active",
+            "created_at": "2026-05-10T12:00:00Z",
+        }
     return {
-        "selection_item_id": f"selection-item-{position}",
+        "selection_snapshot_item_id": f"selection-snapshot-item-{position}",
         "position": position,
-        "media_item_id": MEDIA_ID,
+        "media_asset_id": ASSET_ID,
         "kind": kind,
-        "media_kind": kind,
-        "mime_type": source["mime_type"],
         "role": "primary",
         "labels": {
             "display_label": "Source.wav",
             "source_label": "interview_a",
             "original_filename": "source.wav",
         },
-        "source_snapshot": source,
+        "origin_snapshot": origin_snapshot,
+        "storage_snapshot": storage_snapshot,
         "display_name": "Source.wav",
-        "status_at_selection": "ready",
+        "status_at_selection": "available",
         "metadata_snapshot": {"original_filename": "source.wav"},
-        "retention_snapshot": {"state": "active"},
         "diagnostics": [],
     }
 
 
 def _claim_response(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
-        "execution_id": EXECUTION_ID,
+        "analysis_run_step_id": STEP_ID,
         "analysis_run_id": RUN_ID,
         "run_type": "transcription",
-        "selection": {
-            "selection_id": SELECTION_ID,
+        "selection_snapshot": {
+            "selection_snapshot_id": SNAPSHOT_ID,
             "items": [_selection_item()],
             "option_snapshot": {"language": "ru"},
             "sealed_at": "2026-05-10T12:00:00Z",
         },
+        "analysis_run_step_inputs": [
+            {
+                "analysis_run_step_input_id": "input-1",
+                "analysis_run_step_id": STEP_ID,
+                "input_kind": "selection_snapshot_item",
+                "selection_snapshot_item_id": "selection-snapshot-item-0",
+                "position": 0,
+                "required": True,
+                "metadata": {},
+            }
+        ],
         "params": {"language": "ru"},
         "claimed_at": "2026-05-10T12:01:00Z",
     }
@@ -119,30 +141,30 @@ def test_claim_analysis_run_shapes_payload_and_parses_execution() -> None:
         responses={
             (
                 "POST",
-                f"http://internal.local/internal/v1/analysis-runs/{RUN_ID}/executions/claim",
+                f"http://internal.local/internal/v1/analysis-runs/{RUN_ID}/steps/claim",
             ): _claim_response()
         }
     )
     client = AnalysisRunControlClient(config, transport=transport)
 
-    execution = client.claim_analysis_run(RUN_ID, worker_kind="transcription", task_type="selection.transcription")
+    execution = client.claim_analysis_run_step(RUN_ID, worker_kind="transcription", step_kind="selection.transcription")
 
-    assert execution.execution_id == EXECUTION_ID
+    assert execution.analysis_run_step_id == STEP_ID
     assert execution.analysis_run_id == RUN_ID
-    assert execution.selection.items[0].selection_item_id == "selection-item-0"
-    assert execution.selection.items[0].role == "primary"
-    assert execution.selection.items[0].labels.display_label == "Source.wav"
-    assert execution.selection.items[0].labels.source_label == "interview_a"
-    assert execution.selection.items[0].media_kind == "audio"
-    assert execution.selection.items[0].mime_type == "audio/wav"
-    assert execution.selection.items[0].source_snapshot.origin_type == "object"
+    assert execution.selection_snapshot.items[0].selection_snapshot_item_id == "selection-snapshot-item-0"
+    assert execution.selection_snapshot.items[0].role == "primary"
+    assert execution.selection_snapshot.items[0].labels.display_label == "Source.wav"
+    assert execution.selection_snapshot.items[0].labels.source_label == "interview_a"
+    assert execution.selection_snapshot.items[0].media_kind == "audio"
+    assert execution.selection_snapshot.items[0].mime_type == "audio/wav"
+    assert execution.selection_snapshot.items[0].source_snapshot.origin_type == "object"
     assert execution.ordered_inputs[0].object_key == "media/run-1/source.wav"
     assert execution.params == {"language": "ru"}
     assert transport.calls == [
         {
             "method": "POST",
-            "url": f"http://internal.local/internal/v1/analysis-runs/{RUN_ID}/executions/claim",
-            "payload": {"worker_kind": "transcription", "task_type": "selection.transcription"},
+            "url": f"http://internal.local/internal/v1/analysis-runs/{RUN_ID}/steps/claim",
+            "payload": {"worker_kind": "transcription", "step_kind": "selection.transcription"},
         }
     ]
 
@@ -162,28 +184,30 @@ def test_selection_item_materialization_classifies_final_multimodal_sources() ->
 
     for position, (origin_type, kind, mime_type, expected_kind) in enumerate(cases):
         payload = _selection_item(position=position, origin_type=origin_type, kind=kind)
-        payload["media_item_id"] = f"44444444-4444-4444-4444-4444444444{position:02d}"
-        payload["source_snapshot"]["source_id"] = f"55555555-5555-5555-5555-5555555555{position:02d}"
-        payload["source_snapshot"]["mime_type"] = mime_type
-        payload["mime_type"] = mime_type
+        payload["media_asset_id"] = f"44444444-4444-4444-4444-4444444444{position:02d}"
         if origin_type == "object":
-            payload["source_snapshot"]["object_key"] = f"media/item-{position}"
-        item = ClaimedAnalysisRunExecution.from_payload(
+            payload["storage_snapshot"]["stored_object_id"] = f"55555555-5555-5555-5555-5555555555{position:02d}"
+            payload["storage_snapshot"]["content_type"] = mime_type
+            payload["origin_snapshot"]["content_type"] = mime_type
+            payload["origin_snapshot"]["size_bytes"] = 42
+        if origin_type == "object":
+            payload["storage_snapshot"]["object_key"] = f"media/item-{position}"
+        item = ClaimedAnalysisRunStep.from_payload(
             _claim_response(
-                selection={
-                    "selection_id": SELECTION_ID,
+                selection_snapshot={
+                    "selection_snapshot_id": SNAPSHOT_ID,
                     "items": [payload],
                     "option_snapshot": {},
                     "sealed_at": "2026-05-10T12:00:00Z",
                 }
             )
-        ).selection.items[0]
+        ).selection_snapshot.items[0]
 
         descriptor = SelectionItemMaterialization.from_selection_item(item)
 
         assert descriptor.materialization_kind == expected_kind
-        assert descriptor.selection_item_id == f"selection-item-{position}"
-        assert descriptor.media_item_id == payload["media_item_id"]
+        assert descriptor.selection_snapshot_item_id == f"selection-snapshot-item-{position}"
+        assert descriptor.media_asset_id == payload["media_asset_id"]
         assert descriptor.media_kind == kind
         assert descriptor.mime_type == mime_type
         assert descriptor.role == "primary"
@@ -197,36 +221,36 @@ def test_selection_item_role_defaults_from_metadata_or_selection_options() -> No
     item_payload.pop("labels")
     item_payload["metadata_snapshot"] = {"role": "reference", "source_label": "note_a"}
 
-    execution = ClaimedAnalysisRunExecution.from_payload(
+    execution = ClaimedAnalysisRunStep.from_payload(
         _claim_response(
-            selection={
-                "selection_id": SELECTION_ID,
+            selection_snapshot={
+                "selection_snapshot_id": SNAPSHOT_ID,
                 "items": [item_payload],
-                "option_snapshot": {"item_roles": {MEDIA_ID: "primary"}},
+                "option_snapshot": {"item_roles": {ASSET_ID: "primary"}},
                 "sealed_at": "2026-05-10T12:00:00Z",
             }
         )
     )
 
-    assert execution.selection.items[0].role == "reference"
-    assert execution.selection.items[0].labels.source_label == "note_a"
+    assert execution.selection_snapshot.items[0].role == "reference"
+    assert execution.selection_snapshot.items[0].labels.source_label == "note_a"
 
     item_payload = _selection_item()
     item_payload.pop("role")
     item_payload.pop("labels")
     item_payload["metadata_snapshot"] = {}
-    execution = ClaimedAnalysisRunExecution.from_payload(
+    execution = ClaimedAnalysisRunStep.from_payload(
         _claim_response(
-            selection={
-                "selection_id": SELECTION_ID,
+            selection_snapshot={
+                "selection_snapshot_id": SNAPSHOT_ID,
                 "items": [item_payload],
-                "option_snapshot": {"item_roles": {MEDIA_ID: "context"}},
+                "option_snapshot": {"item_roles": {ASSET_ID: "context"}},
                 "sealed_at": "2026-05-10T12:00:00Z",
             }
         )
     )
 
-    assert execution.selection.items[0].role == "context"
+    assert execution.selection_snapshot.items[0].role == "context"
 
 
 def test_list_queued_runs_shapes_query_and_parses_minimal_snapshots() -> None:
@@ -235,13 +259,14 @@ def test_list_queued_runs_shapes_query_and_parses_minimal_snapshots() -> None:
         responses={
             (
                 "GET",
-                "http://internal.local/internal/v1/analysis-runs/queue?page=1&page_size=1&status=queued&run_type=transcription&task_type=selection.transcription",
+                "http://internal.local/internal/v1/analysis-runs/queue?page=1&page_size=1&status=queued&run_type=transcription&worker_kind=transcription&step_kind=selection.transcription",
             ): {
                 "items": [
                     {
                         "analysis_run_id": RUN_ID,
                         "run_type": "transcription",
-                        "task_type": "selection.transcription",
+                        "worker_kind": "transcription",
+                        "step_kind": "selection.transcription",
                         "status": "queued",
                         "version": 1,
                     }
@@ -256,7 +281,8 @@ def test_list_queued_runs_shapes_query_and_parses_minimal_snapshots() -> None:
     runs = client.list_queued_runs(
         status="queued",
         run_type="transcription",
-        task_type="selection.transcription",
+        worker_kind="transcription",
+        step_kind="selection.transcription",
         page_size=1,
     )
 
@@ -264,7 +290,7 @@ def test_list_queued_runs_shapes_query_and_parses_minimal_snapshots() -> None:
     assert transport.calls == [
         {
             "method": "GET",
-            "url": "http://internal.local/internal/v1/analysis-runs/queue?page=1&page_size=1&status=queued&run_type=transcription&task_type=selection.transcription",
+            "url": "http://internal.local/internal/v1/analysis-runs/queue?page=1&page_size=1&status=queued&run_type=transcription&worker_kind=transcription&step_kind=selection.transcription",
             "payload": None,
         }
     ]
@@ -299,19 +325,19 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
 
     client.publish_progress(
         "job-1",
-        execution_id="exec-1",
+        analysis_run_step_id="exec-1",
         progress_stage="transcribing",
         progress_message="running whisper",
     )
-    client.register_artifacts("job-1", execution_id="exec-1", artifacts=[artifact])
+    client.register_artifacts("job-1", analysis_run_step_id="exec-1", artifacts=[artifact])
     client.register_diagnostics(
         "job-1",
-        execution_id="exec-1",
+        analysis_run_step_id="exec-1",
         diagnostics=[{"code": "warn_partial_source", "severity": "warning"}],
     )
     client.finalize_analysis_run(
         "job-1",
-        execution_id="exec-1",
+        analysis_run_step_id="exec-1",
         outcome="succeeded",
         progress_stage="completed",
         progress_message="finished",
@@ -322,9 +348,9 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
     assert client.transport.calls == [
         {
             "method": "POST",
-            "url": "http://internal.local/internal/v1/analysis-runs/job-1/executions/progress",
+            "url": "http://internal.local/internal/v1/analysis-runs/job-1/steps/progress",
             "payload": {
-                "execution_id": "exec-1",
+                "analysis_run_step_id": "exec-1",
                 "progress_stage": "transcribing",
                 "progress_message": "running whisper",
             },
@@ -333,7 +359,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
             "method": "POST",
             "url": "http://internal.local/internal/v1/analysis-runs/job-1/artifacts",
             "payload": {
-                "execution_id": "exec-1",
+                "analysis_run_step_id": "exec-1",
                 "artifacts": [
                     {
                         "artifact_kind": "transcript_plain",
@@ -350,15 +376,15 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
             "method": "POST",
             "url": "http://internal.local/internal/v1/analysis-runs/job-1/diagnostics",
             "payload": {
-                "execution_id": "exec-1",
+                "analysis_run_step_id": "exec-1",
                 "diagnostics": [{"code": "warn_partial_source", "severity": "warning"}],
             },
         },
         {
             "method": "POST",
-            "url": "http://internal.local/internal/v1/analysis-runs/job-1/executions/finalize",
+            "url": "http://internal.local/internal/v1/analysis-runs/job-1/steps/finalize",
             "payload": {
-                "execution_id": "exec-1",
+                "analysis_run_step_id": "exec-1",
                 "outcome": "succeeded",
                 "message": "finished",
             },
@@ -372,7 +398,7 @@ def test_check_cancel_uses_query_contract() -> None:
         responses={
             (
                 "GET",
-                "http://internal.local/internal/v1/analysis-runs/job-2/executions/cancel-check?execution_id=exec-2",
+                "http://internal.local/internal/v1/analysis-runs/job-2/steps/cancel-check?analysis_run_step_id=exec-2",
             ): {
                 "cancel_requested": True,
                 "status": "cancel_requested",
@@ -382,7 +408,7 @@ def test_check_cancel_uses_query_contract() -> None:
     )
     client = AnalysisRunControlClient(config, transport=transport)
 
-    result = client.check_cancel("job-2", execution_id="exec-2")
+    result = client.check_cancel("job-2", analysis_run_step_id="exec-2")
 
     assert result.cancel_requested is True
     assert result.status == "cancel_requested"
@@ -395,7 +421,7 @@ def test_resolve_agent_run_request_access_uses_query_contract() -> None:
         responses={
             (
                 "GET",
-                "http://internal.local/internal/v1/analysis-runs/job-agent/request-access?execution_id=exec-agent",
+                "http://internal.local/internal/v1/analysis-runs/job-agent/request-access?analysis_run_step_id=exec-agent",
             ): {
                 "provider": "minio_presigned_url",
                 "url": "https://minio.local/private/request.json",
@@ -408,7 +434,7 @@ def test_resolve_agent_run_request_access_uses_query_contract() -> None:
     )
     client = AnalysisRunControlClient(config, transport=transport)
 
-    result = client.resolve_agent_run_request_access("job-agent", execution_id="exec-agent")
+    result = client.resolve_agent_run_request_access("job-agent", analysis_run_step_id="exec-agent")
 
     assert result.provider == "minio_presigned_url"
     assert result.request_ref == "agentreq_digest"
@@ -454,7 +480,7 @@ def test_internal_api_failures_emit_required_marker(caplog: pytest.LogCaptureFix
     )
 
     with pytest.raises(InternalApiUnavailableError, match="connection refused"):
-        client.claim_analysis_run("job-3", worker_kind="transcription", task_type="selection.transcription")
+        client.claim_analysis_run_step("job-3", worker_kind="transcription", step_kind="selection.transcription")
 
     assert "[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]" in caplog.text
 
@@ -466,14 +492,14 @@ def test_claim_analysis_run_rejects_malformed_response() -> None:
             responses={
                 (
                     "POST",
-                    "http://internal.local/internal/v1/analysis-runs/job-4/executions/claim",
-                ): {**_claim_response(), "selection": {"selection_id": SELECTION_ID, "items": [], "option_snapshot": {}, "sealed_at": "2026-05-10T12:00:00Z"}}
+                    "http://internal.local/internal/v1/analysis-runs/job-4/steps/claim",
+                ): {**_claim_response(), "selection_snapshot": {"selection_snapshot_id": SNAPSHOT_ID, "items": [], "option_snapshot": {}, "sealed_at": "2026-05-10T12:00:00Z"}}
             }
         ),
     )
 
     with pytest.raises(ValueError, match="selection"):
-        client.claim_analysis_run("job-4", worker_kind="transcription", task_type="selection.transcription")
+        client.claim_analysis_run_step("job-4", worker_kind="transcription", step_kind="selection.transcription")
 
 
 def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
@@ -483,7 +509,7 @@ def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
             responses={
                 (
                     "POST",
-                    "http://internal.local/internal/v1/analysis-runs/job-agent/executions/claim",
+                    "http://internal.local/internal/v1/analysis-runs/job-agent/steps/claim",
                 ): _claim_response(
                     analysis_run_id="job-agent",
                     run_type="custom",
@@ -493,20 +519,21 @@ def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
         ),
     )
 
-    execution = client.claim_analysis_run("job-agent", worker_kind="agent_runner", task_type="selection.analysis")
+    execution = client.claim_analysis_run_step("job-agent", worker_kind="agent_runner", step_kind="report.analysis")
 
     assert execution.run_type == "custom"
-    assert execution.selection.items[0].media_item_id == MEDIA_ID
+    assert execution.selection_snapshot.items[0].media_asset_id == ASSET_ID
     assert execution.params == {"harness_name": "fixture"}
 
 
 def test_claim_analysis_run_rejects_empty_selection_items() -> None:
     with pytest.raises(ValueError, match="selection"):
-        ClaimedAnalysisRunExecution(
-            execution_id=EXECUTION_ID,
+        ClaimedAnalysisRunStep(
+            analysis_run_step_id=STEP_ID,
             analysis_run_id=RUN_ID,
             run_type="report",
-            selection=type("EmptySelection", (), {"items": ()})(),
+            selection_snapshot=type("EmptySelection", (), {"items": ()})(),
+            analysis_run_step_inputs=(),
             params={},
             claimed_at="2026-05-10T12:01:00Z",
         )
@@ -514,7 +541,7 @@ def test_claim_analysis_run_rejects_empty_selection_items() -> None:
 
 def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
     source_snapshot = api_module.MediaSourceSnapshot(
-        source_id=SOURCE_ID,
+        source_id=OBJECT_ID,
         origin_type="object",
         object_key="media/run-1/source.wav",
         mime_type="audio/wav",
@@ -522,24 +549,25 @@ def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
     )
     item = api_module.SelectionItemSnapshot(
         position=2,
-        media_item_id=MEDIA_ID,
+        media_asset_id=ASSET_ID,
         kind="audio",
+        origin_snapshot={"origin_type": "telegram_file", "object_ref": "media/run-1/source.wav"},
+        storage_snapshot={"stored_object_id": OBJECT_ID, "object_key": "media/run-1/source.wav", "content_type": "audio/wav"},
         source_snapshot=source_snapshot,
         display_name="  Demo source.wav  ",
-        status_at_selection="ready",
+        status_at_selection="available",
         metadata_snapshot={
             "source_label": "  interview_a  ",
             "original_filename": "   ",
             "filename": " fallback.wav ",
         },
-        retention_snapshot={"state": "active"},
-        selection_item_id=None,
+        selection_snapshot_item_id=None,
         media_kind=None,
         mime_type=None,
         labels=None,
     )
 
-    assert item.selection_item_id == "selection-item-2"
+    assert item.selection_snapshot_item_id == "selection-snapshot-item-2"
     assert item.media_kind == "audio"
     assert item.mime_type == "audio/wav"
     assert item.labels is not None
@@ -549,29 +577,31 @@ def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
     assert api_module._metadata_source_label(item) == "interview_a"
 
     direct_filename_item = api_module.SelectionItemSnapshot(
-        selection_item_id="selection-item-4",
+        selection_snapshot_item_id="selection-snapshot-item-4",
         position=4,
-        media_item_id=MEDIA_ID,
+        media_asset_id=ASSET_ID,
         kind="audio",
         media_kind="audio",
+        origin_snapshot={"origin_type": "telegram_file", "object_ref": "media/run-1/source.wav"},
+        storage_snapshot={"stored_object_id": OBJECT_ID, "object_key": "media/run-1/source.wav", "content_type": "audio/wav"},
         source_snapshot=source_snapshot,
         display_name="Source.wav",
-        status_at_selection="ready",
+        status_at_selection="available",
         metadata_snapshot={"original_filename": "  source.wav  "},
-        retention_snapshot={"state": "active"},
         labels=api_module.SelectionItemLabels(display_label="Source.wav"),
     )
     no_filename_item = api_module.SelectionItemSnapshot(
-        selection_item_id="selection-item-5",
+        selection_snapshot_item_id="selection-snapshot-item-5",
         position=5,
-        media_item_id=MEDIA_ID,
+        media_asset_id=ASSET_ID,
         kind="audio",
         media_kind="audio",
+        origin_snapshot={"origin_type": "telegram_file", "object_ref": "media/run-1/source.wav"},
+        storage_snapshot={"stored_object_id": OBJECT_ID, "object_key": "media/run-1/source.wav", "content_type": "audio/wav"},
         source_snapshot=source_snapshot,
         display_name="Source.wav",
-        status_at_selection="ready",
+        status_at_selection="available",
         metadata_snapshot={"original_filename": "   ", "filename": "   ", "source_label": "   "},
-        retention_snapshot={"state": "active"},
         labels=api_module.SelectionItemLabels(display_label="Source.wav"),
     )
 
@@ -582,22 +612,23 @@ def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
 
 def test_selection_item_materialization_marks_missing_object_key_as_unsupported() -> None:
     source_snapshot = api_module.MediaSourceSnapshot(
-        source_id=SOURCE_ID,
+        source_id=OBJECT_ID,
         origin_type="object",
         object_key=None,
         mime_type="audio/wav",
     )
     item = api_module.SelectionItemSnapshot(
-        selection_item_id="selection-item-3",
+        selection_snapshot_item_id="selection-snapshot-item-3",
         position=3,
-        media_item_id=MEDIA_ID,
+        media_asset_id=ASSET_ID,
         kind="audio",
         media_kind="audio",
+        origin_snapshot={"origin_type": "telegram_file", "object_ref": "media/run-1/source.wav"},
+        storage_snapshot={"stored_object_id": OBJECT_ID, "content_type": "audio/wav"},
         source_snapshot=source_snapshot,
         display_name="Source.wav",
-        status_at_selection="ready",
+        status_at_selection="available",
         metadata_snapshot={},
-        retention_snapshot={"state": "active"},
         labels=api_module.SelectionItemLabels(display_label="Source.wav", source_label="   "),
     )
 
@@ -610,10 +641,10 @@ def test_selection_item_materialization_marks_missing_object_key_as_unsupported(
 
 def test_ordered_input_request_access_and_helper_branches_cover_edge_paths() -> None:
     ordered_input = api_module.OrderedWorkerInput.from_payload(
-        {
-            "position": 1,
-            "source_id": SOURCE_ID,
-            "source_kind": "object",
+            {
+                "position": 1,
+                "source_id": OBJECT_ID,
+                "source_kind": "object",
             "source_label": " interview_a ",
             "display_name": "Source.wav",
             "original_filename": "source.wav",
@@ -644,13 +675,13 @@ def test_selection_item_labels_and_materialization_helpers_trim_source_labels() 
 
     assert labels.source_display_label() == "Display"
     assert api_module.SelectionItemMaterialization(
-        selection_item_id="selection-item-9",
+        selection_snapshot_item_id="selection-snapshot-item-9",
         position=9,
-        media_item_id=MEDIA_ID,
+        media_asset_id=ASSET_ID,
         media_kind="audio",
         role="primary",
         labels=labels,
-        source_id=SOURCE_ID,
+        origin_ref=OBJECT_ID,
         origin_type="object",
         materialization_kind="object",
         mime_type="audio/wav",

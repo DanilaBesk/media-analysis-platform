@@ -32,8 +32,8 @@ def test_build_runner_delegates_to_run_agent_harness(monkeypatch, tmp_path: Path
     config = WorkerRuntimeConfig(
         api_config=InternalApiConfig(base_url="http://api"),
         worker_kind="agent_runner",
-        task_type="selection.analysis",
-        run_type="custom",
+        step_kind="report.analysis",
+        run_type="report",
         workspace_root=tmp_path / "runtime",
     )
     api_client = object()
@@ -55,6 +55,7 @@ def test_build_runner_delegates_to_run_agent_harness(monkeypatch, tmp_path: Path
     assert calls[0]["artifact_store"] is object_store
     assert calls[0]["harness_registry"].__class__.__name__ == "DefaultAgentHarnessRegistry"
     assert calls[0]["lease_client"].__class__.__name__ == "LocalAgentHarnessLeaseClient"
+    assert calls[0]["step_kind"] == "report.analysis"
 
 
 def test_main_wires_agent_runner_runtime_identity(monkeypatch, tmp_path: Path) -> None:
@@ -88,8 +89,8 @@ def test_main_wires_agent_runner_runtime_identity(monkeypatch, tmp_path: Path) -
     config = captured["config"]
     assert isinstance(config, WorkerRuntimeConfig)
     assert config.worker_kind == "agent_runner"
-    assert config.task_type == "selection.analysis"
-    assert config.run_type == "custom"
+    assert config.step_kind == "report.analysis"
+    assert config.run_type == "report"
     assert captured["runner_result"]["analysis_run_id"] == "job-main"
     assert captured["runner_result"]["harness_registry"].__class__.__name__ == "DefaultAgentHarnessRegistry"
     assert captured["runner_result"]["lease_client"].__class__.__name__ == "LocalAgentHarnessLeaseClient"

@@ -20,6 +20,7 @@ import (
 	"github.com/danila/media-analysis-platform/apps/api/internal/api"
 	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
+	targetstore "github.com/danila/media-analysis-platform/apps/api/internal/storage/target"
 	"github.com/danila/media-analysis-platform/apps/api/internal/ws"
 )
 
@@ -91,6 +92,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	targetStateStore, err := targetstore.NewStore(db)
+	if err != nil {
+		return err
+	}
 
 	redisOpt, err := parseRedisClientOpt(cfg.redisURL)
 	if err != nil {
@@ -117,7 +122,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	deps, err := api.NewRuntimeDependencies(repository, publisher, eventsService, websocketHub)
+	deps, err := api.NewRuntimeDependenciesWithTarget(repository, targetStateStore, publisher, eventsService, websocketHub)
 	if err != nil {
 		return err
 	}
@@ -281,12 +286,21 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		return err
 	}
 	if len(migrations) > 0 {
-		hasFinalSchema, err := schemaRelationExists(ctx, db, "public.media_items")
+		baseline := migrations[0].Name
+		hasLegacySchema, err := schemaRelationExists(ctx, db, "public.media_items")
 		if err != nil {
 			return err
 		}
-		if hasFinalSchema {
-			baseline := migrations[0].Name
+		hasTargetSchema, err := schemaRelationExists(ctx, db, "public.channel_accounts")
+		if err != nil {
+			return err
+		}
+		if hasLegacySchema {
+			if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name=$1`, baseline); err != nil {
+				return fmt.Errorf("clear stale legacy migration baseline: %w", err)
+			}
+			delete(applied, baseline)
+		} else if hasTargetSchema {
 			if _, ok := applied[baseline]; !ok {
 				if err := recordAppliedMigration(ctx, db, baseline); err != nil {
 					return err

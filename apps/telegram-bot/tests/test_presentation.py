@@ -5,10 +5,10 @@ from telegram_adapter.presentation import render_material_summary, render_materi
 
 def test_file_summary_uses_name_size_and_optional_duration_without_media_kind_labels() -> None:
     item = {
-        "media_item_id": "media-1",
+        "media_asset_id": "media-1",
         "kind": "audio",
         "display_name": "team-sync.m4a",
-        "source": {"origin_type": "object", "size_bytes": 1_536},
+        "origin": {"origin_type": "upload", "size_bytes": 1_536},
         "duration_seconds": 125,
     }
 
@@ -17,10 +17,10 @@ def test_file_summary_uses_name_size_and_optional_duration_without_media_kind_la
 
 def test_file_summary_omits_missing_optional_parts() -> None:
     item = {
-        "media_item_id": "media-2",
+        "media_asset_id": "media-2",
         "kind": "document",
         "display_name": "brief.pdf",
-        "source": {"origin_type": "object"},
+        "origin": {"origin_type": "upload"},
     }
 
     assert render_material_summary(item) == "brief.pdf"
@@ -28,12 +28,12 @@ def test_file_summary_omits_missing_optional_parts() -> None:
 
 def test_text_summary_uses_bounded_preview_from_source_text() -> None:
     item = {
-        "media_item_id": "media-3",
+        "media_asset_id": "media-3",
         "kind": "text",
         "display_name": "stale fallback",
-        "source": {
+        "origin": {
             "origin_type": "text",
-            "text": "  Очень длинный   текст для карточки Telegram, который должен аккуратно сокращаться.  ",
+            "origin_ref": "  Очень длинный   текст для карточки Telegram, который должен аккуратно сокращаться.  ",
         },
     }
 
@@ -42,12 +42,12 @@ def test_text_summary_uses_bounded_preview_from_source_text() -> None:
 
 def test_link_summary_compacts_url_for_telegram_display() -> None:
     item = {
-        "media_item_id": "media-4",
+        "media_asset_id": "media-4",
         "kind": "url",
         "display_name": "https://www.example.com/reports/2026/q2/summary?utm_source=telegram",
-        "source": {
+        "origin": {
             "origin_type": "url",
-            "url": "https://www.example.com/reports/2026/q2/summary?utm_source=telegram",
+            "origin_ref": "https://www.example.com/reports/2026/q2/summary?utm_source=telegram",
         },
     }
 
@@ -57,20 +57,20 @@ def test_link_summary_compacts_url_for_telegram_display() -> None:
 def test_render_material_summary_lines_limits_items_and_adds_overflow_line() -> None:
     items = [
         {
-            "media_item_id": "media-1",
+            "media_asset_id": "media-1",
             "kind": "document",
             "display_name": "brief.pdf",
-            "source": {"origin_type": "object", "size_bytes": 2_048},
+            "origin": {"origin_type": "upload", "size_bytes": 2_048},
         },
         {
-            "media_item_id": "media-2",
+            "media_asset_id": "media-2",
             "kind": "text",
-            "source": {"origin_type": "text", "text": "Нужен короткий статус"},
+            "origin": {"origin_type": "text", "origin_ref": "Нужен короткий статус"},
         },
         {
-            "media_item_id": "media-3",
+            "media_asset_id": "media-3",
             "kind": "url",
-            "source": {"origin_type": "url", "url": "https://example.com/very/long/path"},
+            "origin": {"origin_type": "url", "origin_ref": "https://example.com/very/long/path"},
         },
     ]
 

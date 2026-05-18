@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/selection-snapshot.schema.json",
+  "title": "SelectionSnapshotContracts",
+  "$defs": {
+    "selectionSnapshotItem": {
+      "type": "object",
+      "required": [
+        "selection_snapshot_item_id",
+        "position",
+        "media_asset_id",
+        "kind",
+        "display_name",
+        "origin_snapshot",
+        "storage_snapshot",
+        "metadata_snapshot",
+        "status_at_selection"
+      ],
+      "properties": {
+        "selection_snapshot_item_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "media_asset_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "kind": {
+          "$ref": "../common/enums.schema.json#/$defs/mediaKind"
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "origin_snapshot": {
+          "$ref": "./media-asset.schema.json#/$defs/mediaAssetOrigin"
+        },
+        "storage_snapshot": {
+          "type": "object"
+        },
+        "metadata_snapshot": {
+          "type": "object"
+        },
+        "status_at_selection": {
+          "$ref": "../common/enums.schema.json#/$defs/mediaAssetStatus"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "createSelectionSnapshotRequest": {
+      "type": "object",
+      "required": [
+        "channel_account_id",
+        "items"
+      ],
+      "properties": {
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "source_collection_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "media_asset_id",
+              "position"
+            ],
+            "properties": {
+              "media_asset_id": {
+                "$ref": "../common/enums.schema.json#/$defs/uuid"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "option_snapshot": {
+          "type": "object"
+        },
+        "created_by": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "selectionSnapshot": {
+      "type": "object",
+      "required": [
+        "selection_snapshot_id",
+        "channel_account_id",
+        "status",
+        "items",
+        "option_snapshot",
+        "created_at",
+        "sealed_at"
+      ],
+      "properties": {
+        "selection_snapshot_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "source_collection_id": {
+          "oneOf": [
+            {
+              "$ref": "../common/enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/selectionSnapshotStatus"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/selectionSnapshotItem"
+          }
+        },
+        "option_snapshot": {
+          "type": "object"
+        },
+        "created_by": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sealed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "selectionSnapshotResponse": {
+      "type": "object",
+      "required": [
+        "selection_snapshot"
+      ],
+      "properties": {
+        "selection_snapshot": {
+          "$ref": "#/$defs/selectionSnapshot"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

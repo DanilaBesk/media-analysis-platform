@@ -42,42 +42,41 @@ OWNER = {
 }
 
 
-def test_add_media_item_posts_final_media_item_payload() -> None:
+def test_create_media_asset_posts_target_media_asset_payload() -> None:
     captured = {}
 
     def fake_urlopen(request):
         captured["request"] = request
-        return FakeHttpResponse(json.dumps({"media_item": {"media_item_id": "media-1"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"media_asset": {"media_asset_id": "media-1"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
-    item = client.add_media_item(
-        owner=OWNER,
+    asset = client.create_media_asset(
+        channel_account_id="channel-account-1",
         kind="text",
-        source={"origin_type": "text", "text": "hello"},
+        origin={"origin_type": "text", "origin_ref": "hello"},
         display_name="hello",
         metadata={"message_id": 42},
     )
 
     payload = json.loads(captured["request"].data.decode("utf-8"))
-    assert item == {"media_item_id": "media-1"}
-    assert captured["request"].full_url == "http://localhost:8080/v1/media-items"
-    assert payload["owner"] == OWNER
+    assert asset == {"media_asset_id": "media-1"}
+    assert captured["request"].full_url == "http://localhost:8080/v1/media-assets"
+    assert payload["channel_account_id"] == "channel-account-1"
     assert payload["kind"] == "text"
-    assert payload["source"] == {"origin_type": "text", "text": "hello"}
-    assert payload["adapter_origin"] == "telegram"
+    assert payload["origin"] == {"origin_type": "text", "origin_ref": "hello"}
     assert payload["metadata"] == {"message_id": 42}
 
 
-def test_upload_media_item_posts_multipart_payload() -> None:
+def test_upload_media_asset_posts_multipart_target_payload() -> None:
     captured = {}
 
     def fake_urlopen(request):
         captured["request"] = request
-        return FakeHttpResponse(json.dumps({"media_item": {"media_item_id": "media-2"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"media_asset": {"media_asset_id": "media-2"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://localhost:8080", urlopen_impl=fake_urlopen)
-    item = client.upload_media_item(
-        owner=OWNER,
+    asset = client.upload_media_asset(
+        channel_account_id="channel-account-1",
         kind="voice",
         content=b"voice-bytes",
         file_name="voice.ogg",
@@ -89,17 +88,17 @@ def test_upload_media_item_posts_multipart_payload() -> None:
     request = captured["request"]
     content_type = request.headers["Content-type"]
     body = request.data
-    assert item == {"media_item_id": "media-2"}
-    assert request.full_url == "http://localhost:8080/v1/media-items"
+    assert asset == {"media_asset_id": "media-2"}
+    assert request.full_url == "http://localhost:8080/v1/media-assets/upload"
     assert content_type.startswith("multipart/form-data; boundary=")
-    assert b'"owner_type": "telegram"' in body
+    assert b'"channel_account_id": "channel-account-1"' in body
     assert b'"kind": "voice"' in body
     assert b'"display_name": "voice.ogg"' in body
     assert b'"message_id": 42' in body
     assert b"voice-bytes" in body
 
 
-def test_remove_collection_item_uses_owner_query_and_expected_version() -> None:
+def test_remove_collection_item_uses_channel_account_query_and_expected_version() -> None:
     captured = {}
 
     def fake_urlopen(request):
@@ -108,9 +107,9 @@ def test_remove_collection_item_uses_owner_query_and_expected_version() -> None:
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
     client.remove_collection_item(
-        owner=OWNER,
+        channel_account_id="channel-account-1",
         collection_id="inbox-1",
-        media_item_id="media-1",
+        media_asset_id="media-1",
         expected_version=2,
     )
 
@@ -118,70 +117,75 @@ def test_remove_collection_item_uses_owner_query_and_expected_version() -> None:
     assert request.get_method() == "DELETE"
     assert request.full_url == (
         "http://api:8080/v1/collections/inbox-1/items/media-1"
-        "?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7&expected_version=2"
+        "?channel_account_id=channel-account-1&expected_version=2"
     )
 
 
-def test_create_selection_and_analysis_run_use_final_identifiers() -> None:
+def test_create_selection_snapshot_and_analysis_run_use_target_identifiers() -> None:
     requests = []
 
     def fake_urlopen(request):
         requests.append(request)
-        if request.full_url.endswith("/v1/selections"):
-            return FakeHttpResponse(json.dumps({"selection": {"selection_id": "sel-1"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/selection-snapshots"):
+            return FakeHttpResponse(
+                json.dumps({"selection_snapshot": {"selection_snapshot_id": "snapshot-1"}}).encode("utf-8")
+            )
         return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    selection = client.create_selection(
-        owner=OWNER,
+    snapshot = client.create_selection_snapshot(
+        channel_account_id="channel-account-1",
         source_collection_id="inbox-1",
-        items=[{"media_item_id": "media-1", "position": 0}],
-        option_snapshot={"adapter": "telegram"},
+        items=[{"media_asset_id": "media-1", "position": 0}],
+        option_snapshot={"channel": "telegram"},
     )
-    run = client.create_analysis_run(owner=OWNER, selection_id=selection["selection_id"])
+    run = client.create_analysis_run(
+        channel_account_id="channel-account-1",
+        selection_snapshot_id=snapshot["selection_snapshot_id"],
+    )
 
-    selection_payload = json.loads(requests[0].data.decode("utf-8"))
+    snapshot_payload = json.loads(requests[0].data.decode("utf-8"))
     run_payload = json.loads(requests[1].data.decode("utf-8"))
-    assert selection == {"selection_id": "sel-1"}
+    assert snapshot == {"selection_snapshot_id": "snapshot-1"}
     assert run == {"analysis_run_id": "run-1"}
-    assert selection_payload["owner"] == OWNER
-    assert selection_payload["source_collection_id"] == "inbox-1"
-    assert selection_payload["items"] == [{"media_item_id": "media-1", "position": 0}]
-    assert selection_payload["option_snapshot"] == {"adapter": "telegram"}
-    assert selection_payload["duplicate_policy"] == "reject"
-    assert selection_payload["created_by"] == "telegram"
+    assert snapshot_payload["channel_account_id"] == "channel-account-1"
+    assert snapshot_payload["source_collection_id"] == "inbox-1"
+    assert snapshot_payload["items"] == [{"media_asset_id": "media-1", "position": 0}]
+    assert snapshot_payload["option_snapshot"] == {"channel": "telegram"}
+    assert snapshot_payload["created_via_channel_account_id"] == "channel-account-1"
     assert run_payload == {
-        "owner": OWNER,
-        "selection_id": "sel-1",
+        "channel_account_id": "channel-account-1",
+        "selection_snapshot_id": "snapshot-1",
         "run_type": "transcription",
         "delivery": {"strategy": "polling"},
+        "created_via_channel_id": "channel-account-1",
     }
 
 
-def test_restore_reads_inbox_media_and_runs_with_owner_query() -> None:
+def test_restore_reads_inbox_media_assets_and_runs_with_channel_account_query() -> None:
     urls = []
 
     def fake_urlopen(request):
         urls.append(request.full_url)
         if "/v1/collections/inbox" in request.full_url:
             return FakeHttpResponse(json.dumps({"collection": {"collection_id": "inbox-1"}}).encode("utf-8"))
-        if "/v1/media-items" in request.full_url:
+        if "/v1/media-assets" in request.full_url:
             return FakeHttpResponse(json.dumps({"items": [], "page": {"page_size": 5, "has_more": False}}).encode("utf-8"))
         return FakeHttpResponse(json.dumps({"items": [], "page": {"page_size": 10, "has_more": False}}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    client.get_inbox_collection(owner=OWNER)
-    client.list_media_items(owner=OWNER, page_size=5)
-    client.list_analysis_runs(owner=OWNER, page_size=10)
+    client.get_inbox_collection(channel_account_id="channel-account-1")
+    client.list_media_assets(channel_account_id="channel-account-1", page_size=5)
+    client.list_analysis_runs(channel_account_id="channel-account-1", page_size=10)
 
     assert urls == [
-        "http://api:8080/v1/collections/inbox?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7",
-        "http://api:8080/v1/media-items?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7&page_size=5",
-        "http://api:8080/v1/analysis-runs?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7&page_size=10",
+        "http://api:8080/v1/collections/inbox?channel_account_id=channel-account-1",
+        "http://api:8080/v1/media-assets?channel_account_id=channel-account-1&page_size=5",
+        "http://api:8080/v1/analysis-runs?channel_account_id=channel-account-1&page_size=10",
     ]
 
 
-def test_get_analysis_run_uses_owner_query_and_extracts_wrapped_object() -> None:
+def test_get_analysis_run_uses_channel_account_query_and_extracts_wrapped_object() -> None:
     captured = {}
 
     def fake_urlopen(request):
@@ -189,13 +193,13 @@ def test_get_analysis_run_uses_owner_query_and_extracts_wrapped_object() -> None
         return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1", "status": "queued"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    run = client.get_analysis_run(owner=OWNER, analysis_run_id="run-1")
+    run = client.get_analysis_run(channel_account_id="channel-account-1", analysis_run_id="run-1")
 
     assert run == {"analysis_run_id": "run-1", "status": "queued"}
-    assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7"
+    assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?channel_account_id=channel-account-1"
 
 
-def test_cancel_analysis_run_posts_owner_query_and_message() -> None:
+def test_cancel_analysis_run_posts_channel_account_and_message() -> None:
     captured = {}
 
     def fake_urlopen(request):
@@ -203,16 +207,17 @@ def test_cancel_analysis_run_posts_owner_query_and_message() -> None:
         return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1", "status": "canceled"}}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    run = client.cancel_analysis_run(owner=OWNER, analysis_run_id="run-1", message="stop from Telegram")
+    run = client.cancel_analysis_run(
+        channel_account_id="channel-account-1",
+        analysis_run_id="run-1",
+        message="stop from Telegram",
+    )
 
     request = captured["request"]
     payload = json.loads(request.data.decode("utf-8"))
     assert request.get_method() == "POST"
-    assert request.full_url == (
-        "http://api:8080/v1/analysis-runs/run-1/cancel"
-        "?owner_type=telegram&owner_id=chat%3A10%3Auser%3A7"
-    )
-    assert payload == {"message": "stop from Telegram"}
+    assert request.full_url == "http://api:8080/v1/analysis-runs/run-1/cancel"
+    assert payload == {"channel_account_id": "channel-account-1", "message": "stop from Telegram"}
     assert run == {"analysis_run_id": "run-1", "status": "canceled"}
 
 
@@ -240,6 +245,78 @@ def test_get_internal_artifact_download_access_uses_internal_endpoint_without_ow
     assert captured["url"] == "http://api:8080/internal/v1/artifacts/artifact-1/download-access"
 
 
+def test_channel_account_and_surface_internal_methods_use_target_contracts() -> None:
+    requests = []
+
+    def fake_urlopen(request):
+        requests.append(request)
+        if request.full_url.endswith("/internal/v1/channel-accounts") and request.get_method() == "PUT":
+            return FakeHttpResponse(json.dumps({"channel_account": {"channel_account_id": "channel-account-1"}}).encode("utf-8"))
+        if "/internal/v1/channel-accounts" in request.full_url and request.get_method() == "GET":
+            return FakeHttpResponse(json.dumps({"items": [{"channel_account_id": "channel-account-1"}]}).encode("utf-8"))
+        if request.full_url.endswith("/internal/v1/channel-surfaces") and request.get_method() == "PUT":
+            return FakeHttpResponse(json.dumps({"channel_surface": {"channel_surface_id": "surface-1", "version": 1}}).encode("utf-8"))
+        if "/display-state" in request.full_url:
+            return FakeHttpResponse(json.dumps({"channel_surface": {"channel_surface_id": "surface-1", "version": 2}}).encode("utf-8"))
+        if "/supersede" in request.full_url:
+            return FakeHttpResponse(json.dumps({"channel_surface_event": {"channel_surface_event_id": "event-1"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"items": [{"channel_surface_id": "surface-1"}]}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    account = client.resolve_channel_account(owner=OWNER)
+    accounts = client.list_channel_accounts(page_size=50)
+    surface = client.upsert_channel_surface(
+        channel_account_id="channel-account-1",
+        surface_type="analysis_task_surface",
+        surface_key="analysis_run:run-1",
+        address={"chat_id": 10, "message_id": 42},
+        address_fingerprint="telegram:10:42",
+        display_state={"status": "queued"},
+        subjects=[{"subject_type": "analysis_run", "subject_id": "run-1", "subject_role": "primary"}],
+    )
+    surfaces = client.list_channel_surfaces(
+        channel_account_id="channel-account-1",
+        subject_type="analysis_run",
+        subject_id="run-1",
+        active_only=True,
+        page_size=10,
+    )
+    replaced = client.replace_channel_surface_display_state(
+        channel_surface_id="surface-1",
+        expected_version=1,
+        display_state={"status": "running"},
+    )
+    event = client.supersede_channel_surface(channel_surface_id="surface-1", reason="message_not_editable")
+
+    resolve_payload = json.loads(requests[0].data.decode("utf-8"))
+    surface_payload = json.loads(requests[2].data.decode("utf-8"))
+    replace_payload = json.loads(requests[4].data.decode("utf-8"))
+    supersede_payload = json.loads(requests[5].data.decode("utf-8"))
+
+    assert account == {"channel_account_id": "channel-account-1"}
+    assert accounts["items"][0]["channel_account_id"] == "channel-account-1"
+    assert surface == {"channel_surface_id": "surface-1", "version": 1}
+    assert surfaces["items"][0]["channel_surface_id"] == "surface-1"
+    assert replaced["version"] == 2
+    assert event["channel_surface_event_id"] == "event-1"
+    assert requests[0].full_url == "http://api:8080/internal/v1/channel-accounts"
+    assert resolve_payload["channel"] == "telegram"
+    assert resolve_payload["external_account_ref"] == OWNER["owner_id"]
+    assert resolve_payload["metadata"]["owner"] == OWNER
+    assert requests[1].full_url == "http://api:8080/internal/v1/channel-accounts?page_size=50"
+    assert requests[2].full_url == "http://api:8080/internal/v1/channel-surfaces"
+    assert surface_payload["surface_type"] == "analysis_task_surface"
+    assert surface_payload["subjects"][0]["subject_type"] == "analysis_run"
+    assert requests[3].full_url == (
+        "http://api:8080/internal/v1/channel-surfaces/active"
+        "?channel_account_id=channel-account-1&subject_type=analysis_run&subject_id=run-1&page_size=10"
+    )
+    assert requests[4].full_url == "http://api:8080/internal/v1/channel-surfaces/surface-1/display-state"
+    assert replace_payload == {"expected_version": 1, "display_state": {"status": "running"}, "actor_type": "telegram_adapter"}
+    assert requests[5].full_url == "http://api:8080/internal/v1/channel-surfaces/surface-1/supersede"
+    assert supersede_payload == {"reason": "message_not_editable", "actor_type": "telegram_adapter"}
+
+
 def test_backend_connection_failure_is_categorized_without_raw_exception_copy() -> None:
     def fake_urlopen(request):
         raise URLError("Connection refused at 127.0.0.1:8080")
@@ -247,7 +324,7 @@ def test_backend_connection_failure_is_categorized_without_raw_exception_copy() 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
 
     with pytest.raises(TelegramApiClientError) as error:
-        client.list_media_items(owner=OWNER, page_size=5)
+        client.list_media_assets(channel_account_id="channel-account-1", page_size=5)
 
     user_error = classify_user_error(error.value)
     copy = user_error_text(error.value)
@@ -282,8 +359,10 @@ def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surfac
     def fake_urlopen(request):
         captured_requests.append(request)
         captured_urls.append(request.full_url)
-        if request.full_url.endswith("/v1/media-items"):
-            return FakeHttpResponse(json.dumps({"media_item": {"media_item_id": "media-9"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/media-assets"):
+            return FakeHttpResponse(json.dumps({"media_asset": {"media_asset_id": "media-9"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/media-assets/upload"):
+            return FakeHttpResponse(json.dumps({"media_asset": {"media_asset_id": "media-upload-9"}}).encode("utf-8"))
         if request.full_url.endswith("/v1/analysis-runs"):
             return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-9"}}).encode("utf-8"))
         if "/v1/artifacts/" in request.full_url:
@@ -291,47 +370,47 @@ def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surfac
         return FakeHttpResponse(json.dumps({"items": [], "page": {"page_size": 3, "has_more": False}}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    media_item = client.add_media_item(
-        owner=owner_with_tenant,
+    media_asset = client.create_media_asset(
+        channel_account_id="channel-account-9",
         kind="text",
-        source={"origin_type": "text", "text": "hello"},
+        origin={"origin_type": "text", "origin_ref": "hello"},
         collection_id="inbox-9",
     )
-    uploaded_item = client.upload_media_item(
-        owner=owner_with_tenant,
+    uploaded_asset = client.upload_media_asset(
+        channel_account_id="channel-account-9",
         kind="audio",
         content=b"audio-body",
         file_name="note.bin",
         collection_id="inbox-9",
     )
     run = client.create_analysis_run(
-        owner=owner_with_tenant,
-        selection_id="selection-9",
+        channel_account_id="channel-account-9",
+        selection_snapshot_id="selection-snapshot-9",
         params={"mode": "deep"},
     )
-    list_media = client.list_media_items(
-        owner=owner_with_tenant,
+    list_media = client.list_media_assets(
+        channel_account_id="channel-account-9",
         cursor="media-cursor",
         page_size=7,
         status="ready",
         kind="text",
     )
     list_runs = client.list_analysis_runs(
-        owner=owner_with_tenant,
+        channel_account_id="channel-account-9",
         cursor="run-cursor",
         page_size=4,
         status="queued",
         run_type="research",
     )
     list_artifacts = client.list_artifacts(
-        owner=owner_with_tenant,
+        channel_account_id="channel-account-9",
         analysis_run_id="run-9",
         cursor="artifact-cursor",
         page_size=3,
     )
-    artifact = client.get_artifact(owner=owner_with_tenant, artifact_id="artifact-9")
+    artifact = client.get_artifact(channel_account_id="channel-account-9", artifact_id="artifact-9")
     diagnostics = client.list_diagnostics(
-        owner=owner_with_tenant,
+        channel_account_id="channel-account-9",
         subject_type="analysis_run",
         subject_id="run-9",
         cursor="diagnostic-cursor",
@@ -342,8 +421,8 @@ def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surfac
     upload_request = captured_requests[1]
     run_payload = json.loads(captured_requests[2].data.decode("utf-8"))
 
-    assert media_item == {"media_item_id": "media-9"}
-    assert uploaded_item == {"media_item_id": "media-9"}
+    assert media_asset == {"media_asset_id": "media-9"}
+    assert uploaded_asset == {"media_asset_id": "media-upload-9"}
     assert run == {"analysis_run_id": "run-9"}
     assert list_media["page"]["page_size"] == 3
     assert list_runs["page"]["page_size"] == 3
@@ -351,12 +430,13 @@ def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surfac
     assert artifact == {"artifact_id": "artifact-9"}
     assert diagnostics["page"]["page_size"] == 3
     assert add_payload["collection_id"] == "inbox-9"
-    assert add_payload["owner"]["tenant_id"] == "tenant-1"
+    assert add_payload["channel_account_id"] == "channel-account-9"
     assert b'"collection_id": "inbox-9"' in upload_request.data
+    assert b'"channel_account_id": "channel-account-9"' in upload_request.data
     assert b"Content-Type: application/octet-stream" in upload_request.data
     assert run_payload["params"] == {"mode": "deep"}
-    assert "tenant_id=tenant-1" in captured_urls[3]
     assert "cursor=media-cursor" in captured_urls[3]
+    assert "channel_account_id=channel-account-9" in captured_urls[3]
     assert "status=ready" in captured_urls[3]
     assert "kind=text" in captured_urls[3]
     assert "cursor=run-cursor" in captured_urls[4]
@@ -388,7 +468,7 @@ def test_request_handles_empty_payload_http_errors_and_missing_wrapped_objects()
 
     conflict_client = TelegramApiClient("http://api:8080", urlopen_impl=fake_http_error)
     with pytest.raises(TelegramApiClientError) as conflict_error:
-        conflict_client.list_media_items(owner=OWNER)
+        conflict_client.list_media_assets(channel_account_id="channel-account-1")
 
     assert conflict_error.value.status == 409
     assert conflict_error.value.code == "conflict"
@@ -405,11 +485,11 @@ def test_request_handles_empty_payload_http_errors_and_missing_wrapped_objects()
 
     non_json_client = TelegramApiClient("http://api:8080", urlopen_impl=fake_non_json_error)
     with pytest.raises(TelegramApiClientError) as non_json_error:
-        non_json_client.list_analysis_runs(owner=OWNER)
+        non_json_client.list_analysis_runs(channel_account_id="channel-account-1")
 
     assert non_json_error.value.status == 500
     assert non_json_error.value.code is None
     assert str(non_json_error.value) == "API request failed with status 500"
 
-    with pytest.raises(RuntimeError, match="media_item"):
-        empty_client._extract({}, "media_item")
+    with pytest.raises(RuntimeError, match="media_asset"):
+        empty_client._extract({}, "media_asset")

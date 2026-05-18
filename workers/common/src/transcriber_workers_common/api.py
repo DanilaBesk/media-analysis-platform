@@ -1,8 +1,8 @@
 # FILE: workers/common/src/transcriber_workers_common/api.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Provide the shared internal worker-control API client and typed execution DTO parsing.
-# SCOPE: Claim, progress, artifact, finalize, and cancel-check calls plus deterministic response validation.
+# PURPOSE: Provide the shared internal worker-control API client and typed analysis_run_step DTO parsing.
+# SCOPE: Step claim, progress, artifact, finalize, and cancel-check calls plus deterministic response validation.
 # DEPENDS: M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-COMMON, V-M-WORKER-COMMON
 # ROLE: RUNTIME
@@ -16,9 +16,9 @@
 # START_MODULE_MAP
 #   InternalApiConfig - Stores worker-control base URL, timeout, and headers.
 #   JsonTransport - Defines the transport contract used by the shared API client.
-#   AnalysisRunQueueItem - Represents the minimal queued analysis-run task consumed by the shared worker loop.
-#   SelectionItemSnapshot - Represents one immutable selected media item from the worker-control contract.
-#   ClaimedAnalysisRunExecution - Represents the final analysis_run claim response consumed by workers.
+#   AnalysisRunQueueItem - Represents the minimal queued analysis_run_step consumed by the shared worker loop.
+#   SelectionSnapshotItemInput - Represents one immutable selection_snapshot item from the worker-control contract.
+#   ClaimedAnalysisRunStep - Represents the analysis_run_step claim response consumed by workers.
 #   CancelCheckResult - Represents the cancel-check response consumed by later worker packets.
 #   ArtifactResolutionResult - Represents a resolved downloadable artifact locator.
 #   AgentRunRequestAccessResult - Represents short-lived private request access for claimed agent_run executions.
@@ -41,7 +41,15 @@ from transcriber_workers_common.artifacts import ArtifactDescriptor
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_CALL_INTERNAL_CONTROL_PLANE = "[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]"
 _WORKER_KINDS = frozenset({"transcription", "agent_runner"})
-_TASK_TYPES = frozenset({"selection.transcription", "selection.analysis"})
+_STEP_KINDS = frozenset(
+    {
+        "selection.transcription",
+        "report.analysis",
+        "deep_research.analysis",
+        "summary.analysis",
+        "custom.analysis",
+    }
+)
 _RUN_TYPES = frozenset({"transcription", "summary", "report", "deep_research", "custom"})
 _MEDIA_KINDS = frozenset({"text", "url", "file", "photo", "image", "audio", "voice", "video", "document"})
 _SOURCE_ORIGINS = frozenset({"text", "url", "object"})
@@ -72,7 +80,9 @@ __all__ = [
     "AgentRunRequestAccessResult",
     "ArtifactResolutionResult",
     "CancelCheckResult",
+    "AnalysisRunStepInput",
     "ClaimedAnalysisRunExecution",
+    "ClaimedAnalysisRunStep",
     "AnalysisRunControlClient",
     "AnalysisRunQueueItem",
     "InternalApiConfig",
@@ -81,9 +91,11 @@ __all__ = [
     "MediaSourceSnapshot",
     "OrderedWorkerInput",
     "SealedSelectionInput",
+    "SealedSelectionSnapshotInput",
     "SelectionItemLabels",
     "SelectionItemMaterialization",
     "SelectionItemSnapshot",
+    "SelectionSnapshotItemInput",
 ]
 
 
@@ -161,9 +173,9 @@ class InternalApiConfig:
 
 
 # START_CONTRACT: AnalysisRunQueueItem
-# PURPOSE: Represent the minimal queued analysis-run task item consumed by worker-common polling.
-# INPUTS: { analysis_run_id: str - Analysis run identifier, run_type/task_type - Frozen run/task routing, status: str - Canonical task status, version: int - Run snapshot version }
-# OUTPUTS: { AnalysisRunQueueItem - Minimal analysis-run task snapshot for queue polling }
+# PURPOSE: Represent the minimal queued analysis_run_step item consumed by worker-common polling.
+# INPUTS: { analysis_run_id: str - Analysis run identifier, run_type/worker_kind/step_kind - Frozen step routing, status: str - Canonical step status, version: int - Run snapshot version }
+# OUTPUTS: { AnalysisRunQueueItem - Minimal analysis_run_step snapshot for queue polling }
 # SIDE_EFFECTS: none
 # LINKS: M-WORKER-COMMON, M-CONTRACTS
 # END_CONTRACT: AnalysisRunQueueItem
@@ -171,30 +183,39 @@ class InternalApiConfig:
 class AnalysisRunQueueItem:
     analysis_run_id: str
     run_type: str
-    task_type: str
+    worker_kind: str
+    step_kind: str
     status: str
     version: int
+    attempt_no: int = 1
 
     def __post_init__(self) -> None:
         _require(self.run_type in _RUN_TYPES, "invalid listed run_type")
-        _require(self.task_type in _TASK_TYPES, "invalid listed task_type")
-        _require(self.status in _JOB_STATUSES, "invalid listed analysis run task status")
+        _require(self.worker_kind in _WORKER_KINDS, "invalid listed worker_kind")
+        _require(self.step_kind in _STEP_KINDS, "invalid listed step_kind")
+        _require(self.status in _JOB_STATUSES, "invalid listed analysis run step status")
         _require(self.version >= 1, "listed analysis run version must be >= 1")
+        _require(self.attempt_no >= 1, "listed analysis run step attempt_no must be >= 1")
 
     @classmethod
     def from_payload(cls, payload: object) -> "AnalysisRunQueueItem":
-        # START_BLOCK_BLOCK_VALIDATE_ANALYSIS_RUN_QUEUE_ITEM
+        # START_BLOCK_BLOCK_VALIDATE_ANALYSIS_RUN_STEP_QUEUE_ITEM
         mapping = _expect_mapping(payload, context="analysis run queue item")
         return cls(
             analysis_run_id=_expect_str(
                 mapping.get("analysis_run_id"), context="analysis run queue item analysis_run_id"
             ),
             run_type=_expect_str(mapping.get("run_type"), context="analysis run queue item run_type"),
-            task_type=_expect_str(mapping.get("task_type"), context="analysis run queue item task_type"),
+            worker_kind=_expect_str(mapping.get("worker_kind"), context="analysis run queue item worker_kind"),
+            step_kind=_expect_str(mapping.get("step_kind"), context="analysis run queue item step_kind"),
             status=_expect_str(mapping.get("status"), context="analysis run queue item status"),
             version=_expect_int(mapping.get("version"), context="analysis run queue item version", minimum=1),
+            attempt_no=_expect_optional_int(
+                mapping.get("attempt_no"), context="analysis run queue item attempt_no", minimum=1
+            )
+            or 1,
         )
-        # END_BLOCK_BLOCK_VALIDATE_ANALYSIS_RUN_QUEUE_ITEM
+        # END_BLOCK_BLOCK_VALIDATE_ANALYSIS_RUN_STEP_QUEUE_ITEM
 
 
 # START_CONTRACT: MediaSourceSnapshot
@@ -294,34 +315,38 @@ class SelectionItemLabels:
 
 
 @dataclass(frozen=True, slots=True)
-class SelectionItemSnapshot:
+class SelectionSnapshotItemInput:
     position: int
-    media_item_id: str
+    media_asset_id: str
     kind: str
+    origin_snapshot: Mapping[str, object]
+    storage_snapshot: Mapping[str, object]
     source_snapshot: MediaSourceSnapshot
     display_name: str
     status_at_selection: str
     metadata_snapshot: Mapping[str, object]
-    retention_snapshot: Mapping[str, object]
     diagnostics: tuple[Mapping[str, object], ...] = ()
-    selection_item_id: str | None = None
+    selection_snapshot_item_id: str | None = None
     media_kind: str | None = None
     mime_type: str | None = None
     role: str = "primary"
     labels: SelectionItemLabels | None = None
 
     def __post_init__(self) -> None:
-        _require(self.position >= 0, "selection item position must be non-negative")
-        _require(self.kind in _MEDIA_KINDS, "invalid selection item kind")
-        if self.selection_item_id is None:
-            object.__setattr__(self, "selection_item_id", f"selection-item-{self.position}")
-        _require(bool(str(self.selection_item_id).strip()), "selection item selection_item_id must not be empty")
+        _require(self.position >= 0, "selection_snapshot item position must be non-negative")
+        _require(self.kind in _MEDIA_KINDS, "invalid selection_snapshot item kind")
+        if self.selection_snapshot_item_id is None:
+            object.__setattr__(self, "selection_snapshot_item_id", f"selection-snapshot-item-{self.position}")
+        _require(
+            bool(str(self.selection_snapshot_item_id).strip()),
+            "selection_snapshot item selection_snapshot_item_id must not be empty",
+        )
         if self.media_kind is None:
             object.__setattr__(self, "media_kind", self.kind)
-        _require(self.media_kind in _MEDIA_KINDS, "invalid selection item media_kind")
+        _require(self.media_kind in _MEDIA_KINDS, "invalid selection_snapshot item media_kind")
         if self.mime_type is None:
             object.__setattr__(self, "mime_type", self.source_snapshot.mime_type)
-        _require(bool(self.role.strip()), "selection item role must not be empty")
+        _require(bool(self.role.strip()), "selection_snapshot item role must not be empty")
         if self.labels is None:
             object.__setattr__(
                 self,
@@ -331,7 +356,15 @@ class SelectionItemSnapshot:
                     metadata=self.metadata_snapshot,
                 ),
             )
-        _require(bool(self.display_name.strip()), "selection item display_name must not be empty")
+        _require(bool(self.display_name.strip()), "selection_snapshot item display_name must not be empty")
+
+    @property
+    def selection_item_id(self) -> str:
+        return str(self.selection_snapshot_item_id)
+
+    @property
+    def media_item_id(self) -> str:
+        return self.media_asset_id
 
     @classmethod
     def from_payload(
@@ -339,64 +372,84 @@ class SelectionItemSnapshot:
         payload: object,
         *,
         option_snapshot: Mapping[str, object] | None = None,
-    ) -> "SelectionItemSnapshot":
-        mapping = _expect_mapping(payload, context="selection item")
-        metadata_snapshot = dict(_expect_mapping(mapping.get("metadata_snapshot", {}), context="selection item metadata_snapshot"))
+    ) -> "SelectionSnapshotItemInput":
+        mapping = _expect_mapping(payload, context="selection_snapshot item")
+        metadata_snapshot = dict(
+            _expect_mapping(mapping.get("metadata_snapshot", {}), context="selection_snapshot item metadata_snapshot")
+        )
         _ensure_allowed_keys(
             mapping,
             required={
-                "selection_item_id",
+                "selection_snapshot_item_id",
                 "position",
-                "media_item_id",
+                "media_asset_id",
                 "kind",
-                "media_kind",
-                "mime_type",
-                "source_snapshot",
                 "display_name",
+                "origin_snapshot",
+                "storage_snapshot",
                 "status_at_selection",
-                "retention_snapshot",
             },
             optional={"metadata_snapshot", "diagnostics", "role", "labels"},
-            context="selection item",
+            context="selection_snapshot item",
         )
         diagnostics = mapping.get("diagnostics", [])
-        _require(isinstance(diagnostics, list), "selection item diagnostics must be a list")
+        _require(isinstance(diagnostics, list), "selection_snapshot item diagnostics must be a list")
+        origin_snapshot = dict(
+            _expect_mapping(mapping.get("origin_snapshot"), context="selection_snapshot item origin_snapshot")
+        )
+        storage_snapshot = dict(
+            _expect_mapping(mapping.get("storage_snapshot"), context="selection_snapshot item storage_snapshot")
+        )
+        media_asset_id = _expect_str(mapping.get("media_asset_id"), context="selection_snapshot item media_asset_id")
+        display_name = _expect_str(mapping.get("display_name"), context="selection_snapshot item display_name")
+        source_snapshot = _source_snapshot_from_target_item(
+            media_asset_id=media_asset_id,
+            origin_snapshot=origin_snapshot,
+            storage_snapshot=storage_snapshot,
+        )
         return cls(
-            selection_item_id=_expect_str(mapping.get("selection_item_id"), context="selection item selection_item_id"),
-            position=_expect_int(mapping.get("position"), context="selection item position", minimum=0),
-            media_item_id=_expect_str(mapping.get("media_item_id"), context="selection item media_item_id"),
-            kind=_expect_str(mapping.get("kind"), context="selection item kind"),
-            media_kind=_expect_str(mapping.get("media_kind"), context="selection item media_kind"),
-            mime_type=_expect_optional_str(mapping.get("mime_type"), context="selection item mime_type"),
+            selection_snapshot_item_id=_expect_str(
+                mapping.get("selection_snapshot_item_id"),
+                context="selection_snapshot item selection_snapshot_item_id",
+            ),
+            position=_expect_int(mapping.get("position"), context="selection_snapshot item position", minimum=0),
+            media_asset_id=media_asset_id,
+            kind=_expect_str(mapping.get("kind"), context="selection_snapshot item kind"),
+            media_kind=_expect_str(mapping.get("kind"), context="selection_snapshot item kind"),
+            mime_type=source_snapshot.mime_type,
             role=_derive_selection_role(mapping, metadata_snapshot=metadata_snapshot, option_snapshot=option_snapshot),
             labels=(
                 SelectionItemLabels.from_payload(mapping.get("labels"))
                 if "labels" in mapping
                 else SelectionItemLabels.from_selection_metadata(
-                    display_name=_expect_str(mapping.get("display_name"), context="selection item display_name"),
+                    display_name=display_name,
                     metadata=metadata_snapshot,
                 )
             ),
-            source_snapshot=MediaSourceSnapshot.from_payload(mapping.get("source_snapshot")),
-            display_name=_expect_str(mapping.get("display_name"), context="selection item display_name"),
+            origin_snapshot=origin_snapshot,
+            storage_snapshot=storage_snapshot,
+            source_snapshot=source_snapshot,
+            display_name=display_name,
             status_at_selection=_expect_str(
-                mapping.get("status_at_selection"), context="selection item status_at_selection"
+                mapping.get("status_at_selection"), context="selection_snapshot item status_at_selection"
             ),
             metadata_snapshot=metadata_snapshot,
-            retention_snapshot=dict(_expect_mapping(mapping.get("retention_snapshot"), context="selection item retention_snapshot")),
-            diagnostics=tuple(_expect_mapping(item, context="selection item diagnostic") for item in diagnostics),
+            diagnostics=tuple(_expect_mapping(item, context="selection_snapshot item diagnostic") for item in diagnostics),
         )
+
+
+SelectionItemSnapshot = SelectionSnapshotItemInput
 
 
 @dataclass(frozen=True, slots=True)
 class SelectionItemMaterialization:
-    selection_item_id: str
+    selection_snapshot_item_id: str
     position: int
-    media_item_id: str
+    media_asset_id: str
     media_kind: str
     role: str
     labels: SelectionItemLabels
-    source_id: str
+    origin_ref: str
     origin_type: str
     materialization_kind: str
     mime_type: str | None = None
@@ -414,7 +467,7 @@ class SelectionItemMaterialization:
         _require(self.materialization_kind in _MATERIALIZATION_KINDS, "invalid materialization_kind")
 
     @classmethod
-    def from_selection_item(cls, item: SelectionItemSnapshot) -> "SelectionItemMaterialization":
+    def from_selection_item(cls, item: SelectionSnapshotItemInput) -> "SelectionItemMaterialization":
         source = item.source_snapshot
         materialization_kind = source.origin_type
         unsupported_reason = None
@@ -434,13 +487,13 @@ class SelectionItemMaterialization:
             metadata=item.metadata_snapshot,
         )
         return cls(
-            selection_item_id=str(item.selection_item_id),
+            selection_snapshot_item_id=str(item.selection_snapshot_item_id),
             position=item.position,
-            media_item_id=item.media_item_id,
+            media_asset_id=item.media_asset_id,
             media_kind=str(item.media_kind),
             role=item.role,
             labels=labels,
-            source_id=source.source_id,
+            origin_ref=source.source_id,
             origin_type=source.origin_type,
             materialization_kind=materialization_kind,
             mime_type=item.mime_type or source.mime_type,
@@ -456,6 +509,18 @@ class SelectionItemMaterialization:
     @property
     def is_object_backed(self) -> bool:
         return self.materialization_kind == "object"
+
+    @property
+    def selection_item_id(self) -> str:
+        return self.selection_snapshot_item_id
+
+    @property
+    def media_item_id(self) -> str:
+        return self.media_asset_id
+
+    @property
+    def source_id(self) -> str:
+        return self.origin_ref
 
 
 @dataclass(frozen=True, slots=True)
@@ -506,79 +571,153 @@ class OrderedWorkerInput:
 
 
 @dataclass(frozen=True, slots=True)
-class SealedSelectionInput:
-    selection_id: str
-    items: tuple[SelectionItemSnapshot, ...]
+class SealedSelectionSnapshotInput:
+    selection_snapshot_id: str
+    items: tuple[SelectionSnapshotItemInput, ...]
     option_snapshot: Mapping[str, object]
     sealed_at: str
 
     def __post_init__(self) -> None:
-        _require(bool(self.items), "claimed selection must include at least one item")
+        _require(bool(self.items), "claimed selection_snapshot must include at least one item")
+
+    @property
+    def selection_id(self) -> str:
+        return self.selection_snapshot_id
 
     @classmethod
-    def from_payload(cls, payload: object) -> "SealedSelectionInput":
-        mapping = _expect_mapping(payload, context="claim response selection")
+    def from_payload(cls, payload: object) -> "SealedSelectionSnapshotInput":
+        mapping = _expect_mapping(payload, context="claim response selection_snapshot")
         _ensure_allowed_keys(
             mapping,
-            required={"selection_id", "items", "option_snapshot", "sealed_at"},
+            required={"selection_snapshot_id", "items", "option_snapshot", "sealed_at"},
             optional=set(),
-            context="claim response selection",
+            context="claim response selection_snapshot",
         )
         items = mapping.get("items")
-        _require(isinstance(items, list), "claim response selection items must be a list")
-        option_snapshot = dict(_expect_mapping(mapping.get("option_snapshot"), context="claim response option_snapshot"))
+        _require(isinstance(items, list), "claim response selection_snapshot items must be a list")
+        option_snapshot = dict(
+            _expect_mapping(mapping.get("option_snapshot"), context="claim response option_snapshot")
+        )
         return cls(
-            selection_id=_expect_str(mapping.get("selection_id"), context="claim response selection_id"),
-            items=tuple(SelectionItemSnapshot.from_payload(item, option_snapshot=option_snapshot) for item in items),
+            selection_snapshot_id=_expect_str(
+                mapping.get("selection_snapshot_id"), context="claim response selection_snapshot_id"
+            ),
+            items=tuple(SelectionSnapshotItemInput.from_payload(item, option_snapshot=option_snapshot) for item in items),
             option_snapshot=option_snapshot,
             sealed_at=_expect_str(mapping.get("sealed_at"), context="claim response sealed_at"),
         )
 
 
-# START_CONTRACT: ClaimedAnalysisRunExecution
-# PURPOSE: Carry the canonical final claim response that workers execute against.
-# INPUTS: { execution_id/analysis_run_id/run_type/selection/params/claimed_at from internal worker-control }
-# OUTPUTS: { ClaimedAnalysisRunExecution - Typed analysis run execution context }
+# START_CONTRACT: ClaimedAnalysisRunStep
+# PURPOSE: Carry the canonical step claim response that workers execute against.
+# INPUTS: { analysis_run_step_id/analysis_run_id/run_type/selection_snapshot/analysis_run_step_inputs/params/claimed_at from internal worker-control }
+# OUTPUTS: { ClaimedAnalysisRunStep - Typed analysis_run_step execution context }
 # SIDE_EFFECTS: none
 # LINKS: M-WORKER-COMMON, M-CONTRACTS
-# END_CONTRACT: ClaimedAnalysisRunExecution
+# END_CONTRACT: ClaimedAnalysisRunStep
 @dataclass(frozen=True, slots=True)
-class ClaimedAnalysisRunExecution:
-    execution_id: str
+class AnalysisRunStepInput:
+    analysis_run_step_input_id: str
+    analysis_run_step_id: str
+    input_kind: str
+    position: int
+    required: bool
+    selection_snapshot_item_id: str | None = None
+    artifact_id: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "AnalysisRunStepInput":
+        mapping = _expect_mapping(payload, context="analysis_run_step_input")
+        _ensure_allowed_keys(
+            mapping,
+            required={"analysis_run_step_input_id", "analysis_run_step_id", "input_kind", "position", "required"},
+            optional={"selection_snapshot_item_id", "artifact_id", "metadata", "created_at"},
+            context="analysis_run_step_input",
+        )
+        return cls(
+            analysis_run_step_input_id=_expect_str(
+                mapping.get("analysis_run_step_input_id"),
+                context="analysis_run_step_input analysis_run_step_input_id",
+            ),
+            analysis_run_step_id=_expect_str(
+                mapping.get("analysis_run_step_id"), context="analysis_run_step_input analysis_run_step_id"
+            ),
+            input_kind=_expect_str(mapping.get("input_kind"), context="analysis_run_step_input input_kind"),
+            position=_expect_int(mapping.get("position"), context="analysis_run_step_input position", minimum=0),
+            required=_expect_bool(mapping.get("required"), context="analysis_run_step_input required"),
+            selection_snapshot_item_id=_expect_optional_str(
+                mapping.get("selection_snapshot_item_id"),
+                context="analysis_run_step_input selection_snapshot_item_id",
+            ),
+            artifact_id=_expect_optional_str(mapping.get("artifact_id"), context="analysis_run_step_input artifact_id"),
+            metadata=dict(_expect_mapping(mapping.get("metadata", {}), context="analysis_run_step_input metadata")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedAnalysisRunStep:
+    analysis_run_step_id: str
     analysis_run_id: str
     run_type: str
-    selection: SealedSelectionInput
+    selection_snapshot: SealedSelectionSnapshotInput
+    analysis_run_step_inputs: tuple[AnalysisRunStepInput, ...]
     params: Mapping[str, object]
     claimed_at: str
 
     def __post_init__(self) -> None:
         _require(self.run_type in _RUN_TYPES, "invalid claimed run_type")
-        _require(bool(self.selection.items), "claimed selection must include at least one item")
+        _require(bool(self.selection_snapshot.items), "claimed selection_snapshot must include at least one item")
 
     @property
     def ordered_inputs(self) -> tuple[OrderedWorkerInput, ...]:
-        return tuple(OrderedWorkerInput.from_selection_item(item) for item in self.selection.items)
+        return tuple(OrderedWorkerInput.from_selection_item(item) for item in self.selection_snapshot.items)
+
+    @property
+    def execution_id(self) -> str:
+        return self.analysis_run_step_id
+
+    @property
+    def selection(self) -> SealedSelectionSnapshotInput:
+        return self.selection_snapshot
 
     @classmethod
-    def from_payload(cls, payload: object) -> "ClaimedAnalysisRunExecution":
-        # START_BLOCK_BLOCK_VALIDATE_CLAIM_RESPONSE
+    def from_payload(cls, payload: object) -> "ClaimedAnalysisRunStep":
+        # START_BLOCK_BLOCK_VALIDATE_STEP_CLAIM_RESPONSE
         mapping = _expect_mapping(payload, context="claim response")
         _ensure_allowed_keys(
             mapping,
-            required={"execution_id", "analysis_run_id", "run_type", "selection", "params", "claimed_at"},
+            required={
+                "analysis_run_step_id",
+                "analysis_run_id",
+                "run_type",
+                "selection_snapshot",
+                "analysis_run_step_inputs",
+                "params",
+                "claimed_at",
+            },
             optional=set(),
             context="claim response",
         )
         params = _expect_mapping(mapping.get("params"), context="claim response params")
+        step_inputs = mapping.get("analysis_run_step_inputs")
+        _require(isinstance(step_inputs, list), "claim response analysis_run_step_inputs must be a list")
         return cls(
-            execution_id=_expect_str(mapping.get("execution_id"), context="claim response execution_id"),
+            analysis_run_step_id=_expect_str(
+                mapping.get("analysis_run_step_id"), context="claim response analysis_run_step_id"
+            ),
             analysis_run_id=_expect_str(mapping.get("analysis_run_id"), context="claim response analysis_run_id"),
             run_type=_expect_str(mapping.get("run_type"), context="claim response run_type"),
-            selection=SealedSelectionInput.from_payload(mapping.get("selection")),
+            selection_snapshot=SealedSelectionSnapshotInput.from_payload(mapping.get("selection_snapshot")),
+            analysis_run_step_inputs=tuple(AnalysisRunStepInput.from_payload(item) for item in step_inputs),
             params=dict(params),
             claimed_at=_expect_str(mapping.get("claimed_at"), context="claim response claimed_at"),
         )
-        # END_BLOCK_BLOCK_VALIDATE_CLAIM_RESPONSE
+        # END_BLOCK_BLOCK_VALIDATE_STEP_CLAIM_RESPONSE
+
+
+ClaimedAnalysisRunExecution = ClaimedAnalysisRunStep
+SealedSelectionInput = SealedSelectionSnapshotInput
 
 
 # START_CONTRACT: CancelCheckResult
@@ -700,8 +839,8 @@ class AnalysisRunControlClient:
         )
 
     # START_CONTRACT: list_queued_runs
-    # PURPOSE: Read authoritative analysis-run task snapshots for shared worker polling without bypassing the API contract.
-    # INPUTS: { status: str | None - Optional task status filter, run_type: str | None - Optional run type filter, task_type: str | None - Optional task type filter, page_size: int - Max items to read }
+    # PURPOSE: Read authoritative analysis_run_step snapshots for shared worker polling without bypassing the API contract.
+    # INPUTS: { status/run_type/worker_kind/step_kind filters, page_size: int - Max items to read }
     # OUTPUTS: { tuple[AnalysisRunQueueItem, ...] - Minimal snapshots consumed by the worker runtime scaffold }
     # SIDE_EFFECTS: API GET request
     # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
@@ -711,15 +850,18 @@ class AnalysisRunControlClient:
         *,
         status: str | None = None,
         run_type: str | None = None,
-        task_type: str | None = None,
+        worker_kind: str | None = None,
+        step_kind: str | None = None,
         page_size: int = 20,
     ) -> tuple[AnalysisRunQueueItem, ...]:
         if status is not None:
-            _require(status in _JOB_STATUSES, "invalid analysis run task status filter")
+            _require(status in _JOB_STATUSES, "invalid analysis run step status filter")
         if run_type is not None:
             _require(run_type in _RUN_TYPES, "invalid run_type filter")
-        if task_type is not None:
-            _require(task_type in _TASK_TYPES, "invalid task_type filter")
+        if worker_kind is not None:
+            _require(worker_kind in _WORKER_KINDS, "invalid worker_kind filter")
+        if step_kind is not None:
+            _require(step_kind in _STEP_KINDS, "invalid step_kind filter")
         _require(page_size > 0, "page_size must be positive")
 
         query = {"page": "1", "page_size": str(page_size)}
@@ -727,35 +869,37 @@ class AnalysisRunControlClient:
             query["status"] = status
         if run_type:
             query["run_type"] = run_type
-        if task_type:
-            query["task_type"] = task_type
+        if worker_kind:
+            query["worker_kind"] = worker_kind
+        if step_kind:
+            query["step_kind"] = step_kind
         response = self._call_internal_api("GET", "/internal/v1/analysis-runs/queue", query=query)
         mapping = _expect_mapping(response, context="analysis run queue response")
         items = mapping.get("items")
         _require(isinstance(items, list), "analysis run queue response items must be a list")
         return tuple(AnalysisRunQueueItem.from_payload(item) for item in items)
 
-    # START_CONTRACT: claim_analysis_run
-    # PURPOSE: Claim one analysis run through the canonical worker-control contract and parse the execution context.
-    # INPUTS: { analysis_run_id: str - Analysis run identifier, worker_kind: str - Frozen worker kind, task_type: str - Frozen queue task type }
-    # OUTPUTS: { ClaimedAnalysisRunExecution - Typed claim response }
+    # START_CONTRACT: claim_analysis_run_step
+    # PURPOSE: Claim one analysis_run_step through the canonical worker-control contract and parse the execution context.
+    # INPUTS: { analysis_run_id: str - Analysis run identifier, worker_kind: str - Frozen worker kind, step_kind: str - Frozen step kind }
+    # OUTPUTS: { ClaimedAnalysisRunStep - Typed claim response }
     # SIDE_EFFECTS: internal API POST request
     # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
-    # END_CONTRACT: claim_analysis_run
-    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunExecution:
+    # END_CONTRACT: claim_analysis_run_step
+    def claim_analysis_run_step(self, analysis_run_id: str, *, worker_kind: str, step_kind: str) -> ClaimedAnalysisRunStep:
         _require(worker_kind in _WORKER_KINDS, "invalid worker_kind")
-        _require(task_type in _TASK_TYPES, "invalid task_type")
-        payload = {"worker_kind": worker_kind, "task_type": task_type}
+        _require(step_kind in _STEP_KINDS, "invalid step_kind")
+        payload = {"worker_kind": worker_kind, "step_kind": step_kind}
         response = self._call_internal_api(
             "POST",
-            f"/internal/v1/analysis-runs/{analysis_run_id}/executions/claim",
+            f"/internal/v1/analysis-runs/{analysis_run_id}/steps/claim",
             payload=payload,
         )
-        return ClaimedAnalysisRunExecution.from_payload(response)
+        return ClaimedAnalysisRunStep.from_payload(response)
 
     # START_CONTRACT: publish_progress
-    # PURPOSE: Emit one canonical progress update for a running worker execution.
-    # INPUTS: { analysis_run_id: str - Analysis run identifier, execution_id: str - Claimed execution identifier, progress_stage: str - Stable progress stage, progress_message: str | None - Optional human-readable progress message }
+    # PURPOSE: Emit one canonical progress update for a running analysis_run_step.
+    # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier, progress_stage: str - Stable progress stage, progress_message: str | None - Optional human-readable progress message }
     # OUTPUTS: { None - The API side effect is authoritative }
     # SIDE_EFFECTS: internal API POST request
     # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-003
@@ -764,29 +908,35 @@ class AnalysisRunControlClient:
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         progress_stage: str,
         progress_message: str | None = None,
     ) -> None:
         _require(bool(progress_stage.strip()), "progress_stage must not be empty")
         payload = {
-            "execution_id": execution_id,
+            "analysis_run_step_id": analysis_run_step_id,
             "progress_stage": progress_stage,
             "progress_message": progress_message,
         }
-        self._call_internal_api("POST", f"/internal/v1/analysis-runs/{analysis_run_id}/executions/progress", payload=payload)
+        self._call_internal_api("POST", f"/internal/v1/analysis-runs/{analysis_run_id}/steps/progress", payload=payload)
 
     # START_CONTRACT: register_artifacts
     # PURPOSE: Report canonical artifact metadata after object persistence succeeds.
-    # INPUTS: { analysis_run_id: str - Analysis run identifier, execution_id: str - Claimed execution identifier, artifacts: Sequence[ArtifactDescriptor] - Canonical artifact descriptors }
+    # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier, artifacts: Sequence[ArtifactDescriptor] - Canonical artifact descriptors }
     # OUTPUTS: { None - The API side effect is authoritative }
     # SIDE_EFFECTS: internal API POST request
     # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
     # END_CONTRACT: register_artifacts
-    def register_artifacts(self, analysis_run_id: str, *, execution_id: str, artifacts: Sequence[ArtifactDescriptor]) -> None:
+    def register_artifacts(
+        self,
+        analysis_run_id: str,
+        *,
+        analysis_run_step_id: str,
+        artifacts: Sequence[ArtifactDescriptor],
+    ) -> None:
         _require(bool(artifacts), "artifacts must not be empty")
         payload = {
-            "execution_id": execution_id,
+            "analysis_run_step_id": analysis_run_step_id,
             "artifacts": [artifact.to_payload() for artifact in artifacts],
         }
         self._call_internal_api("POST", f"/internal/v1/analysis-runs/{analysis_run_id}/artifacts", payload=payload)
@@ -795,16 +945,16 @@ class AnalysisRunControlClient:
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         diagnostics: Sequence[Mapping[str, object]],
     ) -> None:
         _require(bool(diagnostics), "diagnostics must not be empty")
-        payload = {"execution_id": execution_id, "diagnostics": [dict(item) for item in diagnostics]}
+        payload = {"analysis_run_step_id": analysis_run_step_id, "diagnostics": [dict(item) for item in diagnostics]}
         self._call_internal_api("POST", f"/internal/v1/analysis-runs/{analysis_run_id}/diagnostics", payload=payload)
 
     # START_CONTRACT: finalize_analysis_run
-    # PURPOSE: Finalize one worker execution through the canonical internal contract.
-    # INPUTS: { analysis_run_id: str - Analysis run identifier, execution_id: str - Claimed execution identifier, outcome: str - Frozen worker outcome, progress_stage/progress_message/error_code/error_message: str | None - Optional terminal metadata }
+    # PURPOSE: Finalize one analysis_run_step through the canonical internal contract.
+    # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier, outcome: str - Frozen worker outcome, progress_stage/progress_message/error_code/error_message: str | None - Optional terminal metadata }
     # OUTPUTS: { None - The API side effect is authoritative }
     # SIDE_EFFECTS: internal API POST request
     # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001, DF-007
@@ -813,7 +963,7 @@ class AnalysisRunControlClient:
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         outcome: str,
         progress_stage: str | None = None,
         progress_message: str | None = None,
@@ -823,36 +973,48 @@ class AnalysisRunControlClient:
         _require(outcome in _WORKER_OUTCOMES, "invalid worker outcome")
         message = progress_message or error_message
         payload = {
-            "execution_id": execution_id,
+            "analysis_run_step_id": analysis_run_step_id,
             "outcome": outcome,
             "message": message,
         }
-        self._call_internal_api("POST", f"/internal/v1/analysis-runs/{analysis_run_id}/executions/finalize", payload=payload)
+        self._call_internal_api("POST", f"/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize", payload=payload)
 
     # START_CONTRACT: check_cancel
     # PURPOSE: Read the authoritative cancellation state for a running worker execution.
-    # INPUTS: { analysis_run_id: str - Analysis run identifier, execution_id: str - Claimed execution identifier }
+    # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier }
     # OUTPUTS: { CancelCheckResult - Typed cancel-check response }
     # SIDE_EFFECTS: internal API GET request
     # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-007
     # END_CONTRACT: check_cancel
-    def check_cancel(self, analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
+    def check_cancel(self, analysis_run_id: str, *, analysis_run_step_id: str) -> CancelCheckResult:
         response = self._call_internal_api(
             "GET",
-            f"/internal/v1/analysis-runs/{analysis_run_id}/executions/cancel-check",
-            query={"execution_id": execution_id},
+            f"/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check",
+            query={"analysis_run_step_id": analysis_run_step_id},
         )
         return CancelCheckResult.from_payload(response)
+
+    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunStep:
+        step_kind = "selection.transcription" if task_type == "selection.transcription" else "report.analysis"
+        return self.claim_analysis_run_step(analysis_run_id, worker_kind=worker_kind, step_kind=step_kind)
 
     def resolve_artifact(self, artifact_id: str) -> ArtifactResolutionResult:
         response = self._call_internal_api("GET", f"/internal/v1/artifacts/{artifact_id}/download-access")
         return ArtifactResolutionResult.from_payload(response)
 
-    def resolve_agent_run_request_access(self, analysis_run_id: str, *, execution_id: str) -> AgentRunRequestAccessResult:
+    def resolve_agent_run_request_access(
+        self,
+        analysis_run_id: str,
+        *,
+        analysis_run_step_id: str | None = None,
+        execution_id: str | None = None,
+    ) -> AgentRunRequestAccessResult:
+        step_id = analysis_run_step_id or execution_id
+        _require(step_id is not None and bool(step_id.strip()), "analysis_run_step_id is required")
         response = self._call_internal_api(
             "GET",
             f"/internal/v1/analysis-runs/{analysis_run_id}/request-access",
-            query={"execution_id": execution_id},
+            query={"analysis_run_step_id": step_id},
         )
         return AgentRunRequestAccessResult.from_payload(response)
 
@@ -967,15 +1129,67 @@ def _derive_selection_role(
         return role
     item_roles = (option_snapshot or {}).get("item_roles")
     if isinstance(item_roles, Mapping):
-        media_item_id = mapping.get("media_item_id")
+        media_asset_id = mapping.get("media_asset_id")
         position = mapping.get("position")
-        for key in (media_item_id, str(position) if isinstance(position, int) else None):
+        for key in (media_asset_id, str(position) if isinstance(position, int) else None):
             if key is None:
                 continue
             value = item_roles.get(key)
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return "primary"
+
+
+def _source_snapshot_from_target_item(
+    *,
+    media_asset_id: str,
+    origin_snapshot: Mapping[str, object],
+    storage_snapshot: Mapping[str, object],
+) -> MediaSourceSnapshot:
+    origin_type = _expect_str(origin_snapshot.get("origin_type"), context="selection_snapshot origin_snapshot origin_type")
+    if origin_type == "text":
+        text_ref = _first_present_text(origin_snapshot, "text", "origin_ref")
+        return MediaSourceSnapshot(
+            source_id=_first_present_text(origin_snapshot, "origin_ref") or media_asset_id,
+            origin_type="text",
+            text_ref=text_ref,
+        )
+    if origin_type == "url":
+        external_uri = _first_present_text(origin_snapshot, "url", "origin_ref")
+        return MediaSourceSnapshot(
+            source_id=_first_present_text(origin_snapshot, "origin_ref") or external_uri or media_asset_id,
+            origin_type="url",
+            external_uri=external_uri,
+        )
+    object_ref = _first_present_text(origin_snapshot, "object_ref", "origin_ref")
+    stored_object_id = _first_present_text(origin_snapshot, "stored_object_id") or _first_present_text(
+        storage_snapshot, "stored_object_id"
+    )
+    return MediaSourceSnapshot(
+        source_id=stored_object_id or object_ref or media_asset_id,
+        origin_type="object",
+        object_key=_first_present_text(storage_snapshot, "object_key") or object_ref,
+        checksum=_first_present_text(storage_snapshot, "checksum") or _first_present_text(origin_snapshot, "checksum"),
+        size_bytes=_optional_int_from_mapping(storage_snapshot, "size_bytes")
+        or _optional_int_from_mapping(origin_snapshot, "size_bytes"),
+        mime_type=_first_present_text(storage_snapshot, "content_type") or _first_present_text(origin_snapshot, "content_type"),
+        expires_at=_first_present_text(storage_snapshot, "expires_at"),
+    )
+
+
+def _first_present_text(mapping: Mapping[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _optional_int_from_mapping(mapping: Mapping[str, object], key: str) -> int | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    return _expect_int(value, context=f"{key}", minimum=0)
 
 
 def _deterministic_materialized_filename(*, position: int, source_id: str, mime_type: str | None) -> str:

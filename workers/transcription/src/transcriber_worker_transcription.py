@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Protocol
 
 from transcriber_workers_common.api import (
-    ClaimedAnalysisRunExecution,
+    ClaimedAnalysisRunStep,
     AnalysisRunControlClient,
     SelectionItemMaterialization,
 )
@@ -64,7 +64,7 @@ class SourceObjectStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TranscriptionWorkerResult:
-    execution: ClaimedAnalysisRunExecution
+    execution: ClaimedAnalysisRunStep
     source: SourceCandidate
     transcript: TranscriptResult
     artifacts: TranscriptArtifacts
@@ -120,7 +120,11 @@ def runTranscription(
     artifact_store: ArtifactObjectStore,
     transcriber,
 ) -> TranscriptionWorkerResult:
-    execution = api_client.claim_analysis_run(analysis_run_id, worker_kind="transcription", task_type="selection.transcription")
+    execution = api_client.claim_analysis_run_step(
+        analysis_run_id,
+        worker_kind="transcription",
+        step_kind="selection.transcription",
+    )
     workspace_dir = Path(workspace_root) / execution.analysis_run_id
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -129,7 +133,7 @@ def runTranscription(
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             progress_stage="materializing_sources",
             progress_message="Resolving claimed transcription inputs",
         )
@@ -137,23 +141,23 @@ def runTranscription(
         if diagnostics:
             api_client.register_diagnostics(
                 execution.analysis_run_id,
-                execution_id=execution.execution_id,
+                analysis_run_step_id=execution.analysis_run_step_id,
                 diagnostics=diagnostics,
             )
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             progress_stage="transcribing",
             progress_message="Running transcription pipeline",
         )
         _LOGGER.info(
-            "%s analysis_run_id=%s execution_id=%s ordered_input_count=%s",
+            "%s analysis_run_id=%s analysis_run_step_id=%s ordered_input_count=%s",
             _LOG_MARKER_EXECUTE_TRANSCRIPTION_PIPELINE,
             execution.analysis_run_id,
-            execution.execution_id,
-            len(execution.selection.items),
+            execution.analysis_run_step_id,
+            len(execution.selection_snapshot.items),
         )
         materialized_source, transcript_result, artifacts = process_local_transcription(
             source,
@@ -164,7 +168,7 @@ def runTranscription(
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             progress_stage="persisting_artifacts",
             progress_message="Uploading transcript artifacts",
         )
@@ -182,7 +186,7 @@ def runTranscription(
         _assert_required_artifacts_exist(artifacts)
         api_client.register_artifacts(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             artifacts=(*artifact_descriptors, *policy_artifacts),
         )
 
@@ -190,7 +194,7 @@ def runTranscription(
         outcome = "partially_succeeded" if diagnostics else "succeeded"
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome=outcome,
             progress_stage="completed",
             progress_message="Transcript ready",
@@ -209,7 +213,7 @@ def runTranscription(
     except WorkerCancellationRequested:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="canceled",
             progress_stage="canceled",
             progress_message="Cancellation requested",
@@ -221,7 +225,7 @@ def runTranscription(
         if exc.diagnostics:
             api_client.register_diagnostics(
                 execution.analysis_run_id,
-                execution_id=execution.execution_id,
+                analysis_run_step_id=execution.analysis_run_step_id,
                 diagnostics=exc.diagnostics,
             )
         policy_artifacts = _persist_run_policy_artifacts(
@@ -232,12 +236,12 @@ def runTranscription(
         )
         api_client.register_artifacts(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             artifacts=policy_artifacts,
         )
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="failed",
             progress_stage="failed",
             progress_message="Transcription failed",
@@ -248,7 +252,7 @@ def runTranscription(
     except Exception as exc:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="failed",
             progress_stage="failed",
             progress_message="Transcription failed",
@@ -274,11 +278,11 @@ def _write_transcript_artifacts(workspace_dir: Path, transcript_result: Transcri
 
 
 def _materialize_execution_source(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     workspace_dir: Path,
     source_store: SourceObjectStore,
 ) -> tuple[SourceCandidate, tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
-    items = tuple(sorted(execution.selection.items, key=lambda item: item.position))
+    items = tuple(sorted(execution.selection_snapshot.items, key=lambda item: item.position))
     supports_direct_url = len(items) == 1
     materialized_inputs: list[tuple[SelectionItemMaterialization, Path]] = []
     diagnostics: list[Mapping[str, object]] = []
@@ -344,7 +348,7 @@ def _materialize_execution_source(
 
 
 def _unsupported_selection_item_diagnostic(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     materialization: SelectionItemMaterialization,
     *,
     materialized_path: Path | None = None,
@@ -360,10 +364,10 @@ def _unsupported_selection_item_diagnostic(
         message = f"Object-backed {materialization.media_kind} media is not suitable for transcription"
     context: dict[str, object] = {
         "analysis_run_id": execution.analysis_run_id,
-        "selection_id": execution.selection.selection_id,
-        "selection_item_id": materialization.selection_item_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
+        "selection_snapshot_item_id": materialization.selection_snapshot_item_id,
         "item_position": materialization.position,
-        "media_item_id": materialization.media_item_id,
+        "media_asset_id": materialization.media_asset_id,
         "media_kind": materialization.media_kind,
         "mime_type": materialization.mime_type,
         "role": materialization.role,
@@ -383,9 +387,9 @@ def _unsupported_selection_item_diagnostic(
     if materialized_path is not None:
         context["materialized_path"] = str(materialized_path)
     return {
-        "diagnostic_id": f"{execution.execution_id}:{materialization.position}:unsupported-transcription-source",
-        "subject_type": "media_item",
-        "subject_id": materialization.media_item_id,
+        "diagnostic_id": f"{execution.analysis_run_step_id}:{materialization.position}:unsupported-transcription-source",
+        "subject_type": "media_asset",
+        "subject_id": materialization.media_asset_id,
         "severity": "warning",
         "code": "source_unavailable",
         "message": message,
@@ -395,7 +399,7 @@ def _unsupported_selection_item_diagnostic(
 
 
 def _failed_selection_item_diagnostic(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     materialization: SelectionItemMaterialization,
     *,
     message: str,
@@ -407,9 +411,9 @@ def _failed_selection_item_diagnostic(
     if materialization.deterministic_filename:
         context["materialized_filename"] = materialization.deterministic_filename
     return {
-        "diagnostic_id": f"{execution.execution_id}:{materialization.position}:source-materialization-failed",
-        "subject_type": "media_item",
-        "subject_id": materialization.media_item_id,
+        "diagnostic_id": f"{execution.analysis_run_step_id}:{materialization.position}:source-materialization-failed",
+        "subject_type": "media_asset",
+        "subject_id": materialization.media_asset_id,
         "severity": "error",
         "code": "source_unavailable",
         "message": message,
@@ -418,13 +422,13 @@ def _failed_selection_item_diagnostic(
     }
 
 
-def _lineage_context(execution: ClaimedAnalysisRunExecution, materialization: SelectionItemMaterialization) -> dict[str, object]:
+def _lineage_context(execution: ClaimedAnalysisRunStep, materialization: SelectionItemMaterialization) -> dict[str, object]:
     context: dict[str, object] = {
         "analysis_run_id": execution.analysis_run_id,
-        "selection_id": execution.selection.selection_id,
-        "selection_item_id": materialization.selection_item_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
+        "selection_snapshot_item_id": materialization.selection_snapshot_item_id,
         "item_position": materialization.position,
-        "media_item_id": materialization.media_item_id,
+        "media_asset_id": materialization.media_asset_id,
         "media_kind": materialization.media_kind,
         "mime_type": materialization.mime_type,
         "role": materialization.role,
@@ -620,7 +624,7 @@ def _persist_transcript_artifacts(
 
 
 def _persist_run_policy_artifacts(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     artifact_store: ArtifactObjectStore,
     *,
     diagnostics: tuple[Mapping[str, object], ...],
@@ -631,8 +635,8 @@ def _persist_run_policy_artifacts(
     diagnostics_payload = {
         "schema_version": "analysis_run_diagnostics/v2",
         "analysis_run_id": execution.analysis_run_id,
-        "execution_id": execution.execution_id,
-        "selection_id": execution.selection.selection_id,
+        "analysis_run_step_id": execution.analysis_run_step_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
         "diagnostics": [dict(diagnostic) for diagnostic in diagnostics],
     }
     return (
@@ -654,7 +658,7 @@ def _persist_run_policy_artifacts(
 
 
 def _run_manifest_payload(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     item_outcomes: tuple[Mapping[str, object], ...],
 ) -> Mapping[str, object]:
     summary = {
@@ -665,8 +669,8 @@ def _run_manifest_payload(
     return {
         "schema_version": "analysis_run_manifest/v2",
         "analysis_run_id": execution.analysis_run_id,
-        "execution_id": execution.execution_id,
-        "selection_id": execution.selection.selection_id,
+        "analysis_run_step_id": execution.analysis_run_step_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
         "run_type": execution.run_type,
         "created_at": execution.claimed_at,
         "artifact_policy": {
@@ -678,7 +682,7 @@ def _run_manifest_payload(
 
 
 def _item_outcome(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     materialization: SelectionItemMaterialization,
     outcome: str,
     *,
@@ -688,8 +692,8 @@ def _item_outcome(
 ) -> Mapping[str, object]:
     lineage = _lineage_context(execution, materialization)
     result: dict[str, object] = {
-        "selection_item_id": materialization.selection_item_id,
-        "media_item_id": materialization.media_item_id,
+        "selection_snapshot_item_id": materialization.selection_snapshot_item_id,
+        "media_asset_id": materialization.media_asset_id,
         "position": materialization.position,
         "outcome": outcome,
         "included": outcome == "succeeded",
@@ -719,7 +723,7 @@ def _attach_artifacts_to_successful_outcomes(
 
 
 def _outcomes_from_diagnostics(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     diagnostics: tuple[Mapping[str, object], ...],
 ) -> tuple[Mapping[str, object], ...]:
     diagnostics_by_selection_item: dict[str, Mapping[str, object]] = {}
@@ -727,14 +731,14 @@ def _outcomes_from_diagnostics(
         context = diagnostic.get("context")
         if not isinstance(context, Mapping):
             continue
-        selection_item_id = context.get("selection_item_id")
+        selection_item_id = context.get("selection_snapshot_item_id")
         if isinstance(selection_item_id, str):
             diagnostics_by_selection_item[selection_item_id] = diagnostic
 
     outcomes: list[Mapping[str, object]] = []
-    for item in sorted(execution.selection.items, key=lambda selection_item: selection_item.position):
+    for item in sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position):
         materialization = SelectionItemMaterialization.from_selection_item(item)
-        diagnostic = diagnostics_by_selection_item.get(materialization.selection_item_id)
+        diagnostic = diagnostics_by_selection_item.get(materialization.selection_snapshot_item_id)
         if diagnostic is None:
             outcomes.append(_item_outcome(execution, materialization, "failed"))
             continue
@@ -766,8 +770,8 @@ def _assert_required_artifacts_exist(artifacts: TranscriptArtifacts) -> None:
             raise RuntimeError(f"required transcript artifact is missing: {path}")
 
 
-def _check_cancellation(api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunExecution) -> None:
-    cancel_state = api_client.check_cancel(execution.analysis_run_id, execution_id=execution.execution_id)
+def _check_cancellation(api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunStep) -> None:
+    cancel_state = api_client.check_cancel(execution.analysis_run_id, analysis_run_step_id=execution.analysis_run_step_id)
     if cancel_state.cancel_requested:
         raise WorkerCancellationRequested(f"analysis run {execution.analysis_run_id} was canceled")
 

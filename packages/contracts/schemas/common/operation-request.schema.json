@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/common/operation-request.schema.json",
+  "title": "OperationRequestContracts",
+  "$defs": {
+    "operationRequestStatus": {
+      "type": "string",
+      "enum": [
+        "accepted",
+        "completed",
+        "failed",
+        "conflict"
+      ]
+    },
+    "operationRequest": {
+      "type": "object",
+      "required": [
+        "operation_request_id",
+        "channel_account_id",
+        "operation_type",
+        "idempotency_key",
+        "status",
+        "created_at"
+      ],
+      "properties": {
+        "operation_request_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "channel_account_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "operation_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idempotency_key": {
+          "$ref": "./enums.schema.json#/$defs/idempotencyKey"
+        },
+        "request_hash": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/operationRequestStatus"
+        },
+        "target_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "target_id": {
+          "oneOf": [
+            {
+              "$ref": "./enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

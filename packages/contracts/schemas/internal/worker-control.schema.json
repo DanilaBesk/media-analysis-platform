@@ -3,6 +3,96 @@
   "$id": "https://media-analysis.local/contracts/schemas/internal/worker-control.schema.json",
   "title": "InternalAnalysisWorkerControl",
   "$defs": {
+    "claimStepRequest": {
+      "type": "object",
+      "required": [
+        "worker_kind",
+        "step_kind"
+      ],
+      "properties": {
+        "worker_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/workerKind"
+        },
+        "step_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lease_owner": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "selectionSnapshotInput": {
+      "type": "object",
+      "required": [
+        "selection_snapshot_id",
+        "items",
+        "option_snapshot",
+        "sealed_at"
+      ],
+      "properties": {
+        "selection_snapshot_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "items": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "../http/selection-snapshot.schema.json#/$defs/selectionSnapshotItem"
+          }
+        },
+        "option_snapshot": {
+          "type": "object"
+        },
+        "sealed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "claimStepResponse": {
+      "type": "object",
+      "required": [
+        "analysis_run_step_id",
+        "analysis_run_id",
+        "run_type",
+        "selection_snapshot",
+        "analysis_run_step_inputs",
+        "params",
+        "claimed_at"
+      ],
+      "properties": {
+        "analysis_run_step_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "run_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runType"
+        },
+        "selection_snapshot": {
+          "$ref": "#/$defs/selectionSnapshotInput"
+        },
+        "analysis_run_step_inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "../http/analysis-run.schema.json#/$defs/analysisRunStepInput"
+          }
+        },
+        "params": {
+          "type": "object"
+        },
+        "claimed_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
     "claimRequest": {
       "type": "object",
       "required": [
@@ -26,16 +116,20 @@
     "analysisRunQueueItem": {
       "type": "object",
       "required": [
+        "analysis_run_step_id",
         "analysis_run_id",
         "run_type",
         "worker_kind",
-        "task_type",
+        "step_kind",
         "status",
         "version",
         "attempt_no",
         "created_at"
       ],
       "properties": {
+        "analysis_run_step_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
         "analysis_run_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
@@ -45,14 +139,17 @@
         "worker_kind": {
           "$ref": "../common/enums.schema.json#/$defs/workerKind"
         },
-        "task_type": {
-          "$ref": "../common/enums.schema.json#/$defs/taskType"
+        "step_kind": {
+          "type": "string",
+          "minLength": 1
         },
         "status": {
           "type": "string",
           "enum": [
+            "pending",
             "pending_enqueue",
             "queued",
+            "running",
             "claimed",
             "succeeded",
             "partially_succeeded",
@@ -291,11 +388,11 @@
     "progressRequest": {
       "type": "object",
       "required": [
-        "execution_id",
+        "analysis_run_step_id",
         "progress_stage"
       ],
       "properties": {
-        "execution_id": {
+        "analysis_run_step_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "progress_stage": {
@@ -375,11 +472,11 @@
     "artifactUpsertRequest": {
       "type": "object",
       "required": [
-        "execution_id",
+        "analysis_run_step_id",
         "artifacts"
       ],
       "properties": {
-        "execution_id": {
+        "analysis_run_step_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "artifacts": {
@@ -455,11 +552,11 @@
     "diagnosticUpsertRequest": {
       "type": "object",
       "required": [
-        "execution_id",
+        "analysis_run_step_id",
         "diagnostics"
       ],
       "properties": {
-        "execution_id": {
+        "analysis_run_step_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "diagnostics": {
@@ -473,6 +570,58 @@
       "additionalProperties": false
     },
     "finalizeRequest": {
+      "type": "object",
+      "required": [
+        "analysis_run_step_id",
+        "outcome"
+      ],
+      "properties": {
+        "analysis_run_step_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "outcome": {
+          "$ref": "../common/enums.schema.json#/$defs/workerOutcome"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "legacyExecutionProgressRequest": {
+      "type": "object",
+      "required": [
+        "execution_id",
+        "progress_stage"
+      ],
+      "properties": {
+        "execution_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "progress_stage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "progress_message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "item_position": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "legacyExecutionFinalizeRequest": {
       "type": "object",
       "required": [
         "execution_id",

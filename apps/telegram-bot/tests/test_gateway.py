@@ -46,41 +46,47 @@ class FakeFinalApiClient:
         self.upload_requests: list[dict[str, Any]] = []
         self.remove_requests: list[dict[str, Any]] = []
         self.cancel_requests: list[dict[str, Any]] = []
+        self.channel_accounts: list[dict[str, Any]] = []
+        self.channel_surfaces: list[dict[str, Any]] = []
+        self.surface_events: list[dict[str, Any]] = []
+        self.replace_surface_requests: list[dict[str, Any]] = []
+        self.supersede_surface_requests: list[dict[str, Any]] = []
 
-    def add_media_item(self, **kwargs) -> dict[str, Any]:
-        media_item = {
-            "media_item_id": f"media-{len(self.items) + 1}",
+    def create_media_asset(self, **kwargs) -> dict[str, Any]:
+        media_asset = {
+            "media_asset_id": f"media-{len(self.items) + 1}",
             "kind": kwargs["kind"],
             "status": "ready",
             "display_name": kwargs.get("display_name") or kwargs["kind"],
-            "source": kwargs["source"],
+            "origin": kwargs["origin"],
             "metadata": kwargs.get("metadata") or {},
         }
         self.add_requests.append(kwargs)
-        self.items.append(media_item)
-        self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
-        return media_item
+        self.items.append(media_asset)
+        self.collection["items"].append({"media_asset_id": media_asset["media_asset_id"], "position": len(self.items) - 1})
+        return media_asset
 
-    def upload_media_item(self, **kwargs) -> dict[str, Any]:
-        media_item = {
-            "media_item_id": f"media-{len(self.items) + 1}",
+    def upload_media_asset(self, **kwargs) -> dict[str, Any]:
+        media_asset = {
+            "media_asset_id": f"media-{len(self.items) + 1}",
             "kind": kwargs["kind"],
             "status": "ready",
             "display_name": kwargs.get("display_name") or kwargs.get("file_name") or kwargs["kind"],
-            "source": {
-                "origin_type": "object",
-                "object_key": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
-                "mime_type": kwargs.get("content_type"),
+            "origin": {
+                "origin_type": "upload",
+                "origin_ref": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
+                "object_ref": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
+                "content_type": kwargs.get("content_type"),
                 "size_bytes": len(kwargs["content"]),
             },
             "metadata": kwargs.get("metadata") or {},
         }
         self.upload_requests.append(kwargs)
-        self.items.append(media_item)
-        self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
-        return media_item
+        self.items.append(media_asset)
+        self.collection["items"].append({"media_asset_id": media_asset["media_asset_id"], "position": len(self.items) - 1})
+        return media_asset
 
-    def list_media_items(self, **kwargs) -> dict[str, Any]:
+    def list_media_assets(self, **kwargs) -> dict[str, Any]:
         page_size = kwargs.get("page_size") or 5
         start = int(kwargs.get("cursor") or 0)
         next_start = start + page_size
@@ -97,16 +103,16 @@ class FakeFinalApiClient:
         return self.collection
 
     def remove_collection_item(self, **kwargs) -> dict[str, Any]:
-        media_item_id = kwargs["media_item_id"]
+        media_asset_id = kwargs["media_asset_id"]
         self.remove_requests.append(kwargs)
-        self.collection["items"] = [item for item in self.collection["items"] if item["media_item_id"] != media_item_id]
-        self.items = [item for item in self.items if item["media_item_id"] != media_item_id]
+        self.collection["items"] = [item for item in self.collection["items"] if item["media_asset_id"] != media_asset_id]
+        self.items = [item for item in self.items if item["media_asset_id"] != media_asset_id]
         self.collection["version"] += 1
         return self.collection
 
-    def create_selection(self, **kwargs) -> dict[str, Any]:
+    def create_selection_snapshot(self, **kwargs) -> dict[str, Any]:
         selection = {
-            "selection_id": f"selection-{len(self.selections) + 1}",
+            "selection_snapshot_id": f"selection-{len(self.selections) + 1}",
             "items": kwargs["items"],
             "source_collection_id": kwargs.get("source_collection_id"),
         }
@@ -116,7 +122,7 @@ class FakeFinalApiClient:
     def create_analysis_run(self, **kwargs) -> dict[str, Any]:
         run = {
             "analysis_run_id": f"run-{len(self.runs) + 1}",
-            "selection_id": kwargs["selection_id"],
+            "selection_snapshot_id": kwargs["selection_snapshot_id"],
             "run_type": kwargs["run_type"],
             "status": "queued",
             "version": 1,
@@ -163,6 +169,104 @@ class FakeFinalApiClient:
             "page": {"page_size": 10, "has_more": False},
         }
 
+    def resolve_channel_account(self, **kwargs) -> dict[str, Any]:
+        owner_value = kwargs["owner"]
+        owner_id = str(owner_value["owner_id"])
+        existing = next((account for account in self.channel_accounts if account["external_account_ref"] == owner_id), None)
+        if existing is not None:
+            return existing
+        account = {
+            "channel_account_id": f"channel-account-{len(self.channel_accounts) + 1}",
+            "channel": "telegram",
+            "external_account_ref": owner_id,
+            "display_name": owner_id,
+            "status": "active",
+            "metadata": {"owner": owner_value, "adapter_identity": owner_value.get("adapter_identity", {})},
+        }
+        self.channel_accounts.append(account)
+        return account
+
+    def list_channel_accounts(self, **kwargs) -> dict[str, Any]:
+        return {"items": list(self.channel_accounts), "page": {"page_size": kwargs.get("page_size") or 100, "has_more": False}}
+
+    def upsert_channel_surface(self, **kwargs) -> dict[str, Any]:
+        existing = next(
+            (
+                surface
+                for surface in self.channel_surfaces
+                if surface["channel_account_id"] == kwargs["channel_account_id"]
+                and surface["surface_type"] == kwargs["surface_type"]
+                and surface["surface_key"] == kwargs["surface_key"]
+                and surface["lifecycle_status"] == "active"
+            ),
+            None,
+        )
+        if existing is None:
+            surface = {
+                "channel_surface_id": f"surface-{len(self.channel_surfaces) + 1}",
+                "channel_account_id": kwargs["channel_account_id"],
+                "channel": "telegram",
+                "surface_type": kwargs["surface_type"],
+                "surface_key": kwargs["surface_key"],
+                "address": kwargs.get("address") or {},
+                "address_fingerprint": kwargs.get("address_fingerprint") or "",
+                "display_state": kwargs.get("display_state") or {},
+                "lifecycle_status": "active",
+                "version": 1,
+                "subjects": list(kwargs.get("subjects") or []),
+            }
+            self.channel_surfaces.append(surface)
+            return surface
+        existing["address"] = kwargs.get("address") or {}
+        existing["address_fingerprint"] = kwargs.get("address_fingerprint") or ""
+        existing["display_state"] = kwargs.get("display_state") or {}
+        existing["version"] = int(existing.get("version") or 0) + 1
+        if kwargs.get("subjects"):
+            existing["subjects"] = list(kwargs["subjects"])
+        return existing
+
+    def list_channel_surfaces(self, **kwargs) -> dict[str, Any]:
+        items = [
+            surface
+            for surface in self.channel_surfaces
+            if surface["channel_account_id"] == kwargs["channel_account_id"]
+        ]
+        if kwargs.get("active_only"):
+            items = [surface for surface in items if surface["lifecycle_status"] == "active"]
+        if kwargs.get("lifecycle_status"):
+            items = [surface for surface in items if surface["lifecycle_status"] == kwargs["lifecycle_status"]]
+        if kwargs.get("subject_type") or kwargs.get("subject_id"):
+            items = [
+                surface
+                for surface in items
+                if any(
+                    subject.get("subject_type") == kwargs.get("subject_type")
+                    and subject.get("subject_id") == kwargs.get("subject_id")
+                    for subject in surface.get("subjects", [])
+                )
+            ]
+        return {"items": items[: kwargs.get("page_size") or 100], "page": {"has_more": False}}
+
+    def replace_channel_surface_display_state(self, **kwargs) -> dict[str, Any]:
+        self.replace_surface_requests.append(kwargs)
+        surface = next(surface for surface in self.channel_surfaces if surface["channel_surface_id"] == kwargs["channel_surface_id"])
+        surface["display_state"] = kwargs["display_state"]
+        surface["version"] = int(surface.get("version") or 0) + 1
+        return surface
+
+    def supersede_channel_surface(self, **kwargs) -> dict[str, Any]:
+        self.supersede_surface_requests.append(kwargs)
+        surface = next(surface for surface in self.channel_surfaces if surface["channel_surface_id"] == kwargs["channel_surface_id"])
+        surface["lifecycle_status"] = "superseded"
+        event = {
+            "channel_surface_event_id": f"surface-event-{len(self.surface_events) + 1}",
+            "channel_surface_id": kwargs["channel_surface_id"],
+            "event_type": "channel_surface.superseded",
+            "reason": kwargs.get("reason"),
+        }
+        self.surface_events.append(event)
+        return event
+
 
 def owner() -> dict[str, Any]:
     return {
@@ -175,16 +279,16 @@ def owner() -> dict[str, Any]:
 def create_selection_and_run(gateway: TelegramInboxGateway) -> tuple[dict[str, Any], dict[str, Any]]:
     status = gateway.restore_status(owner=owner())
     assert status.collection is not None
-    selection = gateway.create_selection(
+    selection = gateway.create_selection_snapshot(
         owner=owner(),
         collection_id=status.collection["collection_id"],
         expected_version=int(status.collection["version"]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
     return selection, run
 
 
-def test_text_and_link_messages_become_inbox_media_items() -> None:
+def test_text_and_link_messages_become_inbox_media_assets() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
 
@@ -192,8 +296,8 @@ def test_text_and_link_messages_become_inbox_media_items() -> None:
 
     assert [record.status for record in records] == ["accepted", "accepted"]
     assert [request["kind"] for request in api.add_requests] == ["url", "text"]
-    assert api.add_requests[0]["source"] == {"origin_type": "url", "url": "https://example.com/a"}
-    assert api.add_requests[1]["source"] == {"origin_type": "text", "text": "Meeting notes"}
+    assert api.add_requests[0]["origin"] == {"origin_type": "url", "origin_ref": "https://example.com/a"}
+    assert api.add_requests[1]["origin"] == {"origin_type": "text", "origin_ref": "Meeting notes"}
     assert api.add_requests[0]["metadata"]["message_id"] == 42
 
 
@@ -252,7 +356,7 @@ def test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files() -> No
     assert records[1].reason == "unsupported_url_scheme"
     assert [request["kind"] for request in api.add_requests] == ["url", "text"]
     assert [request["kind"] for request in api.upload_requests] == ["photo", "document"]
-    assert api.add_requests[1]["source"] == {"origin_type": "text", "text": "Keep this"}
+    assert api.add_requests[1]["origin"] == {"origin_type": "text", "origin_ref": "Keep this"}
     assert api.upload_requests[1]["content_type"] == "application/octet-stream"
 
 
@@ -276,7 +380,7 @@ def test_photo_video_document_and_media_group_inputs_keep_telegram_metadata() ->
     assert all(request["metadata"]["media_group_id"] == "grp" for request in api.upload_requests)
 
 
-def test_voice_file_ingress_uses_multipart_upload_and_never_add_media_item_object_refs() -> None:
+def test_voice_file_ingress_uses_multipart_upload_and_never_add_media_asset_object_refs() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
 
@@ -299,10 +403,10 @@ def test_voice_file_ingress_uses_multipart_upload_and_never_add_media_item_objec
     assert api.upload_requests[0]["kind"] == "voice"
     assert api.upload_requests[0]["content"] == b"voice-body"
     assert api.upload_requests[0]["metadata"]["file_unique_id"] == "voice-u"
-    assert record.media_item is not None
-    assert record.media_item["source"]["origin_type"] == "object"
-    assert record.media_item["source"]["object_key"].startswith("sources/")
-    assert "telegram://file/" not in record.media_item["source"]["object_key"]
+    assert record.media_asset is not None
+    assert record.media_asset["origin"]["origin_type"] == "upload"
+    assert record.media_asset["origin"]["object_ref"].startswith("sources/")
+    assert "telegram://file/" not in record.media_asset["origin"]["object_ref"]
 
 
 def test_album_status_preview_groups_visible_media_together() -> None:
@@ -363,19 +467,19 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     updated = gateway.remove_collection_item(
         owner=owner(),
         collection_id=_decode_callback_token(remove_tokens[0]),
-        media_item_id=_decode_callback_token(remove_tokens[2]),
+        media_asset_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
     updated_keyboard = build_status_keyboard(updated)
     updated_callbacks = [button.callback_data for row in updated_keyboard.inline_keyboard for button in row]
     updated_run_callback = next(callback for callback in updated_callbacks if callback.startswith("ib:rn:"))
     updated_run_action, updated_run_tokens = _parse_callback_payload(updated_run_callback)
-    selection = gateway.create_selection(
+    selection = gateway.create_selection_snapshot(
         owner=owner(),
         collection_id=_decode_callback_token(updated_run_tokens[0]),
         expected_version=_decode_callback_version(updated_run_tokens[1]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
 
     assert text.startswith("Транскрибация\nМатериалов: 2\n")
     assert [button.text for button in keyboard.inline_keyboard[0]] == ["Материалы"]
@@ -401,7 +505,7 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     assert _decode_callback_version(updated_run_tokens[1]) == 2
     assert updated.collection is not None
     assert updated.collection["version"] == 2
-    assert selection["items"] == [{"media_item_id": "media-2", "position": 0}]
+    assert selection["items"] == [{"media_asset_id": "media-2", "position": 0}]
     assert run["status"] == "queued"
 
 
@@ -428,7 +532,7 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     after_slot_remove = gateway.remove_collection_item(
         owner=owner(),
         collection_id=_decode_callback_token(remove_tokens[0]),
-        media_item_id=_decode_callback_token(remove_tokens[2]),
+        media_asset_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
     page_two_status = gateway.restore_status(owner=owner(), cursor="media-6")
@@ -449,21 +553,21 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
 
     assert remove_action == "rm"
     assert clear_action == "cl"
-    assert [item["media_item_id"] for item in after_slot_remove.collection["items"][:5]] == [
+    assert [item["media_asset_id"] for item in after_slot_remove.collection["items"][:5]] == [
         "media-1",
         "media-3",
         "media-4",
         "media-5",
         "media-6",
     ]
-    assert [request["media_item_id"] for request in api.remove_requests[-5:]] == [
+    assert [request["media_asset_id"] for request in api.remove_requests[-5:]] == [
         "media-7",
         "media-8",
         "media-9",
         "media-10",
         "media-11",
     ]
-    assert [item["media_item_id"] for item in after_clear.collection["items"]] == [
+    assert [item["media_asset_id"] for item in after_clear.collection["items"]] == [
         "media-1",
         "media-3",
         "media-4",
@@ -488,7 +592,7 @@ def test_clear_collection_removes_all_items_across_pages() -> None:
     assert cleared.items == []
     assert cleared.collection is not None
     assert cleared.collection["items"] == []
-    assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+    assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
 
 
 def test_remove_latest_collection_item_removes_last_item_from_full_collection() -> None:
@@ -513,8 +617,8 @@ def test_remove_latest_collection_item_removes_last_item_from_full_collection() 
     )
 
     assert action == "rl"
-    assert api.remove_requests[-1]["media_item_id"] == "media-4"
-    assert [item["media_item_id"] for item in updated.collection["items"]] == [
+    assert api.remove_requests[-1]["media_asset_id"] == "media-4"
+    assert [item["media_asset_id"] for item in updated.collection["items"]] == [
         "media-1",
         "media-2",
         "media-3",
@@ -524,10 +628,10 @@ def test_remove_latest_collection_item_removes_last_item_from_full_collection() 
 def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_list() -> None:
     class CollectionOnlyRemovalApiClient(FakeFinalApiClient):
         def remove_collection_item(self, **kwargs) -> dict[str, Any]:
-            media_item_id = kwargs["media_item_id"]
+            media_asset_id = kwargs["media_asset_id"]
             self.remove_requests.append(kwargs)
             self.collection["items"] = [
-                item for item in self.collection["items"] if item["media_item_id"] != media_item_id
+                item for item in self.collection["items"] if item["media_asset_id"] != media_asset_id
             ]
             self.collection["version"] += 1
             return self.collection
@@ -549,12 +653,12 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
     updated = gateway.remove_collection_item(
         owner=owner(),
         collection_id=_decode_callback_token(remove_tokens[0]),
-        media_item_id=_decode_callback_token(remove_tokens[2]),
+        media_asset_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
     updated_text = render_status_text(updated)
 
-    assert [item["media_item_id"] for item in updated.items] == [
+    assert [item["media_asset_id"] for item in updated.items] == [
         "media-2",
         "media-3",
         "media-4",
@@ -573,11 +677,11 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
         collection={
             "collection_id": "11111111-1111-1111-1111-111111111111",
             "version": 123456,
-            "items": [{"media_item_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
+            "items": [{"media_asset_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
         },
         items=[
             {
-                "media_item_id": "22222222-2222-2222-2222-222222222222",
+                "media_asset_id": "22222222-2222-2222-2222-222222222222",
                 "display_name": "uuid-item",
                 "kind": "text",
                 "status": "ready",
@@ -605,8 +709,8 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
         status,
         current_cursor="44444444-4444-4444-4444-444444444444",
         selection={
-            "selection_id": "55555555-5555-5555-5555-555555555555",
-            "items": [{"media_item_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
+            "selection_snapshot_id": "55555555-5555-5555-5555-555555555555",
+            "items": [{"media_asset_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
         },
         focused_run_id="33333333-3333-3333-3333-333333333333",
     )
@@ -614,8 +718,8 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
         status,
         current_cursor="44444444-4444-4444-4444-444444444444",
         selection={
-            "selection_id": "55555555-5555-5555-5555-555555555555",
-            "items": [{"media_item_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
+            "selection_snapshot_id": "55555555-5555-5555-5555-555555555555",
+            "items": [{"media_asset_id": "22222222-2222-2222-2222-222222222222", "position": 0}],
         },
         screen="materials",
     )
@@ -764,7 +868,9 @@ def test_gateway_cancel_analysis_run_verifies_version_and_active_status() -> Non
         message="stop",
     )
 
-    assert api.cancel_requests == [{"owner": owner(), "analysis_run_id": "run-1", "message": "stop"}]
+    assert api.cancel_requests == [
+        {"channel_account_id": "channel-account-1", "analysis_run_id": "run-1", "message": "stop"}
+    ]
     assert status.active_runs == []
     assert api.runs[0]["status"] == "canceled"
 
@@ -846,7 +952,7 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     api.runs.append(
         {
             "analysis_run_id": "run-1",
-            "selection_id": "selection-1",
+            "selection_snapshot_id": "selection-1",
             "run_type": "transcription",
             "status": "succeeded",
             "version": 3,
@@ -875,7 +981,7 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     status = gateway.restore_status(owner=owner())
     keyboard = build_status_keyboard(
         status,
-        selection={"selection_id": "selection-1", "items": status.collection["items"]},
+        selection={"selection_snapshot_id": "selection-1", "items": status.collection["items"]},
         focused_run_id="run-1",
     )
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
@@ -884,7 +990,7 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     assert any(callback.startswith("ib:ar:") for callback in callbacks)
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
 
-    selection_text = render_status_text(status, selection={"selection_id": "selection-1", "items": status.collection["items"]})
+    selection_text = render_status_text(status, selection={"selection_snapshot_id": "selection-1", "items": status.collection["items"]})
     assert "Последние результаты:" not in selection_text
     assert "run-1" not in selection_text
     assert "Выборка готова:" not in selection_text
@@ -915,7 +1021,7 @@ def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -
     assert invalid_link.reason == "invalid_url"
     assert missing_content.reason == "missing_file_content"
     assert plain_text_records[0].status == "accepted"
-    assert api.add_requests[-1]["source"] == {"origin_type": "text", "text": "plain text only"}
+    assert api.add_requests[-1]["origin"] == {"origin_type": "text", "origin_ref": "plain text only"}
 
     caption_record = gateway.add_file(
         owner=owner(),
@@ -927,31 +1033,31 @@ def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -
             caption="human caption",
         ),
     )
-    assert caption_record.media_item is not None
+    assert caption_record.media_asset is not None
     assert api.upload_requests[-1]["metadata"]["caption"] == "human caption"
 
-    api.items.append({"media_item_id": "", "display_name": "orphan", "kind": "text", "status": "ready", "metadata": {}})
+    api.items.append({"media_asset_id": "", "display_name": "orphan", "kind": "text", "status": "ready", "metadata": {}})
     cleared = gateway.clear_visible_items(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
-    assert all(item.get("media_item_id") != "" for item in cleared.collection["items"])
+    assert all(item.get("media_asset_id") != "" for item in cleared.collection["items"])
 
     api.items.clear()
     api.collection["items"].clear()
     empty_cleared = gateway.clear_visible_items(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
     assert empty_cleared.items == []
 
-    with pytest.raises(RuntimeError, match="slot_missing_media_item_id"):
+    with pytest.raises(RuntimeError, match="slot_missing_media_asset_id"):
         gateway.remove_collection_item(
             owner=owner(),
             collection_id="inbox-1",
-            media_item_id="   ",
+            media_asset_id="   ",
             expected_version=api.collection["version"],
         )
 
     with pytest.raises(RuntimeError, match="inbox_empty"):
-        gateway.create_selection(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+        gateway.create_selection_snapshot(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
 
     with pytest.raises(RuntimeError, match="slot_not_visible"):
-        gateway.start_analysis(owner=owner(), selection_id="   ")
+        gateway.start_analysis(owner=owner(), selection_snapshot_id="   ")
 
     with pytest.raises(RuntimeError, match="slot_not_visible"):
         gateway._get_verified_inbox_collection(owner=owner(), collection_id="different", expected_version=api.collection["version"])
@@ -999,7 +1105,7 @@ def test_restore_status_tolerates_missing_collection_and_renders_without_collect
     failing_api.runs = api.runs
     failing_api.artifacts = api.artifacts
     failing_api.diagnostics = api.diagnostics
-    failing_api.items = [{"media_item_id": "media-1", "display_name": "item", "kind": "text", "status": "ready", "metadata": {}}]
+    failing_api.items = [{"media_asset_id": "media-1", "display_name": "item", "kind": "text", "status": "ready", "metadata": {}}]
     gateway = TelegramInboxGateway(failing_api)
 
     status = gateway.restore_status(owner=owner())

@@ -31,7 +31,7 @@ def test_build_runner_delegates_to_run_transcription(monkeypatch, tmp_path: Path
     config = WorkerRuntimeConfig(
         api_config=InternalApiConfig(base_url="http://api"),
         worker_kind="transcription",
-        task_type="selection.transcription",
+        step_kind="selection.transcription",
         run_type="transcription",
         workspace_root=tmp_path / "runtime",
     )
@@ -70,7 +70,7 @@ def test_build_runner_keeps_selection_runs_on_transcription_worker(monkeypatch, 
     config = WorkerRuntimeConfig(
         api_config=InternalApiConfig(base_url="http://api"),
         worker_kind="transcription",
-        task_type="selection.transcription",
+        step_kind="selection.transcription",
         run_type="transcription",
         workspace_root=tmp_path / "runtime",
     )

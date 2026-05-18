@@ -24,6 +24,8 @@
     <StorageTests>
       <required>
         <item>Create media_asset from text, URL, and uploaded body with channel-account scope and stored_object/origin metadata.</item>
+        <item>Target migration and required schema fragments create channel_accounts, operation_requests, stored_objects, media_assets, selection_snapshots, analysis_run_steps, analysis_run_step_inputs, artifact_subjects, diagnostics, channel_surfaces, and channel surface event tables without recreating legacy sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, or safe_adapter_context.</item>
+        <item>Deterministic seed fixtures create a stable channel_account and inbox collection for fresh local reset/bootstrap tests.</item>
         <item>Default inbox membership is created for accepted media_asset records.</item>
         <item>Adding media to an existing inbox or user collection appends after the current highest active position without duplicate active positions.</item>
         <item>Collection add, remove, reorder, archive, restore, and delete use version checks.</item>
@@ -56,6 +58,7 @@
       <required>
         <item>Worker claim loads declared analysis_run_step_inputs through internal control-plane contracts.</item>
         <item>Agent-runner report and research steps consume ready transcript or prepared text-corpus artifact inputs and do not transcribe or discover raw speech media.</item>
+        <item>Worker artifact registration creates API-owned stored_object metadata and artifact_subject lineage for analysis_run plus analysis_run_step.</item>
         <item>Missing transcript or text-corpus prerequisites produce diagnostics instead of silent failure or raw media processing in agent-runner.</item>
         <item>Per-item and prerequisite diagnostics are recorded without mutating the selection snapshot.</item>
         <item>Successful execution publishes artifacts under analysis_run.</item>
@@ -113,11 +116,15 @@
     </Gate>
     <Gate id="EV-STORAGE">
       <description>Storage implements channel-account scope, immutable selection snapshots, step inputs, artifact lineage, lifecycle, retention, and diagnostics.</description>
-      <required-evidence>Focused storage tests pass with same-channel-account and cross-channel-account cases.</required-evidence>
+      <required-evidence>Focused storage tests pass for target schema fragments, target repositories, deterministic fixtures, same-channel-account behavior, and cross-channel-account cases.</required-evidence>
     </Gate>
     <Gate id="EV-API">
       <description>API provides the complete media_asset to artifact flow plus prerequisite orchestration.</description>
       <required-evidence>Focused API tests pass for ingestion, inbox, collections, selection_snapshot, analysis_run, prerequisite planning, cancellation, artifacts, artifact_subjects, diagnostics, and retention.</required-evidence>
+    </Gate>
+    <Gate id="EV-WORKERS">
+      <description>Workers execute only through analysis_run_step contracts and immutable declared inputs.</description>
+      <required-evidence>Worker-common, transcription, and agent-runner tests pass for step_kind queue polling, step claim/progress/finalize, sealed selection_snapshot materialization, transcript/text-corpus artifact input materialization, diagnostics, and cancellation.</required-evidence>
     </Gate>
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
@@ -152,6 +159,12 @@
     <bead id="media-7f3">Validate target architecture document, GRACE references, XML parsing, and architecture coverage checklist.</bead>
     <bead id="media-36a">Validate GRACE XML and stale vocabulary searches only.</bead>
     <bead id="media-49h">Run contract and schema checks.</bead>
+    <bead id="media-7f3.9.1">Run target contract and compatibility isolation checks.</bead>
+    <bead id="media-7f3.9.2">Run target storage schema, repository, deterministic fixture, and stale storage vocabulary checks.</bead>
+    <bead id="media-7f3.9.3">Run target API/domain service checks for channel-account scope, media_asset upload/list/get/delete, collections, selection_snapshot, analysis_run events/cancel/retry, artifacts, diagnostics, analysis_run_step lifecycle, and channel_surface list/update/event operations.</bead>
+    <bead id="media-7f3.9.4">Run Telegram channel surface checks for current_materials_panel persistence, analysis_task_surface restart watcher recovery, result_artifact_surface duplicate-delivery prevention, supersede on uneditable messages, and target channel_surface storage upsert behavior.</bead>
+    <bead id="media-7f3.9.5">Run Telegram adapter checks for target media_asset creation/upload, channel-account collection reads and mutation, selection_snapshot creation, analysis_run start/cancel/status, artifact/diagnostic reads, and stale Telegram vocabulary search.</bead>
+    <bead id="media-7f3.9.6">Run worker-common, transcription, agent-runner, target contract, and API tests for analysis_run_step queue/claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, stored_object artifact registration, diagnostics, and cancellation.</bead>
     <bead id="media-5cj">Run storage and API orchestration checks.</bead>
     <bead id="media-sfx">Run worker execution checks.</bead>
     <bead id="media-7al">Run Telegram adapter checks.</bead>

@@ -45,11 +45,13 @@ type mediaSourceHTTP struct {
 }
 
 type collectionItemsHTTP struct {
-	Owner           storage.OwnerScope `json:"owner"`
-	ExpectedVersion int64              `json:"expected_version"`
-	Items           []struct {
-		MediaItemID string `json:"media_item_id"`
-		Position    int    `json:"position"`
+	Owner            storage.OwnerScope `json:"owner"`
+	ChannelAccountID string             `json:"channel_account_id,omitempty"`
+	ExpectedVersion  int64              `json:"expected_version"`
+	Items            []struct {
+		MediaItemID  string `json:"media_item_id,omitempty"`
+		MediaAssetID string `json:"media_asset_id,omitempty"`
+		Position     int    `json:"position"`
 	} `json:"items"`
 }
 
@@ -66,20 +68,26 @@ type createSelectionHTTP struct {
 }
 
 type createAnalysisRunHTTP struct {
-	Owner       storage.OwnerScope `json:"owner"`
-	SelectionID string             `json:"selection_id"`
-	RunType     string             `json:"run_type"`
-	Params      json.RawMessage    `json:"params,omitempty"`
-	Delivery    json.RawMessage    `json:"delivery,omitempty"`
+	Owner               storage.OwnerScope `json:"owner"`
+	SelectionID         string             `json:"selection_id"`
+	ChannelAccountID    string             `json:"channel_account_id,omitempty"`
+	SelectionSnapshotID string             `json:"selection_snapshot_id,omitempty"`
+	RunType             string             `json:"run_type"`
+	Params              json.RawMessage    `json:"params,omitempty"`
+	Delivery            json.RawMessage    `json:"delivery,omitempty"`
+	IdempotencyKey      string             `json:"idempotency_key,omitempty"`
+	CreatedViaChannelID string             `json:"created_via_channel_id,omitempty"`
 }
 
 type cancelAnalysisRunHTTP struct {
-	Message string `json:"message,omitempty"`
+	ChannelAccountID string `json:"channel_account_id,omitempty"`
+	Message          string `json:"message,omitempty"`
 }
 
 type retryAnalysisRunHTTP struct {
-	Owner          storage.OwnerScope `json:"owner,omitempty"`
-	IdempotencyKey string             `json:"idempotency_key,omitempty"`
+	Owner            storage.OwnerScope `json:"owner,omitempty"`
+	ChannelAccountID string             `json:"channel_account_id,omitempty"`
+	IdempotencyKey   string             `json:"idempotency_key,omitempty"`
 }
 
 type reconcileQueueHTTP struct {
@@ -232,6 +240,10 @@ func (s *Server) handleRemoveMediaItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetInboxCollection(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleGetTargetInboxCollection(w, r)
+		return
+	}
 	collection, err := s.deps.Public.GetInboxCollection(r.Context(), ownerFromQuery(r))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -242,12 +254,23 @@ func (s *Server) handleGetInboxCollection(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Owner storage.OwnerScope `json:"owner"`
-		Name  string             `json:"name"`
-		Items []string           `json:"items,omitempty"`
+		Owner            storage.OwnerScope `json:"owner"`
+		ChannelAccountID string             `json:"channel_account_id,omitempty"`
+		Name             string             `json:"name"`
+		Items            []string           `json:"items,omitempty"`
+		IdempotencyKey   string             `json:"idempotency_key,omitempty"`
 	}
 	if err := decodeJSONBody(r, &body); err != nil {
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_collection", message: "collection request must be valid JSON", details: err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.ChannelAccountID) != "" {
+		s.handleCreateTargetCollectionDecoded(w, r, TargetCreateCollectionRequest{
+			ChannelAccountID: body.ChannelAccountID,
+			Name:             body.Name,
+			Items:            body.Items,
+			IdempotencyKey:   body.IdempotencyKey,
+		})
 		return
 	}
 	collection, err := s.deps.Public.CreateCollection(r.Context(), storage.CreateCollectionRequest{Owner: body.Owner, Name: body.Name, Items: body.Items})
@@ -259,6 +282,10 @@ func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleListCollections(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleListTargetCollections(w, r)
+		return
+	}
 	collections, err := s.deps.Public.ListCollections(r.Context(), ownerFromQuery(r))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -273,6 +300,10 @@ func (s *Server) handleListCollections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetCollection(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleGetTargetCollection(w, r)
+		return
+	}
 	collection, err := s.deps.Public.GetCollection(r.Context(), ownerFromQuery(r), r.PathValue("collection_id"))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -283,13 +314,23 @@ func (s *Server) handleGetCollection(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateCollection(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Owner           storage.OwnerScope `json:"owner"`
-		ExpectedVersion int64              `json:"expected_version"`
-		Name            string             `json:"name,omitempty"`
-		Status          string             `json:"status,omitempty"`
+		Owner            storage.OwnerScope `json:"owner"`
+		ChannelAccountID string             `json:"channel_account_id,omitempty"`
+		ExpectedVersion  int64              `json:"expected_version"`
+		Name             string             `json:"name,omitempty"`
+		Status           string             `json:"status,omitempty"`
 	}
 	if err := decodeJSONBody(r, &body); err != nil {
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_collection", message: "collection update must be valid JSON", details: err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.ChannelAccountID) != "" {
+		s.handleUpdateTargetCollectionDecoded(w, r, TargetUpdateCollectionRequest{
+			ChannelAccountID: body.ChannelAccountID,
+			ExpectedVersion:  body.ExpectedVersion,
+			Name:             body.Name,
+			Status:           body.Status,
+		})
 		return
 	}
 	collection, err := s.deps.Public.UpdateCollection(r.Context(), storage.UpdateCollectionRequest{
@@ -312,6 +353,21 @@ func (s *Server) handleUpdateCollectionItems(w http.ResponseWriter, r *http.Requ
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_collection_items", message: "collection item update must be valid JSON", details: err.Error()})
 		return
 	}
+	if strings.TrimSpace(body.ChannelAccountID) != "" {
+		items := make([]TargetCollectionItemMutationInput, 0, len(body.Items))
+		for _, item := range body.Items {
+			items = append(items, TargetCollectionItemMutationInput{
+				MediaAssetID: firstNonEmpty(item.MediaAssetID, item.MediaItemID),
+				Position:     item.Position,
+			})
+		}
+		s.handleUpdateTargetCollectionItemsDecoded(w, r, TargetUpdateCollectionItemsRequest{
+			ChannelAccountID: body.ChannelAccountID,
+			ExpectedVersion:  body.ExpectedVersion,
+			Items:            items,
+		})
+		return
+	}
 	items := make([]storage.CollectionItemRecord, 0, len(body.Items))
 	for _, item := range body.Items {
 		items = append(items, storage.CollectionItemRecord{MediaItemID: item.MediaItemID, Position: item.Position})
@@ -331,6 +387,10 @@ func (s *Server) handleUpdateCollectionItems(w http.ResponseWriter, r *http.Requ
 
 func (s *Server) handleRemoveCollectionItem(w http.ResponseWriter, r *http.Request) {
 	expected, _ := strconv.ParseInt(r.URL.Query().Get("expected_version"), 10, 64)
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleRemoveTargetCollectionItem(w, r)
+		return
+	}
 	owner := ownerFromQuery(r)
 	collectionID := r.PathValue("collection_id")
 	removeID := r.PathValue("media_item_id")
@@ -400,6 +460,10 @@ func (s *Server) handleCreateAnalysisRun(w http.ResponseWriter, r *http.Request)
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_analysis_run", message: "analysis run request must be valid JSON", details: err.Error()})
 		return
 	}
+	if strings.TrimSpace(body.SelectionSnapshotID) != "" || strings.TrimSpace(body.ChannelAccountID) != "" {
+		s.handleCreateTargetAnalysisRunDecoded(w, r, body)
+		return
+	}
 	run, err := s.deps.Public.CreateAnalysisRun(r.Context(), storage.CreateAnalysisRunRequest{
 		Owner:          body.Owner,
 		SelectionID:    body.SelectionID,
@@ -416,6 +480,10 @@ func (s *Server) handleCreateAnalysisRun(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleListAnalysisRuns(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleListTargetAnalysisRuns(w, r)
+		return
+	}
 	runs, err := s.deps.Public.ListAnalysisRuns(r.Context(), ownerFromQuery(r))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -431,6 +499,10 @@ func (s *Server) handleListAnalysisRuns(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGetAnalysisRun(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleGetTargetAnalysisRun(w, r)
+		return
+	}
 	run, err := s.deps.Public.GetAnalysisRun(r.Context(), ownerFromQuery(r), r.PathValue("analysis_run_id"))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -445,6 +517,16 @@ func (s *Server) handleCancelAnalysisRun(w http.ResponseWriter, r *http.Request)
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_cancel_request", message: "cancel request must be valid JSON", details: err.Error()})
 		return
 	}
+	if strings.TrimSpace(body.ChannelAccountID) != "" || strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		if body.ChannelAccountID == "" {
+			body.ChannelAccountID = strings.TrimSpace(r.URL.Query().Get("channel_account_id"))
+		}
+		s.handleCancelTargetAnalysisRunDecoded(w, r, TargetCancelAnalysisRunRequest{
+			ChannelAccountID: body.ChannelAccountID,
+			Message:          body.Message,
+		})
+		return
+	}
 	run, err := s.deps.Public.CancelAnalysisRun(r.Context(), ownerFromQuery(r), r.PathValue("analysis_run_id"), body.Message)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -457,6 +539,16 @@ func (s *Server) handleRetryAnalysisRun(w http.ResponseWriter, r *http.Request) 
 	var body retryAnalysisRunHTTP
 	if err := decodeJSONBody(r, &body); err != nil {
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_retry_request", message: "retry request must be valid JSON", details: err.Error()})
+		return
+	}
+	if strings.TrimSpace(body.ChannelAccountID) != "" || strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		if body.ChannelAccountID == "" {
+			body.ChannelAccountID = strings.TrimSpace(r.URL.Query().Get("channel_account_id"))
+		}
+		s.handleRetryTargetAnalysisRunDecoded(w, r, TargetRetryAnalysisRunRequest{
+			ChannelAccountID: body.ChannelAccountID,
+			IdempotencyKey:   body.IdempotencyKey,
+		})
 		return
 	}
 	owner := ownerFromQuery(r)
@@ -476,6 +568,10 @@ func (s *Server) handleRetryAnalysisRun(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleListAnalysisRunEvents(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleListTargetAnalysisRunEvents(w, r)
+		return
+	}
 	events, err := s.deps.Public.ListAnalysisRunEvents(r.Context(), ownerFromQuery(r), r.PathValue("analysis_run_id"))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -487,6 +583,10 @@ func (s *Server) handleListAnalysisRunEvents(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleListTargetArtifacts(w, r)
+		return
+	}
 	analysisRunID := strings.TrimSpace(r.PathValue("analysis_run_id"))
 	if analysisRunID == "" {
 		analysisRunID = strings.TrimSpace(r.URL.Query().Get("analysis_run_id"))
@@ -506,6 +606,10 @@ func (s *Server) handleListArtifacts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetArtifact(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleGetTargetArtifact(w, r)
+		return
+	}
 	artifact, err := s.deps.Public.GetArtifact(r.Context(), ownerFromQuery(r), r.PathValue("artifact_id"))
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -524,6 +628,10 @@ func (s *Server) handleRefreshArtifactLink(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handleListDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if strings.TrimSpace(r.URL.Query().Get("channel_account_id")) != "" {
+		s.handleListTargetDiagnostics(w, r)
+		return
+	}
 	diagnostics, err := s.deps.Public.ListDiagnostics(r.Context(), ownerFromQuery(r), storage.DiagnosticQuery{
 		SubjectType:   r.URL.Query().Get("subject_type"),
 		SubjectID:     r.URL.Query().Get("subject_id"),

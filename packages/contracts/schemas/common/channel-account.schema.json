@@ -1,0 +1,356 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/common/channel-account.schema.json",
+  "title": "ChannelAccountAndSurfaceContracts",
+  "$defs": {
+    "channelAccountStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "disabled"
+      ]
+    },
+    "channelSurfaceStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "superseded",
+        "deleted",
+        "failed"
+      ]
+    },
+    "channelAccount": {
+      "type": "object",
+      "required": [
+        "channel_account_id",
+        "channel",
+        "external_account_ref",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "channel_account_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "channel": {
+          "type": "string",
+          "enum": [
+            "telegram",
+            "web",
+            "mcp",
+            "local",
+            "service"
+          ]
+        },
+        "external_account_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/channelAccountStatus"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_seen_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "disabled_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resolveChannelAccountRequest": {
+      "type": "object",
+      "required": [
+        "channel",
+        "external_account_ref"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "external_account_ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "channelSurfaceSubject": {
+      "type": "object",
+      "required": [
+        "subject_type",
+        "subject_id",
+        "subject_role"
+      ],
+      "properties": {
+        "subject_type": {
+          "$ref": "./enums.schema.json#/$defs/channelSurfaceSubjectType"
+        },
+        "subject_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "subject_role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "context",
+            "result",
+            "diagnostic",
+            "navigation_target"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "channelSurface": {
+      "type": "object",
+      "required": [
+        "channel_surface_id",
+        "channel_account_id",
+        "channel",
+        "surface_type",
+        "surface_key",
+        "address",
+        "display_state",
+        "lifecycle_status",
+        "version",
+        "subjects",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "channel_surface_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "channel_account_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "address": {
+          "type": "object"
+        },
+        "address_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "display_state": {
+          "type": "object"
+        },
+        "lifecycle_status": {
+          "$ref": "#/$defs/channelSurfaceStatus"
+        },
+        "version": {
+          "$ref": "./pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/channelSurfaceSubject"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "last_rendered_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "superseded_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "deleted_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "upsertChannelSurfaceRequest": {
+      "type": "object",
+      "required": [
+        "channel_account_id",
+        "channel",
+        "surface_type",
+        "surface_key",
+        "address",
+        "display_state",
+        "subjects"
+      ],
+      "properties": {
+        "channel_account_id": {
+          "$ref": "./enums.schema.json#/$defs/uuid"
+        },
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "surface_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "address": {
+          "type": "object"
+        },
+        "address_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "display_state": {
+          "type": "object"
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/channelSurfaceSubject"
+          }
+        },
+        "idempotency_key": {
+          "$ref": "./enums.schema.json#/$defs/idempotencyKey"
+        }
+      },
+      "additionalProperties": false
+    },
+    "replaceChannelSurfaceDisplayStateRequest": {
+      "type": "object",
+      "required": [
+        "expected_version",
+        "display_state"
+      ],
+      "properties": {
+        "expected_version": {
+          "$ref": "./pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "display_state": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "supersedeChannelSurfaceRequest": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "channelAccountResponse": {
+      "type": "object",
+      "required": [
+        "channel_account"
+      ],
+      "properties": {
+        "channel_account": {
+          "$ref": "#/$defs/channelAccount"
+        }
+      },
+      "additionalProperties": false
+    },
+    "channelSurfaceResponse": {
+      "type": "object",
+      "required": [
+        "channel_surface"
+      ],
+      "properties": {
+        "channel_surface": {
+          "$ref": "#/$defs/channelSurface"
+        }
+      },
+      "additionalProperties": false
+    },
+    "channelSurfaceListResponse": {
+      "allOf": [
+        {
+          "$ref": "./pagination.schema.json#/$defs/paginatedResponse"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/channelSurface"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

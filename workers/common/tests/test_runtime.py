@@ -43,10 +43,19 @@ class FakeApiClient:
         *,
         status: str | None = None,
         run_type: str | None = None,
-        task_type: str | None = None,
+        worker_kind: str | None = None,
+        step_kind: str | None = None,
         page_size: int = 20,
     ) -> tuple[AnalysisRunQueueItem, ...]:
-        self.calls.append({"status": status, "run_type": run_type, "task_type": task_type, "page_size": page_size})
+        self.calls.append(
+            {
+                "status": status,
+                "run_type": run_type,
+                "worker_kind": worker_kind,
+                "step_kind": step_kind,
+                "page_size": page_size,
+            }
+        )
         if not self.pages:
             return ()
         return self.pages.pop(0)
@@ -55,7 +64,7 @@ class FakeApiClient:
 def test_runtime_config_from_env_normalizes_worker_settings(tmp_path: Path) -> None:
     config = WorkerRuntimeConfig.from_env(
         worker_kind="transcription",
-        task_type="selection.transcription",
+        step_kind="selection.transcription",
         run_type="transcription",
         env={
             "API_BASE_URL": " http://api.internal ",
@@ -80,8 +89,8 @@ def test_runtime_config_from_env_normalizes_worker_settings(tmp_path: Path) -> N
 def test_runtime_config_accepts_agent_runner_identity(tmp_path: Path) -> None:
     config = WorkerRuntimeConfig.from_env(
         worker_kind="agent_runner",
-        task_type="selection.analysis",
-        run_type="custom",
+        step_kind="report.analysis",
+        run_type="report",
         env={
             "API_BASE_URL": "http://api.internal",
             "WORKER_WORKSPACE_ROOT": str(tmp_path / "workspace"),
@@ -89,8 +98,8 @@ def test_runtime_config_accepts_agent_runner_identity(tmp_path: Path) -> None:
     )
 
     assert config.worker_kind == "agent_runner"
-    assert config.task_type == "selection.analysis"
-    assert config.run_type == "custom"
+    assert config.step_kind == "report.analysis"
+    assert config.run_type == "report"
 
 
 def test_run_worker_loop_executes_explicit_run_without_polling(tmp_path: Path) -> None:
@@ -128,7 +137,8 @@ def test_run_worker_loop_polls_queued_run_through_api_client(tmp_path: Path) -> 
                 AnalysisRunQueueItem(
                     analysis_run_id="run-queued",
                     run_type="transcription",
-                    task_type="selection.transcription",
+                    worker_kind="transcription",
+                    step_kind="selection.transcription",
                     status="queued",
                     version=1,
                 ),
@@ -141,7 +151,13 @@ def test_run_worker_loop_polls_queued_run_through_api_client(tmp_path: Path) -> 
 
     assert processed == ["run-queued"]
     assert api_client.calls == [
-        {"status": "queued", "run_type": "transcription", "task_type": "selection.transcription", "page_size": 1}
+        {
+            "status": "queued",
+            "run_type": "transcription",
+            "worker_kind": "transcription",
+            "step_kind": "selection.transcription",
+            "page_size": 1,
+        }
     ]
     assert result.processed_runs == 1
     assert result.failed_runs == 0
@@ -154,10 +170,11 @@ def test_run_worker_loop_counts_queue_poll_failures(tmp_path: Path) -> None:
             *,
             status: str | None = None,
             run_type: str | None = None,
-            task_type: str | None = None,
+            worker_kind: str | None = None,
+            step_kind: str | None = None,
             page_size: int = 20,
         ):
-            raise RuntimeError(f"{status}:{run_type}:{task_type}:{page_size}")
+            raise RuntimeError(f"{status}:{run_type}:{worker_kind}:{step_kind}:{page_size}")
 
     config = _config(tmp_path, max_idle_polls=1)
 
@@ -178,7 +195,8 @@ def test_run_worker_loop_sleeps_and_recovers_after_queue_poll_failure(tmp_path: 
             *,
             status: str | None = None,
             run_type: str | None = None,
-            task_type: str | None = None,
+            worker_kind: str | None = None,
+            step_kind: str | None = None,
             page_size: int = 20,
         ):
             self.calls += 1
@@ -188,7 +206,8 @@ def test_run_worker_loop_sleeps_and_recovers_after_queue_poll_failure(tmp_path: 
                 AnalysisRunQueueItem(
                     analysis_run_id="run-recovered",
                     run_type="transcription",
-                    task_type="selection.transcription",
+                    worker_kind="transcription",
+                    step_kind="selection.transcription",
                     status="queued",
                     version=1,
                 ),
@@ -232,7 +251,8 @@ def test_run_worker_loop_accounts_runner_failures(
                 AnalysisRunQueueItem(
                     analysis_run_id="run-fails",
                     run_type="transcription",
-                    task_type="selection.transcription",
+                    worker_kind="transcription",
+                    step_kind="selection.transcription",
                     status="queued",
                     version=1,
                 ),
@@ -256,7 +276,7 @@ def test_runtime_config_rejects_invalid_numeric_env() -> None:
     with pytest.raises(ValueError, match="number"):
         WorkerRuntimeConfig.from_env(
             worker_kind="transcription",
-            task_type="selection.transcription",
+            step_kind="selection.transcription",
             run_type="transcription",
             env={
                 "API_BASE_URL": "http://api",
@@ -269,7 +289,7 @@ def test_runtime_config_rejects_invalid_optional_integer_env() -> None:
     with pytest.raises(ValueError, match="integer"):
         WorkerRuntimeConfig.from_env(
             worker_kind="transcription",
-            task_type="selection.transcription",
+            step_kind="selection.transcription",
             run_type="transcription",
             env={
                 "API_BASE_URL": "http://api",
@@ -282,7 +302,7 @@ def test_runtime_config_rejects_nonpositive_processed_limit() -> None:
     with pytest.raises(ValueError, match="positive"):
         WorkerRuntimeConfig.from_env(
             worker_kind="transcription",
-            task_type="selection.transcription",
+            step_kind="selection.transcription",
             run_type="transcription",
             env={
                 "API_BASE_URL": "http://api",
@@ -301,7 +321,7 @@ def _config(
     return WorkerRuntimeConfig(
         api_config=InternalApiConfig(base_url="http://internal.local"),
         worker_kind="transcription",
-        task_type="selection.transcription",
+        step_kind="selection.transcription",
         run_type="transcription",
         workspace_root=tmp_path / "runtime",
         analysis_run_id=analysis_run_id,

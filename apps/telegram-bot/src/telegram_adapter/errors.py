@@ -51,7 +51,7 @@ REJECTION_COPY: dict[str, str] = {
 
 STALE_RUNTIME_REASONS = {
     "slot_not_visible",
-    "slot_missing_media_item_id",
+    "slot_missing_media_asset_id",
     "inbox_empty",
 }
 

@@ -2,7 +2,7 @@
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
 # PURPOSE: Provide the shared worker execution scaffold used by compose-ready worker launchers.
-# SCOPE: Env-backed runtime config, queued analysis-run polling through the API client, one-shot run execution, retry-safe loop control, and deterministic loop results for tests.
+# SCOPE: Env-backed runtime config, queued analysis_run_step polling through the API client, one-shot run execution, retry-safe loop control, and deterministic loop results for tests.
 # DEPENDS: M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-COMMON, V-M-WORKER-COMMON
 # ROLE: RUNTIME
@@ -35,7 +35,7 @@ from transcriber_workers_common.api import AnalysisRunControlClient, InternalApi
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_RUN_WORKER_LOOP = "[WorkerCommon][runWorkerLoop][BLOCK_RUN_WORKER_LOOP]"
 _WORKER_KINDS = frozenset({"transcription", "agent_runner"})
-_TASK_TYPES = frozenset({"selection.transcription", "selection.analysis"})
+_STEP_KINDS = frozenset({"selection.transcription", "report.analysis", "deep_research.analysis", "summary.analysis", "custom.analysis"})
 _RUN_TYPES = frozenset({"transcription", "summary", "report", "deep_research", "custom"})
 
 __all__ = [
@@ -52,7 +52,7 @@ class AnalysisRunRunner(Protocol):
 
 # START_CONTRACT: WorkerRuntimeConfig
 # PURPOSE: Carry the shared worker runtime settings that every executable launcher consumes.
-# INPUTS: { api_config: InternalApiConfig - API boundary, worker_kind/task_type/run_type - frozen worker identity, workspace_root: Path - local workspace, polling and test-limit settings }
+# INPUTS: { api_config: InternalApiConfig - API boundary, worker_kind/step_kind/run_type - frozen worker identity, workspace_root: Path - local workspace, polling and test-limit settings }
 # OUTPUTS: { WorkerRuntimeConfig - Immutable runtime config for run_worker_loop }
 # SIDE_EFFECTS: none
 # LINKS: M-WORKER-COMMON, M-CONTRACTS
@@ -61,7 +61,7 @@ class AnalysisRunRunner(Protocol):
 class WorkerRuntimeConfig:
     api_config: InternalApiConfig
     worker_kind: str
-    task_type: str
+    step_kind: str
     run_type: str
     workspace_root: Path
     poll_interval_seconds: float = 5.0
@@ -71,7 +71,7 @@ class WorkerRuntimeConfig:
 
     def __post_init__(self) -> None:
         _require(self.worker_kind in _WORKER_KINDS, "invalid worker_kind")
-        _require(self.task_type in _TASK_TYPES, "invalid task_type")
+        _require(self.step_kind in _STEP_KINDS, "invalid step_kind")
         _require(self.run_type in _RUN_TYPES, "invalid run_type")
         _require(self.poll_interval_seconds >= 0, "poll interval must be non-negative")
         if self.max_idle_polls is not None:
@@ -84,7 +84,7 @@ class WorkerRuntimeConfig:
         cls,
         *,
         worker_kind: str,
-        task_type: str,
+        step_kind: str,
         run_type: str,
         env: Mapping[str, str] | None = None,
     ) -> "WorkerRuntimeConfig":
@@ -94,7 +94,7 @@ class WorkerRuntimeConfig:
         return cls(
             api_config=InternalApiConfig(base_url=api_base_url, timeout_seconds=timeout_seconds),
             worker_kind=worker_kind,
-            task_type=task_type,
+            step_kind=step_kind,
             run_type=run_type,
             workspace_root=Path(values.get("WORKER_WORKSPACE_ROOT", "/tmp/runtime")),
             poll_interval_seconds=_parse_non_negative_float(values.get("WORKER_POLL_INTERVAL_SECONDS"), 5.0),
@@ -140,10 +140,10 @@ def run_worker_loop(
 
     config.workspace_root.mkdir(parents=True, exist_ok=True)
     _LOGGER.info(
-        "%s worker_kind=%s task_type=%s run_type=%s workspace_root=%s",
+        "%s worker_kind=%s step_kind=%s run_type=%s workspace_root=%s",
         _LOG_MARKER_RUN_WORKER_LOOP,
         config.worker_kind,
-        config.task_type,
+        config.step_kind,
         config.run_type,
         config.workspace_root,
     )
@@ -160,13 +160,19 @@ def run_worker_loop(
             queued_runs = client.list_queued_runs(
                 status="queued",
                 run_type=config.run_type,
-                task_type=config.task_type,
+                worker_kind=config.worker_kind,
+                step_kind=config.step_kind,
                 page_size=1,
             )
         except Exception:
             failed_runs += 1
             idle_polls += 1
-            _LOGGER.exception("%s queue_poll_failed run_type=%s task_type=%s", _LOG_MARKER_RUN_WORKER_LOOP, config.run_type, config.task_type)
+            _LOGGER.exception(
+                "%s queue_poll_failed run_type=%s step_kind=%s",
+                _LOG_MARKER_RUN_WORKER_LOOP,
+                config.run_type,
+                config.step_kind,
+            )
             if _should_stop(config, processed_runs=processed_runs, idle_polls=idle_polls):
                 return WorkerLoopResult(processed_runs=processed_runs, failed_runs=failed_runs, idle_polls=idle_polls)
             sleeper(config.poll_interval_seconds)
@@ -174,7 +180,13 @@ def run_worker_loop(
 
         if not queued_runs:
             idle_polls += 1
-            _LOGGER.info("%s idle run_type=%s task_type=%s idle_polls=%d", _LOG_MARKER_RUN_WORKER_LOOP, config.run_type, config.task_type, idle_polls)
+            _LOGGER.info(
+                "%s idle run_type=%s step_kind=%s idle_polls=%d",
+                _LOG_MARKER_RUN_WORKER_LOOP,
+                config.run_type,
+                config.step_kind,
+                idle_polls,
+            )
             if _should_stop(config, processed_runs=processed_runs, idle_polls=idle_polls):
                 return WorkerLoopResult(processed_runs=processed_runs, failed_runs=failed_runs, idle_polls=idle_polls)
             sleeper(config.poll_interval_seconds)

@@ -69,15 +69,15 @@ def _render_file_summary(item: JsonMapping) -> str:
 
 
 def _is_text_item(item: JsonMapping) -> bool:
-    return str(item.get("kind") or "") == "text" or str(_source(item).get("origin_type") or "") == "text"
+    return str(item.get("kind") or "") == "text" or str(_origin(item).get("origin_type") or "") == "text"
 
 
 def _is_url_item(item: JsonMapping) -> bool:
-    return str(item.get("kind") or "") == "url" or str(_source(item).get("origin_type") or "") == "url"
+    return str(item.get("kind") or "") == "url" or str(_origin(item).get("origin_type") or "") == "url"
 
 
 def _extract_text_preview(item: JsonMapping) -> str:
-    for value in (_source(item).get("text"), item.get("text"), item.get("display_name")):
+    for value in (_origin(item).get("origin_ref"), item.get("text"), item.get("display_name")):
         normalized = _normalize_text(value)
         if normalized:
             return normalized
@@ -85,7 +85,7 @@ def _extract_text_preview(item: JsonMapping) -> str:
 
 
 def _extract_url(item: JsonMapping) -> str:
-    for value in (_source(item).get("url"), item.get("url"), item.get("display_name")):
+    for value in (_origin(item).get("origin_ref"), item.get("url"), item.get("display_name")):
         normalized = _normalize_text(value)
         if normalized:
             return normalized
@@ -93,7 +93,7 @@ def _extract_url(item: JsonMapping) -> str:
 
 
 def _extract_size_bytes(item: JsonMapping) -> int | None:
-    for mapping in (item, _source(item), _metadata(item)):
+    for mapping in (item, _origin(item), _metadata(item)):
         parsed = _coerce_non_negative_int(mapping.get("size_bytes"))
         if parsed is not None:
             return parsed
@@ -101,7 +101,7 @@ def _extract_size_bytes(item: JsonMapping) -> int | None:
 
 
 def _extract_duration_seconds(item: JsonMapping) -> int | None:
-    for mapping in (item, _source(item), _metadata(item)):
+    for mapping in (item, _origin(item), _metadata(item)):
         for key in ("duration_seconds", "duration_secs", "duration"):
             parsed = _coerce_duration_seconds(mapping.get(key))
             if parsed is not None:
@@ -158,17 +158,17 @@ def _truncate(value: str, limit: int) -> str:
 
 
 def _fallback_label(item: JsonMapping) -> str:
-    for value in (item.get("display_name"), item.get("media_item_id")):
+    for value in (item.get("display_name"), item.get("media_asset_id")):
         normalized = _normalize_text(value)
         if normalized:
             return normalized
     return "Материал"
 
 
-def _source(item: JsonMapping) -> JsonMapping:
-    source = item.get("source")
-    if isinstance(source, Mapping):
-        return source
+def _origin(item: JsonMapping) -> JsonMapping:
+    origin = item.get("origin")
+    if isinstance(origin, Mapping):
+        return origin
     return {}
 
 

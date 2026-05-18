@@ -4,121 +4,191 @@
   <Framework>Go HTTP API, PostgreSQL, MinIO, Redis/asynq, Python workers, React Web UI, Telegram adapter, MCP adapter</Framework>
 
   <ArchitectureShape>
-    <goal>Make the API the durable product authority for media accumulation, curation, execution, artifacts, diagnostics, and retention.</goal>
-    <canonical-chain>media_item -&gt; collection/inbox -&gt; immutable selection -&gt; analysis_run -&gt; artifacts</canonical-chain>
-    <control-plane>Go API owns public contracts, owner scope, lifecycle transitions, validation, idempotency, retention policy, diagnostics, artifact metadata, and adapter-visible state.</control-plane>
-    <execution-plane>Python workers consume sealed selection material through internal execution contracts and report progress, artifacts, and diagnostics back to the control plane.</execution-plane>
+    <goal>Make the API the durable product authority for media accumulation, curation, execution, artifacts, diagnostics, channel recovery, idempotency, and retention.</goal>
+    <canonical-chain>media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; analysis_run_step/artifacts -&gt; artifact_subject lineage</canonical-chain>
+    <control-plane>Go API owns target public contracts, channel_account scope, lifecycle transitions, validation, operation_requests, retention policy, diagnostics, artifact metadata, and channel_surface recovery state.</control-plane>
+    <execution-plane>Python workers consume sealed selection_snapshot material and declared analysis_run_step_inputs through internal execution contracts.</execution-plane>
     <queue-plane>Redis/asynq remains an execution transport only; queued work does not define user-facing product concepts.</queue-plane>
-    <object-plane>MinIO stores source bodies, previews, generated artifacts, private execution evidence, and diagnostic bundles behind API-issued access decisions.</object-plane>
-    <adapters>Telegram, Web, and MCP are thin clients over the same API-owned media_item, collection, selection, analysis_run, artifact, and diagnostic state.</adapters>
+    <object-plane>MinIO stores stored_object bodies for media assets, previews, generated artifacts, private execution evidence, and diagnostic bundles behind API-issued access decisions.</object-plane>
+    <adapters>Telegram, Web, and MCP are thin clients over the same API-owned media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, channel_account, and channel_surface state.</adapters>
   </ArchitectureShape>
 
   <TargetComponents>
-    <component id="apps-api" path="apps/api" role="Go HTTP API, WebSocket server, storage orchestrator, and owner-scoped product authority" />
-    <component id="workers-transcription" path="workers/transcription" role="Python transcription execution behind analysis_run" />
-    <component id="workers-agent-runner" path="workers/agent-runner" role="Python report and research execution behind analysis_run" />
+    <component id="apps-api" path="apps/api" role="Go HTTP API, WebSocket server, storage orchestrator, and channel-account-scoped product authority" />
+    <component id="workers-transcription" path="workers/transcription" role="Python transcription execution behind analysis_run_steps" />
+    <component id="workers-agent-runner" path="workers/agent-runner" role="Python report and research execution behind analysis_run_steps" />
     <component id="apps-web" path="apps/web" role="React management UI for inbox, collections, selections, runs, artifacts, and diagnostics" />
-    <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Telegram capture and management adapter over API-owned state" />
+    <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Telegram capture, rendering, and recovery adapter over API-owned state" />
     <component id="apps-mcp-server" path="apps/mcp-server" role="Thin MCP tool adapter over API-owned state" />
-    <component id="packages-contracts" path="packages/contracts" role="OpenAPI and schema source for canonical public vocabulary" />
+    <component id="packages-contracts" path="packages/contracts" role="OpenAPI and JSON schema source for target vocabulary plus explicit deprecated compatibility contracts" />
     <component id="infra-compose" path="infra/docker-compose.yml" role="Local runtime topology" />
   </TargetComponents>
 
   <PersistentModel>
-    <table name="media_items">
-      <purpose>Owner-scoped durable input records independent of execution.</purpose>
-      <fields>id, owner_id, source_id, adapter_origin, kind, display_name, status, size_bytes, mime_type, content_hash, created_at, updated_at, deleted_at, retention_policy_id, diagnostics_id</fields>
-      <rules>New inputs land in the owner inbox by default; invalid inputs remain queryable through diagnostics.</rules>
+    <table name="channel_accounts">
+      <purpose>Durable external channel identities for the single human user.</purpose>
+      <fields>id, channel, external_account_ref, display_name, status, metadata, created_at, updated_at, last_seen_at, disabled_at</fields>
+      <rules>Channel accounts are access and recovery scope, not product owners or workspaces.</rules>
     </table>
-    <table name="sources">
-      <purpose>Normalized input body and origin metadata behind media_item.</purpose>
-      <fields>id, owner_id, origin_type, external_uri, object_key, text_body_ref, checksum, byte_size, metadata_json, created_at, expires_at</fields>
-      <rules>Adapters do not bypass the API to write source bodies.</rules>
+    <table name="operation_requests">
+      <purpose>Idempotency and audit records for accepted mutating channel operations.</purpose>
+      <fields>id, channel_account_id, operation_type, idempotency_key, request_hash, status, target_type, target_id, error_code, metadata, created_at, completed_at</fields>
+      <rules>Retries must be deterministic and conflict-aware.</rules>
+    </table>
+    <table name="stored_objects">
+      <purpose>Shared object storage metadata for input media and output artifacts.</purpose>
+      <fields>id, bucket, object_key, content_type, size_bytes, checksum, storage_status, retention_state, created_at, expires_at, deleted_at</fields>
+      <rules>Stored object lifecycle can expire bytes without deleting historical run metadata.</rules>
+    </table>
+    <table name="media_assets">
+      <purpose>Channel-account-scoped durable input records independent of execution.</purpose>
+      <fields>id, channel_account_id, stored_object_id, origin_type, origin_ref, kind, display_name, status, metadata, created_at, updated_at, deleted_at</fields>
+      <rules>Accepted media assets land in inbox by default; invalid assets remain visible through diagnostics.</rules>
     </table>
     <table name="collections">
-      <purpose>Owner-scoped named groups, including the default inbox.</purpose>
-      <fields>id, owner_id, kind, name, status, version, created_at, updated_at, archived_at, deleted_at</fields>
-      <rules>Exactly one active inbox exists per owner; other collections are user-managed.</rules>
+      <purpose>Mutable channel-account-scoped groups, including the default inbox.</purpose>
+      <fields>id, channel_account_id, kind, name, status, version, created_at, updated_at, archived_at, deleted_at</fields>
+      <rules>Collection membership is mutable and version checked; collection edits never mutate sealed snapshots.</rules>
     </table>
     <table name="collection_items">
-      <purpose>Ordered membership between collections and media_item records.</purpose>
-      <fields>collection_id, media_item_id, owner_id, position, added_by, added_at, removed_at</fields>
-      <rules>Membership changes are versioned through the parent collection and never mutate media_item content.</rules>
+      <purpose>Ordered membership between collections and media_asset records.</purpose>
+      <fields>id, collection_id, media_asset_id, position, added_via_channel_account_id, added_at, removed_at</fields>
+      <rules>Active membership has unique asset and position constraints per collection.</rules>
     </table>
-    <table name="selections">
+    <table name="selection_snapshots">
       <purpose>Immutable ordered snapshots prepared for analysis.</purpose>
-      <fields>id, owner_id, status, source_collection_id, item_snapshot_json, option_snapshot_json, diagnostics_id, created_by, created_at, sealed_at</fields>
-      <rules>selection rows are append-only after sealing except for diagnostic invalidation metadata.</rules>
+      <fields>id, channel_account_id, source_collection_id, status, option_snapshot, diagnostics, created_via_channel_account_id, created_at, sealed_at</fields>
+      <rules>Selection snapshots are never recomputed from later collection state and storage rejects direct update/delete attempts.</rules>
+    </table>
+    <table name="selection_snapshot_items">
+      <purpose>Frozen item facts consumed by workers.</purpose>
+      <fields>id, selection_snapshot_id, position, media_asset_id, kind, display_name, origin_snapshot, storage_snapshot, metadata_snapshot, status_at_selection, diagnostics</fields>
+      <rules>Workers read snapshot facts, not mutable collection rows.</rules>
     </table>
     <table name="analysis_runs">
-      <purpose>User-facing execution records created from selections.</purpose>
-      <fields>id, owner_id, selection_id, run_type, status, idempotency_key, delivery_preference, evidence_gate_state, diagnostics_id, created_at, started_at, completed_at, canceled_at, expires_at</fields>
-      <rules>Internal execution rows and queue tasks may reference analysis_run_id, but public clients address analysis_run.</rules>
+      <purpose>User-facing execution records created from selection_snapshots.</purpose>
+      <fields>id, channel_account_id, selection_snapshot_id, run_type, status, version, idempotency_key, params, delivery, evidence_gate_state, created_via_channel_account_id, created_at, started_at, completed_at, cancel_requested_at, canceled_at, expires_at</fields>
+      <rules>Public clients address analysis_run; internal steps remain behind it.</rules>
+    </table>
+    <table name="analysis_run_steps">
+      <purpose>Internal worker-visible step, claim, heartbeat, retry, and finalization state.</purpose>
+      <fields>id, analysis_run_id, step_kind, worker_kind, status, attempt_no, lease_owner, claimed_at, heartbeat_at, finalized_at, metadata, created_at</fields>
+      <rules>Steps are internal execution records, not public product objects.</rules>
+    </table>
+    <table name="analysis_run_step_inputs">
+      <purpose>Declared immutable inputs a worker step may read.</purpose>
+      <fields>id, analysis_run_step_id, input_kind, selection_snapshot_item_id, artifact_id, position, required, metadata, created_at</fields>
+      <rules>Report and research steps consume transcript/text-corpus artifacts when speech prerequisites exist; active worker code materializes declared artifact inputs instead of discovering raw speech media.</rules>
+    </table>
+    <table name="analysis_run_events">
+      <purpose>Append-only run status, artifact, and diagnostic timeline.</purpose>
+      <fields>id, analysis_run_id, event_type, version, status, payload, created_at</fields>
+      <rules>Events power polling and WebSocket updates.</rules>
     </table>
     <table name="artifacts">
-      <purpose>Owner-scoped outputs and evidence produced for analysis_run records.</purpose>
-      <fields>id, owner_id, analysis_run_id, kind, status, object_key, content_type, size_bytes, checksum, preview_json, visibility, retention_state, created_at, expires_at, deleted_at</fields>
-      <rules>Artifact access is always mediated by the API and scoped to owner plus run.</rules>
+      <purpose>Run outputs, previews, evidence objects, and downloadable files.</purpose>
+      <fields>id, channel_account_id, analysis_run_id, stored_object_id, kind, status, content_type, checksum, size_bytes, visibility, preview, created_at, expires_at, deleted_at</fields>
+      <rules>Artifact access is mediated by the API and scoped through channel_account plus run; worker-published artifacts create stored_object metadata and artifact_subject lineage.</rules>
+    </table>
+    <table name="artifact_subjects">
+      <purpose>Lineage links from artifacts to runs, steps, snapshots, selected items, media assets, or diagnostics.</purpose>
+      <fields>id, artifact_id, subject_type, subject_id, subject_role, created_at</fields>
+      <rules>Lineage removes guessing from worker and UI artifact resolution.</rules>
     </table>
     <table name="diagnostics">
-      <purpose>Structured failure, warning, and operator evidence for ingestion, selection, execution, adapter, retention, and artifact paths.</purpose>
-      <fields>id, owner_id, subject_type, subject_id, severity, code, message, context_json, correlation_id, created_at</fields>
+      <purpose>Structured failure, warning, and operator evidence for target subjects.</purpose>
+      <fields>id, channel_account_id, subject_type, subject_id, severity, code, message, context, safe_channel_context, correlation_id, remediation_hint, created_at</fields>
       <rules>Rejected records and partial failures are represented as diagnostics, not hidden drops.</rules>
     </table>
-    <table name="execution_rows">
-      <purpose>Internal worker claims, queue state, attempts, and read models behind analysis_run.</purpose>
-      <fields>id, analysis_run_id, worker_kind, task_kind, status, attempt_no, lease_owner, claimed_at, heartbeat_at, finalized_at</fields>
-      <rules>This table family is internal and cannot reintroduce old public product vocabulary.</rules>
+    <table name="channel_surfaces">
+      <purpose>Restart-safe external presentation mappings for Telegram, Web recovery surfaces, or future channels.</purpose>
+      <fields>id, channel_account_id, channel, surface_type, surface_key, address, address_fingerprint, display_state, lifecycle_status, version, idempotency_key, created_at, updated_at, last_rendered_at, superseded_at, deleted_at</fields>
+      <rules>Channel surfaces cannot drive product lifecycle.</rules>
+    </table>
+    <table name="channel_surface_subjects">
+      <purpose>Links from channel surfaces to represented product or diagnostic subjects.</purpose>
+      <fields>surface_id, subject_type, subject_id, subject_role, created_at</fields>
+      <rules>One primary subject per surface is allowed.</rules>
+    </table>
+    <table name="channel_surface_events">
+      <purpose>Append-only operational history for channel surface recovery and delivery investigations.</purpose>
+      <fields>id, surface_id, event_type, reason, previous_version, next_version, actor_type, actor_id, metadata, created_at</fields>
+      <rules>Delivery failures remain channel evidence and do not mutate product entities.</rules>
     </table>
   </PersistentModel>
 
   <PublicApiSurface>
-    <endpoint method="POST" path="/v1/media-items">Create a media_item from text, URL, or uploaded body.</endpoint>
-    <endpoint method="GET" path="/v1/media-items">List owner-scoped media_item records with filters, pagination, and diagnostics summary.</endpoint>
-    <endpoint method="GET" path="/v1/media-items/{media_item_id}">Read one media_item and source metadata allowed for the caller.</endpoint>
-    <endpoint method="DELETE" path="/v1/media-items/{media_item_id}">Soft-delete a media_item and update collection membership visibility.</endpoint>
-    <endpoint method="GET" path="/v1/collections/inbox">Read the default owner inbox.</endpoint>
+    <endpoint method="POST" path="/v1/media-assets">Create a media_asset from text, URL, or channel-provided object reference.</endpoint>
+    <endpoint method="POST" path="/v1/media-assets/upload">Upload bytes and create a media_asset.</endpoint>
+    <endpoint method="GET" path="/v1/media-assets">List channel-account-scoped media_asset records.</endpoint>
+    <endpoint method="GET" path="/v1/media-assets/{media_asset_id}">Read one media_asset and safe origin or stored_object metadata.</endpoint>
+    <endpoint method="DELETE" path="/v1/media-assets/{media_asset_id}">Mark one media_asset deleted.</endpoint>
+    <endpoint method="GET" path="/v1/collections/inbox">Read the default inbox collection.</endpoint>
     <endpoint method="POST" path="/v1/collections">Create a user collection.</endpoint>
     <endpoint method="GET" path="/v1/collections">List inbox and collections.</endpoint>
-    <endpoint method="PATCH" path="/v1/collections/{collection_id}">Rename, archive, or restore a collection with version checks.</endpoint>
-    <endpoint method="POST" path="/v1/collections/{collection_id}/items">Add or reorder media_item membership.</endpoint>
-    <endpoint method="DELETE" path="/v1/collections/{collection_id}/items/{media_item_id}">Remove collection membership.</endpoint>
-    <endpoint method="POST" path="/v1/selections">Create and seal an immutable selection.</endpoint>
-    <endpoint method="GET" path="/v1/selections/{selection_id}">Read a selection snapshot.</endpoint>
-    <endpoint method="POST" path="/v1/analysis-runs">Create analysis_run from a selection.</endpoint>
-    <endpoint method="GET" path="/v1/analysis-runs">List owner-scoped runs.</endpoint>
+    <endpoint method="PATCH" path="/v1/collections/{collection_id}">Rename, archive, restore, or delete a collection with version checks.</endpoint>
+    <endpoint method="POST" path="/v1/collections/{collection_id}/items">Add or reorder media_asset membership.</endpoint>
+    <endpoint method="DELETE" path="/v1/collections/{collection_id}/items/{media_asset_id}">Remove collection membership.</endpoint>
+    <endpoint method="POST" path="/v1/selection-snapshots">Create and seal an immutable selection_snapshot.</endpoint>
+    <endpoint method="GET" path="/v1/selection-snapshots/{selection_snapshot_id}">Read a selection_snapshot.</endpoint>
+    <endpoint method="POST" path="/v1/analysis-runs">Create analysis_run from a selection_snapshot.</endpoint>
+    <endpoint method="GET" path="/v1/analysis-runs">List channel-account-scoped runs.</endpoint>
     <endpoint method="GET" path="/v1/analysis-runs/{analysis_run_id}">Read run status, diagnostics summary, and artifact summary.</endpoint>
     <endpoint method="POST" path="/v1/analysis-runs/{analysis_run_id}/cancel">Request cooperative cancellation.</endpoint>
-    <endpoint method="POST" path="/v1/analysis-runs/{analysis_run_id}/retry">Create a new analysis_run attempt from the same sealed selection as a previous run.</endpoint>
+    <endpoint method="POST" path="/v1/analysis-runs/{analysis_run_id}/retry">Create a new analysis_run attempt from the same sealed selection_snapshot.</endpoint>
     <endpoint method="GET" path="/v1/analysis-runs/{analysis_run_id}/events">Poll events and diagnostics.</endpoint>
     <endpoint method="GET" path="/v1/analysis-runs/{analysis_run_id}/artifacts">List artifact summaries for one analysis_run.</endpoint>
-    <endpoint method="GET" path="/v1/artifacts/{artifact_id}">Resolve owner-scoped artifact preview or download access.</endpoint>
-    <endpoint method="POST" path="/v1/artifacts/{artifact_id}/refresh">Refresh artifact preview and download handles for the same owner.</endpoint>
-    <endpoint method="GET" path="/v1/diagnostics">Query owner-scoped diagnostics by subject, severity, code, and correlation id.</endpoint>
-    <endpoint method="POST" path="/v1/admin/reconcile-queue">Promote pending analysis_run tasks into queued worker delivery.</endpoint>
-    <endpoint method="GET" path="/v1/admin/observability">Read queue and artifact-resolution observability counters.</endpoint>
-    <endpoint method="GET" path="/v1/ws">Subscribe to owner-visible analysis_run events over WebSocket.</endpoint>
+    <endpoint method="GET" path="/v1/artifacts/{artifact_id}">Resolve channel-account-scoped artifact preview or download access.</endpoint>
+    <endpoint method="POST" path="/v1/artifacts/{artifact_id}/refresh">Refresh artifact preview and download handles.</endpoint>
+    <endpoint method="GET" path="/v1/diagnostics">Query diagnostics by subject, severity, code, and correlation id.</endpoint>
+    <endpoint method="GET" path="/v1/ws">Subscribe to analysis_run events over WebSocket.</endpoint>
   </PublicApiSurface>
 
+  <InternalApiSurface>
+    <endpoint method="GET" path="/internal/v1/channel-accounts">List channel_account records for recovery and diagnostics.</endpoint>
+    <endpoint method="PUT" path="/internal/v1/channel-accounts">Resolve or create channel_account records.</endpoint>
+    <endpoint method="PATCH" path="/internal/v1/channel-accounts/{channel_account_id}">Update channel_account status, metadata, or last-seen timestamp.</endpoint>
+    <endpoint method="PUT" path="/internal/v1/channel-surfaces">Upsert channel_surface records for restart-safe rendering.</endpoint>
+    <endpoint method="GET" path="/internal/v1/channel-surfaces">List channel_surfaces by channel account or represented subject.</endpoint>
+    <endpoint method="GET" path="/internal/v1/channel-surfaces/active">List active channel_surfaces for channel restart recovery.</endpoint>
+    <endpoint method="PATCH" path="/internal/v1/channel-surfaces/{channel_surface_id}/display-state">Replace channel_surface display_state with optimistic version checks.</endpoint>
+    <endpoint method="POST" path="/internal/v1/channel-surfaces/{channel_surface_id}/supersede">Supersede stale channel surfaces.</endpoint>
+    <endpoint method="GET" path="/internal/v1/channel-surfaces/{channel_surface_id}/events">List channel_surface event history.</endpoint>
+    <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/steps/claim">Claim an analysis_run_step with declared inputs.</endpoint>
+    <endpoint method="GET" path="/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check">Check cooperative cancellation for a step.</endpoint>
+    <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/steps/progress">Record step progress.</endpoint>
+    <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize">Finalize a step.</endpoint>
+    <endpoint method="GET" path="/internal/v1/analysis-runs/{analysis_run_id}/request-access">Resolve private agent-runner operation envelopes by analysis_run_step_id.</endpoint>
+    <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/artifacts">Record artifacts.</endpoint>
+    <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/diagnostics">Record diagnostics.</endpoint>
+  </InternalApiSurface>
+
+  <CompatibilitySurface>
+    <deprecated path="/v1/media-items">Maps media_item/source/owner fields to media_asset/origin/stored_object/channel_account during transition only.</deprecated>
+    <deprecated path="/v1/selections">Maps selection_id and media_item_id fields to selection_snapshot_id and media_asset_id during transition only.</deprecated>
+    <deprecated name="analysis_run_task">Maps only to internal analysis_run_step migration concepts and must not appear in target public contracts.</deprecated>
+  </CompatibilitySurface>
+
   <LifecycleAndRetention>
-    <status-source>Lifecycle statuses are defined in docs/requirements.xml and must be mirrored in contracts.</status-source>
-    <retention-rule>Soft-deleted media_item and collection membership are hidden from default reads but retained until policy permits hard deletion.</retention-rule>
-    <retention-rule>Selections remain immutable audit snapshots even if source media later expires; execution must record whether source bodies were available at run time.</retention-rule>
-    <retention-rule>Artifacts can expire independently from run metadata; diagnostics must explain unavailable artifacts.</retention-rule>
-    <retention-rule>Owner export and deletion workflows must include media_item, collection, selection, analysis_run, artifact, source, and diagnostic records.</retention-rule>
+    <status-source>Lifecycle statuses are defined in docs/requirements.xml and mirrored in packages/contracts schemas.</status-source>
+    <retention-rule>Soft-deleted media_assets and collection membership are hidden from default reads but retained until policy permits hard deletion.</retention-rule>
+    <retention-rule>Selection snapshots remain immutable audit snapshots even if stored object bodies later expire.</retention-rule>
+    <retention-rule>Artifacts can expire independently from run metadata; diagnostics explain unavailable artifacts.</retention-rule>
+    <retention-rule>Deletion and export workflows must include media_asset, stored_object, collection, selection_snapshot, analysis_run, artifact, artifact_subject, diagnostic, and channel_surface records.</retention-rule>
   </LifecycleAndRetention>
 
   <AdapterContracts>
-    <telegram>Telegram captures input, shows inbox or collection state, lets the user manage items, creates selections, starts analysis_run records, and sends artifact previews or downloads returned by the API.</telegram>
-    <web>Web provides the richest management UI for inbox, collections, selections, runs, artifacts, diagnostics, owner-scoped search, and the surviving retention-touching actions: media soft delete plus artifact access refresh.</web>
+    <telegram>Telegram captures input, resolves channel_account scope, creates media_assets, shows inbox or collection state, creates selection_snapshots, starts analysis_run records, persists current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces, recovers active surfaces after restart, and sends artifact previews or downloads returned by the API.</telegram>
+    <web>Web provides management UI for materials, groups, selections, progress, results, downloads, errors, and retention over target public API contracts.</web>
     <mcp>MCP exposes stable tools over the same API and never maintains its own durable media store.</mcp>
   </AdapterContracts>
 
   <EvidenceContracts>
-    <contract-evidence>Schema tests must fail if old public product route vocabulary returns to OpenAPI or shared JSON schemas.</contract-evidence>
-    <storage-evidence>Storage tests must cover owner isolation, immutable selection snapshots, lifecycle transitions, retention, diagnostics, and artifact linkage.</storage-evidence>
-    <api-evidence>API tests must cover ingestion, inbox membership, collection mutation, selection sealing, analysis_run creation, event polling, cancellation, artifact access, and diagnostics queries.</api-evidence>
-    <adapter-evidence>Adapter tests must prove Telegram, Web, and MCP operate over the same API-owned state and do not expose grouped submission modes as durable product state.</adapter-evidence>
+    <contract-evidence>Schema tests must prove target DTOs and route names exist, deprecated compatibility is isolated, and stale public product vocabulary does not appear in target operations.</contract-evidence>
+    <storage-evidence>Storage tests must cover target migration fragments, absence of legacy target tables, channel_account isolation, immutable selection snapshots, operation_request idempotency, step input linkage, lifecycle transitions, retention, diagnostics, channel_surface supersede rules, and artifact_subject lineage.</storage-evidence>
+    <api-evidence>API tests must cover ingestion, inbox membership, collection mutation, selection_snapshot sealing, analysis_run creation, prerequisite planning, event polling, cancellation, worker artifact stored_object registration, artifact access, and diagnostics queries.</api-evidence>
+    <worker-evidence>Worker tests must cover step_kind queue polling, analysis_run_step claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, partial diagnostics, and cancellation.</worker-evidence>
+    <adapter-evidence>Adapter tests must prove Telegram, Web, and MCP operate over the same API-owned state and do not expose grouped submission modes as durable product state. Telegram tests must also prove target channel_account media_asset, selection_snapshot, analysis_run, artifact, and diagnostic request shapes plus channel_surface restart recovery, result duplicate prevention, and supersede behavior.</adapter-evidence>
     <runtime-evidence>Runtime smoke must prove a real item can be ingested, selected, analyzed, and resolved as artifacts with diagnostics available for failures.</runtime-evidence>
   </EvidenceContracts>
 </TechnologyStack>

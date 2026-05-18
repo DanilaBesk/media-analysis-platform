@@ -133,14 +133,18 @@
   </PublicContractPlan>
 
   <StoragePlan>
-    <step id="media-5cj-1">Create bottom-up migrations for channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</step>
-    <step id="media-5cj-2">Implement storage repositories with channel-account/single-user predicates on every read and mutation.</step>
+    <step id="media-7f3.9.2-1">Create bottom-up target reset migration for channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</step>
+    <step id="media-7f3.9.2-2">Implement target storage repositories with channel-account/single-user predicates for every new target read and mutation surface.</step>
+    <step id="media-7f3.9.2-3">Provide deterministic seed fixtures for fresh local reset/bootstrap tests.</step>
     <step id="media-5cj-3">Implement immutable selection snapshot writes and prove later collection edits do not affect sealed selections.</step>
     <step id="media-5cj-4">Implement retention state transitions and stored object/artifact cleanup scheduling.</step>
     <step id="media-5cj-5">Implement diagnostics persistence for ingestion, selection_snapshot, run, prerequisite, worker, artifact, adapter, and retention failures.</step>
   </StoragePlan>
 
   <ApiOrchestrationPlan>
+    <step id="media-7f3.9.3-1">Wire TargetRuntimeService into cmd/api through NewRuntimeDependenciesWithTarget over apps/api/internal/storage/target.Store.</step>
+    <step id="media-7f3.9.3-2">Expose target HTTP paths for channel_accounts, media_assets/upload, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, analysis_run_step lifecycle, and channel_surfaces.</step>
+    <step id="media-7f3.9.3-3">Keep legacy owner/media_item/selection/execution routes as compatibility-only surfaces while target routes return only target vocabulary.</step>
     <step id="api-1">Build ingestion service that normalizes adapter input into stored_object and media_asset records, then adds accepted items to inbox.</step>
     <step id="api-2">Build collection service for inbox reads, collection mutation, ordering, archive, delete, and version conflict handling.</step>
     <step id="api-3">Build selection_snapshot service that validates channel-account access, freezes item snapshots, freezes options, and emits diagnostics.</step>
@@ -155,6 +159,10 @@
     <step id="media-sfx-3">Partial success records per-item diagnostics while allowing analysis_run to finish with partially_succeeded when policy allows.</step>
     <step id="media-sfx-4">Worker logs and raw evidence become private artifacts or diagnostics, not public product entities.</step>
     <step id="media-sfx-5">Agent-runner consumes ready transcript or prepared text-corpus artifacts for report and research work; it does not transcribe raw speech media.</step>
+    <step id="media-7f3.9.6-1">WorkerRuntimeConfig and worker polling use step_kind and worker_kind over analysis_run_step queue records.</step>
+    <step id="media-7f3.9.6-2">Transcription consumes immutable selection_snapshot_item input and publishes transcript artifacts, diagnostics, progress, and finalization with analysis_run_step_id.</step>
+    <step id="media-7f3.9.6-3">Agent-runner materializes declared transcript_artifact/text_corpus_artifact analysis_run_step_inputs as harness inputs before report or research execution.</step>
+    <step id="media-7f3.9.6-4">Target API artifact registration creates stored_object metadata and artifact_subject lineage for worker outputs.</step>
   </WorkerPlan>
 
   <AdapterPlan>
@@ -163,6 +171,14 @@
       <step>After input, render current inbox or selected collection state and explicit actions for manage, create selection, run analysis, remove item, and view diagnostics.</step>
       <step>Use API identifiers and version tokens in callbacks for mutable collection operations.</step>
       <step>Display analysis_run status and artifacts returned by the API.</step>
+      <step id="media-7f3.9.4-1">Persist the current materials card as a current_materials_panel channel_surface with opaque Telegram address and display_state.</step>
+      <step id="media-7f3.9.4-2">Persist focused active run cards as analysis_task_surface channel_surfaces and resume watchers from active surfaces on adapter startup.</step>
+      <step id="media-7f3.9.4-3">Persist delivered transcript/result messages as result_artifact_surface channel_surfaces so restart recovery does not deliver the same artifact twice.</step>
+      <step id="media-7f3.9.4-4">Supersede uneditable Telegram messages through the channel_surface lifecycle before creating replacement surfaces.</step>
+      <step id="media-7f3.9.5-1">Resolve Telegram chat/user scope into channel_account before every target public product request.</step>
+      <step id="media-7f3.9.5-2">Create text, URL, and upload inputs as media_assets and render current materials from collection media_asset membership.</step>
+      <step id="media-7f3.9.5-3">Create selection_snapshots from current collection media_asset_ids and start analysis_runs with selection_snapshot_id.</step>
+      <step id="media-7f3.9.5-4">Read analysis_runs, artifacts, diagnostics, and cancellation through channel_account_id while preserving channel_surface recovery from media-7f3.9.4.</step>
     </Telegram>
     <Web bead="media-7wo">
       <step>Build simple human-facing views for materials, groups, current selection, progress, results, downloads, errors, and retention actions over the public API.</step>
@@ -204,7 +220,8 @@
 
   <CurrentClosureState>
     <completed>Earlier inbox-first packets remain historical implementation evidence, but they are superseded by the media-7f3 target rebuild plan where naming, table boundaries, API orchestration, Web copy, and worker input contracts are being redefined from first principles.</completed>
-    <remaining>Open work is tracked by media-7f3.9, media-7f3.10, and media-7f3.11. The current tree is not closed against the target rebuild until compatibility isolation, target storage, prerequisite orchestration, worker step inputs, Web/MCP split, and QA vocabulary gates pass.</remaining>
+    <completed bead="media-7f3.9.6">Active workers now use analysis_run_step queue/claim/progress/finalize contracts, sealed selection_snapshot materialization, declared artifact step inputs for agent-runner, and API-owned artifact/diagnostic publication.</completed>
+    <remaining>Open work is tracked by media-7f3.9, media-7f3.10, and media-7f3.11. The current tree is not closed against the target rebuild until Web/MCP migration, full prerequisite runtime orchestration proof, coverage closure, and QA vocabulary gates pass.</remaining>
   </CurrentClosureState>
 
   <DefinitionOfDone>

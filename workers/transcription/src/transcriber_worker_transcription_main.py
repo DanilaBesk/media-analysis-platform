@@ -62,7 +62,7 @@ def main(env: Mapping[str, str] | None = None) -> int:
     values = os.environ if env is None else env
     config = WorkerRuntimeConfig.from_env(
         worker_kind="transcription",
-        task_type="selection.transcription",
+        step_kind="selection.transcription",
         run_type="transcription",
         env=values,
     )

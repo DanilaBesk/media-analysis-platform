@@ -37,9 +37,13 @@ from telegram_adapter.errors import (
     user_error_text,
 )
 from telegram_adapter.gateway import (
+    ANALYSIS_TASK_SURFACE,
+    ACTIVE_RUN_STATUSES,
     CANCELABLE_RUN_STATUSES,
+    CURRENT_MATERIALS_PANEL,
     InboxStatus,
     IngressRecord,
+    RESULT_ARTIFACT_SURFACE,
     TERMINAL_RUN_STATUSES,
     TelegramFileInput,
     TelegramInboxGateway,
@@ -97,6 +101,7 @@ class TelegramInboxApp:
                 list(build_localized_commands(locale, locale_service=self.locale_service)),
                 language_code=locale,
             )
+        await self._recover_active_channel_surfaces()
         try:
             await self.dispatcher.start_polling(self.bot)
         finally:
@@ -266,11 +271,11 @@ class TelegramInboxApp:
             if action == "rm":
                 collection_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
-                media_item_id = _decode_callback_token(tokens[2])
+                media_asset_id = _decode_callback_token(tokens[2])
                 status = self.gateway.remove_collection_item(
                     owner=owner,
                     collection_id=collection_id,
-                    media_item_id=media_item_id,
+                    media_asset_id=media_asset_id,
                     expected_version=expected_version,
                     cursor=page_state.current_cursor if page_state else None,
                 )
@@ -362,6 +367,14 @@ class TelegramInboxApp:
                     focused_run_id=run_id,
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
+                if run_id:
+                    self._persist_analysis_task_surface(
+                        owner=owner,
+                        analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
+                        state=self.page_states.get(key, _PageState()),
+                        chat_id=callback.message.chat.id,
+                        message_id=callback.message.message_id,
+                    )
                 if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
@@ -382,8 +395,8 @@ class TelegramInboxApp:
                         expected_version=expected_version,
                     )
                 else:
-                    selection_id = _decode_callback_token(tokens[0])
-                    run = self.gateway.start_analysis(owner=owner, selection_id=selection_id)
+                    selection_snapshot_id = _decode_callback_token(tokens[0])
+                    run = self.gateway.start_analysis(owner=owner, selection_snapshot_id=selection_snapshot_id)
                     status, prefix, answer_text, run_id, terminal_status = await self._resolve_run_start_status(
                         owner=owner,
                         run=run,
@@ -408,6 +421,14 @@ class TelegramInboxApp:
                     focused_run_id=run_id,
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
+                if run_id:
+                    self._persist_analysis_task_surface(
+                        owner=owner,
+                        analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
+                        state=self.page_states.get(key, _PageState()),
+                        chat_id=callback.message.chat.id,
+                        message_id=callback.message.message_id,
+                    )
                 if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
@@ -548,6 +569,7 @@ class TelegramInboxApp:
             screen="main",
             focused_run_id=None,
         )
+        state = self.page_states.get(key, _PageState())
         markup = build_status_keyboard(
             status,
             can_go_back=False,
@@ -556,7 +578,8 @@ class TelegramInboxApp:
             screen="main",
             focused_run_id=None,
         )
-        previous_message_id = self.status_message_ids.get(key)
+        current_surface = self.gateway.find_current_materials_surface(owner=owner)
+        previous_message_id = self.status_message_ids.get(key) or _surface_message_id(current_surface)
         if prefer_edit and previous_message_id is not None:
             try:
                 await self.bot.edit_message_text(
@@ -565,11 +588,55 @@ class TelegramInboxApp:
                     message_id=previous_message_id,
                     reply_markup=markup,
                 )
+                self.status_message_ids[key] = previous_message_id
+                self._persist_current_materials_surface(
+                    owner=owner,
+                    status=status,
+                    state=state,
+                    chat_id=message.chat.id,
+                    message_id=previous_message_id,
+                    surface=current_surface,
+                )
                 return True
+            except TelegramBadRequest as error:
+                if "message is not modified" in str(error).lower():
+                    self.status_message_ids[key] = previous_message_id
+                    self._persist_current_materials_surface(
+                        owner=owner,
+                        status=status,
+                        state=state,
+                        chat_id=message.chat.id,
+                        message_id=previous_message_id,
+                        surface=current_surface,
+                    )
+                    return True
+                if current_surface is not None:
+                    self.gateway.supersede_channel_surface(
+                        surface=current_surface,
+                        reason="message_not_editable",
+                        actor_id="telegram_adapter",
+                        metadata={"chat_id": message.chat.id, "message_id": previous_message_id},
+                    )
+                self.status_message_ids.pop(key, None)
             except Exception:
+                if current_surface is not None:
+                    self.gateway.supersede_channel_surface(
+                        surface=current_surface,
+                        reason="message_not_editable",
+                        actor_id="telegram_adapter",
+                        metadata={"chat_id": message.chat.id, "message_id": previous_message_id},
+                    )
                 self.status_message_ids.pop(key, None)
         sent = await message.answer(text, reply_markup=markup)
         self.status_message_ids[key] = sent.message_id
+        self._persist_current_materials_surface(
+            owner=owner,
+            status=status,
+            state=state,
+            chat_id=message.chat.id,
+            message_id=sent.message_id,
+            surface=None,
+        )
         return True
 
     async def _deliver_run_result(
@@ -591,6 +658,8 @@ class TelegramInboxApp:
         selected = _select_transcript_artifact(artifacts)
         if selected is None:
             return ("Готовый транскрипт пока недоступен.", True)
+        if self.gateway.result_artifact_surface_exists(owner=owner, artifact_id=str(selected["artifact_id"])):
+            return ("Транскрипт уже отправлен в чат.", True)
         access = self.gateway.api_client.get_internal_artifact_download_access(artifact_id=str(selected["artifact_id"]))
         download_url = _artifact_download_url(access)
         if not download_url:
@@ -605,15 +674,33 @@ class TelegramInboxApp:
         if _should_send_transcript_as_text(artifact, content):
             text = _decode_transcript_text(content)
             if message is not None:
-                await message.answer(text)
+                sent = await message.answer(text)
+                target_chat_id = message.chat.id
             else:
-                await self.bot.send_message(chat_id=chat_id, text=text)
+                sent = await self.bot.send_message(chat_id=chat_id, text=text)
+                target_chat_id = chat_id
+            self._persist_result_artifact_surface(
+                owner=owner,
+                artifact=artifact,
+                chat_id=target_chat_id,
+                message_id=sent.message_id,
+                delivery_mode="text",
+            )
             return ("Транскрипт отправлен в чат", False)
         document = BufferedInputFile(content, filename=_artifact_filename(artifact))
         if message is not None:
-            await message.answer_document(document)
+            sent = await message.answer_document(document)
+            target_chat_id = message.chat.id
         else:
-            await self.bot.send_document(chat_id=chat_id, document=document)
+            sent = await self.bot.send_document(chat_id=chat_id, document=document)
+            target_chat_id = chat_id
+        self._persist_result_artifact_surface(
+            owner=owner,
+            artifact=artifact,
+            chat_id=target_chat_id,
+            message_id=sent.message_id,
+            delivery_mode="document",
+        )
         return ("Транскрипт отправлен файлом", False)
 
     def _download_artifact_bytes(self, download_url: str) -> bytes:
@@ -630,12 +717,12 @@ class TelegramInboxApp:
         collection_id: str,
         expected_version: int,
     ) -> tuple[InboxStatus, str, str, str | None, str | None]:
-        selection = self.gateway.create_selection(
+        selection = self.gateway.create_selection_snapshot(
             owner=owner,
             collection_id=collection_id,
             expected_version=expected_version,
         )
-        run = self.gateway.start_analysis(owner=owner, selection_id=str(selection["selection_id"]))
+        run = self.gateway.start_analysis(owner=owner, selection_snapshot_id=str(selection["selection_snapshot_id"]))
         return await self._resolve_run_start_status(owner=owner, run=run)
 
     async def _resolve_run_start_status(
@@ -766,6 +853,13 @@ class TelegramInboxApp:
                     status=status,
                     state=updated_state,
                 )
+                self._persist_analysis_task_surface(
+                    owner=owner,
+                    analysis_run=latest,
+                    state=updated_state,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                )
                 if latest_status in TERMINAL_RUN_STATUSES:
                     return
         except asyncio.CancelledError:
@@ -788,6 +882,7 @@ class TelegramInboxApp:
             return
         key = self._state_key_from_callback(callback)
         state = self.page_states.get(key, _PageState())
+        owner = self._owner_from_callback(callback)
         try:
             await callback.message.edit_text(
                 prefix + render_status_text(status, selection=state.selection, screen=state.screen),
@@ -804,6 +899,13 @@ class TelegramInboxApp:
             if "message is not modified" not in str(error).lower():
                 raise
         self.status_message_ids[key] = callback.message.message_id
+        self._persist_current_materials_surface(
+            owner=owner,
+            status=status,
+            state=state,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+        )
 
     async def _edit_status_message_via_bot(
         self,
@@ -831,6 +933,193 @@ class TelegramInboxApp:
         except TelegramBadRequest as error:
             if "message is not modified" not in str(error).lower():
                 raise
+
+    async def _recover_active_channel_surfaces(self) -> None:
+        for account in self.gateway.list_channel_accounts():
+            if account.get("channel") != "telegram" or account.get("status") != "active":
+                continue
+            owner = _owner_from_channel_account(account)
+            if owner is None:
+                continue
+            surfaces = self.gateway.list_active_channel_surfaces(
+                channel_account_id=str(account["channel_account_id"]),
+                page_size=100,
+            )
+            for surface in surfaces:
+                if surface.get("surface_type") == CURRENT_MATERIALS_PANEL:
+                    await self._recover_current_materials_surface(owner=owner, surface=surface)
+            for surface in surfaces:
+                if surface.get("surface_type") == ANALYSIS_TASK_SURFACE:
+                    self._recover_analysis_task_surface(owner=owner, surface=surface)
+
+    async def _recover_current_materials_surface(self, *, owner: JsonObject, surface: JsonObject) -> None:
+        address = _surface_address(surface)
+        if address is None:
+            return
+        chat_id, message_id = address
+        display_state = _surface_display_state(surface)
+        state = _page_state_from_display_state(display_state)
+        status = self.gateway.restore_status(owner=owner, cursor=state.current_cursor if state.screen == "materials" else None)
+        key = _state_key_from_owner(owner)
+        if key is None:
+            return
+        self._set_page_state(
+            key,
+            status,
+            current_cursor=state.current_cursor,
+            previous_cursors=state.previous_cursors,
+            selection=None,
+            screen=state.screen,
+            focused_run_id=state.focused_run_id,
+        )
+        self.status_message_ids[key] = message_id
+        recovered_state = self.page_states.get(key, state)
+        try:
+            await self._edit_status_message_via_bot(
+                chat_id=chat_id,
+                message_id=message_id,
+                status=status,
+                state=recovered_state,
+            )
+            self._persist_current_materials_surface(
+                owner=owner,
+                status=status,
+                state=recovered_state,
+                chat_id=chat_id,
+                message_id=message_id,
+                surface=surface,
+            )
+        except TelegramBadRequest as error:
+            if "message is not modified" in str(error).lower():
+                return
+            self.gateway.supersede_channel_surface(
+                surface=surface,
+                reason="message_not_editable",
+                actor_id="telegram_adapter",
+                metadata={"chat_id": chat_id, "message_id": message_id},
+            )
+            sent = await self.bot.send_message(
+                chat_id=chat_id,
+                text=render_status_text(status, selection=recovered_state.selection, screen=recovered_state.screen),
+                reply_markup=build_status_keyboard(
+                    status,
+                    can_go_back=bool(recovered_state.previous_cursors),
+                    current_cursor=recovered_state.current_cursor,
+                    selection=recovered_state.selection,
+                    screen=recovered_state.screen,
+                    focused_run_id=recovered_state.focused_run_id,
+                ),
+            )
+            self.status_message_ids[key] = sent.message_id
+            self._persist_current_materials_surface(
+                owner=owner,
+                status=status,
+                state=recovered_state,
+                chat_id=chat_id,
+                message_id=sent.message_id,
+                surface=None,
+            )
+
+    def _recover_analysis_task_surface(self, *, owner: JsonObject, surface: JsonObject) -> None:
+        run_id = _surface_subject_id(surface, subject_type="analysis_run", role="primary")
+        address = _surface_address(surface)
+        key = _state_key_from_owner(owner)
+        if not run_id or address is None or key is None:
+            return
+        latest = self.gateway.get_run_status(owner=owner, analysis_run_id=run_id)
+        if str(latest.get("status") or "") not in ACTIVE_RUN_STATUSES:
+            return
+        chat_id, message_id = address
+        display_state = _surface_display_state(surface)
+        state = _page_state_from_display_state(display_state, focused_run_id=run_id)
+        status = self.gateway.restore_status(owner=owner, cursor=state.current_cursor if state.screen == "materials" else None)
+        self._set_page_state(
+            key,
+            status,
+            current_cursor=state.current_cursor,
+            previous_cursors=state.previous_cursors,
+            selection=None,
+            screen=state.screen,
+            focused_run_id=run_id,
+        )
+        self.status_message_ids[key] = message_id
+        self._schedule_run_status_tracking(
+            key=key,
+            owner=owner,
+            analysis_run_id=run_id,
+            chat_id=chat_id,
+            message_id=message_id,
+        )
+
+    def _persist_current_materials_surface(
+        self,
+        *,
+        owner: JsonObject,
+        status: InboxStatus,
+        state: _PageState,
+        chat_id: int,
+        message_id: int,
+        surface: JsonObject | None = None,
+    ) -> JsonObject:
+        display_state = _status_surface_display_state(status, state)
+        address = _telegram_surface_address(chat_id=chat_id, message_id=message_id)
+        existing = surface if surface is not None else self.gateway.find_current_materials_surface(owner=owner)
+        if existing is not None and _surface_address_matches(existing, chat_id=chat_id, message_id=message_id):
+            try:
+                return self.gateway.replace_channel_surface_display_state(
+                    surface=existing,
+                    display_state=display_state,
+                    actor_id="telegram_adapter",
+                )
+            except TelegramApiClientError as error:
+                if error.status not in {404, 409}:
+                    raise
+        return self.gateway.upsert_current_materials_surface(
+            owner=owner,
+            address=address,
+            display_state=display_state,
+            collection=status.collection,
+        )
+
+    def _persist_analysis_task_surface(
+        self,
+        *,
+        owner: JsonObject,
+        analysis_run: JsonObject,
+        state: _PageState,
+        chat_id: int,
+        message_id: int,
+    ) -> JsonObject:
+        display_state = _run_surface_display_state(analysis_run, state)
+        return self.gateway.upsert_analysis_task_surface(
+            owner=owner,
+            analysis_run=analysis_run,
+            address=_telegram_surface_address(chat_id=chat_id, message_id=message_id),
+            display_state=display_state,
+        )
+
+    def _persist_result_artifact_surface(
+        self,
+        *,
+        owner: JsonObject,
+        artifact: JsonObject,
+        chat_id: int | None,
+        message_id: int,
+        delivery_mode: str,
+    ) -> JsonObject:
+        if chat_id is None:
+            raise RuntimeError("telegram_result_chat_missing")
+        return self.gateway.upsert_result_artifact_surface(
+            owner=owner,
+            artifact=artifact,
+            address=_telegram_surface_address(chat_id=chat_id, message_id=message_id),
+            display_state={
+                "analysis_run_id": artifact.get("analysis_run_id"),
+                "artifact_id": artifact.get("artifact_id"),
+                "delivery_mode": delivery_mode,
+                "kind": artifact.get("kind"),
+            },
+        )
 
     def _state_key_from_callback(self, callback: CallbackQuery) -> tuple[int, int | None]:
         return self._scope_from_callback(callback).state_key
@@ -980,11 +1269,11 @@ def build_status_keyboard(
                     "rm",
                     _encode_callback_token(collection_id),
                     _encode_callback_version(collection_version),
-                    _encode_callback_token(str(item["media_item_id"])),
+                    _encode_callback_token(str(item["media_asset_id"])),
                 ),
             )
             for index, item in enumerate(status.items, start=1)
-            if item.get("media_item_id") and collection_id
+            if item.get("media_asset_id") and collection_id
         ]
         rows.extend([button] for button in remove_buttons)
         nav_row: list[InlineKeyboardButton] = []
@@ -1173,7 +1462,7 @@ def _normalize_message_error(error: Exception) -> BaseException | TelegramUserEr
         return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=error.code)
     if isinstance(error, RuntimeError) and str(error) == "telegram_file_download_failed":
         return TelegramUserError(TelegramUserErrorCode.UNSUPPORTED_INPUT, detail="missing_file_content")
-    if isinstance(error, RuntimeError) and str(error) in {"slot_not_visible", "slot_missing_media_item_id", "inbox_empty"}:
+    if isinstance(error, RuntimeError) and str(error) in {"slot_not_visible", "slot_missing_media_asset_id", "inbox_empty"}:
         return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=str(error))
     return error
 
@@ -1312,7 +1601,7 @@ def _message_files(message: Message) -> Iterable[TelegramFileInput]:
 
 
 def _item_label(item: JsonObject) -> str:
-    display_name = _display_name_text(str(item.get("display_name") or item.get("media_item_id") or "media"))
+    display_name = _display_name_text(str(item.get("display_name") or item.get("media_asset_id") or "media"))
     kind = item.get("kind", "media")
     status = item.get("status", "unknown")
     metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
@@ -1413,6 +1702,145 @@ def _analysis_run_version(status: InboxStatus, analysis_run_id: str) -> int | No
         version = int(run.get("version") or 0)
         return version if version > 0 else None
     return None
+
+
+def _run_for_id(status: InboxStatus, analysis_run_id: str) -> JsonObject | None:
+    for run in reversed(status.recent_runs):
+        if str(run.get("analysis_run_id") or "") == analysis_run_id:
+            return run
+    return None
+
+
+def _status_surface_display_state(status: InboxStatus, state: _PageState) -> JsonObject:
+    return {
+        "screen": state.screen,
+        "current_cursor": state.current_cursor,
+        "previous_cursors": state.previous_cursors,
+        "next_cursor": state.next_cursor,
+        "focused_run_id": state.focused_run_id,
+        "material_count": _material_count(status),
+        "collection_id": status.collection.get("collection_id") if status.collection else None,
+        "collection_version": status.collection.get("version") if status.collection else None,
+        "active_run_ids": [
+            str(run["analysis_run_id"])
+            for run in status.active_runs
+            if run.get("analysis_run_id")
+        ],
+    }
+
+
+def _run_surface_display_state(analysis_run: JsonObject, state: _PageState) -> JsonObject:
+    return {
+        "analysis_run_id": analysis_run.get("analysis_run_id"),
+        "run_status": analysis_run.get("status"),
+        "run_version": analysis_run.get("version"),
+        "screen": state.screen,
+        "current_cursor": state.current_cursor,
+        "focused_run_id": state.focused_run_id or analysis_run.get("analysis_run_id"),
+    }
+
+
+def _telegram_surface_address(*, chat_id: int, message_id: int) -> JsonObject:
+    return {"chat_id": chat_id, "message_id": message_id}
+
+
+def _surface_message_id(surface: JsonObject | None) -> int | None:
+    if surface is None:
+        return None
+    address = _surface_address(surface)
+    return address[1] if address is not None else None
+
+
+def _surface_address(surface: JsonObject) -> tuple[int, int] | None:
+    address = surface.get("address")
+    if not isinstance(address, dict):
+        return None
+    chat_id = _parse_int(address.get("chat_id"))
+    message_id = _parse_int(address.get("message_id"))
+    if chat_id is None or message_id is None:
+        return None
+    return chat_id, message_id
+
+
+def _surface_address_matches(surface: JsonObject, *, chat_id: int, message_id: int) -> bool:
+    address = _surface_address(surface)
+    return address == (chat_id, message_id)
+
+
+def _surface_display_state(surface: JsonObject) -> JsonObject:
+    display_state = surface.get("display_state")
+    return display_state if isinstance(display_state, dict) else {}
+
+
+def _page_state_from_display_state(display_state: JsonObject, *, focused_run_id: str | None = None) -> _PageState:
+    previous = display_state.get("previous_cursors")
+    return _PageState(
+        current_cursor=_optional_str(display_state.get("current_cursor")),
+        previous_cursors=[
+            _optional_str(cursor)
+            for cursor in previous
+        ]
+        if isinstance(previous, list)
+        else [],
+        next_cursor=_optional_str(display_state.get("next_cursor")),
+        screen=str(display_state.get("screen") or "main"),
+        focused_run_id=focused_run_id or _optional_str(display_state.get("focused_run_id")),
+    )
+
+
+def _owner_from_channel_account(account: JsonObject) -> JsonObject | None:
+    metadata = account.get("metadata")
+    adapter_identity: JsonObject | None = None
+    if isinstance(metadata, dict):
+        owner = metadata.get("owner")
+        if isinstance(owner, dict) and owner.get("owner_type") and owner.get("owner_id"):
+            return owner
+        if isinstance(metadata.get("adapter_identity"), dict):
+            adapter_identity = metadata["adapter_identity"]
+    owner_id = str(account.get("external_account_ref") or "").strip()
+    if not owner_id:
+        return None
+    owner = {"owner_type": "telegram", "owner_id": owner_id}
+    if adapter_identity:
+        owner["adapter_identity"] = adapter_identity
+    return owner
+
+
+def _state_key_from_owner(owner: JsonObject) -> tuple[int, int | None] | None:
+    identity = owner.get("adapter_identity")
+    if not isinstance(identity, dict):
+        return None
+    chat_id = _parse_int(identity.get("telegram_chat_id"))
+    user_id = _parse_int(identity.get("telegram_user_id"))
+    if chat_id is None:
+        return None
+    return chat_id, user_id
+
+
+def _surface_subject_id(surface: JsonObject, *, subject_type: str, role: str) -> str | None:
+    subjects = surface.get("subjects")
+    if not isinstance(subjects, list):
+        return None
+    for subject in subjects:
+        if not isinstance(subject, dict):
+            continue
+        if subject.get("subject_type") == subject_type and subject.get("subject_role") == role:
+            return _optional_str(subject.get("subject_id"))
+    return None
+
+
+def _parse_int(value: Any) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None
 
 
 def _start_text() -> str:

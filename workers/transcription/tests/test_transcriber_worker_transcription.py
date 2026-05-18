@@ -36,7 +36,7 @@ import pytest
 from transcriber_workers_common.api import (
     ArtifactResolutionResult,
     CancelCheckResult,
-    ClaimedAnalysisRunExecution,
+    ClaimedAnalysisRunStep,
     MediaSourceSnapshot,
     OrderedWorkerInput,
     SealedSelectionInput,
@@ -56,7 +56,7 @@ from transcriber_worker_transcription import (
 class RecordingApiClient:
     def __init__(
         self,
-        execution: ClaimedAnalysisRunExecution,
+        execution: ClaimedAnalysisRunStep,
         *,
         cancel_results: list[CancelCheckResult] | None = None,
         artifact_downloads: dict[str, Path] | None = None,
@@ -66,11 +66,11 @@ class RecordingApiClient:
         self.artifact_downloads = dict(artifact_downloads or {})
         self.calls: list[tuple[str, dict[str, object]]] = []
 
-    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunExecution:
+    def claim_analysis_run_step(self, analysis_run_id: str, *, worker_kind: str, step_kind: str) -> ClaimedAnalysisRunStep:
         self.calls.append(
             (
-                "claim_analysis_run",
-                {"analysis_run_id": analysis_run_id, "worker_kind": worker_kind, "task_type": task_type},
+                "claim_analysis_run_step",
+                {"analysis_run_id": analysis_run_id, "worker_kind": worker_kind, "step_kind": step_kind},
             )
         )
         return self.execution
@@ -79,7 +79,7 @@ class RecordingApiClient:
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         progress_stage: str,
         progress_message: str | None = None,
     ) -> None:
@@ -88,32 +88,32 @@ class RecordingApiClient:
                 "publish_progress",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "progress_stage": progress_stage,
                     "progress_message": progress_message,
                 },
             )
         )
 
-    def register_artifacts(self, analysis_run_id: str, *, execution_id: str, artifacts) -> None:
+    def register_artifacts(self, analysis_run_id: str, *, analysis_run_step_id: str, artifacts) -> None:
         self.calls.append(
             (
                 "register_artifacts",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "artifacts": tuple(artifacts),
                 },
             )
         )
 
-    def register_diagnostics(self, analysis_run_id: str, *, execution_id: str, diagnostics) -> None:
+    def register_diagnostics(self, analysis_run_id: str, *, analysis_run_step_id: str, diagnostics) -> None:
         self.calls.append(
             (
                 "register_diagnostics",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "diagnostics": tuple(diagnostics),
                 },
             )
@@ -123,7 +123,7 @@ class RecordingApiClient:
         self,
         analysis_run_id: str,
         *,
-        execution_id: str,
+        analysis_run_step_id: str,
         outcome: str,
         progress_stage: str | None = None,
         progress_message: str | None = None,
@@ -135,7 +135,7 @@ class RecordingApiClient:
                 "finalize_analysis_run",
                 {
                     "analysis_run_id": analysis_run_id,
-                    "execution_id": execution_id,
+                    "analysis_run_step_id": analysis_run_step_id,
                     "outcome": outcome,
                     "progress_stage": progress_stage,
                     "progress_message": progress_message,
@@ -145,11 +145,11 @@ class RecordingApiClient:
             )
         )
 
-    def check_cancel(self, analysis_run_id: str, *, execution_id: str) -> CancelCheckResult:
+    def check_cancel(self, analysis_run_id: str, *, analysis_run_step_id: str) -> CancelCheckResult:
         self.calls.append(
             (
                 "check_cancel",
-                {"analysis_run_id": analysis_run_id, "execution_id": execution_id},
+                {"analysis_run_id": analysis_run_id, "analysis_run_step_id": analysis_run_step_id},
             )
         )
         if self.cancel_results:
@@ -265,8 +265,8 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
 
     claim_call = api_client.calls[0]
     assert claim_call == (
-        "claim_analysis_run",
-        {"analysis_run_id": execution.analysis_run_id, "worker_kind": "transcription", "task_type": "selection.transcription"},
+        "claim_analysis_run_step",
+        {"analysis_run_id": execution.analysis_run_id, "worker_kind": "transcription", "step_kind": "selection.transcription"},
     )
     assert [call[1]["progress_stage"] for call in api_client.calls if call[0] == "publish_progress"] == [
         "materializing_sources",
@@ -292,7 +292,7 @@ def test_run_transcription_claims_and_finalizes_after_all_artifacts_exist(
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["analysis_run_id"] == execution.analysis_run_id
     assert manifest["summary"]["included_count"] == 1
-    assert manifest["items"][0]["lineage"]["media_item_id"] == "media-source-1"
+    assert manifest["items"][0]["lineage"]["media_asset_id"] == "media-source-1"
     assert manifest["items"][0]["outcome"] == "succeeded"
     diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
     assert diagnostics_bundle["diagnostics"] == []
@@ -479,7 +479,7 @@ def test_run_transcription_supports_single_youtube_url_only_selection(tmp_path: 
     assert manifest["items"][0]["outcome"] == "succeeded"
     assert manifest["items"][0]["diagnostic_ids"] == []
     assert manifest["items"][0]["lineage"]["origin_type"] == "url"
-    assert manifest["items"][0]["lineage"]["selection_item_id"] == "selection-item-0"
+    assert manifest["items"][0]["lineage"]["selection_snapshot_item_id"] == "selection-snapshot-item-0"
 
 
 def test_run_transcription_rejects_single_non_youtube_url_selection(tmp_path: Path) -> None:
@@ -575,9 +575,9 @@ def test_run_transcription_mixed_selection_records_item_diagnostics_and_partial_
     assert [diagnostic["context"]["item_position"] for diagnostic in diagnostics] == [1, 2]
     assert {diagnostic["context"]["origin_type"] for diagnostic in diagnostics} == {"text", "url"}
     assert all(diagnostic["context"]["analysis_run_id"] == execution.analysis_run_id for diagnostic in diagnostics)
-    assert all(diagnostic["context"]["selection_id"] == execution.selection.selection_id for diagnostic in diagnostics)
-    assert all(diagnostic["context"]["selection_item_id"] for diagnostic in diagnostics)
-    assert all(diagnostic["context"]["media_item_id"] for diagnostic in diagnostics)
+    assert all(diagnostic["context"]["selection_snapshot_id"] == execution.selection_snapshot.selection_snapshot_id for diagnostic in diagnostics)
+    assert all(diagnostic["context"]["selection_snapshot_item_id"] for diagnostic in diagnostics)
+    assert all(diagnostic["context"]["media_asset_id"] for diagnostic in diagnostics)
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "skipped", "skipped"]
     assert manifest["summary"] == {"included_count": 1, "skipped_count": 2, "failed_count": 0}
@@ -586,7 +586,7 @@ def test_run_transcription_mixed_selection_records_item_diagnostics_and_partial_
         "transcript_segmented_markdown",
         "transcript_docx",
     ]
-    assert manifest["items"][1]["lineage"]["selection_item_id"] == "selection-item-1"
+    assert manifest["items"][1]["lineage"]["selection_snapshot_item_id"] == "selection-snapshot-item-1"
     diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
     assert diagnostics_bundle["diagnostics"] == list(diagnostics)
     finalize_call = api_client.calls[-1]
@@ -599,20 +599,20 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    execution = ClaimedAnalysisRunExecution(
-        execution_id="exec-v2",
+    execution = ClaimedAnalysisRunStep(
+        analysis_run_step_id="exec-v2",
         analysis_run_id="run-v2",
         run_type="transcription",
-        selection=SealedSelectionInput(
-            selection_id="selection-v2",
+        selection_snapshot=SealedSelectionInput(
+            selection_snapshot_id="selection-v2",
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
             items=(
                 _v2_selection_item(
                     position=0,
-                    selection_item_id="sel-item-audio",
-                    media_item_id="media-audio",
-                    source_id="source-audio",
+                    selection_snapshot_item_id="sel-item-audio",
+                    media_asset_id="media-audio",
+                    origin_ref="source-audio",
                     media_kind="audio",
                     mime_type="audio/ogg",
                     object_key="objects/audio-source",
@@ -622,9 +622,9 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
                 ),
                 _v2_selection_item(
                     position=1,
-                    selection_item_id="sel-item-text",
-                    media_item_id="media-text",
-                    source_id="source-text",
+                    selection_snapshot_item_id="sel-item-text",
+                    media_asset_id="media-text",
+                    origin_ref="source-text",
                     media_kind="text",
                     origin_type="text",
                     display_label="Manual note",
@@ -632,9 +632,9 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
                 ),
                 _v2_selection_item(
                     position=2,
-                    selection_item_id="sel-item-url",
-                    media_item_id="media-url",
-                    source_id="source-url",
+                    selection_snapshot_item_id="sel-item-url",
+                    media_asset_id="media-url",
+                    origin_ref="source-url",
                     media_kind="url",
                     origin_type="url",
                     external_uri="https://example.test/reference",
@@ -643,9 +643,9 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
                 ),
                 _v2_selection_item(
                     position=3,
-                    selection_item_id="sel-item-document",
-                    media_item_id="media-document",
-                    source_id="source-document",
+                    selection_snapshot_item_id="sel-item-document",
+                    media_asset_id="media-document",
+                    origin_ref="source-document",
                     media_kind="document",
                     mime_type="application/pdf",
                     object_key="objects/document-source",
@@ -655,6 +655,7 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
                 ),
             ),
         ),
+        analysis_run_step_inputs=(),
         params={},
         claimed_at="2026-05-10T12:01:00Z",
     )
@@ -694,7 +695,7 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
         "media-document",
     ]
     assert [diagnostic["context"]["role"] for diagnostic in diagnostics] == ["context", "reference", "reference"]
-    assert [diagnostic["context"]["selection_item_id"] for diagnostic in diagnostics] == [
+    assert [diagnostic["context"]["selection_snapshot_item_id"] for diagnostic in diagnostics] == [
         "sel-item-text",
         "sel-item-url",
         "sel-item-document",
@@ -732,8 +733,8 @@ def test_run_transcription_records_per_item_fetch_failure_without_silent_drop(tm
     diagnostics = diagnostics_call[1]["diagnostics"]
     assert diagnostics[0]["subject_id"] == "media-source-broken"
     assert diagnostics[0]["severity"] == "error"
-    assert diagnostics[0]["context"]["selection_item_id"] == "selection-item-0"
-    assert diagnostics[0]["context"]["media_item_id"] == "media-source-broken"
+    assert diagnostics[0]["context"]["selection_snapshot_item_id"] == "selection-snapshot-item-0"
+    assert diagnostics[0]["context"]["media_asset_id"] == "media-source-broken"
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["summary"] == {"included_count": 0, "skipped_count": 0, "failed_count": 1}
     assert manifest["items"][0]["outcome"] == "failed"
@@ -785,7 +786,7 @@ def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path
         "finalize_analysis_run",
         {
             "analysis_run_id": execution.analysis_run_id,
-            "execution_id": execution.execution_id,
+            "analysis_run_step_id": execution.analysis_run_step_id,
             "outcome": "canceled",
             "progress_stage": "canceled",
             "progress_message": "Cancellation requested",
@@ -894,7 +895,7 @@ def test_run_transcription_classifies_source_materialization_failures(tmp_path: 
         "finalize_analysis_run",
         {
             "analysis_run_id": execution.analysis_run_id,
-            "execution_id": execution.execution_id,
+            "analysis_run_step_id": execution.analysis_run_step_id,
             "outcome": "failed",
             "progress_stage": "failed",
             "progress_message": "Transcription failed",
@@ -933,7 +934,7 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
         "finalize_analysis_run",
         {
             "analysis_run_id": execution.analysis_run_id,
-            "execution_id": execution.execution_id,
+            "analysis_run_step_id": execution.analysis_run_step_id,
             "outcome": "failed",
             "progress_stage": "failed",
             "progress_message": "Transcription failed",
@@ -944,20 +945,20 @@ def test_run_transcription_classifies_transcriber_failures(tmp_path: Path) -> No
 
 
 def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure(tmp_path: Path) -> None:
-    execution = ClaimedAnalysisRunExecution(
-        execution_id="exec-unsupported",
+    execution = ClaimedAnalysisRunStep(
+        analysis_run_step_id="exec-unsupported",
         analysis_run_id="run-unsupported",
         run_type="transcription",
-        selection=SealedSelectionInput(
-            selection_id="selection-unsupported",
+        selection_snapshot=SealedSelectionInput(
+            selection_snapshot_id="selection-unsupported",
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
             items=(
                 _v2_selection_item(
                     position=0,
-                    selection_item_id="sel-item-document",
-                    media_item_id="media-document",
-                    source_id="source-document",
+                    selection_snapshot_item_id="sel-item-document",
+                    media_asset_id="media-document",
+                    origin_ref="source-document",
                     media_kind="document",
                     mime_type="application/pdf",
                     object_key="objects/missing.pdf",
@@ -966,6 +967,7 @@ def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure
                 ),
             ),
         ),
+        analysis_run_step_inputs=(),
         params={},
         claimed_at="2026-05-10T12:01:00Z",
     )
@@ -974,19 +976,19 @@ def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure
         worker_module._materialize_execution_source(execution, tmp_path, FakeSourceStore({}))
 
     diagnostic = exc_info.value.diagnostics[0]
-    assert diagnostic["context"]["selection_item_id"] == "sel-item-document"
+    assert diagnostic["context"]["selection_snapshot_item_id"] == "sel-item-document"
     assert "materialized_path" not in diagnostic["context"]
 
 
 def test_materialize_unsupported_object_descriptor_returns_none_for_non_object(tmp_path: Path) -> None:
     descriptor = worker_module.SelectionItemMaterialization(
-        selection_item_id="sel-item-text",
+        selection_snapshot_item_id="sel-item-text",
         position=0,
-        media_item_id="media-text",
+        media_asset_id="media-text",
         media_kind="text",
         role="reference",
         labels=SelectionItemLabels(display_label="Manual note"),
-        source_id="source-text",
+        origin_ref="source-text",
         origin_type="text",
         materialization_kind="text",
         text_ref="text:source-text",
@@ -997,13 +999,13 @@ def test_materialize_unsupported_object_descriptor_returns_none_for_non_object(t
 
 def test_materialize_single_selection_item_downloads_object_backed_source(tmp_path: Path) -> None:
     descriptor = worker_module.SelectionItemMaterialization(
-        selection_item_id="sel-item-audio",
+        selection_snapshot_item_id="sel-item-audio",
         position=2,
-        media_item_id="media-audio",
+        media_asset_id="media-audio",
         media_kind="audio",
         role="primary",
         labels=SelectionItemLabels(display_label="Voice message"),
-        source_id="source-audio",
+        origin_ref="source-audio",
         origin_type="object",
         materialization_kind="object",
         mime_type="audio/ogg",
@@ -1024,13 +1026,13 @@ def test_materialize_single_selection_item_downloads_object_backed_source(tmp_pa
 
 def test_download_materialization_descriptor_requires_deterministic_filename(tmp_path: Path) -> None:
     descriptor = worker_module.SelectionItemMaterialization(
-        selection_item_id="sel-item-audio",
+        selection_snapshot_item_id="sel-item-audio",
         position=0,
-        media_item_id="media-audio",
+        media_asset_id="media-audio",
         media_kind="audio",
         role="primary",
         labels=SelectionItemLabels(display_label="Voice message"),
-        source_id="source-audio",
+        origin_ref="source-audio",
         origin_type="object",
         materialization_kind="object",
         mime_type="audio/ogg",
@@ -1044,13 +1046,13 @@ def test_download_materialization_descriptor_requires_deterministic_filename(tmp
 
 def test_download_materialization_descriptor_requires_object_key_and_invalid_origin_is_rejected(tmp_path: Path) -> None:
     descriptor = worker_module.SelectionItemMaterialization(
-        selection_item_id="sel-item-audio",
+        selection_snapshot_item_id="sel-item-audio",
         position=0,
-        media_item_id="media-audio",
+        media_asset_id="media-audio",
         media_kind="audio",
         role="primary",
         labels=SelectionItemLabels(display_label="Voice message"),
-        source_id="source-audio",
+        origin_ref="source-audio",
         origin_type="object",
         materialization_kind="object",
         mime_type="audio/ogg",
@@ -1063,13 +1065,13 @@ def test_download_materialization_descriptor_requires_object_key_and_invalid_ori
 
     with pytest.raises(ValueError, match="invalid materialization origin_type"):
         worker_module.SelectionItemMaterialization(
-            selection_item_id="sel-item-invalid",
+            selection_snapshot_item_id="sel-item-invalid",
             position=0,
-            media_item_id="media-invalid",
+            media_asset_id="media-invalid",
             media_kind="audio",
             role="primary",
             labels=SelectionItemLabels(display_label="Invalid"),
-            source_id="source-invalid",
+            origin_ref="source-invalid",
             origin_type="invalid",
             materialization_kind="unsupported",
         )
@@ -1129,7 +1131,7 @@ def test_outcomes_from_diagnostics_marks_missing_selection_items_as_failed() -> 
         {
             "diagnostic_id": "exec-1:0:source-skipped",
             "severity": "warning",
-            "context": {"selection_item_id": "selection-item-0"},
+            "context": {"selection_snapshot_item_id": "selection-snapshot-item-0"},
         },
     )
 
@@ -1158,31 +1160,34 @@ def _build_execution(
     analysis_run_id: str = "job-1",
     root_analysis_run_id: str = "root-1",
     params: dict[str, object] | None = None,
-) -> ClaimedAnalysisRunExecution:
+) -> ClaimedAnalysisRunStep:
     items = tuple(_selection_item_from_ordered_input(item) for item in ordered_inputs)
     if not items:
         items = (
             SelectionItemSnapshot(
                 position=0,
-                media_item_id="media-empty",
+                selection_snapshot_item_id="selection-snapshot-item-0",
+                media_asset_id="media-empty",
                 kind="audio",
+                origin_snapshot={"origin_type": "telegram_file", "object_ref": "empty.wav"},
+                storage_snapshot={"stored_object_id": "source-empty", "object_key": "empty.wav", "content_type": "audio/ogg"},
                 source_snapshot=MediaSourceSnapshot(source_id="source-empty", origin_type="object", object_key="empty.wav"),
                 display_name="empty.wav",
-                status_at_selection="ready",
+                status_at_selection="available",
                 metadata_snapshot={},
-                retention_snapshot={"state": "active"},
             ),
         )
-    return ClaimedAnalysisRunExecution(
-        execution_id="exec-1",
+    return ClaimedAnalysisRunStep(
+        analysis_run_step_id="exec-1",
         analysis_run_id=analysis_run_id,
         run_type="transcription",
-        selection=SealedSelectionInput(
-            selection_id=root_analysis_run_id,
+        selection_snapshot=SealedSelectionInput(
+            selection_snapshot_id=root_analysis_run_id,
             items=items,
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
         ),
+        analysis_run_step_inputs=(),
         params=params or {},
         claimed_at="2026-05-10T12:01:00Z",
     )
@@ -1209,11 +1214,39 @@ def _selection_item_from_ordered_input(ordered_input: OrderedWorkerInput) -> Sel
     else:
         kind = "audio"
     mime_type = "video/mp4" if kind == "video" else "audio/ogg"
+    target_origin_type = "telegram_file" if origin_type == "object" else origin_type
+    origin_snapshot = (
+        {"origin_type": "text", "text": f"text:{ordered_input.source_id}"}
+        if origin_type == "text"
+        else {"origin_type": "url", "url": ordered_input.source_url or ""}
+        if origin_type == "url"
+        else {
+            "origin_type": target_origin_type,
+            "object_ref": ordered_input.object_key or ordered_input.source_id,
+            "content_type": mime_type,
+            "size_bytes": ordered_input.size_bytes or 1,
+        }
+    )
+    storage_snapshot = (
+        {}
+        if origin_type in {"text", "url"}
+        else {
+            "stored_object_id": ordered_input.source_id,
+            "object_key": ordered_input.object_key or "",
+            "content_type": mime_type,
+            "size_bytes": ordered_input.size_bytes or 1,
+            "storage_status": "available",
+            "retention_state": "active",
+            "created_at": "2026-05-10T12:00:00Z",
+        }
+    )
     return SelectionItemSnapshot(
         position=ordered_input.position,
-        selection_item_id=f"selection-item-{ordered_input.position}",
-        media_item_id=f"media-{ordered_input.source_id}",
+        selection_snapshot_item_id=f"selection-snapshot-item-{ordered_input.position}",
+        media_asset_id=f"media-{ordered_input.source_id}",
         kind=kind,
+        origin_snapshot=origin_snapshot,
+        storage_snapshot=storage_snapshot,
         media_kind=kind,
         mime_type=mime_type,
         role=metadata_snapshot.get("role", "primary"),
@@ -1232,18 +1265,17 @@ def _selection_item_from_ordered_input(ordered_input: OrderedWorkerInput) -> Sel
             mime_type=mime_type,
         ),
         display_name=ordered_input.display_name or ordered_input.source_id,
-        status_at_selection="ready",
+        status_at_selection="available",
         metadata_snapshot=metadata_snapshot,
-        retention_snapshot={"state": "active"},
     )
 
 
 def _v2_selection_item(
     *,
     position: int,
-    selection_item_id: str,
-    media_item_id: str,
-    source_id: str,
+    selection_snapshot_item_id: str,
+    media_asset_id: str,
+    origin_ref: str,
     media_kind: str,
     origin_type: str = "object",
     mime_type: str | None = None,
@@ -1254,11 +1286,26 @@ def _v2_selection_item(
     original_filename: str | None = None,
     role: str = "primary",
 ) -> SelectionItemSnapshot:
+    target_origin_type = "telegram_file" if origin_type == "object" else origin_type
+    origin_snapshot = (
+        {"origin_type": "text", "text": f"text:{origin_ref}"}
+        if origin_type == "text"
+        else {"origin_type": "url", "url": external_uri or ""}
+        if origin_type == "url"
+        else {"origin_type": target_origin_type, "object_ref": object_key or origin_ref, "content_type": mime_type or "application/octet-stream"}
+    )
+    storage_snapshot = (
+        {}
+        if origin_type in {"text", "url"}
+        else {"stored_object_id": origin_ref, "object_key": object_key or "", "content_type": mime_type or "application/octet-stream", "storage_status": "available", "retention_state": "active", "created_at": "2026-05-10T12:00:00Z"}
+    )
     return SelectionItemSnapshot(
         position=position,
-        selection_item_id=selection_item_id,
-        media_item_id=media_item_id,
+        selection_snapshot_item_id=selection_snapshot_item_id,
+        media_asset_id=media_asset_id,
         kind=media_kind,
+        origin_snapshot=origin_snapshot,
+        storage_snapshot=storage_snapshot,
         media_kind=media_kind,
         mime_type=mime_type,
         role=role,
@@ -1268,15 +1315,15 @@ def _v2_selection_item(
             original_filename=original_filename,
         ),
         source_snapshot=MediaSourceSnapshot(
-            source_id=source_id,
+            source_id=origin_ref,
             origin_type=origin_type,
             external_uri=external_uri,
             object_key=object_key,
-            text_ref=f"text:{source_id}" if origin_type == "text" else None,
+            text_ref=f"text:{origin_ref}" if origin_type == "text" else None,
             mime_type=mime_type,
         ),
         display_name=display_label,
-        status_at_selection="ready",
+        status_at_selection="available",
         metadata_snapshot={
             key: value
             for key, value in {
@@ -1286,7 +1333,6 @@ def _v2_selection_item(
             }.items()
             if value is not None
         },
-        retention_snapshot={"state": "active"},
     )
 
 

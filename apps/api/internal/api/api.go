@@ -69,6 +69,7 @@ type WebsocketAcceptor interface {
 type Dependencies struct {
 	Public    PublicService
 	Worker    WorkerService
+	Target    TargetService
 	Websocket WebsocketAcceptor
 }
 
@@ -110,6 +111,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	for _, path := range []string{
 		"/v1/media-items",
 		"/v1/media-items/{media_item_id}",
+		"/v1/media-assets",
+		"/v1/media-assets/upload",
+		"/v1/media-assets/{media_asset_id}",
 		"/v1/collections/inbox",
 		"/v1/collections",
 		"/v1/collections/{collection_id}",
@@ -117,6 +121,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/collections/{collection_id}/items/{media_item_id}",
 		"/v1/selections",
 		"/v1/selections/{selection_id}",
+		"/v1/selection-snapshots",
+		"/v1/selection-snapshots/{selection_snapshot_id}",
 		"/v1/analysis-runs",
 		"/v1/analysis-runs/{analysis_run_id}",
 		"/v1/analysis-runs/{analysis_run_id}/cancel",
@@ -129,7 +135,18 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/diagnostics",
 		"/v1/admin/reconcile-queue",
 		"/v1/admin/observability",
+		"/internal/v1/channel-accounts",
+		"/internal/v1/channel-accounts/{channel_account_id}",
+		"/internal/v1/channel-surfaces",
+		"/internal/v1/channel-surfaces/active",
+		"/internal/v1/channel-surfaces/{channel_surface_id}/display-state",
+		"/internal/v1/channel-surfaces/{channel_surface_id}/supersede",
+		"/internal/v1/channel-surfaces/{channel_surface_id}/events",
 		"/internal/v1/analysis-runs/queue",
+		"/internal/v1/analysis-runs/{analysis_run_id}/steps/claim",
+		"/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check",
+		"/internal/v1/analysis-runs/{analysis_run_id}/steps/progress",
+		"/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize",
 		"/internal/v1/analysis-runs/{analysis_run_id}/executions/claim",
 		"/internal/v1/analysis-runs/{analysis_run_id}/request-access",
 		"/internal/v1/analysis-runs/{analysis_run_id}/executions/cancel-check",
@@ -145,6 +162,22 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/media-items", s.withCORS(s.handleListMediaItems))
 	mux.HandleFunc("GET /v1/media-items/{media_item_id}", s.withCORS(s.handleGetMediaItem))
 	mux.HandleFunc("DELETE /v1/media-items/{media_item_id}", s.withCORS(s.handleRemoveMediaItem))
+	mux.HandleFunc("POST /v1/media-assets", s.withCORS(s.handleCreateTargetMediaAsset))
+	mux.HandleFunc("POST /v1/media-assets/upload", s.withCORS(s.handleUploadTargetMediaAsset))
+	mux.HandleFunc("GET /v1/media-assets", s.withCORS(s.handleListTargetMediaAssets))
+	mux.HandleFunc("GET /v1/media-assets/{media_asset_id}", s.withCORS(s.handleGetTargetMediaAsset))
+	mux.HandleFunc("DELETE /v1/media-assets/{media_asset_id}", s.withCORS(s.handleDeleteTargetMediaAsset))
+	mux.HandleFunc("GET /internal/v1/channel-accounts", s.withCORS(s.handleListTargetChannelAccounts))
+	mux.HandleFunc("PUT /internal/v1/channel-accounts", s.withCORS(s.handleResolveTargetChannelAccount))
+	mux.HandleFunc("PATCH /internal/v1/channel-accounts/{channel_account_id}", s.withCORS(s.handleUpdateTargetChannelAccount))
+	mux.HandleFunc("POST /v1/selection-snapshots", s.withCORS(s.handleCreateTargetSelectionSnapshot))
+	mux.HandleFunc("GET /v1/selection-snapshots/{selection_snapshot_id}", s.withCORS(s.handleGetTargetSelectionSnapshot))
+	mux.HandleFunc("PUT /internal/v1/channel-surfaces", s.withCORS(s.handleUpsertTargetChannelSurface))
+	mux.HandleFunc("GET /internal/v1/channel-surfaces", s.withCORS(s.handleListTargetChannelSurfaces))
+	mux.HandleFunc("GET /internal/v1/channel-surfaces/active", s.withCORS(s.handleListActiveTargetChannelSurfaces))
+	mux.HandleFunc("PATCH /internal/v1/channel-surfaces/{channel_surface_id}/display-state", s.withCORS(s.handleReplaceTargetChannelSurfaceDisplayState))
+	mux.HandleFunc("POST /internal/v1/channel-surfaces/{channel_surface_id}/supersede", s.withCORS(s.handleSupersedeTargetChannelSurface))
+	mux.HandleFunc("GET /internal/v1/channel-surfaces/{channel_surface_id}/events", s.withCORS(s.handleListTargetChannelSurfaceEvents))
 	mux.HandleFunc("GET /v1/collections/inbox", s.withCORS(s.handleGetInboxCollection))
 	mux.HandleFunc("POST /v1/collections", s.withCORS(s.handleCreateCollection))
 	mux.HandleFunc("GET /v1/collections", s.withCORS(s.handleListCollections))
@@ -169,6 +202,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/admin/observability", s.withCORS(s.handleGetObservabilitySnapshot))
 	mux.HandleFunc("GET /v1/ws", s.withCORS(s.HandleWebsocket))
 	mux.HandleFunc("GET /internal/v1/analysis-runs/queue", s.withCORS(s.handleListAnalysisRunQueue))
+	mux.HandleFunc("POST /internal/v1/analysis-runs/{analysis_run_id}/steps/claim", s.withCORS(s.handleClaimTargetAnalysisRunStep))
+	mux.HandleFunc("GET /internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check", s.withCORS(s.handleCheckTargetAnalysisRunStepCancel))
+	mux.HandleFunc("POST /internal/v1/analysis-runs/{analysis_run_id}/steps/progress", s.withCORS(s.handleRecordTargetAnalysisRunStepProgress))
+	mux.HandleFunc("POST /internal/v1/analysis-runs/{analysis_run_id}/steps/finalize", s.withCORS(s.handleFinalizeTargetAnalysisRunStep))
 	mux.HandleFunc("POST /internal/v1/analysis-runs/{analysis_run_id}/executions/claim", s.withCORS(s.handleClaimExecution))
 	mux.HandleFunc("GET /internal/v1/analysis-runs/{analysis_run_id}/request-access", s.withCORS(s.handleResolveRequestAccess))
 	mux.HandleFunc("GET /internal/v1/analysis-runs/{analysis_run_id}/executions/cancel-check", s.withCORS(s.handleCheckCancel))
@@ -369,6 +406,21 @@ type ExecutionFinalizeRequest struct {
 }
 
 func (s *Server) handleListAnalysisRunQueue(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target != nil {
+		response, err := s.deps.Target.ListAnalysisRunStepQueue(r.Context(), TargetAnalysisRunStepQueueRequest{
+			Status:     strings.TrimSpace(r.URL.Query().Get("status")),
+			RunType:    strings.TrimSpace(r.URL.Query().Get("run_type")),
+			WorkerKind: strings.TrimSpace(r.URL.Query().Get("worker_kind")),
+			StepKind:   strings.TrimSpace(r.URL.Query().Get("step_kind")),
+			PageSize:   parsePositiveQueryInt(r.URL.Query().Get("page_size"), 20),
+		})
+		if err != nil {
+			s.writeAPIError(w, mapFinalStorageError(err))
+			return
+		}
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
 	if s.deps.Worker == nil {
 		s.writeAPIError(w, dependencyUnavailableError("worker service is not configured"))
 		return
@@ -410,12 +462,15 @@ func (s *Server) handleResolveRequestAccess(w http.ResponseWriter, r *http.Reque
 		s.writeAPIError(w, dependencyUnavailableError("worker service is not configured"))
 		return
 	}
-	executionID := strings.TrimSpace(r.URL.Query().Get("execution_id"))
-	if executionID == "" {
-		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_request_access", message: "execution_id is required"})
+	analysisRunStepID := strings.TrimSpace(r.URL.Query().Get("analysis_run_step_id"))
+	if analysisRunStepID == "" {
+		analysisRunStepID = strings.TrimSpace(r.URL.Query().Get("execution_id"))
+	}
+	if analysisRunStepID == "" {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_request_access", message: "analysis_run_step_id is required"})
 		return
 	}
-	response, err := s.deps.Worker.ResolveRequestAccess(r.Context(), r.PathValue("analysis_run_id"), executionID)
+	response, err := s.deps.Worker.ResolveRequestAccess(r.Context(), r.PathValue("analysis_run_id"), analysisRunStepID)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
@@ -472,6 +527,34 @@ func (s *Server) handleRecordExecutionProgress(w http.ResponseWriter, r *http.Re
 }
 
 func (s *Server) handleRecordExecutionArtifacts(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target != nil {
+		var req TargetRecordAnalysisRunArtifactsRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_execution_artifacts", message: "analysis run artifacts must be valid JSON", details: err.Error()})
+			return
+		}
+		if req.AnalysisRunStepID != "" {
+			if err := s.deps.Target.RecordAnalysisRunArtifacts(r.Context(), r.PathValue("analysis_run_id"), req); err != nil {
+				s.writeAPIError(w, mapFinalStorageError(err))
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+			return
+		}
+		if s.deps.Worker == nil {
+			s.writeAPIError(w, dependencyUnavailableError("worker service is not configured"))
+			return
+		}
+		if err := s.deps.Worker.RecordExecutionArtifacts(r.Context(), r.PathValue("analysis_run_id"), ExecutionArtifactsRequest{
+			ExecutionID: req.ExecutionID,
+			Artifacts:   req.Artifacts,
+		}); err != nil {
+			s.writeAPIError(w, mapFinalStorageError(err))
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+		return
+	}
 	if s.deps.Worker == nil {
 		s.writeAPIError(w, dependencyUnavailableError("worker service is not configured"))
 		return
@@ -489,6 +572,34 @@ func (s *Server) handleRecordExecutionArtifacts(w http.ResponseWriter, r *http.R
 }
 
 func (s *Server) handleRecordExecutionDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target != nil {
+		var req TargetRecordAnalysisRunDiagnosticsRequest
+		if err := decodeJSONBody(r, &req); err != nil {
+			s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_execution_diagnostics", message: "analysis run diagnostics must be valid JSON", details: err.Error()})
+			return
+		}
+		if req.AnalysisRunStepID != "" {
+			if err := s.deps.Target.RecordAnalysisRunDiagnostics(r.Context(), r.PathValue("analysis_run_id"), req); err != nil {
+				s.writeAPIError(w, mapFinalStorageError(err))
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+			return
+		}
+		if s.deps.Worker == nil {
+			s.writeAPIError(w, dependencyUnavailableError("worker service is not configured"))
+			return
+		}
+		if err := s.deps.Worker.RecordExecutionDiagnostics(r.Context(), r.PathValue("analysis_run_id"), ExecutionDiagnosticsRequest{
+			ExecutionID: req.ExecutionID,
+			Diagnostics: req.Diagnostics,
+		}); err != nil {
+			s.writeAPIError(w, mapFinalStorageError(err))
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+		return
+	}
 	if s.deps.Worker == nil {
 		s.writeAPIError(w, dependencyUnavailableError("worker service is not configured"))
 		return

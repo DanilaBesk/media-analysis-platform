@@ -48,15 +48,15 @@
     "createAnalysisRunRequest": {
       "type": "object",
       "required": [
-        "owner",
-        "selection_id",
+        "channel_account_id",
+        "selection_snapshot_id",
         "run_type"
       ],
       "properties": {
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "selection_id": {
+        "selection_snapshot_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "run_type": {
@@ -84,11 +84,11 @@
     "retryAnalysisRunRequest": {
       "type": "object",
       "required": [
-        "owner"
+        "channel_account_id"
       ],
       "properties": {
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "reason": {
           "type": "string",
@@ -101,9 +101,9 @@
       "type": "object",
       "required": [
         "analysis_run_id",
-        "owner",
-        "selection_id",
-        "selection",
+        "channel_account_id",
+        "selection_snapshot_id",
+        "selection_snapshot",
         "run_type",
         "status",
         "version",
@@ -116,14 +116,14 @@
         "analysis_run_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
-        },
-        "selection_id": {
+        "channel_account_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "selection": {
-          "$ref": "./selection.schema.json#/$defs/selection"
+        "selection_snapshot_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "selection_snapshot": {
+          "$ref": "./selection-snapshot.schema.json#/$defs/selectionSnapshot"
         },
         "run_type": {
           "$ref": "../common/enums.schema.json#/$defs/runType"
@@ -235,6 +235,117 @@
         },
         "diagnostic": {
           "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunStepInput": {
+      "type": "object",
+      "required": [
+        "analysis_run_step_input_id",
+        "analysis_run_step_id",
+        "input_kind",
+        "position",
+        "required"
+      ],
+      "properties": {
+        "analysis_run_step_input_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_step_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "input_kind": {
+          "type": "string",
+          "enum": [
+            "selection_snapshot_item",
+            "transcript_artifact",
+            "text_corpus_artifact",
+            "metadata_artifact"
+          ]
+        },
+        "selection_snapshot_item_id": {
+          "oneOf": [
+            {
+              "$ref": "../common/enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact_id": {
+          "oneOf": [
+            {
+              "$ref": "../common/enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "position": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunStep": {
+      "type": "object",
+      "required": [
+        "analysis_run_step_id",
+        "analysis_run_id",
+        "step_kind",
+        "worker_kind",
+        "status",
+        "attempt_no",
+        "inputs",
+        "created_at"
+      ],
+      "properties": {
+        "analysis_run_step_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "step_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/workerKind"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/analysisRunStepStatus"
+        },
+        "attempt_no": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/analysisRunStepInput"
+          }
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
         }
       },
       "additionalProperties": false

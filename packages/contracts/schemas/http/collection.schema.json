@@ -6,20 +6,20 @@
     "collectionItem": {
       "type": "object",
       "required": [
-        "media_item_id",
+        "media_asset_id",
         "position",
         "added_at"
       ],
       "properties": {
-        "media_item_id": {
+        "media_asset_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "position": {
           "type": "integer",
           "minimum": 0
         },
-        "media_item": {
-          "$ref": "./media-item.schema.json#/$defs/mediaItem"
+        "media_asset": {
+          "$ref": "./media-asset.schema.json#/$defs/mediaAsset"
         },
         "added_by": {
           "type": [
@@ -39,7 +39,7 @@
       "type": "object",
       "required": [
         "collection_id",
-        "owner",
+        "channel_account_id",
         "kind",
         "name",
         "status",
@@ -52,8 +52,8 @@
         "collection_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "kind": {
           "$ref": "../common/enums.schema.json#/$defs/collectionKind"
@@ -105,12 +105,12 @@
     "createCollectionRequest": {
       "type": "object",
       "required": [
-        "owner",
+        "channel_account_id",
         "name"
       ],
       "properties": {
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "name": {
           "type": "string",
@@ -128,12 +128,12 @@
     "updateCollectionRequest": {
       "type": "object",
       "required": [
-        "owner",
+        "channel_account_id",
         "expected_version"
       ],
       "properties": {
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "expected_version": {
           "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
@@ -151,13 +151,13 @@
     "updateCollectionItemsRequest": {
       "type": "object",
       "required": [
-        "owner",
+        "channel_account_id",
         "expected_version",
         "items"
       ],
       "properties": {
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "expected_version": {
           "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
@@ -167,11 +167,11 @@
           "items": {
             "type": "object",
             "required": [
-              "media_item_id",
+              "media_asset_id",
               "position"
             ],
             "properties": {
-              "media_item_id": {
+              "media_asset_id": {
                 "$ref": "../common/enums.schema.json#/$defs/uuid"
               },
               "position": {

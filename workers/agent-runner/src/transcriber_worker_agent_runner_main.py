@@ -54,6 +54,7 @@ def build_runner(
             artifact_store=object_store,
             harness_registry=harness_registry,
             lease_client=lease_client,
+            step_kind=config.step_kind,
         )
 
     return _runner
@@ -64,8 +65,8 @@ def main(env: Mapping[str, str] | None = None) -> int:
     values = os.environ if env is None else env
     config = WorkerRuntimeConfig.from_env(
         worker_kind="agent_runner",
-        task_type="selection.analysis",
-        run_type="custom",
+        step_kind=values.get("WORKER_STEP_KIND", "report.analysis").strip() or "report.analysis",
+        run_type=values.get("WORKER_RUN_TYPE", "report").strip() or "report",
         env=values,
     )
     api_client = AnalysisRunControlClient(config.api_config)

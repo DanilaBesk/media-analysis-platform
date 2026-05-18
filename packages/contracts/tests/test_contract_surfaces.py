@@ -26,9 +26,6 @@ STALE_PUBLIC_TOKENS = (
     "Job" + "Snapshot",
     _snake("source", "set"),
     _hyphen("job", "create"),
-    "Compat" + "ibility",
-    "compat" + "ibility",
-    "leg" + "acy",
 )
 
 
@@ -44,12 +41,17 @@ def validate_contract_surface() -> dict[str, dict]:
         "error": _load_json(SCHEMA_ROOT / "common" / "error-envelope.schema.json"),
         "pagination": _load_json(SCHEMA_ROOT / "common" / "pagination.schema.json"),
         "owner": _load_json(SCHEMA_ROOT / "common" / "owner-scope.schema.json"),
+        "channel": _load_json(SCHEMA_ROOT / "common" / "channel-account.schema.json"),
+        "operation_request": _load_json(SCHEMA_ROOT / "common" / "operation-request.schema.json"),
+        "media_asset": _load_json(SCHEMA_ROOT / "http" / "media-asset.schema.json"),
         "media": _load_json(SCHEMA_ROOT / "http" / "media-item.schema.json"),
         "collection": _load_json(SCHEMA_ROOT / "http" / "collection.schema.json"),
+        "selection_snapshot": _load_json(SCHEMA_ROOT / "http" / "selection-snapshot.schema.json"),
         "selection": _load_json(SCHEMA_ROOT / "http" / "selection.schema.json"),
         "analysis_run": _load_json(SCHEMA_ROOT / "http" / "analysis-run.schema.json"),
         "artifact": _load_json(SCHEMA_ROOT / "http" / "artifact.schema.json"),
         "diagnostic": _load_json(SCHEMA_ROOT / "http" / "diagnostic.schema.json"),
+        "compatibility": _load_json(SCHEMA_ROOT / "compatibility" / "deprecated-v1.schema.json"),
         "worker_control": _load_json(SCHEMA_ROOT / "internal" / "worker-control.schema.json"),
         "ws_event": _load_json(SCHEMA_ROOT / "ws" / "run-event.schema.json"),
         "webhook_event": _load_json(SCHEMA_ROOT / "webhook" / "run-lifecycle.schema.json"),
@@ -75,6 +77,180 @@ def _assert_owner_scope_query_parameters(operation: dict) -> None:
     assert "#/components/parameters/OwnerType" in names
     assert "#/components/parameters/OwnerId" in names
     assert "#/components/parameters/TenantId" in names
+
+
+def _target_operation_json(spec: dict, path: str, method: str) -> str:
+    operation = _path_item(spec, path, method)
+    assert operation.get("deprecated") is not True
+    return json.dumps(operation, sort_keys=True)
+
+
+def _assert_channel_scope_query_parameters(operation: dict) -> None:
+    names = _parameter_names(operation)
+    assert "#/components/parameters/ChannelAccountId" in names
+
+
+def test_target_openapi_contains_media_asset_snapshot_and_channel_surface_paths() -> None:
+    spec = validate_contract_surface()["openapi"]
+
+    expected_target_paths = {
+        "/v1/media-assets",
+        "/v1/media-assets/upload",
+        "/v1/media-assets/{media_asset_id}",
+        "/v1/selection-snapshots",
+        "/v1/selection-snapshots/{selection_snapshot_id}",
+        "/internal/v1/channel-accounts",
+        "/internal/v1/channel-accounts/{channel_account_id}",
+        "/internal/v1/channel-surfaces",
+        "/internal/v1/channel-surfaces/active",
+        "/internal/v1/channel-surfaces/{channel_surface_id}/display-state",
+        "/internal/v1/channel-surfaces/{channel_surface_id}/supersede",
+        "/internal/v1/channel-surfaces/{channel_surface_id}/events",
+        "/internal/v1/analysis-runs/{analysis_run_id}/steps/claim",
+        "/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check",
+        "/internal/v1/analysis-runs/{analysis_run_id}/steps/progress",
+        "/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize",
+    }
+
+    assert expected_target_paths.issubset(spec["paths"])
+    assert _path_item(spec, "/v1/media-assets", "post")["operationId"] == "createMediaAsset"
+    assert _path_item(spec, "/v1/media-assets/upload", "post")["operationId"] == "uploadMediaAsset"
+    assert _path_item(spec, "/v1/media-assets/{media_asset_id}", "get")["operationId"] == "getMediaAsset"
+    assert _path_item(spec, "/v1/selection-snapshots", "post")["operationId"] == "createSelectionSnapshot"
+    assert _path_item(spec, "/v1/selection-snapshots/{selection_snapshot_id}", "get")["operationId"] == (
+        "getSelectionSnapshot"
+    )
+    assert _path_item(spec, "/internal/v1/channel-surfaces", "put")["operationId"] == "upsertChannelSurface"
+    assert _path_item(spec, "/internal/v1/channel-surfaces/active", "get")["operationId"] == (
+        "listActiveChannelSurfaces"
+    )
+    assert _path_item(spec, "/internal/v1/analysis-runs/{analysis_run_id}/steps/claim", "post")["operationId"] == (
+        "claimAnalysisRunStep"
+    )
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/media-assets", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/media-assets/{media_asset_id}", "get"))
+    _assert_channel_scope_query_parameters(_path_item(spec, "/v1/selection-snapshots/{selection_snapshot_id}", "get"))
+
+
+def test_target_dto_schemas_use_channel_aware_vocabulary() -> None:
+    surface = validate_contract_surface()
+    media_defs = surface["media_asset"]["$defs"]
+    channel_defs = surface["channel"]["$defs"]
+    operation_defs = surface["operation_request"]["$defs"]
+    selection_defs = surface["selection_snapshot"]["$defs"]
+    run_defs = surface["analysis_run"]["$defs"]
+    artifact_defs = surface["artifact"]["$defs"]
+    diagnostic_subjects = surface["enums"]["$defs"]["diagnosticSubjectType"]["enum"]
+
+    assert media_defs["createMediaAssetRequest"]["required"] == ["channel_account_id", "kind", "origin"]
+    assert media_defs["mediaAsset"]["required"] == [
+        "media_asset_id",
+        "channel_account_id",
+        "origin",
+        "kind",
+        "status",
+        "display_name",
+        "retention",
+        "created_at",
+        "updated_at",
+    ]
+    assert media_defs["mediaAsset"]["properties"]["stored_object"]["$ref"] == "#/$defs/storedObject"
+    assert channel_defs["channelAccount"]["required"] == [
+        "channel_account_id",
+        "channel",
+        "external_account_ref",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+    assert operation_defs["operationRequest"]["required"] == [
+        "operation_request_id",
+        "channel_account_id",
+        "operation_type",
+        "idempotency_key",
+        "status",
+        "created_at",
+    ]
+    assert selection_defs["selectionSnapshot"]["properties"]["items"]["items"]["$ref"] == (
+        "#/$defs/selectionSnapshotItem"
+    )
+    assert run_defs["createAnalysisRunRequest"]["required"] == ["channel_account_id", "selection_snapshot_id", "run_type"]
+    assert run_defs["analysisRun"]["properties"]["selection_snapshot"]["$ref"].endswith(
+        "selection-snapshot.schema.json#/$defs/selectionSnapshot"
+    )
+    assert artifact_defs["artifact"]["properties"]["subjects"]["items"]["$ref"] == "#/$defs/artifactSubject"
+    assert {
+        "media_asset",
+        "stored_object",
+        "selection_snapshot",
+        "selection_snapshot_item",
+        "analysis_run_step",
+        "artifact_subject",
+        "channel_surface",
+    }.issubset(diagnostic_subjects)
+
+
+def test_compatibility_routes_are_deprecated_and_map_one_to_one_to_target_dtos() -> None:
+    surface = validate_contract_surface()
+    spec = surface["openapi"]
+    compatibility_defs = surface["compatibility"]["$defs"]
+
+    compatibility_operations = (
+        ("/v1/media-items", "post", "mediaAsset"),
+        ("/v1/media-items", "get", "mediaAsset"),
+        ("/v1/media-items/{media_item_id}", "get", "mediaAsset"),
+        ("/v1/media-items/{media_item_id}", "delete", "mediaAsset"),
+        ("/v1/selections", "post", "selectionSnapshot"),
+        ("/v1/selections/{selection_id}", "get", "selectionSnapshot"),
+    )
+    for path, method, target in compatibility_operations:
+        operation = _path_item(spec, path, method)
+        assert operation["deprecated"] is True
+        assert operation["x-compatibility"]["target"] == target
+        assert operation["x-compatibility"]["policy"] == "deprecated_transition_only"
+
+    assert compatibility_defs["mediaItemCompatibility"]["x-target-mapping"]["target_schema"] == "mediaAsset"
+    assert compatibility_defs["mediaItemCompatibility"]["x-target-mapping"]["id_field"] == (
+        "media_item_id -> media_asset_id"
+    )
+    assert compatibility_defs["selectionCompatibility"]["x-target-mapping"]["target_schema"] == "selectionSnapshot"
+    assert compatibility_defs["selectionCompatibility"]["x-target-mapping"]["id_field"] == (
+        "selection_id -> selection_snapshot_id"
+    )
+
+
+def test_target_operations_do_not_reintroduce_compatibility_names() -> None:
+    spec = validate_contract_surface()["openapi"]
+    target_operations = (
+        ("/v1/media-assets", "post"),
+        ("/v1/media-assets", "get"),
+        ("/v1/media-assets/upload", "post"),
+        ("/v1/media-assets/{media_asset_id}", "get"),
+        ("/v1/media-assets/{media_asset_id}", "delete"),
+        ("/v1/selection-snapshots", "post"),
+        ("/v1/selection-snapshots/{selection_snapshot_id}", "get"),
+        ("/v1/analysis-runs", "post"),
+        ("/internal/v1/analysis-runs/{analysis_run_id}/steps/claim", "post"),
+        ("/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check", "get"),
+        ("/internal/v1/analysis-runs/{analysis_run_id}/steps/progress", "post"),
+        ("/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize", "post"),
+        ("/internal/v1/channel-surfaces", "put"),
+        ("/internal/v1/channel-surfaces/active", "get"),
+    )
+    disallowed_tokens = (
+        "media_item",
+        "media-item",
+        "owner",
+        "selection_id",
+        "analysis_run_task",
+        "adapter_projection",
+        "telegram_message_id",
+    )
+
+    for path, method in target_operations:
+        operation_json = _target_operation_json(spec, path, method)
+        for token in disallowed_tokens:
+            assert token not in operation_json, f"{token!r} leaked into target {method.upper()} {path}"
 
 
 def test_openapi_contains_final_inbox_first_public_paths() -> None:
@@ -239,7 +415,7 @@ def test_collections_inbox_and_optimistic_versions_are_contractual() -> None:
 
     assert collection["required"] == [
         "collection_id",
-        "owner",
+        "channel_account_id",
         "kind",
         "name",
         "status",
@@ -250,55 +426,53 @@ def test_collections_inbox_and_optimistic_versions_are_contractual() -> None:
     ]
     assert collection["properties"]["kind"]["$ref"].endswith("collectionKind")
     assert collection["properties"]["version"]["$ref"].endswith("optimisticVersion")
-    assert collection_item["required"] == ["media_item_id", "position", "added_at"]
-    assert update_request["required"] == ["owner", "expected_version", "items"]
+    assert collection_item["required"] == ["media_asset_id", "position", "added_at"]
+    assert update_request["required"] == ["channel_account_id", "expected_version", "items"]
     assert update_request["properties"]["expected_version"]["$ref"].endswith("optimisticVersion")
     assert pagination_defs["conflictEnvelope"]["required"] == ["code", "message", "expected_version", "actual_version"]
 
 
 def test_selection_snapshot_is_immutable_and_run_creation_requires_selection() -> None:
     surface = validate_contract_surface()
-    selection_defs = surface["selection"]["$defs"]
+    selection_defs = surface["selection_snapshot"]["$defs"]
     run_defs = surface["analysis_run"]["$defs"]
 
-    selection = selection_defs["selection"]
-    item_snapshot = selection_defs["selectionItemSnapshot"]
+    selection = selection_defs["selectionSnapshot"]
+    item_snapshot = selection_defs["selectionSnapshotItem"]
     run_request = run_defs["createAnalysisRunRequest"]
     retry_request = run_defs["retryAnalysisRunRequest"]
     run = run_defs["analysisRun"]
 
     assert selection["required"] == [
-        "selection_id",
-        "owner",
+        "selection_snapshot_id",
+        "channel_account_id",
         "status",
         "items",
         "option_snapshot",
-        "created_by",
         "created_at",
         "sealed_at",
     ]
     assert selection["properties"]["items"]["minItems"] == 1
-    assert selection["properties"]["status"]["$ref"].endswith("selectionStatus")
+    assert selection["properties"]["status"]["$ref"].endswith("selectionSnapshotStatus")
     assert item_snapshot["required"] == [
-        "selection_item_id",
+        "selection_snapshot_item_id",
         "position",
-        "media_item_id",
+        "media_asset_id",
         "kind",
-        "media_kind",
-        "mime_type",
-        "role",
-        "labels",
-        "source_snapshot",
         "display_name",
+        "origin_snapshot",
+        "storage_snapshot",
+        "metadata_snapshot",
         "status_at_selection",
-        "retention_snapshot",
     ]
-    assert item_snapshot["properties"]["media_kind"]["$ref"].endswith("mediaKind")
-    assert item_snapshot["properties"]["labels"]["$ref"] == "#/$defs/selectionItemLabels"
-    assert selection_defs["selectionItemLabels"]["required"] == ["display_label"]
-    assert run_request["required"] == ["owner", "selection_id", "run_type"]
-    assert retry_request["required"] == ["owner"]
-    assert run["properties"]["selection"]["$ref"].endswith("selection.schema.json#/$defs/selection")
+    assert item_snapshot["properties"]["origin_snapshot"]["$ref"].endswith(
+        "media-asset.schema.json#/$defs/mediaAssetOrigin"
+    )
+    assert run_request["required"] == ["channel_account_id", "selection_snapshot_id", "run_type"]
+    assert retry_request["required"] == ["channel_account_id"]
+    assert run["properties"]["selection_snapshot"]["$ref"].endswith(
+        "selection-snapshot.schema.json#/$defs/selectionSnapshot"
+    )
     assert run["properties"]["status"]["$ref"].endswith("analysisRunStatus")
     assert run["properties"]["idempotency"]["$ref"].endswith("idempotencyRecord")
 
@@ -332,7 +506,7 @@ def test_run_events_artifacts_diagnostics_and_retention_are_first_class() -> Non
     diagnostic = diagnostic_defs["diagnostic"]
     assert diagnostic["required"] == [
         "diagnostic_id",
-        "owner",
+        "channel_account_id",
         "subject",
         "severity",
         "code",
@@ -373,25 +547,28 @@ def test_internal_worker_contract_consumes_sealed_selection_and_publishes_run_ou
     worker_defs = surface["worker_control"]["$defs"]
     enums = surface["enums"]["$defs"]
 
-    claim_response = worker_defs["claimResponse"]
-    selection_input = worker_defs["sealedSelectionInput"]
+    claim_response = worker_defs["claimStepResponse"]
+    selection_input = worker_defs["selectionSnapshotInput"]
+    progress_request = worker_defs["progressRequest"]
     artifact_request = worker_defs["artifactUpsertRequest"]
     diagnostic_request = worker_defs["diagnosticUpsertRequest"]
+    finalize_request = worker_defs["finalizeRequest"]
     queue_response = worker_defs["analysisRunQueueResponse"]
     request_access_response = worker_defs["requestAccessResponse"]
     cancel_check_response = worker_defs["cancelCheckResponse"]
     artifact_download_response = worker_defs["artifactDownloadAccessResponse"]
 
     assert claim_response["required"] == [
-        "execution_id",
+        "analysis_run_step_id",
         "analysis_run_id",
         "run_type",
-        "selection",
+        "selection_snapshot",
+        "analysis_run_step_inputs",
         "params",
         "claimed_at",
     ]
-    assert claim_response["properties"]["selection"]["$ref"] == "#/$defs/sealedSelectionInput"
-    assert selection_input["properties"]["items"]["items"]["$ref"] == "../http/selection.schema.json#/$defs/selectionItemSnapshot"
+    assert claim_response["properties"]["selection_snapshot"]["$ref"] == "#/$defs/selectionSnapshotInput"
+    assert selection_input["properties"]["items"]["items"]["$ref"] == "../http/selection-snapshot.schema.json#/$defs/selectionSnapshotItem"
     assert request_access_response["required"] == [
         "provider",
         "url",
@@ -405,11 +582,19 @@ def test_internal_worker_contract_consumes_sealed_selection_and_publishes_run_ou
     assert cancel_check_response["properties"]["status"]["$ref"].endswith("analysisRunStatus")
     assert artifact_download_response["properties"]["artifact_kind"]["$ref"] == "#/$defs/workerArtifactDescriptorKind"
     assert artifact_download_response["properties"]["download"]["required"] == ["provider", "url", "expires_at"]
-    item_props = surface["selection"]["$defs"]["selectionItemSnapshot"]["properties"]
-    assert {"selection_item_id", "media_item_id", "media_kind", "mime_type", "role", "labels"}.issubset(item_props)
+    item_props = surface["selection_snapshot"]["$defs"]["selectionSnapshotItem"]["properties"]
+    assert {"selection_snapshot_item_id", "media_asset_id", "kind", "origin_snapshot", "storage_snapshot"}.issubset(item_props)
     assert queue_response["properties"]["items"]["items"]["$ref"] == "#/$defs/analysisRunQueueItem"
+    queue_item = worker_defs["analysisRunQueueItem"]
+    assert "analysis_run_step_id" in queue_item["required"]
+    assert "step_kind" in queue_item["required"]
+    assert "task_type" not in queue_item["properties"]
+    assert progress_request["required"] == ["analysis_run_step_id", "progress_stage"]
     assert artifact_request["properties"]["artifacts"]["items"]["$ref"] == "#/$defs/artifactDescriptor"
+    assert artifact_request["required"] == ["analysis_run_step_id", "artifacts"]
     assert diagnostic_request["properties"]["diagnostics"]["items"]["$ref"] == "#/$defs/diagnosticDescriptor"
+    assert diagnostic_request["required"] == ["analysis_run_step_id", "diagnostics"]
+    assert finalize_request["required"] == ["analysis_run_step_id", "outcome"]
     artifact_descriptor = worker_defs["artifactDescriptor"]
     assert {"artifact_kind", "mime_type", "object_key", "size_bytes", "filename", "format"}.issubset(
         artifact_descriptor["properties"]

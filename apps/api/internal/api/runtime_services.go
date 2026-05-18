@@ -10,6 +10,7 @@ import (
 
 	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
+	targetstore "github.com/danila/media-analysis-platform/apps/api/internal/storage/target"
 	"github.com/danila/media-analysis-platform/apps/api/internal/ws"
 )
 
@@ -23,15 +24,26 @@ type workerRuntimeService struct {
 }
 
 func NewRuntimeDependencies(storageService *storage.Repository, publisher *queue.Publisher, _ *ws.Service, websocket WebsocketAcceptor) (Dependencies, error) {
+	return NewRuntimeDependenciesWithTarget(storageService, nil, publisher, nil, websocket)
+}
+
+func NewRuntimeDependenciesWithTarget(storageService *storage.Repository, targetState TargetStateStore, publisher *queue.Publisher, _ *ws.Service, websocket WebsocketAcceptor) (Dependencies, error) {
 	if storageService == nil {
 		return Dependencies{}, fmt.Errorf("%w: storage repository is required", storage.ErrContractViolation)
+	}
+	var target TargetService
+	if targetState != nil {
+		target = NewTargetRuntimeService(targetState)
 	}
 	return Dependencies{
 		Public:    &publicRuntimeService{store: storageService, queue: publisher},
 		Worker:    &workerRuntimeService{store: storageService},
+		Target:    target,
 		Websocket: websocket,
 	}, nil
 }
+
+var _ TargetStateStore = (*targetstore.Store)(nil)
 
 func (s *workerRuntimeService) ListAnalysisRunQueue(ctx context.Context, req AnalysisRunQueueRequest) (AnalysisRunQueueResponse, error) {
 	records, err := s.store.ListAnalysisRunQueue(ctx, req.Status, req.RunType, req.TaskType, req.PageSize)

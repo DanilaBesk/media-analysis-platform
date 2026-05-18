@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/compatibility/deprecated-v1.schema.json",
+  "title": "DeprecatedV1CompatibilityContracts",
+  "$defs": {
+    "deprecatedOwnerScope": {
+      "deprecated": true,
+      "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope",
+      "x-target-mapping": {
+        "target_schema": "channelAccount",
+        "policy": "single-user channel account resolution during transition"
+      }
+    },
+    "mediaItemCompatibility": {
+      "deprecated": true,
+      "$ref": "../http/media-item.schema.json#/$defs/mediaItem",
+      "x-target-mapping": {
+        "target_schema": "mediaAsset",
+        "id_field": "media_item_id -> media_asset_id",
+        "origin_field": "source -> origin/stored_object",
+        "scope_field": "owner -> channel_account_id",
+        "policy": "deprecated_transition_only"
+      }
+    },
+    "mediaItemCompatibilityResponse": {
+      "deprecated": true,
+      "$ref": "../http/media-item.schema.json#/$defs/mediaItemResponse"
+    },
+    "mediaItemCompatibilityListResponse": {
+      "deprecated": true,
+      "$ref": "../http/media-item.schema.json#/$defs/mediaItemListResponse"
+    },
+    "selectionCompatibility": {
+      "deprecated": true,
+      "$ref": "../http/selection.schema.json#/$defs/selection",
+      "x-target-mapping": {
+        "target_schema": "selectionSnapshot",
+        "id_field": "selection_id -> selection_snapshot_id",
+        "item_field": "media_item_id -> media_asset_id",
+        "policy": "deprecated_transition_only"
+      }
+    },
+    "selectionCompatibilityResponse": {
+      "deprecated": true,
+      "$ref": "../http/selection.schema.json#/$defs/selectionResponse"
+    },
+    "analysisRunTaskCompatibility": {
+      "deprecated": true,
+      "type": "object",
+      "x-target-mapping": {
+        "target_schema": "analysisRunStep",
+        "id_field": "analysis_run_task_id -> analysis_run_step_id",
+        "policy": "internal_migration_only"
+      }
+    }
+  }
+}

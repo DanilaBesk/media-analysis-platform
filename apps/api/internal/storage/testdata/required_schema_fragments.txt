@@ -1,31 +1,40 @@
-# required final inbox-first storage schema fragments
-CREATE TABLE sources
-CREATE TABLE media_items
+# required single-user channel-aware target storage schema fragments
+CREATE TABLE channel_accounts
+CREATE TABLE operation_requests
+CREATE TABLE stored_objects
+CREATE TABLE media_assets
 CREATE TABLE collections
 CREATE TABLE collection_items
-CREATE TABLE selections
-CREATE TABLE selection_items
+CREATE TABLE selection_snapshots
+CREATE TABLE selection_snapshot_items
 CREATE TABLE analysis_runs
-CREATE TABLE analysis_run_tasks
-CREATE TABLE artifacts
-CREATE TABLE diagnostics
+CREATE TABLE analysis_run_steps
 CREATE TABLE analysis_run_events
-owner_type text NOT NULL
-owner_id text NOT NULL
-tenant_id text NULL
-origin_type text NOT NULL
-status IN ('validating', 'ready', 'quarantined', 'deleted')
-retention_state text NOT NULL DEFAULT 'active'
-CREATE UNIQUE INDEX collections_active_inbox_owner_unique_idx
-version bigint NOT NULL DEFAULT 1
-source_snapshot jsonb NOT NULL
-retention_snapshot jsonb NOT NULL
-status IN ('queued', 'running', 'cancel_requested', 'partially_succeeded', 'succeeded', 'failed', 'canceled', 'expired')
-idempotency_key text NULL
-evidence_gate_state text NOT NULL DEFAULT 'not_required'
-analysis_run_id uuid NOT NULL REFERENCES analysis_runs(id)
-status text NOT NULL DEFAULT 'pending_enqueue'
-preview jsonb NOT NULL DEFAULT '{"available":false}'::jsonb
-safe_adapter_context jsonb NOT NULL DEFAULT '{}'::jsonb
-CREATE INDEX diagnostics_owner_subject_created_at_desc_idx
-CREATE INDEX analysis_run_events_run_created_at_idx
+CREATE TABLE artifacts
+CREATE TABLE analysis_run_step_inputs
+CREATE TABLE artifact_subjects
+CREATE TABLE diagnostics
+CREATE TABLE channel_surfaces
+CREATE TABLE channel_surface_subjects
+CREATE TABLE channel_surface_events
+channel_account_id uuid REFERENCES channel_accounts(id)
+stored_object_id uuid REFERENCES stored_objects(id)
+media_asset_id uuid NOT NULL REFERENCES media_assets(id)
+selection_snapshot_id uuid NOT NULL REFERENCES selection_snapshots(id)
+status IN ('queued', 'claiming', 'running', 'cancel_requested', 'partially_succeeded', 'succeeded', 'failed', 'canceled', 'expired')
+status IN ('pending', 'queued', 'claimed', 'succeeded', 'partially_succeeded', 'failed', 'canceled')
+safe_channel_context jsonb NOT NULL DEFAULT '{}'::jsonb
+visibility text NOT NULL DEFAULT 'private'
+CREATE UNIQUE INDEX operation_requests_channel_idempotency_unique_idx
+CREATE UNIQUE INDEX stored_objects_bucket_key_unique_idx
+CREATE UNIQUE INDEX collections_active_inbox_channel_unique_idx
+CREATE UNIQUE INDEX collection_items_active_asset_unique_idx
+CREATE UNIQUE INDEX collection_items_active_position_unique_idx
+CREATE UNIQUE INDEX selection_snapshot_items_position_unique_idx
+CREATE TRIGGER selection_snapshots_immutable_update_trg
+CREATE TRIGGER selection_snapshots_immutable_delete_trg
+CREATE UNIQUE INDEX analysis_runs_channel_idempotency_unique_idx
+CREATE UNIQUE INDEX analysis_run_step_inputs_position_unique_idx
+CREATE UNIQUE INDEX channel_surfaces_active_key_idx
+CREATE UNIQUE INDEX channel_surfaces_active_address_idx
+CREATE UNIQUE INDEX channel_surface_one_primary_subject_idx

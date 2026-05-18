@@ -145,7 +145,7 @@
       "type": "object",
       "required": [
         "artifact_id",
-        "owner",
+        "channel_account_id",
         "analysis_run_id",
         "kind",
         "status",
@@ -156,17 +156,28 @@
         "preview",
         "download",
         "retention",
+        "subjects",
         "created_at"
       ],
       "properties": {
         "artifact_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
-        "owner": {
-          "$ref": "../common/owner-scope.schema.json#/$defs/ownerScope"
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "analysis_run_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "stored_object_id": {
+          "oneOf": [
+            {
+              "$ref": "../common/enums.schema.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "kind": {
           "$ref": "../common/enums.schema.json#/$defs/artifactKind"
@@ -208,6 +219,12 @@
         "retention": {
           "$ref": "../common/pagination.schema.json#/$defs/retentionMetadata"
         },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifactSubject"
+          }
+        },
         "diagnostics": {
           "type": "array",
           "items": {
@@ -223,6 +240,54 @@
             "string",
             "null"
           ],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifactSubject": {
+      "type": "object",
+      "required": [
+        "artifact_subject_id",
+        "artifact_id",
+        "subject_type",
+        "subject_id",
+        "subject_role",
+        "created_at"
+      ],
+      "properties": {
+        "artifact_subject_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "artifact_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "subject_type": {
+          "type": "string",
+          "enum": [
+            "analysis_run",
+            "analysis_run_step",
+            "selection_snapshot",
+            "selection_snapshot_item",
+            "media_asset",
+            "diagnostic"
+          ]
+        },
+        "subject_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "subject_role": {
+          "type": "string",
+          "enum": [
+            "primary",
+            "source",
+            "result",
+            "diagnostic",
+            "manifest_entry"
+          ]
+        },
+        "created_at": {
+          "type": "string",
           "format": "date-time"
         }
       },

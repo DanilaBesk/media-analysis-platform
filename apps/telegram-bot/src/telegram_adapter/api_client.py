@@ -35,22 +35,21 @@ class TelegramApiClient:
         self.base_url = base_url.rstrip("/")
         self.urlopen_impl = urlopen_impl or urlopen
 
-    def add_media_item(
+    def create_media_asset(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         kind: str,
-        source: JsonObject,
+        origin: JsonObject,
         display_name: str | None = None,
         collection_id: str | None = None,
-        adapter_origin: str = "telegram",
         metadata: JsonObject | None = None,
+        idempotency_key: str | None = None,
     ) -> JsonObject:
         payload: JsonObject = {
-            "owner": _owner_body(owner),
+            "channel_account_id": channel_account_id,
+            "origin": origin,
             "kind": kind,
-            "source": source,
-            "adapter_origin": adapter_origin,
         }
         if display_name:
             payload["display_name"] = display_name
@@ -58,25 +57,26 @@ class TelegramApiClient:
             payload["collection_id"] = collection_id
         if metadata:
             payload["metadata"] = metadata
-        return self._extract(self._request_json("/v1/media-items", method="POST", json_body=payload), "media_item")
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
+        return self._extract(self._request_json("/v1/media-assets", method="POST", json_body=payload), "media_asset")
 
-    def upload_media_item(
+    def upload_media_asset(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         kind: str,
         content: bytes,
         file_name: str,
         content_type: str | None = None,
         display_name: str | None = None,
         collection_id: str | None = None,
-        adapter_origin: str = "telegram",
         metadata: JsonObject | None = None,
+        idempotency_key: str | None = None,
     ) -> JsonObject:
         payload: JsonObject = {
-            "owner": _owner_body(owner),
+            "channel_account_id": channel_account_id,
             "kind": kind,
-            "adapter_origin": adapter_origin,
         }
         if display_name:
             payload["display_name"] = display_name
@@ -84,6 +84,8 @@ class TelegramApiClient:
             payload["collection_id"] = collection_id
         if metadata:
             payload["metadata"] = metadata
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         boundary = f"codex-{uuid.uuid4().hex}"
         body = _encode_multipart_form(
             boundary=boundary,
@@ -94,7 +96,7 @@ class TelegramApiClient:
         )
         return self._extract(
             self._request(
-                "/v1/media-items",
+                "/v1/media-assets/upload",
                 method="POST",
                 body=body,
                 headers={
@@ -102,19 +104,19 @@ class TelegramApiClient:
                     "Content-Type": f"multipart/form-data; boundary={boundary}",
                 },
             ),
-            "media_item",
+            "media_asset",
         )
 
-    def list_media_items(
+    def list_media_assets(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         cursor: str | None = None,
         page_size: int | None = None,
         status: str | None = None,
         kind: str | None = None,
     ) -> JsonObject:
-        params = _owner_query(owner)
+        params = _channel_account_query(channel_account_id)
         if cursor:
             params["cursor"] = cursor
         if page_size:
@@ -123,79 +125,88 @@ class TelegramApiClient:
             params["status"] = status
         if kind:
             params["kind"] = kind
-        return self._request_json(f"/v1/media-items?{urlencode(params)}")
+        return self._request_json(f"/v1/media-assets?{urlencode(params)}")
 
-    def get_inbox_collection(self, *, owner: JsonObject) -> JsonObject:
-        payload = self._request_json(f"/v1/collections/inbox?{urlencode(_owner_query(owner))}")
+    def get_inbox_collection(self, *, channel_account_id: str) -> JsonObject:
+        payload = self._request_json(f"/v1/collections/inbox?{urlencode(_channel_account_query(channel_account_id))}")
         return self._extract(payload, "collection")
 
     def remove_collection_item(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         collection_id: str,
-        media_item_id: str,
+        media_asset_id: str,
         expected_version: int,
     ) -> JsonObject:
-        params = _owner_query(owner)
+        params = _channel_account_query(channel_account_id)
         params["expected_version"] = str(expected_version)
         payload = self._request_json(
-            f"/v1/collections/{collection_id}/items/{media_item_id}?{urlencode(params)}",
+            f"/v1/collections/{collection_id}/items/{media_asset_id}?{urlencode(params)}",
             method="DELETE",
         )
         return self._extract(payload, "collection")
 
-    def create_selection(
+    def create_selection_snapshot(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         items: list[JsonObject],
         source_collection_id: str | None = None,
         option_snapshot: JsonObject | None = None,
-        duplicate_policy: str = "reject",
-        created_by: str = "telegram",
+        created_via_channel_account_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> JsonObject:
         payload: JsonObject = {
-            "owner": _owner_body(owner),
+            "channel_account_id": channel_account_id,
             "items": items,
-            "duplicate_policy": duplicate_policy,
-            "created_by": created_by,
+            "created_via_channel_account_id": created_via_channel_account_id or channel_account_id,
         }
         if source_collection_id:
             payload["source_collection_id"] = source_collection_id
         if option_snapshot:
             payload["option_snapshot"] = option_snapshot
-        return self._extract(self._request_json("/v1/selections", method="POST", json_body=payload), "selection")
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
+        return self._extract(
+            self._request_json("/v1/selection-snapshots", method="POST", json_body=payload),
+            "selection_snapshot",
+        )
 
     def create_analysis_run(
         self,
         *,
-        owner: JsonObject,
-        selection_id: str,
+        channel_account_id: str,
+        selection_snapshot_id: str,
         run_type: str = "transcription",
         params: JsonObject | None = None,
         delivery: JsonObject | None = None,
+        created_via_channel_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> JsonObject:
         payload: JsonObject = {
-            "owner": _owner_body(owner),
-            "selection_id": selection_id,
+            "channel_account_id": channel_account_id,
+            "selection_snapshot_id": selection_snapshot_id,
             "run_type": run_type,
             "delivery": delivery or {"strategy": "polling"},
+            "created_via_channel_id": created_via_channel_id or channel_account_id,
         }
         if params:
             payload["params"] = params
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
         return self._extract(self._request_json("/v1/analysis-runs", method="POST", json_body=payload), "analysis_run")
 
     def list_analysis_runs(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         cursor: str | None = None,
         page_size: int | None = None,
         status: str | None = None,
         run_type: str | None = None,
     ) -> JsonObject:
-        params = _owner_query(owner)
+        params = _channel_account_query(channel_account_id)
         if cursor:
             params["cursor"] = cursor
         if page_size:
@@ -206,33 +217,35 @@ class TelegramApiClient:
             params["run_type"] = run_type
         return self._request_json(f"/v1/analysis-runs?{urlencode(params)}")
 
-    def get_analysis_run(self, *, owner: JsonObject, analysis_run_id: str) -> JsonObject:
-        payload = self._request_json(f"/v1/analysis-runs/{analysis_run_id}?{urlencode(_owner_query(owner))}")
+    def get_analysis_run(self, *, channel_account_id: str, analysis_run_id: str) -> JsonObject:
+        payload = self._request_json(
+            f"/v1/analysis-runs/{analysis_run_id}?{urlencode(_channel_account_query(channel_account_id))}"
+        )
         return self._extract(payload, "analysis_run")
 
     def cancel_analysis_run(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         analysis_run_id: str,
         message: str = "Canceled from Telegram",
     ) -> JsonObject:
         payload = self._request_json(
-            f"/v1/analysis-runs/{analysis_run_id}/cancel?{urlencode(_owner_query(owner))}",
+            f"/v1/analysis-runs/{analysis_run_id}/cancel",
             method="POST",
-            json_body={"message": message},
+            json_body={"channel_account_id": channel_account_id, "message": message},
         )
         return self._extract(payload, "analysis_run")
 
     def list_artifacts(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         analysis_run_id: str | None = None,
         cursor: str | None = None,
         page_size: int | None = None,
     ) -> JsonObject:
-        params = _owner_query(owner)
+        params = _channel_account_query(channel_account_id)
         if analysis_run_id:
             params["analysis_run_id"] = analysis_run_id
         if cursor:
@@ -241,23 +254,150 @@ class TelegramApiClient:
             params["page_size"] = str(page_size)
         return self._request_json(f"/v1/artifacts?{urlencode(params)}")
 
-    def get_artifact(self, *, owner: JsonObject, artifact_id: str) -> JsonObject:
-        payload = self._request_json(f"/v1/artifacts/{artifact_id}?{urlencode(_owner_query(owner))}")
+    def get_artifact(self, *, channel_account_id: str, artifact_id: str) -> JsonObject:
+        payload = self._request_json(f"/v1/artifacts/{artifact_id}?{urlencode(_channel_account_query(channel_account_id))}")
         return self._extract(payload, "artifact")
 
     def get_internal_artifact_download_access(self, *, artifact_id: str) -> JsonObject:
         return self._request_json(f"/internal/v1/artifacts/{artifact_id}/download-access")
 
+    def resolve_channel_account(self, *, owner: JsonObject) -> JsonObject:
+        metadata: JsonObject = {"owner": owner}
+        if owner.get("adapter_identity"):
+            metadata["adapter_identity"] = owner["adapter_identity"]
+        payload: JsonObject = {
+            "channel": "telegram",
+            "external_account_ref": str(owner["owner_id"]),
+            "display_name": str(owner["owner_id"]),
+            "status": "active",
+            "metadata": metadata,
+        }
+        return self._extract(
+            self._request_json("/internal/v1/channel-accounts", method="PUT", json_body=payload),
+            "channel_account",
+        )
+
+    def list_channel_accounts(self, *, page_size: int | None = None) -> JsonObject:
+        params: dict[str, str] = {}
+        if page_size:
+            params["page_size"] = str(page_size)
+        query = f"?{urlencode(params)}" if params else ""
+        return self._request_json(f"/internal/v1/channel-accounts{query}")
+
+    def upsert_channel_surface(
+        self,
+        *,
+        channel_account_id: str,
+        surface_type: str,
+        surface_key: str,
+        address: JsonObject,
+        display_state: JsonObject,
+        address_fingerprint: str | None = None,
+        subjects: list[JsonObject] | None = None,
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {
+            "channel_account_id": channel_account_id,
+            "channel": "telegram",
+            "surface_type": surface_type,
+            "surface_key": surface_key,
+            "address": address,
+            "display_state": display_state,
+        }
+        if address_fingerprint:
+            payload["address_fingerprint"] = address_fingerprint
+        if subjects:
+            payload["subjects"] = subjects
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
+        return self._extract(
+            self._request_json("/internal/v1/channel-surfaces", method="PUT", json_body=payload),
+            "channel_surface",
+        )
+
+    def list_channel_surfaces(
+        self,
+        *,
+        channel_account_id: str,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        lifecycle_status: str | None = None,
+        active_only: bool = False,
+        page_size: int | None = None,
+    ) -> JsonObject:
+        params = {"channel_account_id": channel_account_id}
+        if subject_type:
+            params["subject_type"] = subject_type
+        if subject_id:
+            params["subject_id"] = subject_id
+        if lifecycle_status:
+            params["lifecycle_status"] = lifecycle_status
+        if page_size:
+            params["page_size"] = str(page_size)
+        path = "/internal/v1/channel-surfaces/active" if active_only else "/internal/v1/channel-surfaces"
+        return self._request_json(f"{path}?{urlencode(params)}")
+
+    def replace_channel_surface_display_state(
+        self,
+        *,
+        channel_surface_id: str,
+        expected_version: int,
+        display_state: JsonObject,
+        actor_type: str = "telegram_adapter",
+        actor_id: str | None = None,
+        metadata: JsonObject | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {
+            "expected_version": expected_version,
+            "display_state": display_state,
+            "actor_type": actor_type,
+        }
+        if actor_id:
+            payload["actor_id"] = actor_id
+        if metadata:
+            payload["metadata"] = metadata
+        return self._extract(
+            self._request_json(
+                f"/internal/v1/channel-surfaces/{channel_surface_id}/display-state",
+                method="PATCH",
+                json_body=payload,
+            ),
+            "channel_surface",
+        )
+
+    def supersede_channel_surface(
+        self,
+        *,
+        channel_surface_id: str,
+        reason: str,
+        actor_type: str = "telegram_adapter",
+        actor_id: str | None = None,
+        metadata: JsonObject | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {"reason": reason, "actor_type": actor_type}
+        if actor_id:
+            payload["actor_id"] = actor_id
+        if metadata:
+            payload["metadata"] = metadata
+        return self._extract(
+            self._request_json(
+                f"/internal/v1/channel-surfaces/{channel_surface_id}/supersede",
+                method="POST",
+                json_body=payload,
+            ),
+            "channel_surface_event",
+        )
+
     def list_diagnostics(
         self,
         *,
-        owner: JsonObject,
+        channel_account_id: str,
         subject_type: str | None = None,
         subject_id: str | None = None,
         cursor: str | None = None,
         page_size: int | None = None,
     ) -> JsonObject:
-        params = _owner_query(owner)
+        params = _channel_account_query(channel_account_id)
         if subject_type:
             params["subject_type"] = subject_type
         if subject_id:
@@ -329,26 +469,8 @@ class TelegramApiClient:
         return value
 
 
-def _owner_body(owner: JsonObject) -> JsonObject:
-    body: JsonObject = {
-        "owner_type": owner["owner_type"],
-        "owner_id": owner["owner_id"],
-    }
-    if owner.get("tenant_id"):
-        body["tenant_id"] = owner["tenant_id"]
-    if owner.get("adapter_identity"):
-        body["adapter_identity"] = owner["adapter_identity"]
-    return body
-
-
-def _owner_query(owner: JsonObject) -> dict[str, str]:
-    params = {
-        "owner_type": str(owner["owner_type"]),
-        "owner_id": str(owner["owner_id"]),
-    }
-    if owner.get("tenant_id"):
-        params["tenant_id"] = str(owner["tenant_id"])
-    return params
+def _channel_account_query(channel_account_id: str) -> dict[str, str]:
+    return {"channel_account_id": str(channel_account_id)}
 
 
 def _encode_multipart_form(

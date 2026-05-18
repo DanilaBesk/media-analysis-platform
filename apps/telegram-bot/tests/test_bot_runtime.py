@@ -61,41 +61,47 @@ class FakeFinalApiClient:
         self.get_artifact_requests: list[str] = []
         self.internal_artifact_download_access_requests: list[str] = []
         self.internal_artifact_download_access: dict[str, dict[str, Any]] = {}
+        self.channel_accounts: list[dict[str, Any]] = []
+        self.channel_surfaces: list[dict[str, Any]] = []
+        self.surface_events: list[dict[str, Any]] = []
+        self.replace_surface_requests: list[dict[str, Any]] = []
+        self.supersede_surface_requests: list[dict[str, Any]] = []
 
-    def add_media_item(self, **kwargs) -> dict[str, Any]:
-        media_item = {
-            "media_item_id": f"media-{len(self.items) + 1}",
+    def create_media_asset(self, **kwargs) -> dict[str, Any]:
+        media_asset = {
+            "media_asset_id": f"media-{len(self.items) + 1}",
             "kind": kwargs["kind"],
             "status": "ready",
             "display_name": kwargs.get("display_name") or kwargs["kind"],
-            "source": kwargs["source"],
+            "origin": kwargs["origin"],
             "metadata": kwargs.get("metadata") or {},
         }
         self.add_requests.append(kwargs)
-        self.items.append(media_item)
-        self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
-        return media_item
+        self.items.append(media_asset)
+        self.collection["items"].append({"media_asset_id": media_asset["media_asset_id"], "position": len(self.items) - 1})
+        return media_asset
 
-    def upload_media_item(self, **kwargs) -> dict[str, Any]:
-        media_item = {
-            "media_item_id": f"media-{len(self.items) + 1}",
+    def upload_media_asset(self, **kwargs) -> dict[str, Any]:
+        media_asset = {
+            "media_asset_id": f"media-{len(self.items) + 1}",
             "kind": kwargs["kind"],
             "status": "ready",
             "display_name": kwargs.get("display_name") or kwargs.get("file_name") or kwargs["kind"],
-            "source": {
-                "origin_type": "object",
-                "object_key": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
-                "mime_type": kwargs.get("content_type"),
+            "origin": {
+                "origin_type": "upload",
+                "origin_ref": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
+                "object_ref": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
+                "content_type": kwargs.get("content_type"),
                 "size_bytes": len(kwargs["content"]),
             },
             "metadata": kwargs.get("metadata") or {},
         }
         self.upload_requests.append(kwargs)
-        self.items.append(media_item)
-        self.collection["items"].append({"media_item_id": media_item["media_item_id"], "position": len(self.items) - 1})
-        return media_item
+        self.items.append(media_asset)
+        self.collection["items"].append({"media_asset_id": media_asset["media_asset_id"], "position": len(self.items) - 1})
+        return media_asset
 
-    def list_media_items(self, **kwargs) -> dict[str, Any]:
+    def list_media_assets(self, **kwargs) -> dict[str, Any]:
         page_size = kwargs.get("page_size") or 5
         start = int(kwargs.get("cursor") or 0)
         next_start = start + page_size
@@ -112,16 +118,16 @@ class FakeFinalApiClient:
         return self.collection
 
     def remove_collection_item(self, **kwargs) -> dict[str, Any]:
-        media_item_id = kwargs["media_item_id"]
+        media_asset_id = kwargs["media_asset_id"]
         self.remove_requests.append(kwargs)
-        self.collection["items"] = [item for item in self.collection["items"] if item["media_item_id"] != media_item_id]
-        self.items = [item for item in self.items if item["media_item_id"] != media_item_id]
+        self.collection["items"] = [item for item in self.collection["items"] if item["media_asset_id"] != media_asset_id]
+        self.items = [item for item in self.items if item["media_asset_id"] != media_asset_id]
         self.collection["version"] += 1
         return self.collection
 
-    def create_selection(self, **kwargs) -> dict[str, Any]:
+    def create_selection_snapshot(self, **kwargs) -> dict[str, Any]:
         selection = {
-            "selection_id": f"selection-{len(self.selections) + 1}",
+            "selection_snapshot_id": f"selection-{len(self.selections) + 1}",
             "items": kwargs["items"],
             "source_collection_id": kwargs.get("source_collection_id"),
         }
@@ -131,7 +137,7 @@ class FakeFinalApiClient:
     def create_analysis_run(self, **kwargs) -> dict[str, Any]:
         run = {
             "analysis_run_id": f"run-{len(self.runs) + 1}",
-            "selection_id": kwargs["selection_id"],
+            "selection_snapshot_id": kwargs["selection_snapshot_id"],
             "run_type": kwargs["run_type"],
             "status": "queued",
             "version": 1,
@@ -189,6 +195,104 @@ class FakeFinalApiClient:
             ],
             "page": {"page_size": 10, "has_more": False},
         }
+
+    def resolve_channel_account(self, **kwargs) -> dict[str, Any]:
+        owner_value = kwargs["owner"]
+        owner_id = str(owner_value["owner_id"])
+        existing = next((account for account in self.channel_accounts if account["external_account_ref"] == owner_id), None)
+        if existing is not None:
+            return existing
+        account = {
+            "channel_account_id": f"channel-account-{len(self.channel_accounts) + 1}",
+            "channel": "telegram",
+            "external_account_ref": owner_id,
+            "display_name": owner_id,
+            "status": "active",
+            "metadata": {"owner": owner_value, "adapter_identity": owner_value.get("adapter_identity", {})},
+        }
+        self.channel_accounts.append(account)
+        return account
+
+    def list_channel_accounts(self, **kwargs) -> dict[str, Any]:
+        return {"items": list(self.channel_accounts), "page": {"page_size": kwargs.get("page_size") or 100, "has_more": False}}
+
+    def upsert_channel_surface(self, **kwargs) -> dict[str, Any]:
+        existing = next(
+            (
+                surface
+                for surface in self.channel_surfaces
+                if surface["channel_account_id"] == kwargs["channel_account_id"]
+                and surface["surface_type"] == kwargs["surface_type"]
+                and surface["surface_key"] == kwargs["surface_key"]
+                and surface["lifecycle_status"] == "active"
+            ),
+            None,
+        )
+        if existing is None:
+            surface = {
+                "channel_surface_id": f"surface-{len(self.channel_surfaces) + 1}",
+                "channel_account_id": kwargs["channel_account_id"],
+                "channel": "telegram",
+                "surface_type": kwargs["surface_type"],
+                "surface_key": kwargs["surface_key"],
+                "address": kwargs.get("address") or {},
+                "address_fingerprint": kwargs.get("address_fingerprint") or "",
+                "display_state": kwargs.get("display_state") or {},
+                "lifecycle_status": "active",
+                "version": 1,
+                "subjects": list(kwargs.get("subjects") or []),
+            }
+            self.channel_surfaces.append(surface)
+            return surface
+        existing["address"] = kwargs.get("address") or {}
+        existing["address_fingerprint"] = kwargs.get("address_fingerprint") or ""
+        existing["display_state"] = kwargs.get("display_state") or {}
+        existing["version"] = int(existing.get("version") or 0) + 1
+        if kwargs.get("subjects"):
+            existing["subjects"] = list(kwargs["subjects"])
+        return existing
+
+    def list_channel_surfaces(self, **kwargs) -> dict[str, Any]:
+        items = [
+            surface
+            for surface in self.channel_surfaces
+            if surface["channel_account_id"] == kwargs["channel_account_id"]
+        ]
+        if kwargs.get("active_only"):
+            items = [surface for surface in items if surface["lifecycle_status"] == "active"]
+        if kwargs.get("lifecycle_status"):
+            items = [surface for surface in items if surface["lifecycle_status"] == kwargs["lifecycle_status"]]
+        if kwargs.get("subject_type") or kwargs.get("subject_id"):
+            items = [
+                surface
+                for surface in items
+                if any(
+                    subject.get("subject_type") == kwargs.get("subject_type")
+                    and subject.get("subject_id") == kwargs.get("subject_id")
+                    for subject in surface.get("subjects", [])
+                )
+            ]
+        return {"items": items[: kwargs.get("page_size") or 100], "page": {"has_more": False}}
+
+    def replace_channel_surface_display_state(self, **kwargs) -> dict[str, Any]:
+        self.replace_surface_requests.append(kwargs)
+        surface = next(surface for surface in self.channel_surfaces if surface["channel_surface_id"] == kwargs["channel_surface_id"])
+        surface["display_state"] = kwargs["display_state"]
+        surface["version"] = int(surface.get("version") or 0) + 1
+        return surface
+
+    def supersede_channel_surface(self, **kwargs) -> dict[str, Any]:
+        self.supersede_surface_requests.append(kwargs)
+        surface = next(surface for surface in self.channel_surfaces if surface["channel_surface_id"] == kwargs["channel_surface_id"])
+        surface["lifecycle_status"] = "superseded"
+        event = {
+            "channel_surface_event_id": f"surface-event-{len(self.surface_events) + 1}",
+            "channel_surface_id": kwargs["channel_surface_id"],
+            "event_type": "channel_surface.superseded",
+            "reason": kwargs.get("reason"),
+        }
+        self.surface_events.append(event)
+        return event
 
 
 class FakeBot:
@@ -606,16 +710,140 @@ async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message
 
 
 @pytest.mark.asyncio
+async def test_status_surface_supersedes_uneditable_message_and_creates_replacement() -> None:
+    edit_error = TelegramBadRequest(
+        method=SimpleNamespace(__api_method__="editMessageText"),
+        message="message to edit not found",
+    )
+    api, gateway, app = make_app(bot=FakeBot(edit_error=edit_error))
+    gateway.add_text(owner=owner(), text="surface replacement")
+    account = api.resolve_channel_account(owner=owner())
+    api.channel_surfaces.append(
+        {
+            "channel_surface_id": "surface-old",
+            "channel_account_id": account["channel_account_id"],
+            "channel": "telegram",
+            "surface_type": "current_materials_panel",
+            "surface_key": "current:chat:10:user:7",
+            "address": {"chat_id": 10, "message_id": 5002},
+            "address_fingerprint": "telegram:10:5002",
+            "display_state": {"screen": "main"},
+            "lifecycle_status": "active",
+            "version": 1,
+            "subjects": [],
+        }
+    )
+
+    sent = await app._send_or_edit_status(FakeMessage())
+
+    active_surfaces = [surface for surface in api.channel_surfaces if surface["lifecycle_status"] == "active"]
+    assert sent is True
+    assert api.supersede_surface_requests[-1]["channel_surface_id"] == "surface-old"
+    assert api.supersede_surface_requests[-1]["reason"] == "message_not_editable"
+    assert app.status_message_ids[(10, 7)] == 9001
+    assert active_surfaces[-1]["surface_type"] == "current_materials_panel"
+    assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9001}
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_restores_materials_surface_and_resumes_active_run_watcher() -> None:
+    api, gateway, app = make_app(bot=FakeBot())
+    gateway.add_text(owner=owner(), text="recover me")
+    selection = gateway.create_selection_snapshot(owner=owner(), collection_id="inbox-1", expected_version=1)
+    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
+    account = api.resolve_channel_account(owner=owner())
+    api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="current_materials_panel",
+        surface_key="current:chat:10:user:7",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
+    )
+    api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="analysis_task_surface",
+        surface_key="analysis_run:run-1",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main", "focused_run_id": run["analysis_run_id"]},
+        subjects=[{"subject_type": "analysis_run", "subject_id": run["analysis_run_id"], "subject_role": "primary"}],
+    )
+    tick = asyncio.Event()
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+
+    await app._recover_active_channel_surfaces()
+
+    assert app.status_message_ids[(10, 7)] == 5001
+    assert app.page_states[(10, 7)].focused_run_id == run["analysis_run_id"]
+    assert (10, 7) in app.run_watch_tasks
+    assert app.bot.edit_calls[-1]["message_id"] == 5001
+    app._cancel_run_status_tracking((10, 7))
+    tick.set()
+
+
+@pytest.mark.asyncio
+async def test_existing_result_surface_prevents_duplicate_delivery_after_restart() -> None:
+    api, gateway, app = make_app(bot=FakeBot())
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_snapshot_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+        }
+    )
+    account = api.resolve_channel_account(owner=owner())
+    api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="result_artifact_surface",
+        surface_key="artifact:artifact-1",
+        address={"chat_id": 10, "message_id": 7001},
+        address_fingerprint="telegram:10:7001",
+        display_state={"delivery_mode": "text"},
+        subjects=[{"subject_type": "artifact", "subject_id": "artifact-1", "subject_role": "primary"}],
+    )
+
+    notice, show_alert = await app._deliver_run_result(
+        owner=owner(),
+        analysis_run_id="run-1",
+        expected_version=1,
+        chat_id=10,
+    )
+
+    assert notice == "Транскрипт уже отправлен в чат."
+    assert show_alert is True
+    assert api.internal_artifact_download_access_requests == []
+    assert app.bot.send_message_calls == []
+
+
+@pytest.mark.asyncio
 async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_active() -> None:
     api, gateway, app = make_app()
     gateway.add_text(owner=owner(), text="queued run")
     status = gateway.restore_status(owner=owner())
-    selection = gateway.create_selection(
+    selection = gateway.create_selection_snapshot(
         owner=owner(),
         collection_id=status.collection["collection_id"],
         expected_version=int(status.collection["version"]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_id=selection["selection_id"])
+    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
 
     async def no_sleep(_seconds: float) -> None:
         return None
@@ -706,7 +934,7 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     remove_callback = FakeCallback(data=remove_callback_data, message=base_message)
     await app._handle_status_callback(remove_callback)
     assert remove_callback.answers[-1]["text"] == "Материал убран"
-    assert api.remove_requests[-1]["media_item_id"] == "media-2"
+    assert api.remove_requests[-1]["media_asset_id"] == "media-2"
     assert app.page_states[(10, 7)].screen == "materials"
 
     gateway.add_text(owner=owner(), text="three")
@@ -727,7 +955,7 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     remove_latest_callback = FakeCallback(data=remove_latest_callback_data, message=base_message)
     await app._handle_status_callback(remove_latest_callback)
     assert remove_latest_callback.answers[-1]["text"] == "Последний материал убран"
-    assert api.remove_requests[-1]["media_item_id"] == "media-2"
+    assert api.remove_requests[-1]["media_asset_id"] == "media-2"
     assert app.page_states[(10, 7)].screen == "materials"
 
     back_callback = FakeCallback(data="ib:mn", message=base_message)
@@ -874,7 +1102,7 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
     api.runs.append(
         {
             "analysis_run_id": "run-1",
-            "selection_id": "selection-1",
+            "selection_snapshot_id": "selection-1",
             "run_type": "transcription",
             "status": "succeeded",
             "version": 1,
@@ -924,7 +1152,7 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
     assert base_message.answers[-1]["text"] == "manual transcript"
     assert api.collection["items"] == []
     assert api.items == []
-    assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+    assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
     assert "Материалов: 0" in base_message.edits[-1]["text"]
 
 
@@ -935,7 +1163,7 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
     api.runs.append(
         {
             "analysis_run_id": "run-1",
-            "selection_id": "selection-1",
+            "selection_snapshot_id": "selection-1",
             "run_type": "transcription",
             "status": "running",
             "version": 2,
@@ -966,14 +1194,7 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
     assert cancel_callback.answers[-1] == {"text": "Транскрибация отменена", "show_alert": False}
     assert api.cancel_requests == [
         {
-            "owner": {
-                **owner(),
-                "adapter_identity": {
-                    "telegram_chat_id": "10",
-                    "telegram_user_id": "7",
-                    "telegram_chat_type": "private",
-                },
-            },
+            "channel_account_id": "channel-account-1",
             "analysis_run_id": "run-1",
             "message": "Canceled from Telegram inline button",
         }
@@ -996,7 +1217,7 @@ async def test_unfocused_active_run_can_be_canceled_while_new_transcription_can_
     api.runs.append(
         {
             "analysis_run_id": "run-old",
-            "selection_id": "selection-old",
+            "selection_snapshot_id": "selection-old",
             "run_type": "transcription",
             "status": "running",
             "version": 3,
@@ -1048,14 +1269,14 @@ async def test_cancel_callback_rejects_stale_focus_without_canceling_other_run()
         [
             {
                 "analysis_run_id": "run-old",
-                "selection_id": "selection-old",
+                "selection_snapshot_id": "selection-old",
                 "run_type": "transcription",
                 "status": "running",
                 "version": 1,
             },
             {
                 "analysis_run_id": "run-current",
-                "selection_id": "selection-current",
+                "selection_snapshot_id": "selection-current",
                 "run_type": "transcription",
                 "status": "running",
                 "version": 2,
@@ -1099,7 +1320,7 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
     api.runs.append(
         {
             "analysis_run_id": "run-1",
-            "selection_id": "selection-1",
+            "selection_snapshot_id": "selection-1",
             "run_type": "transcription",
             "status": "succeeded",
             "version": 1,
@@ -1286,7 +1507,7 @@ async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_a
     assert api.get_artifact_requests == []
     assert api.collection["items"] == []
     assert api.items == []
-    assert [request["media_item_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+    assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
     assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
 
 
@@ -1334,7 +1555,7 @@ async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
 
     assert app.run_watch_tasks == {}
     assert app.bot.send_message_calls == []
-    assert api.collection["items"] == [{"media_item_id": "media-1", "position": 0}]
+    assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
     assert api.remove_requests == []
     assert "Материалов: 1" in app.bot.edit_calls[-1]["text"]
 
@@ -1479,7 +1700,7 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
     normalized_404 = _normalize_callback_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))
     normalized_message_404 = _normalize_message_error(TelegramApiClientError("/v1", 404, "missing", code="gone"))
     normalized_message_runtime = _normalize_message_error(RuntimeError("inbox_empty"))
-    normalized_key_error = _normalize_callback_error(KeyError("selection_id"))
+    normalized_key_error = _normalize_callback_error(KeyError("selection_snapshot_id"))
     passthrough = _normalize_callback_error(RuntimeError("boom"))
 
     assert isinstance(normalized_404, TelegramUserError)

@@ -18,10 +18,10 @@
       </annotations>
     </M-TARGET-ARCHITECTURE>
 
-    <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" STATUS="planned" OWNER="media-49h">
+    <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" STATUS="implemented" OWNER="media-7f3.9.1">
       <purpose>Own OpenAPI and shared schemas for the target product vocabulary plus explicit deprecated compatibility contracts.</purpose>
       <path>packages/contracts</path>
-      <depends>none</depends>
+      <depends>M-TARGET-ARCHITECTURE</depends>
       <verification-ref>EV-CONTRACTS</verification-ref>
       <annotations>
         <export-mediaAssetSchemas PURPOSE="Define media_asset create, read, list, delete, stored_object/origin metadata, status, retention, and diagnostics envelopes." />
@@ -35,7 +35,7 @@
       </annotations>
     </M-CONTRACTS>
 
-    <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="planned" OWNER="media-5cj">
+    <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="implemented" OWNER="media-7f3.9.3">
       <purpose>Expose the public API for media_asset ingestion, collection management, selection_snapshot sealing, analysis_run lifecycle, artifact access, and diagnostics.</purpose>
       <path>apps/api/internal/api</path>
       <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
@@ -48,12 +48,14 @@
         <export-registerAnalysisRunRoutes PURPOSE="Bind analysis_run create, read, list, events, and cancel routes." />
         <export-registerArtifactRoutes PURPOSE="Bind channel-account-scoped artifact preview and download-resolution routes." />
         <export-registerDiagnosticRoutes PURPOSE="Bind channel-account-scoped diagnostics query routes." />
+        <export-registerTargetStepRoutes PURPOSE="Bind target analysis_run_step claim, cancel-check, progress, and finalize routes." />
+        <export-registerChannelSurfaceRoutes PURPOSE="Bind channel_surface list, active recovery, display-state, supersede, and event routes." />
       </annotations>
     </M-API-HTTP>
 
-    <M-API-DOMAIN NAME="ApiDomain" TYPE="CORE_LOGIC" STATUS="planned" OWNER="media-5cj">
+    <M-API-DOMAIN NAME="ApiDomain" TYPE="CORE_LOGIC" STATUS="implemented" OWNER="media-7f3.9.3">
       <purpose>Own product rules for channel-account access, ingestion, inbox membership, collection mutation, selection snapshot immutability, analysis_run lifecycle, prerequisite planning, retention, and diagnostics.</purpose>
-      <path>apps/api/internal/api/media_runtime.go</path>
+      <path>apps/api/internal/api/target_runtime.go</path>
       <depends>M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
@@ -65,15 +67,19 @@
         <export-cancelAnalysisRun PURPOSE="Apply cooperative cancellation against analysis_run and internal execution rows." />
         <export-applyRetention PURPOSE="Evaluate stored_object, media_asset, selection_snapshot, run, artifact, and diagnostics retention actions." />
         <export-recordDiagnostic PURPOSE="Persist safe diagnostic evidence for rejected and partial flows." />
+        <export-recordWorkerArtifacts PURPOSE="Persist worker artifact registrations as stored_objects, artifacts, and artifact_subject lineage keyed by analysis_run_step_id." />
+        <export-targetRuntimeService PURPOSE="Routes target operations through apps/api/internal/storage/target.Store while compatibility services remain available for deprecated clients." />
       </annotations>
     </M-API-DOMAIN>
 
-    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="planned" OWNER="media-5cj">
+    <M-API-STORAGE NAME="ApiStorage" TYPE="DATA_LAYER" STATUS="implemented" OWNER="media-7f3.9.2">
       <purpose>Persist channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</purpose>
       <path>apps/api/internal/storage</path>
       <depends>M-CONTRACTS</depends>
       <verification-ref>EV-STORAGE</verification-ref>
       <annotations>
+        <migration-targetReset PATH="apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql" PURPOSE="Destructively resets disposable local storage and recreates the target channel-aware table set." />
+        <repository-targetStore PATH="apps/api/internal/storage/target" PURPOSE="Provides target SQL repository methods for channel accounts, operation requests, media assets with inbox membership, collections, selection snapshots, analysis run graphs/events/step lifecycle, artifacts, diagnostics, and channel surfaces." />
         <table-channelAccounts PURPOSE="Store durable channel identity and access scope for the single-user product." />
         <table-operationRequests PURPOSE="Store idempotency and accepted mutation attempts for safe retries." />
         <table-storedObjects PURPOSE="Store object body and origin metadata." />
@@ -88,6 +94,9 @@
         <table-artifacts PURPOSE="Store output metadata and retention state." />
         <table-artifactSubjects PURPOSE="Store artifact lineage links to runs, steps, snapshots, selected items, media assets, and diagnostics." />
         <table-diagnostics PURPOSE="Store structured warnings, errors, and operator evidence." />
+        <table-channelSurfaces PURPOSE="Store restart-safe channel presentation mappings with active uniqueness by channel account, surface key, and address fingerprint." />
+        <table-channelSurfaceSubjects PURPOSE="Store external surface links to target product subjects while enforcing one primary subject per surface." />
+        <table-channelSurfaceEvents PURPOSE="Store append-only channel surface lifecycle and recovery history." />
       </annotations>
     </M-API-STORAGE>
 
@@ -113,7 +122,7 @@
       </annotations>
     </M-API-EVENTS>
 
-    <M-INTERACTION-SURFACES NAME="ChannelSurfaces" TYPE="UTILITY" STATUS="planned" OWNER="media-w9y">
+    <M-INTERACTION-SURFACES NAME="ChannelSurfaces" TYPE="UTILITY" STATUS="implemented" OWNER="media-7f3.9.4">
       <purpose>Persist channel-account-scoped external channel surfaces without adding consumer-specific fields to domain entities.</purpose>
       <path>apps/api/internal/interaction_surfaces</path>
       <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE</depends>
@@ -123,33 +132,35 @@
         <table-channelSurfaces PURPOSE="Store channel_account, channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, idempotency, and lifecycle timestamps." />
         <table-channelSurfaceSubjects PURPOSE="Store surface-to-domain-subject links with subject type, subject id, and subject role while enforcing one primary subject per surface." />
         <table-channelSurfaceEvents PURPOSE="Store append-only operational history for created, upserted, address changed, display state replaced, superseded, deleted, failed, and recovered events." />
-        <internal-upsertSurface PURPOSE="Allow channel runtimes to create or update durable external channel surfaces idempotently." />
+        <internal-upsertSurface PURPOSE="Allow channel runtimes to create or update durable external channel surfaces idempotently; repeat upserts return the actual persisted row and rebind subject links to it." />
         <internal-listSurfaces PURPOSE="Allow channel runtimes to recover active external surfaces after restart." />
         <internal-supersedeSurface PURPOSE="Allow channel runtimes to retire stale or uneditable external surfaces without deleting domain history." />
       </annotations>
     </M-INTERACTION-SURFACES>
 
-    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="WORKER" STATUS="planned" OWNER="media-sfx">
+    <M-WORKER-TRANSCRIPTION NAME="WorkerTranscription" TYPE="WORKER" STATUS="implemented" OWNER="media-7f3.9.6">
       <purpose>Execute transcription steps from sealed selection material and publish artifacts through analysis_run.</purpose>
       <path>workers/transcription</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
         <export-claimRunStep PURPOSE="Claim analysis_run_steps by analysis_run_id." />
-        <export-processStepInputs PURPOSE="Process declared selection_snapshot_item inputs without reading mutable collection state." />
+        <export-processStepInputs PURPOSE="Process declared selection_snapshot_item inputs from sealed selection_snapshot facts without reading mutable collection state." />
         <export-publishArtifacts PURPOSE="Publish transcript artifacts and artifact_subject lineage through API-owned artifact contracts." />
+        <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
 
-    <M-WORKER-AGENT-RUNNER NAME="WorkerAgentRunner" TYPE="WORKER" STATUS="planned" OWNER="media-sfx">
+    <M-WORKER-AGENT-RUNNER NAME="WorkerAgentRunner" TYPE="WORKER" STATUS="implemented" OWNER="media-7f3.9.6">
       <purpose>Execute report and research analysis from ready transcript or text-corpus artifacts and publish artifacts plus diagnostics through analysis_run.</purpose>
       <path>workers/agent-runner</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
         <export-runAnalysisHarness PURPOSE="Dispatch configured analysis harnesses behind analysis_run." />
-        <export-consumePreparedText PURPOSE="Consume declared transcript_artifact or text_corpus_artifact step inputs instead of transcribing or discovering raw speech media." />
+        <export-consumePreparedText PURPOSE="Consume declared transcript_artifact or text_corpus_artifact step inputs by materializing them as harness input artifacts instead of transcribing or discovering raw speech media." />
         <export-publishAnalysisArtifacts PURPOSE="Publish report, research, log, and diagnostic artifacts." />
+        <export-stepRequestAccess PURPOSE="Resolve private operation envelopes by analysis_run_step_id." />
       </annotations>
     </M-WORKER-AGENT-RUNNER>
 
@@ -165,15 +176,18 @@
       </annotations>
     </M-WEB>
 
-    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="ADAPTER" STATUS="planned" OWNER="media-7al">
-      <purpose>Capture Telegram input and present inbox, collection, selection, run, artifact, and diagnostic actions over the shared API state.</purpose>
+    <M-TELEGRAM-ADAPTER NAME="TelegramAdapter" TYPE="ADAPTER" STATUS="partial" OWNER="media-7f3.9.5">
+      <purpose>Capture Telegram input and present inbox, collection, selection_snapshot, analysis_run, artifact, and diagnostic actions over the shared API state.</purpose>
       <path>apps/telegram-bot</path>
       <depends>M-CONTRACTS, M-API-HTTP</depends>
       <verification-ref>EV-ADAPTERS</verification-ref>
       <annotations>
-        <export-addMediaFromUpdate PURPOSE="Convert Telegram updates into API add_media requests." />
+        <export-addMediaFromUpdate PURPOSE="Convert Telegram updates into target media_asset creation and upload requests scoped by channel_account." />
         <export-renderInboxStatus PURPOSE="Show accepted inputs and available management actions." />
-        <export-runAnalysisAction PURPOSE="Create a selection and analysis_run from explicit user action." />
+        <export-runAnalysisAction PURPOSE="Create a selection_snapshot and analysis_run from explicit user action." />
+        <export-targetTelegramVocabulary PURPOSE="Use media_asset_id, selection_snapshot_id, and channel_account_id in active Telegram API request and callback paths." />
+        <export-channelSurfaceRecovery PURPOSE="Persist current materials panels, active run cards, and result artifact deliveries through channel_surfaces and recover them after restart." />
+        <export-resultDeliveryDeduplication PURPOSE="Use result_artifact_surface records to avoid duplicate Telegram result delivery after restart without mutating product lifecycle." />
         <contract-selectionTranscriptionCards PATH="docs/architecture/telegram-selection-transcription-cards.md" PURPOSE="Define Telegram user-facing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>

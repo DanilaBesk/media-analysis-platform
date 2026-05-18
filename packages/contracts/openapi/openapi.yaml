@@ -3,9 +3,700 @@
   "info": {
     "title": "Media Analysis Platform API",
     "version": "2.0.0",
-    "description": "Inbox-first public contract for API-owned media, collections, immutable selections, analysis runs, artifacts, diagnostics, retention, and owner-scoped access."
+    "description": "Single-user channel-aware target contract for API-owned media assets, collections, immutable selection snapshots, analysis runs, artifacts, diagnostics, channel accounts, channel surfaces, idempotency, and explicit deprecated v1 compatibility."
   },
   "paths": {
+    "/v1/media-assets": {
+      "post": {
+        "operationId": "createMediaAsset",
+        "summary": "Create one channel-account-scoped media asset without starting analysis.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/media-asset.schema.json#/$defs/createMediaAssetRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Accepted input persisted as a media asset and visible through the inbox collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/media-asset.schema.json#/$defs/mediaAssetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      },
+      "get": {
+        "operationId": "listMediaAssets",
+        "summary": "List media assets for a channel account with filters, diagnostics summary, and pagination.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/mediaKind"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/mediaAssetStatus"
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Media assets ordered by creation time descending.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/media-asset.schema.json#/$defs/mediaAssetListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/media-assets/upload": {
+      "post": {
+        "operationId": "uploadMediaAsset",
+        "summary": "Upload bytes and create one media asset without starting analysis.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "../schemas/http/media-asset.schema.json#/$defs/createMediaAssetMultipartRequest"
+              },
+              "encoding": {
+                "metadata": {
+                  "contentType": "application/json"
+                },
+                "file": {
+                  "contentType": "application/octet-stream"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded input persisted as a media asset and visible through the inbox collection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/media-asset.schema.json#/$defs/mediaAssetResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/media-assets/{media_asset_id}": {
+      "get": {
+        "operationId": "getMediaAsset",
+        "summary": "Read one media asset and safe origin or stored object metadata for the caller.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "$ref": "#/components/parameters/MediaAssetId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Media asset detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/media-asset.schema.json#/$defs/mediaAssetResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteMediaAsset",
+        "summary": "Mark one media asset deleted and hide it from default collection membership reads.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "$ref": "#/components/parameters/MediaAssetId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated media asset with retention metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/media-asset.schema.json#/$defs/mediaAssetResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/selection-snapshots": {
+      "post": {
+        "operationId": "createSelectionSnapshot",
+        "summary": "Create and seal an immutable selection snapshot from explicit media asset references.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/http/selection-snapshot.schema.json#/$defs/createSelectionSnapshotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Sealed selection snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/selection-snapshot.schema.json#/$defs/selectionSnapshotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/v1/selection-snapshots/{selection_snapshot_id}": {
+      "get": {
+        "operationId": "getSelectionSnapshot",
+        "summary": "Read an immutable selection snapshot.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "$ref": "#/components/parameters/SelectionSnapshotId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Selection snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/selection-snapshot.schema.json#/$defs/selectionSnapshotResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-accounts": {
+      "get": {
+        "operationId": "listChannelAccounts",
+        "summary": "Internal channel identity lookup for recovery and diagnostics.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel accounts ordered by last seen time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelAccountResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "resolveChannelAccount",
+        "summary": "Resolve or create a durable external channel identity for the single user.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/common/channel-account.schema.json#/$defs/resolveChannelAccountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Resolved channel account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelAccountResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created channel account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelAccountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-accounts/{channel_account_id}": {
+      "patch": {
+        "operationId": "updateChannelAccount",
+        "summary": "Update channel account status, metadata, or last-seen timestamp.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountPathId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated channel account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelAccountResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-surfaces": {
+      "put": {
+        "operationId": "upsertChannelSurface",
+        "summary": "Create or update a restart-safe channel surface by channel account and surface key.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/common/channel-account.schema.json#/$defs/upsertChannelSurfaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upserted channel surface.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurfaceResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Created channel surface.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurfaceResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listChannelSurfaces",
+        "summary": "List channel surfaces by channel account, status, and represented subject.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "name": "subject_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/channelSurfaceSubjectType"
+            }
+          },
+          {
+            "name": "subject_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel surfaces ordered by update time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurfaceListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-surfaces/active": {
+      "get": {
+        "operationId": "listActiveChannelSurfaces",
+        "summary": "List active channel surfaces for restart recovery.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelAccountId"
+          },
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active channel surfaces for restart recovery.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurfaceListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-surfaces/{channel_surface_id}/display-state": {
+      "patch": {
+        "operationId": "replaceChannelSurfaceDisplayState",
+        "summary": "Replace channel surface display state with optimistic version checks.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelSurfaceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/common/channel-account.schema.json#/$defs/replaceChannelSurfaceDisplayStateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated channel surface display state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurfaceResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/ErrorEnvelope"
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-surfaces/{channel_surface_id}/supersede": {
+      "post": {
+        "operationId": "supersedeChannelSurface",
+        "summary": "Supersede a stale or uneditable channel surface without mutating product lifecycle.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelSurfaceId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/common/channel-account.schema.json#/$defs/supersedeChannelSurfaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Superseded channel surface.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurfaceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/channel-surfaces/{channel_surface_id}/events": {
+      "get": {
+        "operationId": "listChannelSurfaceEvents",
+        "summary": "List append-only channel surface event history.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ChannelSurfaceId"
+          },
+          {
+            "$ref": "#/components/parameters/PageCursor"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Channel surface event history."
+          }
+        }
+      }
+    },
+    "/internal/v1/analysis-runs/{analysis_run_id}/steps/claim": {
+      "post": {
+        "operationId": "claimAnalysisRunStep",
+        "summary": "Internal worker claim for one analysis run step with declared immutable inputs.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AnalysisRunId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimStepRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Claimed step with sealed selection snapshot and declared inputs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimStepResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/analysis-runs/{analysis_run_id}/steps/cancel-check": {
+      "get": {
+        "operationId": "checkAnalysisRunStepCancelState",
+        "summary": "Internal cooperative cancellation state for a claimed analysis run step.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AnalysisRunId"
+          },
+          {
+            "name": "analysis_run_step_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancel state for the claimed analysis run step.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/cancelCheckResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/analysis-runs/{analysis_run_id}/steps/progress": {
+      "post": {
+        "operationId": "recordAnalysisRunStepProgress",
+        "summary": "Internal worker progress update for an analysis run step.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AnalysisRunId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/progressRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Progress accepted."
+          }
+        }
+      }
+    },
+    "/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize": {
+      "post": {
+        "operationId": "finalizeAnalysisRunStep",
+        "summary": "Internal worker finalization for a claimed analysis run step.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AnalysisRunId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/finalizeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Run snapshot after internal step finalization.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../schemas/http/analysis-run.schema.json#/$defs/analysisRunResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/media-items": {
       "post": {
         "operationId": "addMediaItem",
@@ -55,6 +746,12 @@
           "409": {
             "$ref": "#/components/responses/ErrorEnvelope"
           }
+        },
+        "deprecated": true,
+        "x-compatibility": {
+          "target": "mediaAsset",
+          "policy": "deprecated_transition_only",
+          "replacement": "/v1/media-assets"
         }
       },
       "get": {
@@ -113,6 +810,12 @@
               }
             }
           }
+        },
+        "deprecated": true,
+        "x-compatibility": {
+          "target": "mediaAsset",
+          "policy": "deprecated_transition_only",
+          "replacement": "/v1/media-assets"
         }
       }
     },
@@ -148,6 +851,12 @@
           "404": {
             "$ref": "#/components/responses/ErrorEnvelope"
           }
+        },
+        "deprecated": true,
+        "x-compatibility": {
+          "target": "mediaAsset",
+          "policy": "deprecated_transition_only",
+          "replacement": "/v1/media-assets"
         }
       },
       "delete": {
@@ -181,6 +890,12 @@
           "404": {
             "$ref": "#/components/responses/ErrorEnvelope"
           }
+        },
+        "deprecated": true,
+        "x-compatibility": {
+          "target": "mediaAsset",
+          "policy": "deprecated_transition_only",
+          "replacement": "/v1/media-assets"
         }
       }
     },
@@ -476,6 +1191,12 @@
           "400": {
             "$ref": "#/components/responses/ErrorEnvelope"
           }
+        },
+        "deprecated": true,
+        "x-compatibility": {
+          "target": "selectionSnapshot",
+          "policy": "deprecated_transition_only",
+          "replacement": "/v1/selection-snapshots"
         }
       }
     },
@@ -511,6 +1232,12 @@
           "404": {
             "$ref": "#/components/responses/ErrorEnvelope"
           }
+        },
+        "deprecated": true,
+        "x-compatibility": {
+          "target": "selectionSnapshot",
+          "policy": "deprecated_transition_only",
+          "replacement": "/v1/selection-snapshots"
         }
       }
     },
@@ -1009,8 +1736,8 @@
     },
     "/internal/v1/analysis-runs/queue": {
       "get": {
-        "operationId": "listQueuedAnalysisRuns",
-        "summary": "Internal worker polling endpoint for queued analysis-run tasks.",
+        "operationId": "listQueuedAnalysisRunSteps",
+        "summary": "Internal worker polling endpoint for queued analysis run steps.",
         "parameters": [
           {
             "name": "status",
@@ -1031,10 +1758,18 @@
             }
           },
           {
-            "name": "task_type",
+            "name": "worker_kind",
             "in": "query",
             "schema": {
-              "$ref": "../schemas/common/enums.schema.json#/$defs/taskType"
+              "$ref": "../schemas/common/enums.schema.json#/$defs/workerKind"
+            }
+          },
+          {
+            "name": "step_kind",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1
             }
           },
           {
@@ -1050,7 +1785,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Queued analysis-run tasks visible to workers.",
+            "description": "Queued analysis run steps visible to workers.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1104,7 +1839,7 @@
             "$ref": "#/components/parameters/AnalysisRunId"
           },
           {
-            "name": "execution_id",
+            "name": "analysis_run_step_id",
             "in": "query",
             "required": true,
             "schema": {
@@ -1194,7 +1929,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/progressRequest"
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/legacyExecutionProgressRequest"
               }
             }
           }
@@ -1272,7 +2007,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/finalizeRequest"
+                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/legacyExecutionFinalizeRequest"
               }
             }
           }
@@ -1394,6 +2129,46 @@
         "schema": {
           "$ref": "../schemas/common/pagination.schema.json#/$defs/pageSize"
         }
+      },
+      "ChannelAccountId": {
+        "name": "channel_account_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "ChannelAccountPathId": {
+        "name": "channel_account_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "MediaAssetId": {
+        "name": "media_asset_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "SelectionSnapshotId": {
+        "name": "selection_snapshot_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "ChannelSurfaceId": {
+        "name": "channel_surface_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
       }
     },
     "responses": {
@@ -1426,6 +2201,33 @@
       },
       "Diagnostic": {
         "$ref": "../schemas/http/diagnostic.schema.json#/$defs/diagnostic"
+      },
+      "ChannelAccount": {
+        "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelAccount"
+      },
+      "ChannelSurface": {
+        "$ref": "../schemas/common/channel-account.schema.json#/$defs/channelSurface"
+      },
+      "OperationRequest": {
+        "$ref": "../schemas/common/operation-request.schema.json#/$defs/operationRequest"
+      },
+      "StoredObject": {
+        "$ref": "../schemas/http/media-asset.schema.json#/$defs/storedObject"
+      },
+      "MediaAsset": {
+        "$ref": "../schemas/http/media-asset.schema.json#/$defs/mediaAsset"
+      },
+      "SelectionSnapshot": {
+        "$ref": "../schemas/http/selection-snapshot.schema.json#/$defs/selectionSnapshot"
+      },
+      "AnalysisRunStep": {
+        "$ref": "../schemas/http/analysis-run.schema.json#/$defs/analysisRunStep"
+      },
+      "AnalysisRunStepInput": {
+        "$ref": "../schemas/http/analysis-run.schema.json#/$defs/analysisRunStepInput"
+      },
+      "ArtifactSubject": {
+        "$ref": "../schemas/http/artifact.schema.json#/$defs/artifactSubject"
       }
     }
   }

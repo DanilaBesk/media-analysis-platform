@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Mapping, Protocol
 from urllib import error, request as urlrequest
 
-from transcriber_workers_common.api import AgentRunRequestAccessResult, ClaimedAnalysisRunExecution, AnalysisRunControlClient
+from transcriber_workers_common.api import AgentRunRequestAccessResult, ClaimedAnalysisRunStep, AnalysisRunControlClient
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
 from transcriber_workers_common.documents import normalize_report_markdown, write_report_docx
 
@@ -58,6 +58,7 @@ _HARNESS_EXECUTION_FAILED_CODE = "agent_harness_execution_failed"
 _GENERIC_FAILURE_CODE = "agent_harness_failed"
 _REQUEST_ACCESS_HARNESSES = frozenset({"claude-code"})
 _LOCAL_FIXTURE_HARNESSES = frozenset({"fixture", "test_fixture"})
+_STEP_INPUT_ARTIFACT_KINDS = frozenset({"transcript_artifact", "text_corpus_artifact"})
 _REDACTED_ERROR_MESSAGE = "agent harness failure details were redacted"
 _DEFAULT_CLAUDE_CODE_BASE_URL = "https://api.z.ai/api/anthropic"
 _DEFAULT_CLAUDE_CODE_API_TIMEOUT_MS = 3_000_000
@@ -163,7 +164,7 @@ class AgentHarnessLease:
 
 @dataclass(frozen=True, slots=True)
 class AgentRunnerWorkerResult:
-    execution: ClaimedAnalysisRunExecution
+    execution: ClaimedAnalysisRunStep
     harness_result: AgentHarnessResult
     artifact_descriptors: tuple[ArtifactDescriptor, ...]
 
@@ -541,8 +542,13 @@ def runAgentHarness(
     artifact_store: ArtifactObjectStore,
     harness_registry: AgentHarnessRegistry | None = None,
     lease_client: AgentHarnessLeaseClient | None = None,
+    step_kind: str = "report.analysis",
 ) -> AgentRunnerWorkerResult:
-    execution = api_client.claim_analysis_run(analysis_run_id, worker_kind="agent_runner", task_type="selection.analysis")
+    execution = api_client.claim_analysis_run_step(
+        analysis_run_id,
+        worker_kind="agent_runner",
+        step_kind=step_kind,
+    )
     workspace_dir = Path(workspace_root) / execution.analysis_run_id
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -553,10 +559,11 @@ def runAgentHarness(
         leases = lease_client or LocalAgentHarnessLeaseClient.from_env()
         request_access = _resolve_request_access(api_client, execution, harness_name)
         request_access_payload = request_access.to_payload() if request_access is not None else _inline_request_access_payload(execution)
+        request_params = _params_with_declared_step_inputs(execution)
         request = AgentHarnessRequest(
             analysis_run_id=execution.analysis_run_id,
             workspace_dir=workspace_dir,
-            params=execution.params,
+            params=request_params,
             request_access=request_access_payload,
         )
         lease: AgentHarnessLease | None = None
@@ -564,16 +571,16 @@ def runAgentHarness(
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             progress_stage="running_agent_harness",
             progress_message="Running agent harness",
         )
         _LOGGER.info(
-            "%s %s analysis_run_id=%s execution_id=%s harness_name=%s workspace_dir=%s",
+            "%s %s analysis_run_id=%s analysis_run_step_id=%s harness_name=%s workspace_dir=%s",
             _LOG_MARKER_RUN_AGENT_HARNESS,
             _LOG_MARKER_DISPATCH_AGENT_HARNESS,
             execution.analysis_run_id,
-            execution.execution_id,
+            execution.analysis_run_step_id,
             harness_name,
             workspace_dir,
         )
@@ -592,7 +599,7 @@ def runAgentHarness(
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             progress_stage="persisting_artifacts",
             progress_message="Uploading agent-runner artifacts",
         )
@@ -611,13 +618,13 @@ def runAgentHarness(
         )
         api_client.register_artifacts(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             artifacts=(*artifact_descriptors, *policy_artifacts),
         )
         if non_fatal_diagnostics:
             api_client.register_diagnostics(
                 execution.analysis_run_id,
-                execution_id=execution.execution_id,
+                analysis_run_step_id=execution.analysis_run_step_id,
                 diagnostics=non_fatal_diagnostics,
             )
 
@@ -630,7 +637,7 @@ def runAgentHarness(
         )
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome=final_outcome,
             progress_stage="completed",
             progress_message=progress_message,
@@ -646,7 +653,7 @@ def runAgentHarness(
     except WorkerCancellationRequested:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="canceled",
             progress_stage="canceled",
             progress_message="Cancellation requested",
@@ -657,7 +664,7 @@ def runAgentHarness(
     except AgentHarnessNotSupported as exc:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="failed",
             progress_stage="failed",
             progress_message="Agent harness failed",
@@ -668,7 +675,7 @@ def runAgentHarness(
     except AgentHarnessConcurrencyUnavailable as exc:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="failed",
             progress_stage="failed",
             progress_message="Agent harness failed",
@@ -679,7 +686,7 @@ def runAgentHarness(
     except AgentHarnessExecutionFailed as exc:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="failed",
             progress_stage="failed",
             progress_message="Agent harness failed",
@@ -690,7 +697,7 @@ def runAgentHarness(
     except Exception as exc:
         api_client.finalize_analysis_run(
             execution.analysis_run_id,
-            execution_id=execution.execution_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
             outcome="failed",
             progress_stage="failed",
             progress_message="Agent harness failed",
@@ -709,7 +716,7 @@ def _resolve_harness_name(params: Mapping[str, object]) -> str:
 
 def _resolve_request_access(
     api_client: AnalysisRunControlClient,
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     harness_name: str,
 ) -> AgentRunRequestAccessResult | None:
     policy = _RequestAccessPolicy.from_params(execution.params)
@@ -721,12 +728,12 @@ def _resolve_request_access(
         return access
     if not policy.requires_access(harness_name=harness_name, operation=operation):
         return None
-    access = api_client.resolve_agent_run_request_access(execution.analysis_run_id, execution_id=execution.execution_id)
+    access = api_client.resolve_agent_run_request_access(execution.analysis_run_id, analysis_run_step_id=execution.analysis_run_step_id)
     _ensure_request_access_not_expired(access)
     return access
 
 
-def _inline_request_access_payload(execution: ClaimedAnalysisRunExecution) -> Mapping[str, object] | None:
+def _inline_request_access_payload(execution: ClaimedAnalysisRunStep) -> Mapping[str, object] | None:
     policy = _RequestAccessPolicy.from_params(execution.params)
     if not policy.allow_inline_request:
         return None
@@ -738,6 +745,45 @@ def _inline_request_access_payload(execution: ClaimedAnalysisRunExecution) -> Ma
         "request": dict(inline_request),
         "request_ref": f"{execution.analysis_run_id}:params.request",
     }
+
+
+def _params_with_declared_step_inputs(execution: ClaimedAnalysisRunStep) -> Mapping[str, object]:
+    declared_artifacts = _declared_step_input_artifacts(execution)
+    if not declared_artifacts:
+        return execution.params
+    params = dict(execution.params)
+    params["analysis_run_step_input_artifacts"] = declared_artifacts
+    return params
+
+
+def _declared_step_input_artifacts(execution: ClaimedAnalysisRunStep) -> list[Mapping[str, object]]:
+    artifacts: list[Mapping[str, object]] = []
+    for step_input in sorted(execution.analysis_run_step_inputs, key=lambda item: item.position):
+        if step_input.input_kind not in _STEP_INPUT_ARTIFACT_KINDS:
+            continue
+        if not step_input.artifact_id:
+            if step_input.required:
+                raise AgentHarnessExecutionFailed(
+                    f"required {step_input.input_kind} input is missing artifact_id"
+                )
+            continue
+        declaration: dict[str, object] = {
+            "artifact_id": step_input.artifact_id,
+            "input_kind": step_input.input_kind,
+            "position": step_input.position,
+            "required": step_input.required,
+            "analysis_run_step_input_id": step_input.analysis_run_step_input_id,
+        }
+        if step_input.selection_snapshot_item_id:
+            declaration["selection_snapshot_item_id"] = step_input.selection_snapshot_item_id
+        artifact_kind = step_input.metadata.get("artifact_kind")
+        if isinstance(artifact_kind, str) and artifact_kind.strip():
+            declaration["artifact_kind"] = artifact_kind.strip()
+        filename = step_input.metadata.get("filename")
+        if isinstance(filename, str) and filename.strip():
+            declaration["filename"] = filename.strip()
+        artifacts.append(declaration)
+    return artifacts
 
 
 def _canonical_harness_name(harness_name: str) -> str:
@@ -939,7 +985,10 @@ def _load_agent_run_prompt_context(
         params_payload=params_payload_mapping,
     )
     prompt = request.get("prompt")
-    input_artifacts = request.get("input_artifacts")
+    input_artifacts = _merge_input_artifact_declarations(
+        request.get("input_artifacts"),
+        request_params.get("analysis_run_step_input_artifacts"),
+    )
     materialized_artifacts = _materialize_input_artifacts(input_artifacts, workspace_dir=workspace_dir)
     chunks: list[str] = []
     if isinstance(prompt, str) and prompt.strip():
@@ -1010,6 +1059,31 @@ def _normalize_expected_output_artifacts(value: object) -> tuple[str, ...]:
         if artifact_kind in _EXPECTED_OPERATION_ARTIFACTS and artifact_kind not in normalized:
             normalized.append(artifact_kind)
     return tuple(normalized)
+
+
+def _merge_input_artifact_declarations(request_artifacts: object, step_artifacts: object) -> object:
+    if step_artifacts is None:
+        return request_artifacts
+    if request_artifacts is None:
+        return step_artifacts
+    if not isinstance(request_artifacts, list) or not isinstance(step_artifacts, list):
+        return request_artifacts
+    merged = list(request_artifacts)
+    seen_artifact_ids = {
+        item.get("artifact_id")
+        for item in request_artifacts
+        if isinstance(item, Mapping) and isinstance(item.get("artifact_id"), str)
+    }
+    for item in step_artifacts:
+        if not isinstance(item, Mapping):
+            continue
+        artifact_id = item.get("artifact_id")
+        if isinstance(artifact_id, str) and artifact_id in seen_artifact_ids:
+            continue
+        merged.append(dict(item))
+        if isinstance(artifact_id, str):
+            seen_artifact_ids.add(artifact_id)
+    return merged
 
 
 def _is_safe_operation_name(value: str) -> bool:
@@ -1148,7 +1222,7 @@ def _persist_agent_artifacts(
 
 
 def _persist_run_policy_artifacts(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     artifact_store: ArtifactObjectStore,
     *,
     artifact_kinds: tuple[str, ...],
@@ -1159,8 +1233,8 @@ def _persist_run_policy_artifacts(
     manifest = {
         "schema_version": "analysis_run_manifest/v2",
         "analysis_run_id": execution.analysis_run_id,
-        "execution_id": execution.execution_id,
-        "selection_id": execution.selection.selection_id,
+        "analysis_run_step_id": execution.analysis_run_step_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
         "run_type": execution.run_type,
         "created_at": execution.claimed_at,
         "artifact_policy": {
@@ -1172,8 +1246,8 @@ def _persist_run_policy_artifacts(
     diagnostics = {
         "schema_version": "analysis_run_diagnostics/v2",
         "analysis_run_id": execution.analysis_run_id,
-        "execution_id": execution.execution_id,
-        "selection_id": execution.selection.selection_id,
+        "analysis_run_step_id": execution.analysis_run_step_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
         "diagnostics": list(diagnostics),
     }
     return (
@@ -1197,8 +1271,8 @@ def _persist_run_policy_artifacts(
 def _selection_item_lineage(item) -> Mapping[str, object]:
     labels = item.labels
     return {
-        "selection_item_id": str(item.selection_item_id),
-        "media_item_id": item.media_item_id,
+        "selection_snapshot_item_id": str(item.selection_snapshot_item_id),
+        "media_asset_id": item.media_asset_id,
         "media_kind": item.media_kind,
         "role": item.role,
         "labels": {
@@ -1210,7 +1284,7 @@ def _selection_item_lineage(item) -> Mapping[str, object]:
 
 
 def _normalize_non_fatal_diagnostics(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     harness_result: AgentHarnessResult,
 ) -> tuple[Mapping[str, object], ...]:
     raw = harness_result.result_payload.get("diagnostics")
@@ -1231,8 +1305,8 @@ def _normalize_non_fatal_diagnostics(
             continue
         context = dict(item.get("context")) if isinstance(item.get("context"), Mapping) else {}
         context.setdefault("analysis_run_id", execution.analysis_run_id)
-        context.setdefault("selection_id", execution.selection.selection_id)
-        context.setdefault("execution_id", execution.execution_id)
+        context.setdefault("selection_snapshot_id", execution.selection_snapshot.selection_snapshot_id)
+        context.setdefault("analysis_run_step_id", execution.analysis_run_step_id)
         context.setdefault("harness_name", harness_result.harness_name)
         diagnostics.append(
             {
@@ -1249,7 +1323,7 @@ def _normalize_non_fatal_diagnostics(
 
 
 def _non_fatal_outcome(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     diagnostics: tuple[Mapping[str, object], ...],
 ) -> str:
     if not diagnostics:
@@ -1261,18 +1335,18 @@ def _non_fatal_outcome(
 
 
 def _manifest_items_with_diagnostics(
-    execution: ClaimedAnalysisRunExecution,
+    execution: ClaimedAnalysisRunStep,
     *,
     artifact_kinds: tuple[str, ...],
     diagnostics: tuple[Mapping[str, object], ...],
 ) -> tuple[list[Mapping[str, object]], Mapping[str, int]]:
-    items = sorted(execution.selection.items, key=lambda selection_item: selection_item.position)
+    items = sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position)
     diagnostics_by_selection_item_id: dict[str, list[str]] = {}
     for diagnostic in diagnostics:
         context = diagnostic.get("context")
         if not isinstance(context, Mapping):
             continue
-        selection_item_id = context.get("selection_item_id")
+        selection_item_id = context.get("selection_snapshot_item_id")
         if isinstance(selection_item_id, str) and selection_item_id.strip():
             diagnostics_by_selection_item_id.setdefault(selection_item_id.strip(), []).append(str(diagnostic["diagnostic_id"]))
 
@@ -1280,7 +1354,7 @@ def _manifest_items_with_diagnostics(
     included_count = 0
     skipped_count = 0
     for item in items:
-        diagnostic_ids = diagnostics_by_selection_item_id.get(str(item.selection_item_id), [])
+        diagnostic_ids = diagnostics_by_selection_item_id.get(str(item.selection_snapshot_item_id), [])
         included = len(diagnostic_ids) == 0
         outcome = "succeeded" if included else "skipped"
         if included:
@@ -1289,8 +1363,8 @@ def _manifest_items_with_diagnostics(
             skipped_count += 1
         manifest_items.append(
             {
-                "selection_item_id": str(item.selection_item_id),
-                "media_item_id": item.media_item_id,
+                "selection_snapshot_item_id": str(item.selection_snapshot_item_id),
+                "media_asset_id": item.media_asset_id,
                 "position": item.position,
                 "outcome": outcome,
                 "included": included,
@@ -1437,13 +1511,13 @@ def _ensure_trailing_newline(value: str) -> str:
     return value if value.endswith("\n") else value + "\n"
 
 
-def _check_cancellation(api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunExecution) -> None:
-    cancel_state = api_client.check_cancel(execution.analysis_run_id, execution_id=execution.execution_id)
+def _check_cancellation(api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunStep) -> None:
+    cancel_state = api_client.check_cancel(execution.analysis_run_id, analysis_run_step_id=execution.analysis_run_step_id)
     if cancel_state.cancel_requested:
         raise WorkerCancellationRequested(f"analysis run {execution.analysis_run_id} was canceled")
 
 
-def _build_harness_cancellation_hook(*, api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunExecution):
+def _build_harness_cancellation_hook(*, api_client: AnalysisRunControlClient, execution: ClaimedAnalysisRunStep):
     def cancellation_hook() -> bool:
         try:
             _check_cancellation(api_client, execution)

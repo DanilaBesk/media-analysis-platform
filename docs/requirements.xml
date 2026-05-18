@@ -29,6 +29,7 @@
     <term name="inbox">The default collection for each channel account where new media_asset records land unless the caller names another collection.</term>
     <term name="selection_snapshot">An immutable ordered snapshot of media_asset references, options, and access scope captured when a user decides what to analyze.</term>
     <term name="analysis_run">A user-facing run created from one selection_snapshot; it owns lifecycle, diagnostics, events, and artifact lineage.</term>
+    <term name="analysis_run_step">An internal worker-claimable execution step with worker_kind, step_kind, lifecycle status, and cancellation/finalization state behind an analysis_run.</term>
     <term name="analysis_run_step_input">An internal execution input declaration that says which selection_snapshot_item or artifact a worker step may read.</term>
     <term name="artifact">A durable result or diagnostic object produced by analysis_run execution and resolved through API-governed access rules.</term>
     <term name="artifact_subject">A lineage link from an artifact to the run, step, selection snapshot, selected item, media asset, or diagnostic it represents.</term>
@@ -132,7 +133,7 @@
     </Requirement>
     <Requirement id="REQ-WORKER-AGENT-RUNNER-001">
       <Action>Run report and research analysis from prepared transcript or text-corpus artifacts.</Action>
-      <AcceptanceCriteria>For audio, video, voice, or other speech media, transcription produces transcript artifacts before report or research execution. Agent-runner receives declared analysis_run_step_inputs for ready transcript or text-corpus artifacts plus safe metadata, publishes report or research artifacts through analysis_run, and records or receives a prerequisite diagnostic instead of transcribing or processing raw speech media itself when required text input is missing.</AcceptanceCriteria>
+      <AcceptanceCriteria>For audio, video, voice, or other speech media, transcription produces transcript artifacts before report or research execution. Agent-runner receives declared analysis_run_step_inputs for ready transcript or text-corpus artifacts plus safe metadata, materializes those artifacts as harness input, publishes report or research artifacts through analysis_run, and records or receives a prerequisite diagnostic instead of transcribing or processing raw speech media itself when required text input is missing.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-INTERACTION-SURFACE-001">
       <Action>Persist external interaction surfaces without coupling domain entities to consumer-specific UI.</Action>
@@ -156,6 +157,8 @@
       <rule>Telegram main-card result and diagnostics actions are scoped to the analysis_run launched from the current card focus; historical terminal runs do not create generic result actions for a new or unstarted inbox selection.</rule>
       <rule>After a successful Telegram result delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selection_snapshots, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
       <rule>Telegram may persist message mappings through the internal channel surfaces API, but the API treats those mappings as opaque channel surfaces rather than Telegram-specific domain fields.</rule>
+      <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
+      <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics; compatibility media item and selection routes are not part of the active Telegram path.</rule>
     </Telegram>
     <Web>
       <rule>Web is a simple human-facing management surface for browsing materials, creating groups, curating the current selection, launching analysis, and reviewing results, progress, errors, and downloads.</rule>
@@ -179,12 +182,18 @@
   <BeadsTrace>
     <bead id="media-36a" status="completed">GRACE source-of-truth rewrite is complete.</bead>
     <bead id="media-49h" status="completed">Public contracts and schemas now expose the canonical inbox-first vocabulary.</bead>
-    <bead id="media-5cj" status="completed">Server storage/API orchestration is implemented for the canonical media_item to artifact chain.</bead>
+    <bead id="media-7f3.9.1" status="completed">Target contracts now expose media_asset, stored_object, selection_snapshot, analysis_run_step, artifact_subject, channel_account, channel_surface, operation_request, diagnostics, and explicit deprecated compatibility mappings.</bead>
+    <bead id="media-7f3.9.2" status="completed">Target storage reset now recreates the channel-aware table set, target schema fragments, target SQL repositories, immutable selection_snapshot guards, operation_request idempotency, channel_surface supersede rules, and deterministic seed fixtures.</bead>
+    <bead id="media-7f3.9.3" status="completed">Target API/domain services now route channel_accounts, media_assets/upload, collections, selection_snapshots, analysis_runs/events/cancel/retry, artifacts, diagnostics, analysis_run_step lifecycle, prerequisite speech planning, and channel_surfaces through TargetRuntimeService over target storage.</bead>
+    <bead id="media-7f3.9.4" status="completed">Telegram now persists current_materials_panel, analysis_task_surface, and result_artifact_surface records through channel_surfaces, restores active surfaces after restart, supersedes uneditable messages, and prevents duplicate result delivery with result artifact surfaces.</bead>
+    <bead id="media-7f3.9.5" status="completed">Telegram active flows now create media_assets, read channel-account-scoped collections, create selection_snapshots, start analysis_runs by selection_snapshot_id, and read artifacts/diagnostics through target channel_account_id requests.</bead>
+    <bead id="media-7f3.9.6" status="completed">Active workers now poll and claim analysis_run_steps by step_kind, consume selection_snapshot/analysis_run_step_inputs, publish artifacts/diagnostics/progress/finalization by analysis_run_step_id, and record worker artifacts as stored_objects plus artifact_subject lineage.</bead>
+    <bead id="media-5cj" status="completed">Historical server storage/API orchestration exists for the earlier inbox-first chain and is superseded by the media-7f3 target rebuild.</bead>
     <bead id="media-sfx" status="completed">Worker execution now runs behind analysis_run with sealed selection consumption.</bead>
     <bead id="media-7al" status="completed">Telegram now operates over explicit selection/run semantics on the API-owned inbox.</bead>
     <bead id="media-7wo" status="completed">Web management UI now covers inbox, collections, run detail, artifact use, and sealed-selection regressions.</bead>
-    <bead id="media-uhi" status="completed">MCP tools now match the owner-scoped canonical API surface.</bead>
-    <bead id="media-nvx" status="completed">Runtime-final compose proof exists for end-to-end inbox, selection, run, artifact, diagnostics, owner denial, and retention behavior.</bead>
+    <bead id="media-uhi" status="completed">MCP tools match the historical canonical API surface and must be migrated to channel-account target contracts in media-7f3.</bead>
+    <bead id="media-nvx" status="completed">Historical runtime-final compose proof exists; target rebuild runtime closure remains tracked by media-7f3.10 and media-7f3.11.</bead>
     <bead id="media-omt" status="completed">Executable coverage inventory is documented and runnable, with remaining measurement gaps explicit.</bead>
     <bead id="media-gna" status="completed">GRACE packet truth now matches the actual closed state of the repo.</bead>
     <bead id="media-i7m" status="completed">The final ordered closure matrix is published and synchronized with the current verification truth.</bead>
@@ -204,6 +213,6 @@
     <item>Reintroducing old public product route vocabulary as an alias layer.</item>
     <item>Preserving grouped pre-run submission state as the user-facing collection model.</item>
     <item>Letting Telegram, Web, or MCP own durable product state independently of the API.</item>
-    <item>Changing application code in this Bead.</item>
+    <item>Preserving or backfilling current disposable local database rows during the target rebuild.</item>
   </NonGoals>
 </RequirementsAnalysis>

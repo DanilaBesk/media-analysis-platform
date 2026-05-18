@@ -16,6 +16,12 @@
     <completed-packet>media-vim-telegram-russian-status-ux</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
+    <completed-packet bead="media-7f3.9.1">target-contracts-compatibility-policy</completed-packet>
+    <completed-packet bead="media-7f3.9.2">target-storage-reset-repositories</completed-packet>
+    <completed-packet bead="media-7f3.9.3">target-api-domain-services-and-operations</completed-packet>
+    <completed-packet bead="media-7f3.9.4">channel-surfaces-restart-recovery</completed-packet>
+    <completed-packet bead="media-7f3.9.5">telegram-target-materials-and-run-cards</completed-packet>
+    <completed-packet bead="media-7f3.9.6">workers-analysis-run-steps-selection-snapshots</completed-packet>
     <remaining-closure-gate>media-7f3 target rebuild remains open through media-7f3.9, media-7f3.10, and media-7f3.11; older closed packets are historical evidence, not final target closure.</remaining-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
@@ -112,6 +118,206 @@ Define /v1/media-items, /v1/selections, media_item, source, selection, owner, an
     <verification>
       <check>OpenAPI parses and schema tests pass.</check>
       <check>Focused search proves public contracts use canonical vocabulary.</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.9.1-target-contracts-compatibility-policy" module="M-CONTRACTS" phase="TargetRebuildContracts" verification-ref="EV-CONTRACTS,EV-STALENESS">
+    <purpose>Implement the first target rebuild slice: target DTOs/routes for media_asset, stored_object, selection_snapshot, analysis_run_step, channel_account, channel_surface, operation_request, artifacts, diagnostics, and explicit deprecated compatibility mappings.</purpose>
+    <depends-on>single-user-channel-aware-target-architecture</depends-on>
+    <write-scope>
+      <file-1>packages/contracts/openapi/openapi.yaml</file-1>
+      <file-2>packages/contracts/schemas</file-2>
+      <file-3>packages/contracts/tests/test_contract_surfaces.py</file-3>
+      <file-4>docs/technology.xml</file-4>
+      <file-5>docs/knowledge-graph.xml</file-5>
+      <file-6>docs/operational-packets.xml</file-6>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Target OpenAPI now exposes /v1/media-assets, /v1/media-assets/upload, /v1/selection-snapshots, internal channel account/surface routes, and internal analysis_run_step routes.
+/v1/media-items and /v1/selections remain only as deprecated_transition_only compatibility operations with one-to-one mappings into media_asset and selection_snapshot DTOs.
+Target operation tests reject media_item, media-item, owner, selection_id, analysis_run_task, adapter_projection, and telegram_message_id inside new target operations.
+    ]]></contract-excerpt>
+    <verification>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>Focused stale vocabulary search shows deprecated terms only in compatibility, migration, historical, or admin/debug contexts.</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.9.2-target-storage-reset-repositories" module="M-API-STORAGE" phase="TargetRebuildStorage" verification-ref="EV-STORAGE,EV-GRACE,EV-STALENESS">
+    <purpose>Implement the target storage reset/rebuild slice: destructive local schema reset, target table set, schema fragments, target SQL repositories, and deterministic seed fixtures.</purpose>
+    <depends-on>media-7f3.9.1-target-contracts-compatibility-policy</depends-on>
+    <write-scope>
+      <file-1>apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql</file-1>
+      <file-2>apps/api/internal/storage/testdata/required_schema_fragments.txt</file-2>
+      <file-3>apps/api/internal/storage/target_schema_test.go</file-3>
+      <file-4>apps/api/internal/storage/target</file-4>
+      <file-5>docs/knowledge-graph.xml</file-5>
+      <file-6>docs/operational-packets.xml</file-6>
+      <file-7>docs/requirements.xml</file-7>
+      <file-8>docs/technology.xml</file-8>
+      <file-9>docs/verification-plan.xml</file-9>
+      <file-10>docs/development-plan.xml</file-10>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The migration recreates channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.
+selection_snapshots are protected by update/delete rejection triggers.
+operation_requests use channel_account_id + operation_type + idempotency_key uniqueness.
+channel_surfaces use active key and address-fingerprint uniqueness plus explicit supersede events.
+Target repository code lives in apps/api/internal/storage/target alongside legacy API-facing storage until media-7f3.9.3 migrates services to the target domain.
+    ]]></contract-excerpt>
+    <verification>
+      <check>go test ./internal/storage/...</check>
+      <check>go test ./...</check>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>Focused stale storage search proves target migration and target repository do not create sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, or safe_adapter_context.</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.9.3-target-api-domain-services-and-operations" module="M-API-DOMAIN,M-API-HTTP" phase="TargetRebuildApi" verification-ref="EV-API,EV-CONTRACTS,EV-GRACE">
+    <purpose>Implement API-owned target services and HTTP operations over the target storage repositories without moving adapter-specific lifecycle into product tables.</purpose>
+    <depends-on>media-7f3.9.2-target-storage-reset-repositories</depends-on>
+    <write-scope>
+      <file-1>apps/api/internal/api</file-1>
+      <file-2>apps/api/internal/storage/target</file-2>
+      <file-3>apps/api/cmd/api/main.go</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+      <file-6>docs/requirements.xml</file-6>
+      <file-7>docs/technology.xml</file-7>
+      <file-8>docs/verification-plan.xml</file-8>
+      <file-9>docs/development-plan.xml</file-9>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+TargetRuntimeService wires channel_accounts, media_assets/upload, collections/inbox, selection_snapshots, analysis_runs, analysis_run_events, artifacts, diagnostics, analysis_run_step claim/cancel/progress/finalize, and channel_surfaces through apps/api/internal/storage/target.
+Target HTTP responses use channel_account_id, media_asset_id, collection_id, selection_snapshot_id, analysis_run_id, analysis_run_step_id, artifact_id, diagnostic_id, and channel_surface_id vocabulary.
+Legacy /v1/media-items, /v1/selections, owner-scoped collection handlers, and execution routes remain compatibility surfaces only until later adapter and worker migration packets replace their callers.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>cmd/api constructs target.Store from the live DB and NewRuntimeDependenciesWithTarget installs TargetRuntimeService.</note>
+      <note>Target API tests reject media_item, media-item, owner, selection_id, analysis_run_task, adapter_projection, and telegram_message_id in target responses.</note>
+      <note>media-7f3.9.4 remains responsible for Telegram restart recovery behavior over channel_surfaces; media-7f3.9.6 remains responsible for moving actual workers to target step routes.</note>
+    </implementation-notes>
+    <verification>
+      <check>go test ./internal/api -run 'Target(Api|Runtime)'</check>
+      <check>go test ./internal/api</check>
+      <check>go test ./internal/storage/...</check>
+      <check>go test ./...</check>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.9.4-channel-surfaces-restart-recovery" module="M-TELEGRAM-ADAPTER,M-INTERACTION-SURFACES,M-API-STORAGE" phase="Telegram Migration" verification-ref="EV-ADAPTERS,EV-API">
+    <purpose>Persist Telegram presentation mappings through channel_surfaces and recover current materials panels, active run cards, and delivered result surfaces after adapter restart.</purpose>
+    <depends-on>media-7f3.9.2, media-7f3.9.3</depends-on>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter</file-1>
+      <file-2>apps/telegram-bot/tests</file-2>
+      <file-3>apps/api/internal/storage/target/store.go</file-3>
+      <file-4>apps/api/internal/api/target_runtime.go</file-4>
+      <file-5>docs/requirements.xml</file-5>
+      <file-6>docs/technology.xml</file-6>
+      <file-7>docs/development-plan.xml</file-7>
+      <file-8>docs/verification-plan.xml</file-8>
+      <file-9>docs/knowledge-graph.xml</file-9>
+      <file-10>docs/operational-packets.xml</file-10>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram stores current_materials_panel, analysis_task_surface, and result_artifact_surface as opaque channel_surfaces scoped by channel_account_id.
+Restart recovery lists active channel_surfaces, restores current materials panels, resumes watchers for active analysis_task_surface records, and supersedes uneditable messages before creating replacements.
+Result artifact surfaces prevent duplicate Telegram delivery after restart while leaving media_asset, collection, selection_snapshot, analysis_run, artifact, and diagnostic lifecycle under API-owned product operations.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>TelegramApiClient now resolves channel_accounts and calls internal channel_surface upsert/list/active/display-state/supersede endpoints.</note>
+      <note>TelegramInboxApp persists display_state for current material cards, active run cards, and result delivery messages; display_state is recovery metadata only.</note>
+      <note>Target store UpsertChannelSurface returns the actual persisted row and rebinds subjects to that row so repeat upserts do not create stale subject links.</note>
+    </implementation-notes>
+    <verification>
+      <check>uv run --project apps/telegram-bot pytest apps/telegram-bot/tests/test_api_client.py apps/telegram-bot/tests/test_bot_runtime.py apps/telegram-bot/tests/test_gateway.py</check>
+      <check>go test ./internal/api ./internal/storage/target -run 'Target|ChannelSurface' -count=1</check>
+      <check>uv run --project apps/telegram-bot pytest apps/telegram-bot/tests</check>
+      <check>go test ./... -count=1 in apps/api</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.9.5-telegram-target-materials-run-cards" module="M-TELEGRAM-ADAPTER,M-API-HTTP" phase="Telegram Migration" verification-ref="EV-ADAPTERS,EV-STALENESS">
+    <purpose>Move the Telegram adapter's active materials and run-card flow from compatibility request shapes to target media_asset, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account operations.</purpose>
+    <depends-on>media-7f3.9.3, media-7f3.9.4</depends-on>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter</file-1>
+      <file-2>apps/telegram-bot/tests</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/technology.xml</file-4>
+      <file-5>docs/development-plan.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+      <file-7>docs/knowledge-graph.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram resolves its chat/user scope into a channel_account and then calls target public operations with channel_account_id.
+Accepted text, URLs, and uploads create media_asset records through /v1/media-assets and /v1/media-assets/upload.
+Current-material actions mutate collection membership by media_asset_id, create immutable selection_snapshots, and start analysis_runs with selection_snapshot_id.
+Artifacts and diagnostics are read with channel_account_id; callback payloads carry media_asset, collection, selection_snapshot, and analysis_run identifiers plus optimistic versions where mutation is allowed.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>TelegramApiClient no longer calls /v1/media-items, /v1/selections, or owner-scoped public query shapes in the active adapter path.</note>
+      <note>TelegramInboxGateway maps Telegram text and URL content into media_asset origin_ref values and keeps presentation wording Russian and non-technical.</note>
+      <note>Channel surface recovery from media-7f3.9.4 continues to own Telegram message-address persistence; product lifecycle remains API-owned.</note>
+    </implementation-notes>
+    <verification>
+      <check>uv run --project apps/telegram-bot pytest apps/telegram-bot/tests</check>
+      <check>rg -n "media_item|media-items|/v1/selections|selection_id|source\b|adapter_projection|analysis_run_task|telegram_message_id" apps/telegram-bot/src apps/telegram-bot/tests</check>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-7f3.9.6-workers-analysis-run-steps-selection-snapshots" module="M-WORKER-TRANSCRIPTION,M-WORKER-AGENT-RUNNER,M-WORKER-COMMON,M-API-HTTP,M-CONTRACTS" phase="Workers Migration" verification-ref="EV-WORKERS,EV-API,EV-CONTRACTS,EV-GRACE">
+    <purpose>Migrate active worker execution to target analysis_run_step contracts over immutable selection_snapshot input, declared step inputs, API-owned artifact storage metadata, diagnostics, progress, finalization, and cancellation.</purpose>
+    <depends-on>media-7f3.9.3, media-7f3.9.5</depends-on>
+    <write-scope>
+      <file-1>workers/common/src/transcriber_workers_common</file-1>
+      <file-2>workers/transcription</file-2>
+      <file-3>workers/agent-runner</file-3>
+      <file-4>apps/api/internal/api</file-4>
+      <file-5>apps/api/internal/storage/target</file-5>
+      <file-6>packages/contracts</file-6>
+      <file-7>docs/requirements.xml</file-7>
+      <file-8>docs/technology.xml</file-8>
+      <file-9>docs/development-plan.xml</file-9>
+      <file-10>docs/verification-plan.xml</file-10>
+      <file-11>docs/knowledge-graph.xml</file-11>
+      <file-12>docs/operational-packets.xml</file-12>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Workers poll and claim /internal/v1/analysis-runs/queue and /internal/v1/analysis-runs/{analysis_run_id}/steps/claim by worker_kind and step_kind.
+Claim responses expose analysis_run_step_id, selection_snapshot, analysis_run_step_inputs, params, and claimed_at; active workers no longer depend on mutable collection contents.
+Transcription consumes selection_snapshot_item inputs and publishes transcript, manifest, and diagnostics artifacts through analysis_run_step_id.
+Agent-runner report and deep_research execution consumes declared transcript_artifact or text_corpus_artifact step inputs and materializes them as harness input artifacts; it does not transcribe or discover raw speech media.
+Artifact registration records stored_objects, artifacts, and artifact_subject lineage for analysis_run plus analysis_run_step; diagnostics include analysis_run_step_id context.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>WorkerRuntimeConfig now carries step_kind instead of task_type; launcher defaults are selection.transcription for transcription and report.analysis for agent-runner.</note>
+      <note>Worker-control schemas and OpenAPI target step requests use analysis_run_step_id; legacy execution routes remain compatibility-only where still registered.</note>
+      <note>TargetRuntimeService records worker artifacts with stored_object rows in the artifacts bucket and artifact_subject links to analysis_run and analysis_run_step.</note>
+      <note>Agent-runner merges declared analysis_run_step_input artifact declarations with private operation-envelope input_artifacts before Claude Code materialization.</note>
+    </implementation-notes>
+    <verification>
+      <check>uv run pytest workers/common/tests -q</check>
+      <check>uv run --project workers/transcription pytest workers/transcription/tests -q</check>
+      <check>uv run --project workers/agent-runner pytest workers/agent-runner/tests -q</check>
+      <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py -q</check>
+      <check>go test ./... -count=1 in apps/api</check>
+      <check>python3 -m py_compile worker runtime modules</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+      <check>Focused stale vocabulary search shows remaining old worker names only in explicit legacy/compatibility surfaces or compatibility aliases, not active worker call paths.</check>
     </verification>
   </ExecutionPacket>
 
@@ -352,7 +558,7 @@ Telegram main-card result and diagnostics buttons are shown only for the analysi
 Telegram shows Отмена only for the current focused queued or running analysis_run. The cancel callback carries the analysis_run id and version, verifies the focused card state, calls the API-owned cancel route, and then refreshes the card without exposing stale cancellation against another run.
     ]]></contract-excerpt>
     <verification>
-      <check>API client regression proves the Telegram adapter posts to /v1/analysis-runs/{analysis_run_id}/cancel with owner query and cancellation message.</check>
+      <check>API client regression proves the Telegram adapter posts to /v1/analysis-runs/{analysis_run_id}/cancel with channel_account_id and cancellation message.</check>
       <check>Gateway and runtime regressions prove cancel is shown only for a focused active run, rejects stale focus, calls the API cancel path, and removes the cancel action after refresh.</check>
     </verification>
   </HotfixPacket>
