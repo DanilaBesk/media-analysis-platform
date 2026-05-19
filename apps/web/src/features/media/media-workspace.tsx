@@ -137,11 +137,6 @@ function artifactGroupLabel(kind: string): string {
       return "Отчет";
     case "deep_research":
       return "Глубокое исследование";
-    case "run_manifest":
-    case "run_diagnostics":
-    case "diagnostic_bundle":
-    case "execution_log":
-      return "Служебный файл";
     case "structured_data":
       return "Данные";
     case "source_manifest":
