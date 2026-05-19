@@ -185,8 +185,10 @@
     <artifact-contract>TranscriptResult carries provider_metadata so run_manifest can identify CopperASR provider, model, duration, and sanitized runtime metadata while visible transcript artifacts remain plain text, markdown, and DOCX.</artifact-contract>
     <target-topology>Dedicated internal CopperASR HTTP runtime service consumed by workers/transcription through COPPER_ASR_BASE_URL.</target-topology>
     <compose-service name="copper-asr" dockerfile="infra/images/copper-asr/Dockerfile" env-file="infra/env/copper-asr.env.example" cache-volume="copper-asr-cache" tmp-volume="copper-asr-tmp" healthcheck="/health" />
-    <cleanup-policy>Legacy ASR imports, model-conversion helpers, provider-specific env, and old model-cache volumes are removed and must not remain active fallback behavior.</cleanup-policy>
-    <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.7, media-b8s.1.9, media-b8s.2.5, media-b8s.3.1</verification-ref>
+    <dependency-policy>Root Python dependencies stay free of removed legacy ASR packages; CopperASR runtime dependencies are isolated in the dedicated image and submodule runtime.</dependency-policy>
+    <cleanup-policy>Legacy ASR imports, model-conversion helpers, provider-specific env, old model-cache volumes, fallback tests, and dual-backend switches are removed and must not remain active fallback behavior.</cleanup-policy>
+    <guardrail path="workers/common/tests/test_no_legacy_asr_runtime.py" script="infra/scripts/no-legacy-target-gate.sh">Active runtime, compose, env, dependency, and doc surfaces must continue to reject removed ASR runtime reintroduction outside historical research or migration plans.</guardrail>
+    <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.5, media-b8s.3.1</verification-ref>
   </AsrRuntime>
 
   <AdapterContracts>
@@ -200,6 +202,7 @@
     <storage-evidence>Storage tests must cover target migration fragments, absence of legacy target tables, channel_account isolation, immutable selection snapshots, operation_request idempotency, step input linkage, lifecycle transitions, retention, diagnostics, channel_surface supersede rules, and artifact_subject lineage.</storage-evidence>
     <api-evidence>API tests must cover ingestion, inbox membership, collection mutation, selection_snapshot sealing, analysis_run creation, prerequisite planning, event polling, cancellation, worker artifact stored_object registration, artifact access, and diagnostics queries.</api-evidence>
     <worker-evidence>Worker tests must cover step_kind queue polling, analysis_run_step claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, API-safe diagnostic identifiers, partial diagnostics, and cancellation.</worker-evidence>
+    <asr-evidence>ASR evidence must cover CopperASR HTTP client configuration, service health, transcript artifact publication, sanitized provider metadata in run_manifest, stable asr_* diagnostics, hidden provider internals in normal Telegram/Web surfaces, explicit MCP service artifact previews, compose topology, and no-legacy runtime guardrails.</asr-evidence>
     <adapter-evidence>Adapter tests must prove Telegram, Web, and MCP operate over the same API-owned state and do not expose grouped submission modes as durable product state. Telegram tests must also prove target channel_account media_asset, selection_snapshot, analysis_run, artifact, and diagnostic request shapes plus channel_surface restart recovery, result duplicate prevention, and supersede behavior.</adapter-evidence>
     <runtime-evidence>Runtime smoke must prove a real item can be ingested, selected, analyzed, and resolved as artifacts with diagnostics available for failures.</runtime-evidence>
   </EvidenceContracts>

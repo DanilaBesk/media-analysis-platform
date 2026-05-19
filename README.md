@@ -88,7 +88,7 @@ python -m pip install -e "vendor/copper-asr[server,cpu]"
 Container build path for the dedicated runtime source:
 
 ```bash
-docker build -f vendor/copper-asr/Dockerfile vendor/copper-asr
+docker build -f infra/images/copper-asr/Dockerfile .
 ```
 
 The active migration target is a dedicated CopperASR runtime service consumed

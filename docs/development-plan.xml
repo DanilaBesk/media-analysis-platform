@@ -6,6 +6,7 @@
     <risk-1>Contract drift can reintroduce immediate-execution wording and split adapters away from one API-owned product model.</risk-1>
     <risk-2>Mutable collections can accidentally leak into already started analysis unless selections are immutable snapshots.</risk-2>
     <risk-3>Rejected media can disappear unless diagnostics are modeled before adapter work.</risk-3>
+    <risk-4>Transcription can silently regress to a removed legacy ASR path unless runtime, dependency, compose, docs, and tests all enforce CopperASR as the only active backend.</risk-4>
   </ArchitectureNotes>
 
   <TargetArchitectureReset bead="media-7f3">
@@ -26,6 +27,7 @@
     <stage order="5" name="Workers Migration">Move workers to analysis_run_steps and sealed selection_snapshots.</stage>
     <stage order="6" name="Web And MCP Migration">Move Web and MCP to target vocabulary and operations.</stage>
     <stage order="7" name="Runtime And Coverage Closure">Prove every user flow, table invariant, API operation, worker path, and channel recovery path.</stage>
+    <stage order="8" name="CopperASR Runtime Finalization">Pin CopperASR as a submodule/runtime service, remove legacy ASR surfaces, and prove provider-agnostic adapter behavior before the E2E coverage wave.</stage>
   </TargetRebuildStages>
 
   <GuidingArchitecture>
@@ -163,6 +165,10 @@
     <step id="media-7f3.9.6-2">Transcription consumes immutable selection_snapshot_item input and publishes transcript artifacts, diagnostics, progress, and finalization with analysis_run_step_id.</step>
     <step id="media-7f3.9.6-3">Agent-runner materializes declared transcript_artifact/text_corpus_artifact analysis_run_step_inputs as harness inputs before report or research execution.</step>
     <step id="media-7f3.9.6-4">Target API artifact registration creates stored_object metadata and artifact_subject lineage for worker outputs.</step>
+    <step id="media-b8s.1.5">Transcription workers call the CopperASR HTTP client boundary from workers/common and treat provider failures as stable asr_* diagnostics.</step>
+    <step id="media-b8s.1.6">Transcription publishes CopperASR provider metadata only inside run_manifest/service artifacts while transcript_plain, transcript_segmented_markdown, and transcript_docx remain user-facing content artifacts.</step>
+    <step id="media-b8s.1.7">Compose starts a dedicated copper-asr service and passes COPPER_ASR_BASE_URL to the transcription worker.</step>
+    <step id="media-b8s.1.9">Removed legacy ASR runtime modules, dependency entries, env switches, model cache volumes, and fallback tests from active paths.</step>
   </WorkerPlan>
 
   <AdapterPlan>
@@ -198,6 +204,7 @@
     <gate id="storage">Storage tests prove channel-account scope, collection versioning, immutable selection snapshots, step input linkage, artifact subjects, run lifecycle, artifacts, retention, and diagnostics.</gate>
     <gate id="api">API tests prove complete media_asset to artifact flow, prerequisite planning, artifact lineage, and rejected input diagnostics.</gate>
     <gate id="workers">Worker tests prove sealed snapshot and declared step-input consumption, agent-runner transcript/text-corpus input behavior, and analysis_run artifact reporting.</gate>
+    <gate id="asr-runtime">CopperASR tests and runtime checks prove the dedicated service, client boundary, artifact metadata, diagnostics, compose topology, and no-legacy guardrails.</gate>
     <gate id="adapters">Adapter tests prove Telegram, Web, and MCP share API-owned state, with Web keeping normal UI language simple and non-technical.</gate>
     <gate id="runtime">Runtime smoke proves ingestion, selection_snapshot, run, prerequisite planning, artifact lineage, diagnostics, and retention behavior across services.</gate>
     <gate id="coverage-inventory">Coverage inventory reports native metrics and pass/fail-only probes per surface, including no-legacy target vocabulary, compose topology/runtime-proof wiring, contract fixtures, and MCP typecheck.</gate>
@@ -218,6 +225,7 @@
     <phase order="6" bead="media-7wo">Web management UI over API-owned inbox and runs.</phase>
     <phase order="7" bead="media-uhi">MCP tools over API-owned inbox and runs.</phase>
     <phase order="8">Full runtime evidence and stale public vocabulary regression checks.</phase>
+    <phase order="9" bead="media-b8s">CopperASR submodule/runtime migration, legacy ASR removal, final GRACE refresh, full E2E coverage, and pre-MR QA.</phase>
   </BottomUpSequencing>
 
   <CurrentClosureState>
@@ -235,6 +243,13 @@
     <completed bead="media-7f3.11.3">Channel UX/runtime QA is published in docs/architecture/target-channel-ux-runtime-qa.md and fixed Web endpoint, raw params, and service artifact visibility drift while preserving Telegram/MCP/runtime proof.</completed>
     <completed bead="media-7f3.11.4">Final readiness packet is published in docs/architecture/target-final-readiness-packet.md with source plan, implemented scope, branch/commit state, coverage inventory, runtime proof, GRACE state, Beads closure, no-regression proof, and accepted risks.</completed>
     <completed bead="media-7f3.11">Pre-MR QA epic is closed after all four QA/readiness children are complete.</completed>
+    <completed bead="media-b8s.1.4">CopperASR source is pinned as vendor/copper-asr and documented as the runtime submodule.</completed>
+    <completed bead="media-b8s.1.5">Transcription worker runtime uses the CopperASR HTTP service boundary without active legacy fallback.</completed>
+    <completed bead="media-b8s.1.6">CopperASR provider metadata is stored in service artifacts and hidden from normal user-facing transcript surfaces.</completed>
+    <completed bead="media-b8s.1.7">Compose topology includes the copper-asr service, runtime image, env file, cache volume, temp volume, and health check.</completed>
+    <completed bead="media-b8s.1.8">Telegram, Web, and MCP behavior is aligned with provider-agnostic user flows and explicit service metadata reads.</completed>
+    <completed bead="media-b8s.1.9">Legacy ASR runtime code, root dependencies, env switches, old model cache surfaces, and active tests are removed or confined to historical research/planning context.</completed>
+    <completed bead="media-b8s.1.10">GRACE artifacts and operational packets now describe the final CopperASR contract and verification gates.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>

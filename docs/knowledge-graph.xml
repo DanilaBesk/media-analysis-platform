@@ -152,20 +152,25 @@
         <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
         <export-copperAsrBoundary PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="Build and call the CopperASR HTTP runtime through COPPER_ASR_* env, normalize ASR responses into TranscriptResult, and propagate stable asr_* failure codes without legacy ASR fallback." />
         <export-copperAsrManifestMetadata PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Persist sanitized CopperASR provider, model, duration, and metadata in run_manifest while preserving transcript_plain, transcript_segmented_markdown, and transcript_docx artifacts." />
+        <test-noLegacyAsrRuntime PATH="workers/common/tests/test_no_legacy_asr_runtime.py" PURPOSE="Reject removed ASR runtime reintroduction across active worker, compose, env, dependency, and doc surfaces." />
       </annotations>
     </M-WORKER-TRANSCRIPTION>
 
-    <M-COPPER-ASR NAME="CopperAsrRuntime" TYPE="SUBMODULE_RUNTIME" STATUS="pinned-source" OWNER="media-b8s.1.4">
+    <M-COPPER-ASR NAME="CopperAsrRuntime" TYPE="SUBMODULE_RUNTIME" STATUS="implemented-runtime" OWNER="media-b8s.1.10">
       <purpose>Provide the pinned CopperASR source used by the dedicated ASR runtime service for transcription steps.</purpose>
       <path>vendor/copper-asr</path>
       <depends>external-git-submodule</depends>
-      <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.7, media-b8s.1.9, media-b8s.2.5, media-b8s.3.1</verification-ref>
+      <verification-ref>EV-ASR-RUNTIME, media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.5, media-b8s.3.1</verification-ref>
       <annotations>
         <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
         <source-pin COMMIT="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
         <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" />
         <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
-        <cleanup-policy PURPOSE="Legacy ASR imports, model-conversion helpers, provider-specific env, and old model-cache volumes must not remain active fallback behavior after migration." />
+        <worker-client PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="HTTP client, source materialization, response normalization, timeout handling, and asr_* diagnostic mapping." />
+        <manifest-contract PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Stores sanitized CopperASR provider metadata only in run_manifest/service artifacts while content artifacts stay provider-agnostic." />
+        <dependency-cleanup PATH="pyproject.toml" LOCKFILE="uv.lock" PURPOSE="Root worker dependencies no longer carry removed legacy ASR packages; CopperASR dependencies live behind the runtime image/submodule boundary." />
+        <cleanup-policy PURPOSE="Legacy ASR imports, model-conversion helpers, provider-specific env, old model-cache volumes, fallback tests, and dual-backend switches must not remain active fallback behavior after migration." />
+        <guard-noLegacyAsr PATH="workers/common/tests/test_no_legacy_asr_runtime.py" SCRIPT="infra/scripts/no-legacy-target-gate.sh" PURPOSE="Regression gate for active runtime, compose, env, dependency, and doc surfaces." />
       </annotations>
     </M-COPPER-ASR>
 
@@ -277,6 +282,7 @@
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-MCP-ADAPTER" relation="defines-tool-contract-responsibility-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-TRANSCRIPTION" relation="defines-step-and-snapshot-execution-contract-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-WORKER-AGENT-RUNNER" relation="defines-step-and-snapshot-execution-contract-for" />
+      <CrossLink from="M-COPPER-ASR" to="M-WORKER-TRANSCRIPTION" relation="provides-dedicated-asr-runtime-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-COVERAGE" relation="defines-source-plan-requirements-for" />
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-QA-READINESS" relation="defines-qa-readiness-source-for" />
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />

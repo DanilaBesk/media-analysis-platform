@@ -39,6 +39,16 @@
     <completed-packet bead="media-b6s">telegram-upload-object-store-and-worker-diagnostics</completed-packet>
     <completed-packet bead="media-t8q">telegram-upload-legacy-stored-object-id-collision</completed-packet>
     <completed-packet bead="media-l5w">telegram-result-active-surface-filter-and-asr-runtime-diagnosis</completed-packet>
+    <completed-packet bead="media-b8s.1.1">copper-asr-runtime-contract-research</completed-packet>
+    <completed-packet bead="media-b8s.1.2">legacy-asr-removal-surface-inventory</completed-packet>
+    <completed-packet bead="media-b8s.1.3">copper-asr-submodule-migration-source-plan</completed-packet>
+    <completed-packet bead="media-b8s.1.4">copper-asr-submodule-installation</completed-packet>
+    <completed-packet bead="media-b8s.1.5">copper-asr-worker-runtime-boundary</completed-packet>
+    <completed-packet bead="media-b8s.1.6">copper-asr-provider-metadata-artifacts</completed-packet>
+    <completed-packet bead="media-b8s.1.7">copper-asr-compose-runtime</completed-packet>
+    <completed-packet bead="media-b8s.1.8">copper-asr-adapter-behavior</completed-packet>
+    <completed-packet bead="media-b8s.1.9">legacy-asr-runtime-removal</completed-packet>
+    <completed-packet bead="media-b8s.1.10">final-copper-asr-grace-refresh</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -56,6 +66,50 @@ Run the focused checks assigned to the packet and prove stale public product voc
       ]]></verification-excerpt>
     </ExecutionPacket>
   </ExecutionPacketTemplate>
+
+  <ExecutionPacket packet-id="media-b8s-copper-asr-runtime-finalization" module="M-COPPER-ASR,M-WORKER-TRANSCRIPTION,M-INFRA,M-TELEGRAM-ADAPTER,M-WEB,M-MCP-ADAPTER,M-GRACE" phase="CopperAsrMigration" verification-ref="EV-ASR-RUNTIME,EV-WORKERS,EV-ADAPTERS,EV-COVERAGE-INVENTORY,EV-GRACE">
+    <purpose>Complete the ASR migration by making CopperASR the only active transcription backend, removing legacy ASR runtime surfaces, and preparing the E2E and QA proof wave.</purpose>
+    <depends-on>docs/plans/2026-05-18-copper-asr-submodule-migration.md</depends-on>
+    <write-scope>
+      <file-1>.gitmodules</file-1>
+      <file-2>vendor/copper-asr</file-2>
+      <file-3>workers/common/src/transcriber_workers_common/copper_asr.py</file-3>
+      <file-4>workers/transcription/src/transcriber_worker_transcription.py</file-4>
+      <file-5>workers/transcription/src/transcriber_worker_transcription_main.py</file-5>
+      <file-6>workers/common/tests/test_no_legacy_asr_runtime.py</file-6>
+      <file-7>infra/docker-compose.yml</file-7>
+      <file-8>infra/images/copper-asr/Dockerfile</file-8>
+      <file-9>infra/env/copper-asr.env.example</file-9>
+      <file-10>apps/telegram-bot, apps/web, apps/mcp-server</file-10>
+      <file-11>docs/requirements.xml, docs/technology.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml, docs/operational-packets.xml</file-11>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+CopperASR is the only active ASR backend.
+The platform owns queues, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, channel_surfaces, and all user-visible status.
+CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe.
+Transcription workers call CopperASR through COPPER_ASR_BASE_URL and publish transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics through the API.
+Provider metadata is service-scoped: normal Telegram and Web surfaces stay provider-agnostic, while MCP can expose explicit run_manifest previews when requested.
+Removed legacy ASR code, env, dependencies, cache volumes, fallback tests, and dual-backend switches must not return to active runtime paths.
+    ]]></contract-excerpt>
+    <implementation-notes>
+      <note>media-b8s.1.1 through media-b8s.1.3 provide research and source-plan evidence before implementation.</note>
+      <note>media-b8s.1.4 through media-b8s.1.8 install the submodule/runtime, worker boundary, metadata contract, compose topology, and adapter behavior.</note>
+      <note>media-b8s.1.9 removes active legacy ASR runtime code and adds a no-legacy regression guard.</note>
+      <note>media-b8s.1.10 refreshes GRACE and operational docs so future E2E and QA work uses the final CopperASR contract.</note>
+    </implementation-notes>
+    <verification>
+      <check>PYTHONPATH=workers/common/src uv run pytest workers/common/tests</check>
+      <check>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests</check>
+      <check>uv run --project apps/telegram-bot --with pytest --with pytest-asyncio pytest apps/telegram-bot/tests</check>
+      <check>pnpm --dir apps/web test</check>
+      <check>pnpm --dir apps/mcp-server test</check>
+      <check>bash infra/scripts/no-legacy-target-gate.sh</check>
+      <check>bash infra/scripts/compose-smoke.sh --check-config</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>media-b8s.2.* must add deterministic E2E fixtures, full application transcription proof, performance evidence, and failure-path coverage.</check>
+      <check>media-b8s.3.* must run traceability, channel UX/runtime QA, security/ops QA, and final readiness checks before closing media-b8s.</check>
+    </verification>
+  </ExecutionPacket>
 
   <HotfixPacket id="telegram-result-active-surface-filter-and-asr-runtime-diagnosis" status="completed" bead="media-l5w">
     <purpose>Fix false Telegram result-delivery duplicate detection and record the current transcription runtime cause for unexpected CPU load.</purpose>

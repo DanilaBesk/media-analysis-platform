@@ -2,7 +2,7 @@
 
 ## Startup
 
-Normal compose runtime is container-native. `worker-transcription` handles transcript generation, and report/deep-research AI execution is routed through the single `worker-agent-runner` model worker. Dedicated report/deep-research LLM worker services are no longer part of the compose topology.
+Normal compose runtime is container-native. `copper-asr` owns ASR inference, `worker-transcription` owns transcript step orchestration and artifact publication, and report/deep-research AI execution is routed through the single `worker-agent-runner` model worker. Dedicated report/deep-research LLM worker services are no longer part of the compose topology.
 
 ```bash
 bash infra/scripts/compose-smoke.sh --check-config
@@ -14,7 +14,7 @@ For a deterministic worker run, keep fixture/test-fixture agent-runner concurren
 ## Restart
 
 ```bash
-docker compose -f infra/docker-compose.yml up -d --build --force-recreate worker-transcription worker-agent-runner
+docker compose -f infra/docker-compose.yml up -d --build --force-recreate copper-asr worker-transcription worker-agent-runner
 docker compose -f infra/docker-compose.yml up -d api web telegram-bot mcp-server
 ```
 
@@ -22,6 +22,7 @@ docker compose -f infra/docker-compose.yml up -d api web telegram-bot mcp-server
 
 ```bash
 docker compose -f infra/docker-compose.yml logs --tail=120 api
+docker compose -f infra/docker-compose.yml logs --tail=120 copper-asr
 docker compose -f infra/docker-compose.yml logs --tail=120 worker-transcription
 docker compose -f infra/docker-compose.yml logs --tail=120 worker-agent-runner
 ```

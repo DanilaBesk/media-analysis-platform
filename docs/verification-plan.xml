@@ -7,6 +7,7 @@
     <retention-policy>Retention checks must prove metadata, stored object bodies, artifacts, diagnostics, and selection snapshots follow their separate lifecycle rules.</retention-policy>
     <coverage-policy>Coverage closure is reported per surface with the metric each tool can actually emit; missing metrics remain explicit gaps and do not collapse into a fake repo-wide 100% claim.</coverage-policy>
     <target-coverage-policy>For the target rebuild, 100% means every declared table invariant, API operation, DTO compatibility rule, user flow, worker step, channel surface recovery path, and diagnostic failure mode has explicit automated or runtime proof.</target-coverage-policy>
+    <asr-runtime-policy>For transcription, 100% means CopperASR is proven as the only active ASR backend across worker runtime, compose, dependencies, env, adapters, service artifacts, diagnostics, and no-legacy guardrails.</asr-runtime-policy>
     <data-reset-policy>The current local database is disposable. Verification should prove clean schema reset/recreate, deterministic seed fixtures, and target behavior from fresh data; it must not require preserving or backfilling current local rows.</data-reset-policy>
     <redaction>Never assert on raw secrets, raw bot tokens, private object URLs, or full prompt payloads.</redaction>
   </GlobalPolicy>
@@ -66,6 +67,9 @@
         <item>Successful execution publishes artifacts under analysis_run.</item>
         <item>Partial execution can finish as partially_succeeded when policy allows and diagnostics explain the skipped or failed items.</item>
         <item>Worker cancellation records the phase where cancellation was observed.</item>
+        <item>Transcription worker configuration points to the dedicated CopperASR service through COPPER_ASR_BASE_URL and rejects startup or execution paths that would require a removed legacy ASR backend.</item>
+        <item>CopperASR responses produce transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics artifacts with sanitized provider metadata only in service artifacts.</item>
+        <item>CopperASR service failures, invalid audio, empty transcript, and timeouts map to stable asr_* diagnostics and never collapse into generic user-facing backend-unavailable text after accepted input.</item>
       </required>
     </WorkerTests>
 
@@ -95,6 +99,7 @@
         <item>Compose smoke ingests at least one file or URL, shows it in inbox, seals a selection_snapshot, creates analysis_run, publishes artifacts, and exposes diagnostics.</item>
         <item>Runtime channel-account isolation check proves another caller cannot read the media_asset, selection_snapshot, run, artifact, or diagnostics.</item>
         <item>Retention smoke expires or soft-deletes an artifact without corrupting selection or run history.</item>
+        <item>Compose topology starts copper-asr, exposes /health internally, wires the transcription worker to COPPER_ASR_BASE_URL, and has no active legacy ASR model cache or dual-backend env switch.</item>
       </required>
     </RuntimeTests>
   </TestingStrategy>
@@ -128,6 +133,10 @@
       <description>Workers execute only through analysis_run_step contracts and immutable declared inputs.</description>
       <required-evidence>Worker-common, transcription, and agent-runner tests pass for step_kind queue polling, step claim/progress/finalize, sealed selection_snapshot materialization, transcript/text-corpus artifact input materialization, diagnostics, and cancellation.</required-evidence>
     </Gate>
+    <Gate id="EV-ASR-RUNTIME">
+      <description>CopperASR is the only active transcription backend.</description>
+      <required-evidence>Focused worker tests pass for CopperASR HTTP client configuration, response normalization, run_manifest provider metadata, transcript artifact publication, stable asr_* diagnostics, and no fallback to removed ASR runtime; compose config includes copper-asr service health and worker COPPER_ASR_BASE_URL; dependency/env scans plus `bash infra/scripts/no-legacy-target-gate.sh` reject active legacy ASR reintroduction; Telegram/Web normal surfaces hide provider internals while MCP service artifact previews expose explicit run_manifest metadata when requested.</required-evidence>
+    </Gate>
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
       <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state.</required-evidence>
@@ -156,6 +165,10 @@
     <failure code="analysis_prerequisite_missing">A later step needs a transcript or text-corpus artifact that does not exist yet.</failure>
     <failure code="analysis_prerequisite_failed">A prerequisite transcription or text preparation step failed.</failure>
     <failure code="analysis_prerequisite_unavailable">A prerequisite cannot be scheduled because the input kind, retention state, or provider contract makes it unavailable.</failure>
+    <failure code="asr_runtime_unavailable">The CopperASR runtime is not healthy, unreachable, or not configured for the worker.</failure>
+    <failure code="asr_invalid_audio">CopperASR rejected or could not decode the provided audio object.</failure>
+    <failure code="asr_empty_transcript">CopperASR completed but produced no speech transcript for the input.</failure>
+    <failure code="asr_request_timeout">The CopperASR request exceeded the worker timeout budget.</failure>
     <failure code="worker_failed">Internal execution failed and produced diagnostic context.</failure>
     <failure code="artifact_unavailable">Artifact is failed, expired, deleted, or not yet published.</failure>
     <failure code="retention_denied">Retention action violates audit, channel-account access, or lifecycle rules.</failure>
@@ -186,6 +199,13 @@
     <bead id="media-b6s">Run target API/runtime upload regressions plus transcription worker diagnostics regression proving Telegram voice uploads materialize from object storage and missing-source failures can finalize instead of leaving active run cards.</bead>
     <bead id="media-t8q">Run target upload regression proving sources/uploads object keys do not reuse legacy uploads/ stored_object_id seeds and therefore avoid stored_objects_pkey collisions on repeated Telegram file uploads.</bead>
     <bead id="media-l5w">Run target API regression proving /internal/v1/channel-surfaces/active preserves subject filters; run Telegram result-delivery regressions; capture live compose proof that artifact-subject active lookup no longer returns the current materials card; document the active transcription backend/runtime evidence.</bead>
+    <bead id="media-b8s.1.4">Verify the CopperASR submodule pin, .gitmodules entry, README/runtime docs, and source availability.</bead>
+    <bead id="media-b8s.1.5">Run worker-common and transcription tests for CopperASR client behavior, worker launcher configuration, artifact publication, and asr_* diagnostics.</bead>
+    <bead id="media-b8s.1.6">Run API/worker artifact tests proving provider metadata is stored in run_manifest and kept out of normal transcript artifacts.</bead>
+    <bead id="media-b8s.1.7">Run compose config and image smoke checks proving copper-asr service health, worker wiring, and removed old cache volumes.</bead>
+    <bead id="media-b8s.1.8">Run Telegram, Web, and MCP tests proving provider-agnostic user surfaces, fixed Telegram result delivery after stale addressless surfaces, and explicit MCP service metadata reads.</bead>
+    <bead id="media-b8s.1.9">Run worker-common, transcription, no-legacy ASR, compose config, GRACE XML, dependency/env scans, and git diff checks before claiming legacy ASR removal complete.</bead>
+    <bead id="media-b8s.1.10">Run GRACE XML validation, no-legacy target gate, active runtime scan, and git diff checks before moving from implementation to E2E coverage tasks.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>
