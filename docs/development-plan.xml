@@ -255,6 +255,7 @@
     <completed bead="media-b8s.2.3">Live API/worker/Web/MCP CopperASR proof now verifies short voice upload, selection_snapshot run creation, successful transcription artifacts, run_manifest provider metadata, artifact download access, diagnostics filtering, cross-channel denial, and history preservation after source media deletion.</completed>
     <completed bead="media-b8s.2.4">CopperASR failure E2E now covers corrupt-audio failed diagnostics, retry failed diagnostics, cancellation terminal state, no transcript artifacts on failed/canceled runs, run policy artifact publication, and declared resource-limit knobs.</completed>
     <completed bead="media-b8s.2.5">No-legacy ASR regression coverage is exposed as a single CI command and wired into coverage inventory plus target no-legacy verification.</completed>
+    <blocked bead="media-b8s.2.7" blocker="media-b8s.2.10">Long-voice benchmark evidence exists and proves successful CopperASR transcription speed, but CPU threshold fails inside the CopperASR runtime container until submodule thread caps and telemetry are fixed.</blocked>
   </CurrentClosureState>
 
   <DefinitionOfDone>

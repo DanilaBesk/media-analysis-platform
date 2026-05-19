@@ -14,6 +14,8 @@ COPPER_ASR_HARNESS = ROOT / "infra" / "scripts" / "copper-asr-e2e-harness.py"
 COPPER_ASR_FAILURE_E2E = ROOT / "infra" / "scripts" / "copper-asr-failure-e2e.py"
 COPPER_ASR_API_WEB_MCP_E2E = ROOT / "infra" / "scripts" / "copper-asr-api-web-mcp-e2e.py"
 COPPER_ASR_TELEGRAM_E2E = ROOT / "infra" / "scripts" / "copper-asr-telegram-e2e.py"
+COPPER_ASR_BENCHMARK_E2E = ROOT / "infra" / "scripts" / "copper-asr-benchmark-e2e.py"
+COPPER_ASR_BENCHMARK_ARTIFACT = ROOT / "docs" / "benchmarks" / "copper-asr-long-voice-benchmark-latest.json"
 UUID_RE = re.compile(r"^00000000-0000-4000-8000-[0-9]{12}$")
 
 
@@ -119,9 +121,49 @@ def test_copper_asr_e2e_harness_reports_deterministic_fixture_plan() -> None:
     assert payload["commands"]["failure_e2e"] == "python3 infra/scripts/copper-asr-failure-e2e.py --json"
     assert payload["commands"]["api_web_mcp_e2e"] == "python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json"
     assert payload["commands"]["telegram_e2e"] == "python3 infra/scripts/copper-asr-telegram-e2e.py --json"
+    assert payload["commands"]["benchmark_e2e"] == "python3 infra/scripts/copper-asr-benchmark-e2e.py --json"
     assert COPPER_ASR_FAILURE_E2E.is_file()
     assert COPPER_ASR_FAILURE_E2E.stat().st_mode & 0o111
     assert COPPER_ASR_API_WEB_MCP_E2E.is_file()
     assert COPPER_ASR_API_WEB_MCP_E2E.stat().st_mode & 0o111
     assert COPPER_ASR_TELEGRAM_E2E.is_file()
     assert COPPER_ASR_TELEGRAM_E2E.stat().st_mode & 0o111
+    assert COPPER_ASR_BENCHMARK_E2E.is_file()
+    assert COPPER_ASR_BENCHMARK_E2E.stat().st_mode & 0o111
+
+
+def test_copper_asr_long_voice_benchmark_artifact_records_runtime_thresholds() -> None:
+    payload = json.loads(COPPER_ASR_BENCHMARK_ARTIFACT.read_text(encoding="utf-8"))
+
+    assert payload["schema_version"] == "copper-asr-long-voice-benchmark-v1"
+    assert payload["bead_id"] == "media-b8s.2.7"
+    assert payload["fixture"]["case_id"] == "representative_long_voice"
+    assert payload["fixture"]["duration_seconds"] == 960.006
+    assert payload["backend"]["provider"] == "copperasr"
+    assert payload["backend"]["legacy_asr_allowed"] is False
+    assert payload["previous_runtime_comparison"]["legacy_runtime_preserved"] is False
+
+    timings = payload["timings"]
+    assert timings["input_duration_seconds"] == 960.006
+    assert timings["run_wall_seconds"] > 0
+    assert timings["total_wall_seconds"] >= timings["run_wall_seconds"]
+    assert timings["delivery_latency_seconds"] >= 0
+    assert timings["real_time_factor"] > 0
+
+    concurrency = payload["runtime"]["concurrency"]
+    assert concurrency["COPPER_ASR_MAX_CONCURRENT_REQUESTS"] == "1"
+    assert concurrency["COPPER_ASR_ONNX_NUM_THREADS"] == "4"
+
+    resources = payload["resources"]["services"]
+    assert "copper-asr" in resources
+    assert resources["copper-asr"]["sample_count"] > 0
+    assert resources["copper-asr"]["max_cpu_percent"] >= 0
+    assert resources["copper-asr"]["max_memory_mib"] > 0
+
+    thresholds = payload["thresholds"]
+    assert thresholds["max_run_wall_seconds"] > 0
+    assert thresholds["max_copper_asr_cpu_percent"] > 0
+    assert thresholds["max_copper_asr_memory_mib"] > 0
+    assert isinstance(thresholds["passed"], bool)
+    if not thresholds["passed"]:
+        assert str(thresholds["blocker_issue_id"]).startswith("media-")

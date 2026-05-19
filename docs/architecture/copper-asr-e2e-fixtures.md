@@ -14,6 +14,7 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 - Telegram E2E harness: `python3 infra/scripts/copper-asr-telegram-e2e.py --json`.
 - API/Web/MCP E2E harness: `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json`.
 - Failure E2E harness: `python3 infra/scripts/copper-asr-failure-e2e.py --json`.
+- Benchmark E2E harness: `python3 infra/scripts/copper-asr-benchmark-e2e.py --json`.
 
 ## Cases
 
@@ -31,6 +32,7 @@ python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json
 python3 infra/scripts/copper-asr-telegram-e2e.py --json
 python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json
 python3 infra/scripts/copper-asr-failure-e2e.py --json
+python3 infra/scripts/copper-asr-benchmark-e2e.py --json --write-artifact docs/benchmarks/copper-asr-long-voice-benchmark-latest.json --blocker-issue-id media-b8s.2.10
 bash infra/scripts/target-reset-smoke.sh
 bash infra/scripts/compose-smoke.sh --check-config
 ```
@@ -41,6 +43,8 @@ The API/Web/MCP E2E command requires the local compose API, transcription worker
 
 The failure E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It creates throwaway channel accounts and analysis runs, then asserts corrupt-audio failure, retry failure, cancellation, policy artifact publication, absence of transcript artifacts on failed runs, and the CopperASR resource-limit env knobs.
 
+The benchmark E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It uploads the `representative_long_voice` fixture through a Telegram-shaped channel account, starts a real transcription run, samples `docker stats` for `copper-asr`, `worker-transcription`, and `api`, downloads transcript/run_manifest bytes, records delivery latency and inbox clearing, and writes the latest evidence to `docs/benchmarks/copper-asr-long-voice-benchmark-latest.json`.
+
 The harness can also copy fixture bytes into a bucket/object-key directory tree for later MinIO seed work:
 
 ```bash
@@ -49,4 +53,6 @@ python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --copy-object-s
 
 ## Limits
 
-These fixtures prove deterministic E2E wiring and provide benchmark input. They do not define a production performance threshold. `media-b8s.2.7` must record measured wall time, CPU, memory, ONNX thread setting, warm/cold model state, and delivery latency before any performance claim is made.
+These fixtures prove deterministic E2E wiring and provide benchmark input. They do not define a production performance threshold. `media-b8s.2.7` records measured wall time, CPU, memory, ONNX thread setting, warm/cold model state, and delivery latency before any performance claim is made.
+
+Latest benchmark evidence: the 960.006 second representative voice finished successfully in 85.148 seconds of run wall time with provider `copperasr` and model `Copperside/CoppersideASR`, but `copper-asr` reached 884.07% CPU while `worker-transcription` and `api` stayed near idle. The benchmark artifact therefore marks thresholds as failed and links blocker `media-b8s.2.10` for CopperASR runtime thread caps and benchmark telemetry. VAD/segmentation timing is currently limited to coarse platform progress events until CopperASR exposes detailed timing/count metadata.

@@ -131,6 +131,7 @@ def build_plan(*, copy_object_store_to: Path | None = None) -> dict[str, Any]:
             "failure_e2e": "python3 infra/scripts/copper-asr-failure-e2e.py --json",
             "api_web_mcp_e2e": "python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json",
             "telegram_e2e": "python3 infra/scripts/copper-asr-telegram-e2e.py --json",
+            "benchmark_e2e": "python3 infra/scripts/copper-asr-benchmark-e2e.py --json",
         },
     }
 

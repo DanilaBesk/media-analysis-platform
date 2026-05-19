@@ -247,6 +247,8 @@
     <bead id="media-b8s.2.3" status="completed">Live CopperASR API/worker proof now uploads the short voice fixture, creates a transcription run through API-owned selection_snapshot state, verifies transcript and policy artifacts, downloads artifact bytes, checks run diagnostics filtering, proves cross-channel run/artifact denial, and preserves run history after source media deletion for Web and MCP shared API surfaces.</bead>
     <bead id="media-b8s.2.4" status="completed">CopperASR failure-path coverage now proves failed corrupt-audio runs and retries emit analysis_run diagnostics plus run policy artifacts instead of transcript artifacts or generic backend-unavailable loops, cancellation reaches a terminal canceled state without orphan artifacts, and runtime concurrency/timeout knobs are asserted.</bead>
     <bead id="media-b8s.2.5" status="completed">A dedicated no-legacy ASR gate now scans active runtime, env, compose, dependency manifest, and runtime-doc surfaces and is wired into the coverage inventory and target gate.</bead>
+    <bead id="media-b8s.2.7" status="blocked">Live long-voice CopperASR benchmark proves successful 960.006 second Telegram-shaped transcription in 85.148 seconds, but records copper-asr max_cpu_percent 884.07 and avg_cpu_percent 562.183 while worker/API stay near idle.</bead>
+    <bead id="media-b8s.2.10" status="open">CopperASR runtime CPU thread caps and VAD/segmentation benchmark telemetry must be fixed in the CopperASR submodule repository before the long-voice benchmark can pass its CPU threshold.</bead>
   </BeadsTrace>
 
   <NonGoals>

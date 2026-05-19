@@ -1,0 +1,239 @@
+{
+  "artifacts": {
+    "artifact_ids": [
+      "4c942ac3-5e2e-4bdd-8b4e-8997fe951783",
+      "bf3a551a-89f5-4113-8831-8df7f6840943",
+      "861474de-d0e8-4511-b9c9-847fcc78dcd4",
+      "ab630c35-11ba-40b9-b65f-bcb9f7951d13",
+      "6eeb454f-3748-4dbc-8b0c-7095433fcb63"
+    ],
+    "manifest_backend": {
+      "duration": 83.26919596502557,
+      "metadata": {
+        "diarization": {
+          "enabled": false
+        },
+        "ignored_params": [],
+        "speakers": null
+      },
+      "model": "Copperside/CoppersideASR",
+      "provider": "copperasr",
+      "revision": null
+    },
+    "public_kinds": [
+      "run_diagnostics",
+      "run_manifest",
+      "transcript"
+    ],
+    "transcript_artifact_id": "4c942ac3-5e2e-4bdd-8b4e-8997fe951783",
+    "transcript_bytes": 27578,
+    "transcript_delivery_mode": "document",
+    "worker_kinds": [
+      "run_diagnostics",
+      "run_manifest",
+      "transcript_docx",
+      "transcript_plain",
+      "transcript_segmented_markdown"
+    ]
+  },
+  "backend": {
+    "duration_seconds": 83.26919596502557,
+    "legacy_asr_allowed": false,
+    "metadata": {
+      "diarization": {
+        "enabled": false
+      },
+      "ignored_params": [],
+      "speakers": null
+    },
+    "model": "Copperside/CoppersideASR",
+    "provider": "copperasr",
+    "revision": null
+  },
+  "bead_id": "media-b8s.2.7",
+  "fixture": {
+    "case_id": "representative_long_voice",
+    "content_type": "audio/ogg; codecs=opus",
+    "duration_seconds": 960.006,
+    "fixture_path": "infra/fixtures/target/object-store/media-inputs/copper-asr/representative-long-ru-voice.ogg",
+    "media_kind": "voice",
+    "sha256": "b8cfbe566903964fab28ca9b245ce3b7bd11b0b3eb532611a469ac28d1531d1c",
+    "size_bytes": 2834743
+  },
+  "generated_at": "2026-05-19T06:22:21Z",
+  "previous_runtime_comparison": {
+    "comparison_mode": "current CopperASR-only runtime measured under compose; removed legacy runtime is not retained as a fallback",
+    "evidence_basis": "media-11o runtime diagnosis and user-observed long voice latency complaint",
+    "legacy_runtime_preserved": false,
+    "previous_backend": "legacy faster-whisper CPU"
+  },
+  "progress_events": [
+    {
+      "created_at": "2026-05-19T06:20:54.814092Z",
+      "event_type": "analysis_run.created",
+      "progress_message": "",
+      "progress_stage": "",
+      "status": "queued"
+    },
+    {
+      "created_at": "2026-05-19T06:20:56.016844Z",
+      "event_type": "analysis_run_step.progress",
+      "progress_message": "Resolving claimed transcription inputs",
+      "progress_stage": "materializing_sources",
+      "status": "running"
+    },
+    {
+      "created_at": "2026-05-19T06:20:56.037192Z",
+      "event_type": "analysis_run_step.progress",
+      "progress_message": "Running transcription pipeline",
+      "progress_stage": "transcribing",
+      "status": "running"
+    },
+    {
+      "created_at": "2026-05-19T06:22:19.399184Z",
+      "event_type": "analysis_run_step.progress",
+      "progress_message": "Uploading transcript artifacts",
+      "progress_stage": "persisting_artifacts",
+      "status": "running"
+    },
+    {
+      "created_at": "2026-05-19T06:22:19.430749Z",
+      "event_type": "analysis_run_step.finalized",
+      "progress_message": "",
+      "progress_stage": "",
+      "status": "succeeded"
+    }
+  ],
+  "resources": {
+    "sample_count": 69,
+    "sample_interval_seconds": 2.0,
+    "sampler_errors": [],
+    "services": {
+      "api": {
+        "avg_cpu_percent": 0.05,
+        "avg_memory_mib": 52.647,
+        "container": "infra-api-1",
+        "first_sample_at": "2026-05-19T06:20:54Z",
+        "last_sample_at": "2026-05-19T06:22:21Z",
+        "max_cpu_percent": 0.43,
+        "max_memory_mib": 62.68,
+        "sample_count": 23
+      },
+      "copper-asr": {
+        "avg_cpu_percent": 562.183,
+        "avg_memory_mib": 1676.466,
+        "container": "infra-copper-asr-1",
+        "first_sample_at": "2026-05-19T06:20:54Z",
+        "last_sample_at": "2026-05-19T06:22:21Z",
+        "max_cpu_percent": 884.07,
+        "max_memory_mib": 1703.936,
+        "sample_count": 23
+      },
+      "worker-transcription": {
+        "avg_cpu_percent": 0.0,
+        "avg_memory_mib": 71.413,
+        "container": "infra-worker-transcription-1",
+        "first_sample_at": "2026-05-19T06:20:54Z",
+        "last_sample_at": "2026-05-19T06:22:21Z",
+        "max_cpu_percent": 0.0,
+        "max_memory_mib": 83.95,
+        "sample_count": 23
+      }
+    }
+  },
+  "runtime": {
+    "api_base_url": "http://localhost:8080",
+    "compose_services": {
+      "api": {
+        "container": "infra-api-1",
+        "created_at": "2026-05-19 08:22:13 +0300 MSK",
+        "health": "",
+        "state": "running",
+        "status": "Up 58 minutes"
+      },
+      "copper-asr": {
+        "container": "infra-copper-asr-1",
+        "created_at": "2026-05-19 08:22:12 +0300 MSK",
+        "health": "healthy",
+        "state": "running",
+        "status": "Up 58 minutes (healthy)"
+      },
+      "worker-transcription": {
+        "container": "infra-worker-transcription-1",
+        "created_at": "2026-05-19 08:35:04 +0300 MSK",
+        "health": "",
+        "state": "running",
+        "status": "Up 45 minutes"
+      }
+    },
+    "concurrency": {
+      "COPPER_ASR_ACQUIRE_TIMEOUT_S": "30",
+      "COPPER_ASR_CLIENT_TIMEOUT_S": "28800",
+      "COPPER_ASR_MAX_CONCURRENT_REQUESTS": "1",
+      "COPPER_ASR_ONNX_NUM_THREADS": "4"
+    },
+    "model_warm_cold": {
+      "COPPER_ASR_CACHE_DIR": "/var/cache/copper-asr",
+      "COPPER_ASR_DEVICE": "auto",
+      "COPPER_ASR_MODEL_PATH": "",
+      "COPPER_ASR_PRELOAD_MODEL": "true",
+      "cold_start_measured": false,
+      "mode": "warm_existing_container"
+    }
+  },
+  "schema_version": "copper-asr-long-voice-benchmark-v1",
+  "started_at": "2026-05-19T06:20:52Z",
+  "telegram_flow": {
+    "analysis_run_id": "b9a3fd71-071a-40d8-b1ca-93466424c709",
+    "channel_account_id": "8c3690e0-763c-4b40-8f2e-28040c2c8344",
+    "collection_id": "3be1f7c5-cadb-5acc-8f32-2c3e0da4baa8",
+    "current_materials_surface_id": "11d350ee-d5fb-4acf-a684-15d53a596122",
+    "diagnostic_codes": [],
+    "diagnostic_count": 0,
+    "external_account_ref": "chat:190944130:user:290944130",
+    "inbox_clear": {
+      "collection_id": "3be1f7c5-cadb-5acc-8f32-2c3e0da4baa8",
+      "remaining_item_count": 0,
+      "version_after_clear": 2
+    },
+    "media_asset_id": "567c22c7-fddf-4273-a647-6ef64ded13fc",
+    "result_surface": {
+      "active_surface_count": 1,
+      "delivery_mode": "document",
+      "duplicate_prevented": true,
+      "surface_id": "61ac9421-e092-4186-a446-fe34b9b6630d",
+      "surface_key": "artifact:4c942ac3-5e2e-4bdd-8b4e-8997fe951783",
+      "surface_type": "result_artifact_surface"
+    },
+    "selection_snapshot_id": "7fbf0dd5-0f67-4bf2-b279-d214939c612b",
+    "terminal_status": "succeeded"
+  },
+  "thresholds": {
+    "blocker_issue_id": "media-b8s.2.10",
+    "failures": [
+      "copper-asr max_cpu_percent 884.07 > 450.0"
+    ],
+    "max_copper_asr_cpu_percent": 450.0,
+    "max_copper_asr_memory_mib": 4096.0,
+    "max_run_wall_seconds": 300.0,
+    "passed": false
+  },
+  "timings": {
+    "delivery_latency_seconds": 0.01,
+    "input_duration_seconds": 960.006,
+    "real_time_factor": 0.089,
+    "run_wall_seconds": 85.148,
+    "speedup_vs_realtime": 11.275,
+    "total_wall_seconds": 89.256,
+    "upload_seconds": 0.052
+  },
+  "vad_segmentation": {
+    "coarse_progress_stage_durations_seconds": {
+      "materializing_sources_to_transcribing_seconds": 0.02,
+      "transcribing_to_persisting_artifacts_seconds": 83.362
+    },
+    "runtime_exposes_segment_count": false,
+    "runtime_exposes_vad_timing": false,
+    "timing_source": "coarse analysis_run_step progress events only; CopperASR HTTP response/run_manifest do not expose VAD timing yet"
+  }
+}
