@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "../src/app/app-shell";
 import type { WebUiRuntime } from "../src/app/runtime";
@@ -13,6 +13,7 @@ const runtime: WebUiRuntime = {
   },
   apiClient: {} as never,
 };
+const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 function RuntimeProbe() {
   const value = useWebUiRuntime();
@@ -31,14 +32,17 @@ describe("WebUiRuntimeProvider", () => {
   });
 
   it("throws when the runtime hook is used without a provider", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
     expect(() => render(<RuntimeProbe />)).toThrowError(
       "WebUiRuntimeProvider is required before rendering app shell routes.",
     );
+    consoleError.mockRestore();
   });
 
   it("renders the shell without leaking runtime endpoints", () => {
     render(
-      <MemoryRouter initialEntries={["/"]}>
+      <MemoryRouter initialEntries={["/"]} future={routerFuture}>
         <WebUiRuntimeProvider runtime={runtime}>
           <AppShell>
             <p>Child content</p>

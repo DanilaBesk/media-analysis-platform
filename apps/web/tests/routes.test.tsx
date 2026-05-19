@@ -6,6 +6,14 @@ import { createWebUiRoutes } from "../src/app/routes";
 import type { WebUiRuntime } from "../src/app/runtime";
 import type { WebUiApiClient } from "../src/lib/api/client";
 
+const routerFuture = {
+  v7_fetcherPersist: true,
+  v7_normalizeFormMethod: true,
+  v7_partialHydration: true,
+  v7_relativeSplatPath: true,
+  v7_skipActionErrorRevalidation: true,
+} as const;
+const routerProviderFuture = { v7_startTransition: true } as const;
 const owner = "web-console";
 
 function secondMediaAsset() {
@@ -341,8 +349,9 @@ function renderRoute(path: string, overrides?: Partial<WebUiApiClient>) {
   const runtime = makeRuntime(overrides);
   const router = createMemoryRouter(createWebUiRoutes(runtime), {
     initialEntries: [path],
+    future: routerFuture,
   });
-  const renderResult = render(<RouterProvider router={router} />);
+  const renderResult = render(<RouterProvider router={router} future={routerProviderFuture} />);
   return { ...runtime, ...renderResult };
 }
 
@@ -482,8 +491,9 @@ describe("createWebUiRoutes", () => {
 
     const router = createMemoryRouter(createWebUiRoutes(runtime), {
       initialEntries: ["/collections"],
+      future: routerFuture,
     });
-    const collectionView = render(<RouterProvider router={router} />);
+    const collectionView = render(<RouterProvider router={router} future={routerProviderFuture} />);
 
     fireEvent.change(await screen.findByLabelText("Добавить материал"), { target: { value: "media-2" } });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
@@ -501,8 +511,9 @@ describe("createWebUiRoutes", () => {
     collectionView.unmount();
     const detailRouter = createMemoryRouter(createWebUiRoutes(runtime), {
       initialEntries: ["/runs/run-1"],
+      future: routerFuture,
     });
-    render(<RouterProvider router={detailRouter} />);
+    render(<RouterProvider router={detailRouter} future={routerProviderFuture} />);
 
     expect(await screen.findByRole("heading", { name: "Краткое содержание" })).toBeVisible();
     expect(screen.getByText("#1 Call note")).toBeVisible();

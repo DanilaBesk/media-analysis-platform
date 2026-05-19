@@ -7,6 +7,15 @@ import type { WebUiRuntime } from "../src/app/runtime";
 import { RECONCILE_STATE_MARKER } from "../src/lib/api/client";
 import type { RunEvent } from "../src/lib/api/types";
 
+const routerFuture = {
+  v7_fetcherPersist: true,
+  v7_normalizeFormMethod: true,
+  v7_partialHydration: true,
+  v7_relativeSplatPath: true,
+  v7_skipActionErrorRevalidation: true,
+} as const;
+const routerProviderFuture = { v7_startTransition: true } as const;
+
 function mediaAsset() {
   return {
     media_asset_id: "asset-1",
@@ -124,9 +133,10 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
   };
   const router = createMemoryRouter(createWebUiRoutes(runtime), {
     initialEntries: ["/runs/run-1"],
+    future: routerFuture,
   });
 
-  render(<RouterProvider router={router} />);
+  render(<RouterProvider router={router} future={routerProviderFuture} />);
   return runtime;
 }
 

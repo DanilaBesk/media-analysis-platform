@@ -111,6 +111,10 @@ class CopperAsrTranscriptionError(RuntimeError):
         self.retryable = retryable
         self.request_id = request_id
 
+    @property
+    def suppress_worker_traceback(self) -> bool:
+        return not self.retryable
+
 
 class CopperAsrHttpTransport:
     def __init__(self, base_url: str, *, client: httpx.Client | None = None) -> None:

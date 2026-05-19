@@ -823,7 +823,7 @@ def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path
     artifact_store = InMemoryArtifactStore()
     transcriber = RecordingTranscriber()
 
-    with pytest.raises(WorkerCancellationRequested, match="was canceled"):
+    with pytest.raises(WorkerCancellationRequested, match="was canceled") as exc_info:
         runTranscription(
             execution.analysis_run_id,
             workspace_root=tmp_path,
@@ -833,6 +833,7 @@ def test_run_transcription_checks_cancellation_inside_worker_loop(tmp_path: Path
             transcriber=transcriber,
         )
 
+    assert getattr(exc_info.value, "suppress_worker_traceback") is True
     assert [call[0] for call in api_client.calls if call[0] == "check_cancel"] == [
         "check_cancel",
         "check_cancel",
@@ -1016,7 +1017,7 @@ def test_run_transcription_uses_copper_asr_diagnostic_code(tmp_path: Path) -> No
     source_store = FakeSourceStore({"uploads/call.ogg": b"audio"})
     artifact_store = InMemoryArtifactStore()
 
-    with pytest.raises(CopperAsrTranscriptionError, match="invalid_audio"):
+    with pytest.raises(CopperAsrTranscriptionError, match="invalid_audio") as exc_info:
         runTranscription(
             execution.analysis_run_id,
             workspace_root=tmp_path,
@@ -1026,6 +1027,7 @@ def test_run_transcription_uses_copper_asr_diagnostic_code(tmp_path: Path) -> No
             transcriber=FailingCopperAsrTranscriber(),
         )
 
+    assert getattr(exc_info.value, "suppress_worker_traceback") is True
     assert api_client.calls[-1] == (
         "finalize_analysis_run",
         {

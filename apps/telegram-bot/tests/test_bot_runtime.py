@@ -5,8 +5,10 @@ import inspect
 import logging
 from pathlib import Path
 import runpy
+import sys
 from types import SimpleNamespace
 from typing import Any
+import warnings
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -2003,9 +2005,12 @@ def test_run_module_executes_script_exit_path(monkeypatch: pytest.MonkeyPatch) -
         coro.close()
 
     monkeypatch.setattr(asyncio, "run", fake_asyncio_run)
+    monkeypatch.delitem(sys.modules, "telegram_adapter.__main__", raising=False)
 
-    with pytest.raises(SystemExit) as exit_info:
-        runpy.run_module("telegram_adapter.__main__", run_name="__main__")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        with pytest.raises(SystemExit) as exit_info:
+            runpy.run_module("telegram_adapter.__main__", run_name="__main__")
 
     assert exit_info.value.code == 0
 

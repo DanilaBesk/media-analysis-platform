@@ -170,6 +170,8 @@ class AgentRunnerWorkerResult:
 
 
 class WorkerCancellationRequested(RuntimeError):
+    suppress_worker_traceback = True
+
     pass
 
 

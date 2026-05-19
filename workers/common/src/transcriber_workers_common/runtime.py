@@ -207,10 +207,23 @@ def _run_one_analysis_run(analysis_run_id: str, run_analysis_run: AnalysisRunRun
     _LOGGER.info("%s run_analysis_run analysis_run_id=%s", _LOG_MARKER_RUN_WORKER_LOOP, analysis_run_id)
     try:
         run_analysis_run(analysis_run_id)
-    except Exception:
-        _LOGGER.exception("%s run_analysis_run_failed analysis_run_id=%s", _LOG_MARKER_RUN_WORKER_LOOP, analysis_run_id)
+    except Exception as exc:
+        if _suppresses_worker_traceback(exc):
+            _LOGGER.warning(
+                "%s run_analysis_run_failed analysis_run_id=%s exception_type=%s error=%s",
+                _LOG_MARKER_RUN_WORKER_LOOP,
+                analysis_run_id,
+                type(exc).__name__,
+                exc,
+            )
+        else:
+            _LOGGER.exception("%s run_analysis_run_failed analysis_run_id=%s", _LOG_MARKER_RUN_WORKER_LOOP, analysis_run_id)
         return False
     return True
+
+
+def _suppresses_worker_traceback(exc: BaseException) -> bool:
+    return getattr(exc, "suppress_worker_traceback", False) is True
 
 
 def _should_stop(config: WorkerRuntimeConfig, *, processed_runs: int, idle_polls: int) -> bool:

@@ -129,6 +129,51 @@ def test_run_worker_loop_accounts_explicit_run_failure(tmp_path: Path) -> None:
     assert result.idle_polls == 0
 
 
+def test_run_worker_loop_logs_controlled_runner_failure_without_traceback(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class ControlledRunnerFailure(RuntimeError):
+        suppress_worker_traceback = True
+
+    caplog.set_level(logging.INFO)
+    config = _config(tmp_path, analysis_run_id="run-controlled")
+
+    def fail_run(analysis_run_id: str) -> None:
+        raise ControlledRunnerFailure(f"{analysis_run_id} was canceled")
+
+    result = run_worker_loop(config, fail_run, api_client=FakeApiClient([]), sleeper=lambda _: None)
+
+    assert result.processed_runs == 0
+    assert result.failed_runs == 1
+    failure_records = [record for record in caplog.records if "run_analysis_run_failed" in record.message]
+    assert len(failure_records) == 1
+    assert failure_records[0].levelno == logging.WARNING
+    assert failure_records[0].exc_info is None
+    assert "ControlledRunnerFailure" in failure_records[0].message
+    assert "run-controlled was canceled" in failure_records[0].message
+
+
+def test_run_worker_loop_keeps_traceback_for_unexpected_runner_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    config = _config(tmp_path, analysis_run_id="run-unexpected")
+
+    def fail_run(analysis_run_id: str) -> None:
+        raise RuntimeError(f"{analysis_run_id} failed")
+
+    result = run_worker_loop(config, fail_run, api_client=FakeApiClient([]), sleeper=lambda _: None)
+
+    assert result.processed_runs == 0
+    assert result.failed_runs == 1
+    failure_records = [record for record in caplog.records if "run_analysis_run_failed" in record.message]
+    assert len(failure_records) == 1
+    assert failure_records[0].levelno == logging.ERROR
+    assert failure_records[0].exc_info is not None
+
+
 def test_run_worker_loop_polls_queued_run_through_api_client(tmp_path: Path) -> None:
     config = _config(tmp_path, max_processed_runs=1)
     api_client = FakeApiClient(

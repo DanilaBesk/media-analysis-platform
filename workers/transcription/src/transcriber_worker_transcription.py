@@ -76,6 +76,8 @@ class TranscriptionWorkerResult:
 
 
 class WorkerCancellationRequested(RuntimeError):
+    suppress_worker_traceback = True
+
     pass
 
 

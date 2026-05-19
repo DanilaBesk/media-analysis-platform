@@ -21,11 +21,12 @@ const items: MediaAssetSummary[] = [
     updated_at: "2026-05-10T00:00:00Z",
   },
 ];
+const routerFuture = { v7_startTransition: true, v7_relativeSplatPath: true } as const;
 
 describe("MediaAssetList", () => {
   it("renders without selection controls when toggle callbacks are absent", () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={routerFuture}>
         <MediaAssetList items={items} selected={new Set()} />
       </MemoryRouter>,
     );
@@ -37,7 +38,7 @@ describe("MediaAssetList", () => {
 
   it("renders an empty state when there are no items", () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={routerFuture}>
         <MediaAssetList items={[]} selected={new Set()} onToggle={vi.fn()} onSelectAll={vi.fn()} onClearSelection={vi.fn()} />
       </MemoryRouter>,
     );
