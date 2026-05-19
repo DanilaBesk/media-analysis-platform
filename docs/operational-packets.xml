@@ -60,6 +60,10 @@
     <blocked-packet bead="media-b8s.2.9">corrupt-audio-invalid-audio-normalization waits for media-b8s.2.11 because the refreshed CopperASR runtime still returns unexpected_runtime_error.</blocked-packet>
     <blocked-packet bead="media-b8s.2.10">external-copper-asr-vad-cpu-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR fix or explicit benchmark-contract decision.</blocked-packet>
     <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR invalid-audio fix or explicit preflight decision.</blocked-packet>
+    <blocked-packet bead="media-b8s.3.1">no-legacy-whisper-qa waits for full CopperASR coverage closure.</blocked-packet>
+    <blocked-packet bead="media-b8s.3.2">contracts-security-ops-submodule-qa waits for full CopperASR coverage closure.</blocked-packet>
+    <blocked-packet bead="media-b8s.3.3">runtime-soak-full-compose-qa waits for full CopperASR coverage closure and runtime blocker resolution.</blocked-packet>
+    <blocked-packet bead="media-b8s.3.4">final-readiness-packet waits for QA audit closure.</blocked-packet>
     <blocked-closure-gate bead="media-b8s.2">coverage epic waits for media-b8s.2.7, media-b8s.2.9, and final coverage inventory closure.</blocked-closure-gate>
     <blocked-closure-gate bead="media-b8s.3">Pre-MR QA waits for full coverage closure.</blocked-closure-gate>
     <blocked-closure-gate bead="media-b8s">root migration waits for full coverage and Pre-MR QA closure.</blocked-closure-gate>

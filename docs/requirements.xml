@@ -256,6 +256,10 @@
     <bead id="media-b8s.2.10" status="blocked">CopperASR runtime telemetry is now visible, but remaining max-CPU pressure is localized to the CopperASR Silero VAD/torch stage and is blocked in this consumer repo until CopperASR fixes it or the benchmark contract explicitly accepts sustained/avg/p95 CPU instead of max burst.</bead>
     <bead id="media-b8s.2.11" status="blocked">CopperASR corrupt-audio invalid-audio classification remains blocked in this consumer repo until CopperASR returns stable non-retryable invalid-audio for corrupt/unsupported audio or an explicit platform preflight exception is approved.</bead>
     <bead id="media-b8s.3" status="blocked">Pre-MR QA is blocked until full CopperASR coverage closes; QA must not begin while runtime blockers and the final coverage inventory remain unresolved.</bead>
+    <bead id="media-b8s.3.1" status="blocked">No-legacy Whisper QA audit is blocked until full CopperASR coverage and the remaining runtime blockers close.</bead>
+    <bead id="media-b8s.3.2" status="blocked">CopperASR contracts, security, ops, and submodule maintainability QA is blocked until full CopperASR coverage closes or the remaining runtime blockers are explicitly accepted.</bead>
+    <bead id="media-b8s.3.3" status="blocked">Runtime soak and full compose E2E QA is blocked until the long-voice benchmark and corrupt-audio classification blockers are resolved or accepted.</bead>
+    <bead id="media-b8s.3.4" status="blocked">Final readiness packet is blocked until full coverage and QA audits are complete.</bead>
   </BeadsTrace>
 
   <NonGoals>

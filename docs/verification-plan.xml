@@ -220,6 +220,10 @@
     <bead id="media-b8s.2.10">Blocked in the consumer repo until CopperASR fixes the Silero VAD/torch max-CPU burst under local caps, or the benchmark contract explicitly accepts sustained/avg/p95 CPU instead of max burst; then rerun media-b8s.2.7.</bead>
     <bead id="media-b8s.2.11">Blocked in the consumer repo until CopperASR returns stable non-retryable invalid-audio for corrupt/unsupported audio, or an explicit platform preflight equivalent is approved; then rerun media-b8s.2.9.</bead>
     <bead id="media-b8s.3">Blocked until media-b8s.2 closes; then run Pre-MR QA audits and final readiness packet with exact commands, runtime proof, residual risks, and blocker state.</bead>
+    <bead id="media-b8s.3.1">Blocked until media-b8s.2 closes; then run the no-legacy Whisper QA audit against code, dependency, env, compose, docs, logs, and runtime wrappers.</bead>
+    <bead id="media-b8s.3.2">Blocked until media-b8s.2 closes; then audit CopperASR contracts, security, ops, submodule pin/update flow, model provenance, health, observability, cancellation, and failure isolation.</bead>
+    <bead id="media-b8s.3.3">Blocked until media-b8s.2 closes; then run the runtime soak and full compose E2E gate with repeated/long voice scenarios, log scans, resource usage, and final state proof.</bead>
+    <bead id="media-b8s.3.4">Blocked until media-b8s.3 QA audits close; then prepare the final readiness packet with exact commits, commands, runtime proof, residual risks, and blocker status.</bead>
     <bead id="media-11o">Blocked until media-b8s.2.7 closes or the remaining CPU threshold decision is explicitly accepted; then close the original compose-runtime alignment bug with CopperASR runtime and performance proof.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>

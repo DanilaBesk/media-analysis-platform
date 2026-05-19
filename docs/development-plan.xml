@@ -263,6 +263,10 @@
     <blocked bead="media-b8s.2.11" blocker="vendor/copper-asr">Corrupt or unsupported audio still needs a stable CopperASR invalid-audio response, or an explicitly approved consumer preflight, before media-b8s.2.9 can close.</blocked>
     <blocked bead="media-b8s.2" blocker="media-b8s.2.7,media-b8s.2.9">Coverage cannot reach 100% until the long-voice benchmark and corrupt-audio classification blockers are resolved and media-b8s.2.6 produces the final coverage inventory.</blocked>
     <blocked bead="media-b8s.3" blocker="media-b8s.2">Pre-MR QA cannot start while full coverage is blocked by unresolved runtime blockers.</blocked>
+    <blocked bead="media-b8s.3.1" blocker="media-b8s.2">No-legacy Whisper QA waits for full CopperASR coverage closure.</blocked>
+    <blocked bead="media-b8s.3.2" blocker="media-b8s.2">CopperASR contracts, security, ops, and submodule QA waits for full CopperASR coverage closure.</blocked>
+    <blocked bead="media-b8s.3.3" blocker="media-b8s.2">Runtime soak/full compose QA waits for the full E2E coverage epic and remaining runtime blockers.</blocked>
+    <blocked bead="media-b8s.3.4" blocker="media-b8s.3.1,media-b8s.3.2,media-b8s.3.3">Final readiness packet waits for QA audit closure.</blocked>
     <blocked bead="media-b8s" blocker="media-b8s.2,media-b8s.3">Root migration closure remains blocked until full E2E coverage and Pre-MR QA are complete.</blocked>
   </CurrentClosureState>
 
