@@ -630,6 +630,77 @@ def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
     assert api_module._metadata_source_label(no_filename_item) is None
 
 
+def test_media_source_snapshot_payload_and_legacy_aliases_cover_compatibility_paths() -> None:
+    source_snapshot = api_module.MediaSourceSnapshot.from_payload(
+        {
+            "source_id": OBJECT_ID,
+            "origin_type": "object",
+            "external_uri": "https://example.test/source",
+            "object_key": "media/run-1/source.wav",
+            "text_ref": "inline-ref",
+            "checksum": "sha256:demo",
+            "mime_type": "audio/wav",
+            "expires_at": "2026-05-10T13:00:00Z",
+        }
+    )
+    item = api_module.SelectionItemSnapshot(
+        selection_snapshot_item_id="selection-snapshot-item-7",
+        position=7,
+        media_asset_id=ASSET_ID,
+        kind="audio",
+        media_kind="audio",
+        role="primary",
+        origin_snapshot={"origin_type": "telegram_file", "object_ref": "media/run-1/source.wav"},
+        storage_snapshot={"stored_object_id": OBJECT_ID, "object_key": "media/run-1/source.wav"},
+        source_snapshot=source_snapshot,
+        display_name="Source.wav",
+        status_at_selection="available",
+        metadata_snapshot={},
+        labels=api_module.SelectionItemLabels(display_label="Source.wav"),
+    )
+    selection = api_module.SealedSelectionSnapshotInput(
+        selection_snapshot_id=SNAPSHOT_ID,
+        items=(item,),
+        option_snapshot={},
+        sealed_at="2026-05-10T12:00:00Z",
+    )
+    claim = api_module.ClaimedAnalysisRunStep(
+        analysis_run_step_id=STEP_ID,
+        analysis_run_id=RUN_ID,
+        run_type="transcription",
+        selection_snapshot=selection,
+        analysis_run_step_inputs=(),
+        params={},
+        claimed_at="2026-05-10T12:01:00Z",
+    )
+    descriptor = SelectionItemMaterialization.from_selection_item(item)
+
+    assert source_snapshot.size_bytes is None
+    assert item.selection_item_id == "selection-snapshot-item-7"
+    assert item.media_item_id == ASSET_ID
+    assert descriptor.selection_item_id == "selection-snapshot-item-7"
+    assert descriptor.media_item_id == ASSET_ID
+    assert descriptor.source_id == OBJECT_ID
+    assert selection.selection_id == SNAPSHOT_ID
+    assert claim.execution_id == STEP_ID
+    assert claim.selection is selection
+
+    target_item_without_sizes = _selection_item()
+    target_item_without_sizes["origin_snapshot"].pop("size_bytes")
+    target_item_without_sizes["storage_snapshot"].pop("size_bytes")
+    parsed = ClaimedAnalysisRunStep.from_payload(
+        _claim_response(
+            selection_snapshot={
+                "selection_snapshot_id": SNAPSHOT_ID,
+                "items": [target_item_without_sizes],
+                "option_snapshot": {},
+                "sealed_at": "2026-05-10T12:00:00Z",
+            }
+        )
+    )
+    assert parsed.selection_snapshot.items[0].source_snapshot.size_bytes is None
+
+
 def test_selection_item_materialization_marks_missing_object_key_as_unsupported() -> None:
     source_snapshot = api_module.MediaSourceSnapshot(
         source_id=OBJECT_ID,
@@ -661,10 +732,10 @@ def test_selection_item_materialization_marks_missing_object_key_as_unsupported(
 
 def test_ordered_input_request_access_and_helper_branches_cover_edge_paths() -> None:
     ordered_input = api_module.OrderedWorkerInput.from_payload(
-            {
-                "position": 1,
-                "source_id": OBJECT_ID,
-                "source_kind": "object",
+        {
+            "position": 1,
+            "source_id": OBJECT_ID,
+            "source_kind": "object",
             "source_label": " interview_a ",
             "display_name": "Source.wav",
             "original_filename": "source.wav",
@@ -708,3 +779,38 @@ def test_selection_item_labels_and_materialization_helpers_trim_source_labels() 
         object_key="media/run-1/source.wav",
         deterministic_filename=str(Path("item-0009-source.wav")),
     ).is_object_backed is True
+
+
+def test_claim_analysis_run_compatibility_wrapper_maps_task_types() -> None:
+    config = InternalApiConfig(base_url="http://internal.local")
+    transport = StubTransport(
+        responses={
+            (
+                "POST",
+                f"http://internal.local/internal/v1/analysis-runs/{RUN_ID}/steps/claim",
+            ): _claim_response()
+        }
+    )
+    client = AnalysisRunControlClient(config, transport=transport)
+
+    transcription = client.claim_analysis_run(
+        RUN_ID,
+        worker_kind="transcription",
+        task_type="selection.transcription",
+    )
+    report = client.claim_analysis_run(
+        RUN_ID,
+        worker_kind="agent_runner",
+        task_type="report.analysis",
+    )
+
+    assert transcription.analysis_run_step_id == STEP_ID
+    assert report.analysis_run_step_id == STEP_ID
+    assert transport.calls[0]["payload"] == {
+        "worker_kind": "transcription",
+        "step_kind": "selection.transcription",
+    }
+    assert transport.calls[1]["payload"] == {
+        "worker_kind": "agent_runner",
+        "step_kind": "report.analysis",
+    }
