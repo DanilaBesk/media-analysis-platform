@@ -187,7 +187,7 @@
     <compose-service name="copper-asr" dockerfile="infra/images/copper-asr/Dockerfile" env-file="infra/env/copper-asr.env.example" cache-volume="copper-asr-cache" tmp-volume="copper-asr-tmp" healthcheck="/health" />
     <dependency-policy>Root Python dependencies stay free of removed legacy ASR packages; CopperASR runtime dependencies are isolated in the dedicated image and submodule runtime.</dependency-policy>
     <cleanup-policy>Legacy ASR imports, model-conversion helpers, provider-specific env, old model-cache volumes, fallback tests, and dual-backend switches are removed and must not remain active fallback behavior.</cleanup-policy>
-    <guardrail path="workers/common/tests/test_no_legacy_asr_runtime.py" script="infra/scripts/no-legacy-target-gate.sh">Active runtime, compose, env, dependency, and doc surfaces must continue to reject removed ASR runtime reintroduction outside historical research or migration plans.</guardrail>
+    <guardrail path="workers/common/tests/test_no_legacy_asr_runtime.py" script="infra/scripts/no-legacy-asr-gate.sh">Active runtime, compose, env, dependency manifest, and doc surfaces must continue to reject removed ASR runtime reintroduction outside historical research or migration plans.</guardrail>
     <verification-ref>media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.5, media-b8s.3.1</verification-ref>
   </AsrRuntime>
 

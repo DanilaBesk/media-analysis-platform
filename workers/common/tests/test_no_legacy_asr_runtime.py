@@ -12,8 +12,16 @@ ACTIVE_PATHS = [
     "pyproject.toml",
     "uv.lock",
     "apps/api",
+    "apps/api/go.mod",
+    "apps/api/go.sum",
+    "apps/mcp-server/package.json",
+    "apps/mcp-server/pnpm-lock.yaml",
     "apps/mcp-server/src",
+    "apps/telegram-bot/pyproject.toml",
+    "apps/telegram-bot/uv.lock",
     "apps/telegram-bot/src",
+    "apps/web/package.json",
+    "apps/web/pnpm-lock.yaml",
     "apps/web/src",
     "infra/docker-compose.yml",
     "infra/env",
@@ -57,6 +65,24 @@ def test_no_legacy_asr_runtime_terms_in_active_code_and_docs() -> None:
                 violations.append(f"{path.relative_to(ROOT)} contains {term}")
 
     assert violations == []
+
+
+def test_no_legacy_asr_gate_is_single_ci_command_wired_into_inventory() -> None:
+    gate = ROOT / "infra/scripts/no-legacy-asr-gate.sh"
+    coverage_inventory = ROOT / "infra/scripts/coverage-inventory.sh"
+    target_gate = ROOT / "infra/scripts/no-legacy-target-gate.sh"
+
+    assert gate.is_file()
+    assert gate.stat().st_mode & 0o111
+
+    gate_text = gate.read_text(encoding="utf-8")
+    assert "workers/common/tests/test_no_legacy_asr_runtime.py" in gate_text
+
+    inventory_text = coverage_inventory.read_text(encoding="utf-8")
+    assert "bash infra/scripts/no-legacy-asr-gate.sh" in inventory_text
+
+    target_gate_text = target_gate.read_text(encoding="utf-8")
+    assert "bash infra/scripts/no-legacy-asr-gate.sh" in target_gate_text
 
 
 def _iter_active_files() -> list[Path]:

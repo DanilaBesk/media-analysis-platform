@@ -251,6 +251,7 @@
     <completed bead="media-b8s.1.9">Legacy ASR runtime code, root dependencies, env switches, old model cache surfaces, and active tests are removed or confined to historical research/planning context.</completed>
     <completed bead="media-b8s.1.10">GRACE artifacts and operational packets now describe the final CopperASR contract and verification gates.</completed>
     <completed bead="media-b8s.2.1">Deterministic CopperASR E2E fixture files, manifest cases, harness validation, and provenance docs are prepared for the coverage wave.</completed>
+    <completed bead="media-b8s.2.5">No-legacy ASR regression coverage is exposed as a single CI command and wired into coverage inventory plus target no-legacy verification.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>

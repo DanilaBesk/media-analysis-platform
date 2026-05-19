@@ -170,7 +170,7 @@
         <manifest-contract PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Stores sanitized CopperASR provider metadata only in run_manifest/service artifacts while content artifacts stay provider-agnostic." />
         <dependency-cleanup PATH="pyproject.toml" LOCKFILE="uv.lock" PURPOSE="Root worker dependencies no longer carry removed legacy ASR packages; CopperASR dependencies live behind the runtime image/submodule boundary." />
         <cleanup-policy PURPOSE="Legacy ASR imports, model-conversion helpers, provider-specific env, old model-cache volumes, fallback tests, and dual-backend switches must not remain active fallback behavior after migration." />
-        <guard-noLegacyAsr PATH="workers/common/tests/test_no_legacy_asr_runtime.py" SCRIPT="infra/scripts/no-legacy-target-gate.sh" PURPOSE="Regression gate for active runtime, compose, env, dependency, and doc surfaces." />
+        <guard-noLegacyAsr PATH="workers/common/tests/test_no_legacy_asr_runtime.py" SCRIPT="infra/scripts/no-legacy-asr-gate.sh" PURPOSE="Regression gate for active runtime, compose, env, dependency manifest, and doc surfaces." />
       </annotations>
     </M-COPPER-ASR>
 
@@ -246,7 +246,8 @@
         <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />
         <script-runtimeFinalE2E PATH="infra/scripts/runtime-final-e2e.py" PURPOSE="Runs target-only channel_account, media_asset, selection_snapshot, analysis_run, artifact download, diagnostics, cross-channel denial, and soft-delete history proof against the compose API." />
         <script-composeSmoke PATH="infra/scripts/compose-smoke.sh" PURPOSE="Builds and force-recreates the local compose stack, enforces runtime proof vocabulary guards, and runs the runtime-final target proof." />
-        <script-coverageInventory PATH="infra/scripts/coverage-inventory.sh" PURPOSE="Reports native coverage metrics per supported surface and runs pass/fail-only contract fixture, no-legacy, compose topology, runtime-proof wiring, and MCP typecheck gates." />
+        <script-coverageInventory PATH="infra/scripts/coverage-inventory.sh" PURPOSE="Reports native coverage metrics per supported surface and runs pass/fail-only contract fixture, ASR no-legacy, target no-legacy, compose topology, runtime-proof wiring, and MCP typecheck gates." />
+        <script-noLegacyAsrGate PATH="infra/scripts/no-legacy-asr-gate.sh" PURPOSE="Rejects removed ASR runtime references from active code, env, compose, dependency manifests, and runtime docs." />
         <script-noLegacyTargetGate PATH="infra/scripts/no-legacy-target-gate.sh" PURPOSE="Requires target runtime proof snippets and rejects deprecated active vocabulary plus legacy target reset schema recreation from target code paths." />
         <test-fixtureValidation PATH="packages/contracts/tests/test_target_fixtures.py" PURPOSE="Validates fixture manifest vocabulary, channel identities, object-store files, sizes, and hashes." />
         <test-storageApiCoverage PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers target API success, validation errors, empty arrays, pagination clamping, and conflict mapping." />

@@ -50,6 +50,7 @@
     <completed-packet bead="media-b8s.1.9">legacy-asr-runtime-removal</completed-packet>
     <completed-packet bead="media-b8s.1.10">final-copper-asr-grace-refresh</completed-packet>
     <completed-packet bead="media-b8s.2.1">copper-asr-e2e-fixtures-harness</completed-packet>
+    <completed-packet bead="media-b8s.2.5">no-legacy-asr-regression-gates</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -137,6 +138,32 @@ Later E2E tasks must consume these cases instead of inventing ad hoc audio sampl
       <check>python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --copy-object-store /tmp/copper-asr-e2e-object-store --json</check>
       <check>bash infra/scripts/target-reset-smoke.sh</check>
       <check>bash infra/scripts/compose-smoke.sh --check-config</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-b8s.2.5-no-legacy-asr-regression-gates" module="M-COVERAGE,M-INFRA,M-COPPER-ASR" phase="CopperAsrCoverage" verification-ref="EV-ASR-RUNTIME,EV-COVERAGE-MATRIX,EV-GRACE">
+    <purpose>Expose removed-ASR regression coverage as a dedicated CI command and wire it into the coverage inventory so active runtime, env, compose, dependency manifest, and runtime-doc surfaces cannot silently reintroduce the old transcription backend.</purpose>
+    <depends-on>media-b8s.2.1</depends-on>
+    <write-scope>
+      <file-1>infra/scripts/no-legacy-asr-gate.sh</file-1>
+      <file-2>infra/scripts/coverage-inventory.sh</file-2>
+      <file-3>infra/scripts/no-legacy-target-gate.sh</file-3>
+      <file-4>workers/common/tests/test_no_legacy_asr_runtime.py</file-4>
+      <file-5>docs/architecture/target-coverage-matrix.md</file-5>
+      <file-6>docs/requirements.xml, docs/technology.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml, docs/operational-packets.xml</file-6>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The single ASR guard command is `bash infra/scripts/no-legacy-asr-gate.sh`.
+It runs the active-surface regression test for removed ASR runtime terms across code, env, compose, dependency manifests, and runtime docs.
+The target no-legacy gate may compose this ASR guard, but the ASR guard must remain independently runnable by local developers and CI.
+    ]]></contract-excerpt>
+    <verification>
+      <check>uv run pytest workers/common/tests/test_no_legacy_asr_runtime.py -q</check>
+      <check>bash infra/scripts/no-legacy-asr-gate.sh</check>
+      <check>bash infra/scripts/no-legacy-target-gate.sh</check>
+      <check>bash infra/scripts/coverage-inventory.sh</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
     </verification>

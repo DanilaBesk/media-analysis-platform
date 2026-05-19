@@ -57,6 +57,10 @@ echo "[CoverageInventory][pass-fail] Contract surfaces and deterministic fixture
 uv run pytest packages/contracts/tests/test_contract_surfaces.py packages/contracts/tests/test_target_fixtures.py -q
 
 echo
+echo "[CoverageInventory][pass-fail] ASR no-legacy gate"
+bash infra/scripts/no-legacy-asr-gate.sh
+
+echo
 echo "[CoverageInventory][pass-fail] Target no-legacy gate"
 bash infra/scripts/no-legacy-target-gate.sh
 
