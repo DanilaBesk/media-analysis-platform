@@ -11,6 +11,7 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 - Runtime model: resolved by the `copper-asr` service env/cache at execution time. Model weights are not embedded in the fixture files.
 - Fixture manifest: `infra/fixtures/target/manifest.json`.
 - Fixture harness: `python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json`.
+- API/Web/MCP E2E harness: `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json`.
 - Failure E2E harness: `python3 infra/scripts/copper-asr-failure-e2e.py --json`.
 
 ## Cases
@@ -26,10 +27,13 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 ```bash
 uv run pytest packages/contracts/tests/test_target_fixtures.py -q
 python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json
+python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json
 python3 infra/scripts/copper-asr-failure-e2e.py --json
 bash infra/scripts/target-reset-smoke.sh
 bash infra/scripts/compose-smoke.sh --check-config
 ```
+
+The API/Web/MCP E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It creates throwaway Web and MCP channel accounts, uploads the `short_voice` fixture through the public API, starts a transcription run, asserts transcript plus policy artifacts, downloads transcript and manifest bytes, checks diagnostics filtering, proves cross-channel denial, and verifies the run/artifact history survives source media deletion.
 
 The failure E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It creates throwaway channel accounts and analysis runs, then asserts corrupt-audio failure, retry failure, cancellation, policy artifact publication, absence of transcript artifacts on failed runs, and the CopperASR resource-limit env knobs.
 

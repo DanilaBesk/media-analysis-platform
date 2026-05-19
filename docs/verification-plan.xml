@@ -140,7 +140,7 @@
     </Gate>
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
-      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state.</required-evidence>
+      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP, while `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
     </Gate>
     <Gate id="EV-COVERAGE-INVENTORY">
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
@@ -152,7 +152,7 @@
     </Gate>
     <Gate id="EV-RUNTIME">
       <description>Runtime smoke proves end-to-end behavior.</description>
-      <required-evidence>Compose proof captures target-only channel_account ingestion, inbox listing, selection_snapshot sealing, analysis_run execution, worker artifact publication, internal artifact download access, diagnostics query shape, channel-account denial, and history preservation after media_asset soft delete.</required-evidence>
+      <required-evidence>Compose proof captures target-only channel_account ingestion, inbox listing, selection_snapshot sealing, analysis_run execution, worker artifact publication, internal artifact download access, diagnostics query shape, channel-account denial, and history preservation after media_asset soft delete. CopperASR API/Web/MCP E2E must additionally upload the short voice fixture, run transcription through the real worker/CopperASR service, assert transcript plus run policy artifacts, download transcript bytes, assert run_manifest provider=copperasr, and preserve artifacts after source media deletion.</required-evidence>
     </Gate>
   </EvidenceGates>
 
@@ -209,6 +209,7 @@
     <bead id="media-b8s.1.9">Run worker-common, transcription, no-legacy ASR, compose config, GRACE XML, dependency/env scans, and git diff checks before claiming legacy ASR removal complete.</bead>
     <bead id="media-b8s.1.10">Run GRACE XML validation, no-legacy target gate, active runtime scan, and git diff checks before moving from implementation to E2E coverage tasks.</bead>
     <bead id="media-b8s.2.1">Run CopperASR fixture manifest tests, harness JSON validation, object-store copy check, target reset smoke, compose config, GRACE XML, and git diff checks before starting Telegram/API/Web/MCP E2E flows.</bead>
+    <bead id="media-b8s.2.3">Run RED/GREEN fixture-harness wiring test, `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json`, Web tests, MCP tests/typecheck, contract fixture tests, GRACE XML validation, and git diff checks before closing API/worker/Web/MCP CopperASR coverage.</bead>
     <bead id="media-b8s.2.4">Run RED/GREEN worker failure-diagnostic regression, full transcription worker tests, CopperASR fixture contract tests, fixture harness JSON validation, live `python3 infra/scripts/copper-asr-failure-e2e.py --json`, GRACE XML validation, and git diff checks before closing failure/retry/cancel/backpressure coverage.</bead>
     <bead id="media-b8s.2.5">Run dedicated no-legacy ASR gate, target no-legacy gate, coverage-inventory wiring checks, GRACE XML, and git diff checks before final E2E coverage inventory closure.</bead>
     <bead id="media-b8s.2.9">Normalize corrupt or unsupported CopperASR audio classification so the live failure E2E no longer needs asr_unexpected_runtime_error as an accepted corrupt-audio code.</bead>

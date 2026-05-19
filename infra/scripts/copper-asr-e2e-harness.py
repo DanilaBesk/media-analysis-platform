@@ -129,6 +129,7 @@ def build_plan(*, copy_object_store_to: Path | None = None) -> dict[str, Any]:
             "reset": "bash infra/scripts/target-reset-smoke.sh",
             "compose_config": "bash infra/scripts/compose-smoke.sh --check-config",
             "failure_e2e": "python3 infra/scripts/copper-asr-failure-e2e.py --json",
+            "api_web_mcp_e2e": "python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json",
         },
     }
 

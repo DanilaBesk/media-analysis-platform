@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "infra" / "fixtures" / "target" / "manifest.json"
 COPPER_ASR_HARNESS = ROOT / "infra" / "scripts" / "copper-asr-e2e-harness.py"
 COPPER_ASR_FAILURE_E2E = ROOT / "infra" / "scripts" / "copper-asr-failure-e2e.py"
+COPPER_ASR_API_WEB_MCP_E2E = ROOT / "infra" / "scripts" / "copper-asr-api-web-mcp-e2e.py"
 UUID_RE = re.compile(r"^00000000-0000-4000-8000-[0-9]{12}$")
 
 
@@ -115,5 +116,8 @@ def test_copper_asr_e2e_harness_reports_deterministic_fixture_plan() -> None:
     assert payload["commands"]["reset"] == "bash infra/scripts/target-reset-smoke.sh"
     assert payload["commands"]["compose_config"] == "bash infra/scripts/compose-smoke.sh --check-config"
     assert payload["commands"]["failure_e2e"] == "python3 infra/scripts/copper-asr-failure-e2e.py --json"
+    assert payload["commands"]["api_web_mcp_e2e"] == "python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json"
     assert COPPER_ASR_FAILURE_E2E.is_file()
     assert COPPER_ASR_FAILURE_E2E.stat().st_mode & 0o111
+    assert COPPER_ASR_API_WEB_MCP_E2E.is_file()
+    assert COPPER_ASR_API_WEB_MCP_E2E.stat().st_mode & 0o111
