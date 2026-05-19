@@ -16,7 +16,7 @@
   <TargetComponents>
     <component id="apps-api" path="apps/api" role="Go HTTP API, WebSocket server, storage orchestrator, and channel-account-scoped product authority" />
     <component id="workers-transcription" path="workers/transcription" role="Python transcription execution behind analysis_run_steps" />
-    <component id="vendor-copper-asr" path="vendor/copper-asr" role="Pinned CopperASR source submodule for the dedicated ASR runtime service" />
+    <component id="external-copper-asr" path="external/copper-asr" current-path="vendor/copper-asr" role="External pinned CopperASR source submodule for the dedicated ASR runtime service" />
     <component id="workers-agent-runner" path="workers/agent-runner" role="Python report and research execution behind analysis_run_steps" />
     <component id="apps-web" path="apps/web" role="React management UI for inbox, collections, selections, runs, artifacts, and diagnostics" />
     <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Telegram capture, rendering, and recovery adapter over API-owned state" />
@@ -179,7 +179,7 @@
   </LifecycleAndRetention>
 
   <AsrRuntime>
-    <source-submodule path="vendor/copper-asr" remote="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" branch="main" pinned-commit="5184cd4452ac45f0d93fb3e00b6bae005cb597e5" />
+    <source-submodule path="external/copper-asr" current-path="vendor/copper-asr" remote="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" branch="main" pinned-commit="5184cd4452ac45f0d93fb3e00b6bae005cb597e5" />
     <contract>media-analysis-platform owns queues, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, and channel surfaces. CopperASR owns ASR model lifecycle, inference, sanitized ASR errors, /health, and /transcribe.</contract>
     <worker-boundary path="workers/common/src/transcriber_workers_common/copper_asr.py" launcher="workers/transcription/src/transcriber_worker_transcription_main.py" env-prefix="COPPER_ASR_" />
     <artifact-contract>TranscriptResult carries provider_metadata so run_manifest can identify CopperASR provider, model, duration, and sanitized runtime metadata while visible transcript artifacts remain plain text, markdown, and DOCX.</artifact-contract>

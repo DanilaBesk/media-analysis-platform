@@ -316,8 +316,9 @@ would make removal of old Whisper deps harder to prove.
 
 Recommended migration shape:
 
-1. Add CopperASR as a pinned git submodule, likely under
-   `vendor/copper-asr` or `third_party/copper-asr`.
+1. Add CopperASR as a pinned git submodule. The reviewed target ownership
+   boundary is `external/copper-asr`; the earlier `vendor/copper-asr`
+   transition path is tracked for cleanup by `media-b8s.4`.
 2. Build a dedicated compose service from the CopperASR Dockerfile or an
    application-local wrapper image that uses the submodule as build context.
 3. Add internal service URL/config for the transcription worker, for example
@@ -437,4 +438,3 @@ sed -n '1,300p' copper_asr/utils/vad_utils.py
 sed -n '1,260p' copper_asr/diarization/factory.py
 rg -n "WHISPER|Whisper|faster-whisper|DefaultTranscriber|transcription" docs apps workers infra pyproject.toml README.md
 ```
-

@@ -30,7 +30,8 @@ Use CopperASR through a dedicated internal HTTP runtime service, not as an embed
 
 Decision:
 
-- Add CopperASR as a pinned git submodule at `vendor/copper-asr`.
+- Treat CopperASR source as an external pinned git submodule, not as a first-party `apps/` service and not as editable vendored package code.
+- Target source path: `external/copper-asr`. The already-implemented transition path is `vendor/copper-asr`; `media-b8s.4` must move the pin to `external/copper-asr` before final QA.
 - Add a compose service named `copper-asr`.
 - Build the service from a repo-local wrapper Dockerfile under `infra/images/copper-asr/Dockerfile`.
 - The transcription worker calls `http://copper-asr:8000` through a narrow `CopperAsrHttpTranscriber`.
@@ -60,7 +61,7 @@ Current runtime source pin after the CopperASR thread-cap and telemetry update:
 
 Implementation rule:
 
-- `media-b8s.1.4` must pin the submodule to an exact commit and record `git -C vendor/copper-asr rev-parse HEAD`.
+- `media-b8s.1.4` pinned the submodule to an exact commit; `media-b8s.4` must align the path with the external ownership boundary and record `git -C external/copper-asr rev-parse HEAD`.
 - Do not track a floating branch for runtime builds.
 - Do not copy generated CopperASR source into this repo.
 - Do not modify the submodule directly from this repo except for an explicit upstream CopperASR change followed by a submodule pointer bump.
@@ -235,7 +236,8 @@ The user-facing Telegram/Web copy must not collapse all of these into a misleadi
 Write scope:
 
 - `.gitmodules`
-- `vendor/copper-asr`
+- `vendor/copper-asr` as the original transition path
+- `external/copper-asr` as the target source path after `media-b8s.4`
 - `README.md` or local bootstrap docs if needed
 - `docs/technology.xml`
 - `docs/knowledge-graph.xml`
@@ -244,10 +246,36 @@ Write scope:
 Acceptance gates:
 
 - `git submodule status --recursive`
-- `git -C vendor/copper-asr rev-parse HEAD`
-- `git -C vendor/copper-asr status --short`
+- transition proof before `media-b8s.4`: `git -C vendor/copper-asr rev-parse HEAD` and `git -C vendor/copper-asr status --short`
+- target proof after `media-b8s.4`: `git -C external/copper-asr rev-parse HEAD` and `git -C external/copper-asr status --short`
 - fresh checkout instructions can run `git submodule update --init --recursive`
 - no Whisper dependency or fallback is added
+
+### media-b8s.4 - External source path alignment
+
+Write scope:
+
+- `.gitmodules`
+- `external/copper-asr`
+- `vendor/copper-asr`
+- `infra/images/copper-asr/Dockerfile`
+- GRACE XML docs and this source plan
+
+Acceptance gates:
+
+- `git submodule status --recursive`
+- `git -C external/copper-asr rev-parse HEAD`
+- `git -C external/copper-asr status --short`
+- `xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml`
+- `bash infra/scripts/no-legacy-asr-gate.sh`
+- compose config check for the `copper-asr` service
+- `git diff --check`
+
+Non-goals:
+
+- Do not edit CopperASR source from this consumer repo.
+- Do not introduce `apps/copper-asr`; CopperASR is a runtime service, but its source remains external.
+- Do not implement consumer-side invalid-audio preflight.
 
 ### media-b8s.1.5 - Worker runtime boundary
 
@@ -368,6 +396,7 @@ Acceptance gates:
 | Requirement | Implementation Bead | Cleanup Bead | Test/QA Bead | Proof |
 | --- | --- | --- | --- | --- |
 | CopperASR is a pinned submodule | `media-b8s.1.4` | `media-b8s.1.9` | `media-b8s.3.2` | submodule status, commit pin, fresh checkout |
+| CopperASR source ownership is external, not first-party app code | `media-b8s.4` | none | `media-b8s.3.2` | `external/copper-asr` submodule path, no `apps/copper-asr`, no submodule source edits |
 | Dedicated CopperASR HTTP runtime | `media-b8s.1.7` | `media-b8s.1.9` | `media-b8s.3.3` | compose config, healthcheck, runtime logs |
 | Worker calls CopperASR only | `media-b8s.1.5` | `media-b8s.1.9` | `media-b8s.2.2`, `media-b8s.2.3` | worker tests, E2E artifacts, backend metadata |
 | API-owned media/run/artifact contract stays stable | `media-b8s.1.6` | none | `media-b8s.2.3` | API/worker tests, artifact lineage |

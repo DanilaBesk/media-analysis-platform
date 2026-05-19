@@ -61,7 +61,8 @@
     <completed-packet bead="media-b8s.2.13">invalid-audio-preflight-decision-not-approved-for-this-cycle</completed-packet>
     <blocked-packet bead="media-b8s.2.6">coverage inventory waits for corrupt-audio normalization closure.</blocked-packet>
     <blocked-packet bead="media-b8s.2.9">corrupt-audio-invalid-audio-normalization waits for media-b8s.2.11 because the refreshed CopperASR runtime still returns unexpected_runtime_error.</blocked-packet>
-    <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR invalid-audio fix. Consumer preflight is not approved for this migration cycle.</blocked-packet>
+    <open-packet bead="media-b8s.4">external-copper-asr-source-path-alignment: move the transition submodule path from vendor/copper-asr to external/copper-asr before final QA, without editing CopperASR source or introducing apps/copper-asr.</open-packet>
+    <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit the CopperASR external submodule source; update submodule after CopperASR invalid-audio fix. Consumer preflight is not approved for this migration cycle.</blocked-packet>
     <blocked-packet bead="media-b8s.3.1">no-legacy-whisper-qa waits for full CopperASR coverage closure.</blocked-packet>
     <blocked-packet bead="media-b8s.3.2">contracts-security-ops-submodule-qa waits for full CopperASR coverage closure.</blocked-packet>
     <blocked-packet bead="media-b8s.3.3">runtime-soak-full-compose-qa waits for full CopperASR coverage closure and runtime blocker resolution.</blocked-packet>
@@ -92,7 +93,8 @@ Run the focused checks assigned to the packet and prove stale public product voc
     <depends-on>docs/plans/2026-05-18-copper-asr-submodule-migration.md</depends-on>
     <write-scope>
       <file-1>.gitmodules</file-1>
-      <file-2>vendor/copper-asr</file-2>
+      <file-2>external/copper-asr</file-2>
+      <file-2-current>vendor/copper-asr</file-2-current>
       <file-3>workers/common/src/transcriber_workers_common/copper_asr.py</file-3>
       <file-4>workers/transcription/src/transcriber_worker_transcription.py</file-4>
       <file-5>workers/transcription/src/transcriber_worker_transcription_main.py</file-5>
@@ -288,7 +290,7 @@ Final closure of media-b8s.2.9 must run the strict verifier: python3 infra/scrip
 The benchmark harness consumes representative_long_voice and records backend/model, input duration, wall time, CPU/memory samples, concurrency settings, compose resource limits, warm/cold model state, result delivery latency, threshold status, and blocker linkage when thresholds fail.
 The current evidence proves provider=copperasr, model=Copperside/CoppersideASR, 960.006s input, 175.232s run wall time, 5.478x realtime speed, transcript document delivery, duplicate-result guard, inbox clearing, and CopperASR response processing telemetry.
 The local consumer profile is COPPER_ASR_LOCAL_CPUS=4.0 plus COPPER_ASR_ONNX_NUM_THREADS=2, COPPER_ASR_TORCH_NUM_THREADS=2, COPPER_ASR_TORCH_INTEROP_THREADS=1, COPPER_ASR_FFMPEG_THREADS=1. The CPU threshold now passes inside copper-asr: max_cpu_percent=408.78, avg_cpu_percent=312.435, while worker-transcription and api stay near idle.
-media-b8s.2.10 closed through a consumer compose CPU quota without editing vendor/copper-asr and without changing the max CPU benchmark semantics.
+media-b8s.2.10 closed through a consumer compose CPU quota without editing the external CopperASR source submodule and without changing the max CPU benchmark semantics.
     ]]></contract-excerpt>
     <verification>
       <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
