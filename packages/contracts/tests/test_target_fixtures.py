@@ -16,6 +16,7 @@ COPPER_ASR_API_WEB_MCP_E2E = ROOT / "infra" / "scripts" / "copper-asr-api-web-mc
 COPPER_ASR_TELEGRAM_E2E = ROOT / "infra" / "scripts" / "copper-asr-telegram-e2e.py"
 COPPER_ASR_BENCHMARK_E2E = ROOT / "infra" / "scripts" / "copper-asr-benchmark-e2e.py"
 COPPER_ASR_BENCHMARK_ARTIFACT = ROOT / "docs" / "benchmarks" / "copper-asr-long-voice-benchmark-latest.json"
+COMPOSE_FILE = ROOT / "infra" / "docker-compose.yml"
 UUID_RE = re.compile(r"^00000000-0000-4000-8000-[0-9]{12}$")
 
 
@@ -89,12 +90,34 @@ def test_copper_asr_e2e_fixture_manifest_covers_required_inputs_and_hashes() -> 
     assert cases["short_voice"]["media_kind"] == "voice"
     assert cases["representative_long_voice"]["benchmark_role"] == "representative_long_voice"
     assert cases["corrupt_audio"]["expected_diagnostic_code"] == "asr_invalid_audio"
-    assert cases["corrupt_audio"]["accepted_live_diagnostic_codes"] == [
-        "asr_invalid_audio",
-        "asr_unexpected_runtime_error",
-    ]
+    assert "accepted_live_diagnostic_codes" not in cases["corrupt_audio"]
     assert cases["cancellation_voice"]["cancellation_checkpoint"] == "before_or_during_asr"
     assert cases["artifact_download"]["assertions"] == ["artifact_download_non_empty", "backend_is_copperasr"]
+
+
+def test_telegram_bot_compose_loads_root_env_after_placeholder_defaults() -> None:
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+    match = re.search(r"(?ms)^  telegram-bot:\n(?P<body>.*?)(?=^  [a-z0-9][a-z0-9-]*:\n)", compose)
+    assert match is not None
+    service_body = match.group("body")
+
+    assert "TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-replace-me}" not in service_body
+    assert "- ./env/telegram-bot.env.example" in service_body
+    assert "path: ../.env" in service_body
+    assert "required: false" in service_body
+    assert service_body.index("- ./env/telegram-bot.env.example") < service_body.index("path: ../.env")
+    assert "api:" in service_body
+    assert "condition: service_healthy" in service_body
+
+
+def test_api_compose_exposes_healthcheck_for_dependent_services() -> None:
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+    match = re.search(r"(?ms)^  api:\n(?P<body>.*?)(?=^  [a-z0-9][a-z0-9-]*:\n)", compose)
+    assert match is not None
+    service_body = match.group("body")
+
+    assert "healthcheck:" in service_body
+    assert "channel-accounts?page_size=1" in service_body
 
 
 def test_copper_asr_e2e_harness_reports_deterministic_fixture_plan() -> None:

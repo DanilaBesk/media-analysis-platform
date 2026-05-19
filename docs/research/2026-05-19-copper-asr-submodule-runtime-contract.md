@@ -316,9 +316,8 @@ would make removal of old Whisper deps harder to prove.
 
 Recommended migration shape:
 
-1. Add CopperASR as a pinned git submodule. The reviewed target ownership
-   boundary is `external/copper-asr`; the earlier `vendor/copper-asr`
-   transition path is tracked for cleanup by `media-b8s.4`.
+1. Add CopperASR as a pinned git submodule. The reviewed ownership boundary is
+   `external/copper-asr`.
 2. Build a dedicated compose service from the CopperASR Dockerfile or an
    application-local wrapper image that uses the submodule as build context.
 3. Add internal service URL/config for the transcription worker, for example

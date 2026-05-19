@@ -24,7 +24,19 @@ from urllib.request import urlopen
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramConflictError,
+    TelegramEntityTooLarge,
+    TelegramForbiddenError,
+    TelegramMigrateToChat,
+    TelegramNetworkError,
+    TelegramNotFound,
+    TelegramRetryAfter,
+    TelegramServerError,
+    TelegramUnauthorizedError,
+)
 from aiogram.filters import Command
 from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -55,6 +67,7 @@ from telegram_adapter.presentation import render_material_summary_lines
 JsonObject = dict[str, Any]
 _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER_TELEGRAM_HANDLER_ERROR = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_HANDLER_ERROR]"
+_LOG_MARKER_TELEGRAM_SURFACE_FAILURE = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_SURFACE_FAILURE]"
 _LOG_MARKER_TELEGRAM_POLLING_STATE = "[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE]"
 _INLINE_TRANSCRIPT_LIMIT = 3800
 _AUTO_DELIVER_RUN_STATUSES = {"succeeded", "partially_succeeded"}
@@ -71,6 +84,17 @@ class _PageState:
 
 
 CALLBACK_NAMESPACE = "ib"
+
+
+@dataclass(frozen=True, slots=True)
+class _TelegramSurfaceErrorClassification:
+    classification: str
+    lifecycle_reason: str | None
+    fatal: bool = False
+
+
+class _TelegramSurfaceDeliveryFailure(RuntimeError):
+    pass
 
 
 class TelegramInboxApp:
@@ -368,8 +392,9 @@ class TelegramInboxApp:
                     focused_run_id=run_id,
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
+                task_surface = None
                 if run_id:
-                    self._persist_analysis_task_surface(
+                    task_surface = self._persist_analysis_task_surface(
                         owner=owner,
                         analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
                         state=self.page_states.get(key, _PageState()),
@@ -383,6 +408,7 @@ class TelegramInboxApp:
                         analysis_run_id=run_id,
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
+                        surface=task_surface,
                     )
                 await callback.answer(answer_text)
                 return
@@ -422,8 +448,9 @@ class TelegramInboxApp:
                     focused_run_id=run_id,
                 )
                 await self._edit_callback_status(callback, status, prefix=prefix)
+                task_surface = None
                 if run_id:
-                    self._persist_analysis_task_surface(
+                    task_surface = self._persist_analysis_task_surface(
                         owner=owner,
                         analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
                         state=self.page_states.get(key, _PageState()),
@@ -437,6 +464,7 @@ class TelegramInboxApp:
                         analysis_run_id=run_id,
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
+                        surface=task_surface,
                     )
                 await callback.answer(answer_text)
                 return
@@ -652,6 +680,8 @@ class TelegramInboxApp:
         expected_version: int,
         message: Message | None = None,
         chat_id: int | None = None,
+        failure_surface: JsonObject | None = None,
+        raise_on_surface_failure: bool = False,
     ) -> tuple[str, bool]:
         if message is None and chat_id is None:
             return ("Готовый транскрипт пока недоступен.", True)
@@ -692,12 +722,24 @@ class TelegramInboxApp:
         content = self._download_artifact_bytes(download_url)
         if _should_send_transcript_as_text(artifact, content):
             text = _decode_transcript_text(content)
-            if message is not None:
-                sent = await message.answer(text)
-                target_chat_id = message.chat.id
-            else:
-                sent = await self.bot.send_message(chat_id=chat_id, text=text)
-                target_chat_id = chat_id
+            try:
+                if message is not None:
+                    sent = await message.answer(text)
+                    target_chat_id = message.chat.id
+                else:
+                    sent = await self.bot.send_message(chat_id=chat_id, text=text)
+                    target_chat_id = chat_id
+            except TelegramAPIError as error:
+                classification = self._handle_telegram_surface_error(
+                    surface=failure_surface,
+                    error=error,
+                    operation="send",
+                    scope="result_delivery",
+                    chat_id=message.chat.id if message is not None else chat_id,
+                )
+                if raise_on_surface_failure and classification.lifecycle_reason is not None:
+                    raise _TelegramSurfaceDeliveryFailure(classification.classification) from error
+                return ("Готовый транскрипт пока недоступен.", True)
             self._persist_result_artifact_surface(
                 owner=owner,
                 artifact=artifact,
@@ -707,12 +749,24 @@ class TelegramInboxApp:
             )
             return ("Транскрипт отправлен в чат", False)
         document = BufferedInputFile(content, filename=_artifact_filename(artifact))
-        if message is not None:
-            sent = await message.answer_document(document)
-            target_chat_id = message.chat.id
-        else:
-            sent = await self.bot.send_document(chat_id=chat_id, document=document)
-            target_chat_id = chat_id
+        try:
+            if message is not None:
+                sent = await message.answer_document(document)
+                target_chat_id = message.chat.id
+            else:
+                sent = await self.bot.send_document(chat_id=chat_id, document=document)
+                target_chat_id = chat_id
+        except TelegramAPIError as error:
+            classification = self._handle_telegram_surface_error(
+                surface=failure_surface,
+                error=error,
+                operation="send_document",
+                scope="result_delivery",
+                chat_id=message.chat.id if message is not None else chat_id,
+            )
+            if raise_on_surface_failure and classification.lifecycle_reason is not None:
+                raise _TelegramSurfaceDeliveryFailure(classification.classification) from error
+            return ("Готовый транскрипт пока недоступен.", True)
         self._persist_result_artifact_surface(
             owner=owner,
             artifact=artifact,
@@ -784,6 +838,8 @@ class TelegramInboxApp:
         chat_id: int,
         message: Message | None = None,
         cursor: str | None = None,
+        surface: JsonObject | None = None,
+        raise_on_surface_failure: bool = False,
     ) -> InboxStatus:
         status = self.gateway.restore_status(owner=owner, cursor=cursor)
         _result_notice, show_alert = await self._deliver_run_result(
@@ -792,6 +848,8 @@ class TelegramInboxApp:
             expected_version=expected_version,
             message=message,
             chat_id=chat_id,
+            failure_surface=surface,
+            raise_on_surface_failure=raise_on_surface_failure,
         )
         if show_alert or status.collection is None:
             return status
@@ -810,6 +868,7 @@ class TelegramInboxApp:
         analysis_run_id: str,
         chat_id: int,
         message_id: int,
+        surface: JsonObject | None = None,
     ) -> None:
         existing = self.run_watch_tasks.pop(key, None)
         if existing is not None:
@@ -821,6 +880,7 @@ class TelegramInboxApp:
                 analysis_run_id=analysis_run_id,
                 chat_id=chat_id,
                 message_id=message_id,
+                surface=surface,
             )
         )
 
@@ -837,6 +897,7 @@ class TelegramInboxApp:
         analysis_run_id: str,
         chat_id: int,
         message_id: int,
+        surface: JsonObject | None = None,
         ) -> None:
         try:
             for _ in range(self.run_status_follow_attempts):
@@ -853,6 +914,8 @@ class TelegramInboxApp:
                         expected_version=int(latest.get("version") or 0),
                         chat_id=chat_id,
                         cursor=current_cursor,
+                        surface=surface,
+                        raise_on_surface_failure=True,
                     )
                 else:
                     status = self.gateway.restore_status(owner=owner, cursor=current_cursor)
@@ -872,7 +935,7 @@ class TelegramInboxApp:
                     status=status,
                     state=updated_state,
                 )
-                self._persist_analysis_task_surface(
+                surface = self._persist_analysis_task_surface(
                     owner=owner,
                     analysis_run=latest,
                     state=updated_state,
@@ -883,6 +946,8 @@ class TelegramInboxApp:
                     return
         except asyncio.CancelledError:
             raise
+        except _TelegramSurfaceDeliveryFailure as exc:
+            _LOGGER.warning("run status tracking stopped after surface delivery failure for %s: %s", analysis_run_id, exc)
         except Exception as exc:
             _LOGGER.warning("run status tracking failed for %s: %s", analysis_run_id, exc)
         finally:
@@ -966,7 +1031,15 @@ class TelegramInboxApp:
             )
             for surface in surfaces:
                 if surface.get("surface_type") == CURRENT_MATERIALS_PANEL:
-                    await self._recover_current_materials_surface(owner=owner, surface=surface)
+                    try:
+                        await self._recover_current_materials_surface(owner=owner, surface=surface)
+                    except TelegramAPIError as error:
+                        self._handle_telegram_surface_error(
+                            surface=surface,
+                            error=error,
+                            operation="recover",
+                            scope="current_materials_recovery",
+                        )
             for surface in surfaces:
                 if surface.get("surface_type") == ANALYSIS_TASK_SURFACE:
                     self._recover_analysis_task_surface(owner=owner, surface=surface)
@@ -1008,27 +1081,43 @@ class TelegramInboxApp:
                 message_id=message_id,
                 surface=surface,
             )
-        except TelegramBadRequest as error:
-            if "message is not modified" in str(error).lower():
-                return
-            self.gateway.supersede_channel_surface(
+        except TelegramAPIError as error:
+            classification = self._handle_telegram_surface_error(
                 surface=surface,
-                reason="message_not_editable",
-                actor_id="telegram_adapter",
-                metadata={"chat_id": chat_id, "message_id": message_id},
-            )
-            sent = await self.bot.send_message(
+                error=error,
+                operation="edit",
+                scope="current_materials_recovery",
                 chat_id=chat_id,
-                text=render_status_text(status, selection=recovered_state.selection, screen=recovered_state.screen),
-                reply_markup=build_status_keyboard(
-                    status,
-                    can_go_back=bool(recovered_state.previous_cursors),
-                    current_cursor=recovered_state.current_cursor,
-                    selection=recovered_state.selection,
-                    screen=recovered_state.screen,
-                    focused_run_id=recovered_state.focused_run_id,
-                ),
+                message_id=message_id,
             )
+            if classification.lifecycle_reason != "telegram_message_unavailable":
+                self.status_message_ids.pop(key, None)
+                return
+            try:
+                sent = await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=render_status_text(status, selection=recovered_state.selection, screen=recovered_state.screen),
+                    reply_markup=build_status_keyboard(
+                        status,
+                        can_go_back=bool(recovered_state.previous_cursors),
+                        current_cursor=recovered_state.current_cursor,
+                        selection=recovered_state.selection,
+                        screen=recovered_state.screen,
+                        focused_run_id=recovered_state.focused_run_id,
+                    ),
+                )
+            except TelegramAPIError as send_error:
+                self._handle_telegram_surface_error(
+                    surface=None,
+                    error=send_error,
+                    operation="send",
+                    scope="current_materials_recovery",
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    replacement_attempted=True,
+                )
+                self.status_message_ids.pop(key, None)
+                return
             self.status_message_ids[key] = sent.message_id
             self._persist_current_materials_surface(
                 owner=owner,
@@ -1068,6 +1157,7 @@ class TelegramInboxApp:
             analysis_run_id=run_id,
             chat_id=chat_id,
             message_id=message_id,
+            surface=surface,
         )
 
     def _persist_current_materials_surface(
@@ -1167,6 +1257,68 @@ class TelegramInboxApp:
                 surface.get("channel_surface_id"),
             )
             return None
+
+    def _handle_telegram_surface_error(
+        self,
+        *,
+        surface: JsonObject | None,
+        error: TelegramAPIError,
+        operation: str,
+        scope: str,
+        chat_id: int | None = None,
+        message_id: int | None = None,
+        replacement_attempted: bool = False,
+    ) -> _TelegramSurfaceErrorClassification:
+        classification = _classify_telegram_surface_error(error)
+        if classification.fatal:
+            raise error
+        if chat_id is None or message_id is None:
+            address = _surface_address(surface) if surface is not None else None
+            if address is not None:
+                chat_id = chat_id if chat_id is not None else address[0]
+                message_id = message_id if message_id is not None else address[1]
+
+        superseded = False
+        metadata: JsonObject = {
+            "scope": scope,
+            "operation": operation,
+            "classification": classification.classification,
+            "telegram_error_type": type(error).__name__,
+            "telegram_error": str(error),
+            "replacement_attempted": replacement_attempted,
+        }
+        if chat_id is not None:
+            metadata["chat_id"] = chat_id
+        if message_id is not None:
+            metadata["message_id"] = message_id
+
+        if surface is not None and classification.lifecycle_reason is not None:
+            superseded = self._try_supersede_channel_surface(
+                surface=surface,
+                reason=classification.lifecycle_reason,
+                actor_id="telegram_adapter",
+                metadata=metadata,
+            ) is not None
+
+        _LOGGER.warning(
+            "%s scope=%s operation=%s classification=%s surface_id=%s surface_type=%s "
+            "surface_key=%s chat_id=%s message_id=%s telegram_error_type=%s "
+            "lifecycle_reason=%s superseded=%s replacement_attempted=%s",
+            _LOG_MARKER_TELEGRAM_SURFACE_FAILURE,
+            scope,
+            operation,
+            classification.classification,
+            surface.get("channel_surface_id") if surface is not None else None,
+            surface.get("surface_type") if surface is not None else None,
+            surface.get("surface_key") if surface is not None else None,
+            chat_id,
+            message_id,
+            type(error).__name__,
+            classification.lifecycle_reason,
+            superseded,
+            replacement_attempted,
+        )
+        return classification
 
     def _persist_analysis_task_surface(
         self,
@@ -1868,6 +2020,30 @@ def _surface_address(surface: JsonObject) -> tuple[int, int] | None:
 def _surface_address_matches(surface: JsonObject, *, chat_id: int, message_id: int) -> bool:
     address = _surface_address(surface)
     return address == (chat_id, message_id)
+
+
+def _classify_telegram_surface_error(error: TelegramAPIError) -> _TelegramSurfaceErrorClassification:
+    message = str(error).lower()
+    if isinstance(error, (TelegramUnauthorizedError, TelegramConflictError)):
+        return _TelegramSurfaceErrorClassification("fatal_telegram_runtime_error", None, fatal=True)
+    if isinstance(error, (TelegramForbiddenError, TelegramNotFound, TelegramMigrateToChat)):
+        return _TelegramSurfaceErrorClassification("telegram_address_unreachable", "telegram_address_unreachable")
+    if isinstance(error, TelegramBadRequest):
+        if "message is not modified" in message:
+            return _TelegramSurfaceErrorClassification("telegram_message_not_modified", None)
+        if "chat not found" in message or "bot was blocked" in message or "user is deactivated" in message:
+            return _TelegramSurfaceErrorClassification("telegram_address_unreachable", "telegram_address_unreachable")
+        if (
+            "message to edit not found" in message
+            or "message can't be edited" in message
+            or "message_id_invalid" in message
+            or "message not found" in message
+        ):
+            return _TelegramSurfaceErrorClassification("telegram_message_unavailable", "telegram_message_unavailable")
+        return _TelegramSurfaceErrorClassification("fatal_telegram_bad_request", None, fatal=True)
+    if isinstance(error, (TelegramNetworkError, TelegramServerError, TelegramRetryAfter, TelegramEntityTooLarge)):
+        return _TelegramSurfaceErrorClassification("transient_telegram_delivery_error", None)
+    return _TelegramSurfaceErrorClassification("fatal_telegram_runtime_error", None, fatal=True)
 
 
 def _surface_display_state(surface: JsonObject) -> JsonObject:

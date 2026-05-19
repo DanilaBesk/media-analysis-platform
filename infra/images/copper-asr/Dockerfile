@@ -23,7 +23,7 @@ RUN apt-get update \
 
 WORKDIR /opt/copper-asr
 
-COPY vendor/copper-asr ./
+COPY external/copper-asr ./
 
 RUN python -m pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 \
     && python -m pip install --no-cache-dir ".[server,cpu]" \

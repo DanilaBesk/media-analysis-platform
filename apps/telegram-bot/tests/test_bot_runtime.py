@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from telegram_adapter import __main__ as telegram_main
 from telegram_adapter.api_client import TelegramApiClientError
@@ -296,9 +296,18 @@ class FakeFinalApiClient:
 
 
 class FakeBot:
-    def __init__(self, *, file_bytes: dict[str, bytes] | None = None, edit_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        file_bytes: dict[str, bytes] | None = None,
+        edit_error: Exception | None = None,
+        edit_errors: dict[tuple[int, int], Exception] | None = None,
+        send_message_errors: dict[int, Exception] | None = None,
+    ) -> None:
         self.file_bytes = file_bytes or {}
         self.edit_error = edit_error
+        self.edit_errors = edit_errors or {}
+        self.send_message_errors = send_message_errors or {}
         self.set_commands_calls: list[tuple[list[Any], str]] = []
         self.get_file_calls: list[str] = []
         self.download_calls: list[str] = []
@@ -318,6 +327,9 @@ class FakeBot:
         destination.write(self.file_bytes.get(file_path, b""))
 
     async def edit_message_text(self, text: str, *, chat_id: int, message_id: int, reply_markup: Any) -> None:
+        scoped_error = self.edit_errors.get((chat_id, message_id))
+        if scoped_error is not None:
+            raise scoped_error
         if self.edit_error is not None:
             raise self.edit_error
         self.edit_calls.append(
@@ -330,6 +342,9 @@ class FakeBot:
         )
 
     async def send_message(self, chat_id: int, text: str, **kwargs) -> SimpleNamespace:
+        scoped_error = self.send_message_errors.get(chat_id)
+        if scoped_error is not None:
+            raise scoped_error
         self.send_message_calls.append({"chat_id": chat_id, "text": text, **kwargs})
         return SimpleNamespace(message_id=9003)
 
@@ -398,11 +413,15 @@ class FakeCallback:
         self.answers.append({"text": text, "show_alert": show_alert})
 
 
-def owner() -> dict[str, Any]:
+def owner(chat_id: int = 10, user_id: int | None = 7) -> dict[str, Any]:
+    user_suffix = "" if user_id is None else f":user:{user_id}"
     return {
         "owner_type": "telegram",
-        "owner_id": "chat:10:user:7",
-        "adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"},
+        "owner_id": f"chat:{chat_id}{user_suffix}",
+        "adapter_identity": {
+            "telegram_chat_id": str(chat_id),
+            "telegram_user_id": "" if user_id is None else str(user_id),
+        },
     }
 
 
@@ -415,6 +434,14 @@ def make_app(*, page_size: int = 5, bot: FakeBot | None = None) -> tuple[FakeFin
         bot=bot or FakeBot(),
     )
     return api, gateway, app
+
+
+def telegram_bad_request(api_method: str, message: str) -> TelegramBadRequest:
+    return TelegramBadRequest(method=SimpleNamespace(__api_method__=api_method), message=message)
+
+
+def telegram_forbidden(api_method: str, message: str) -> TelegramForbiddenError:
+    return TelegramForbiddenError(method=SimpleNamespace(__api_method__=api_method), message=message)
 
 
 def status_for(
@@ -827,6 +854,62 @@ async def test_restart_recovery_restores_materials_surface_and_resumes_active_ru
 
 
 @pytest.mark.asyncio
+async def test_restart_recovery_supersedes_unreachable_surface_and_starts_polling_for_healthy_surfaces(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stale_owner = owner()
+    healthy_owner = owner(chat_id=20, user_id=8)
+    edit_error = telegram_bad_request("editMessageText", "Bad Request: chat not found")
+    send_error = telegram_bad_request("sendMessage", "Bad Request: chat not found")
+    bot = FakeBot(
+        edit_errors={(10, 5001): edit_error},
+        send_message_errors={10: send_error},
+    )
+    api, gateway, app = make_app(bot=bot)
+    gateway.add_text(owner=stale_owner, text="stale surface")
+    gateway.add_text(owner=healthy_owner, text="healthy surface")
+    stale_account = api.resolve_channel_account(owner=stale_owner)
+    healthy_account = api.resolve_channel_account(owner=healthy_owner)
+    api.upsert_channel_surface(
+        channel_account_id=stale_account["channel_account_id"],
+        surface_type="current_materials_panel",
+        surface_key="current:chat:10:user:7",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
+    )
+    api.upsert_channel_surface(
+        channel_account_id=healthy_account["channel_account_id"],
+        surface_type="current_materials_panel",
+        surface_key="current:chat:20:user:8",
+        address={"chat_id": 20, "message_id": 6001},
+        address_fingerprint="telegram:20:6001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
+    )
+    started: dict[str, Any] = {}
+
+    async def fake_start_polling(started_bot: FakeBot) -> None:
+        started["bot"] = started_bot
+
+    app.dispatcher.start_polling = fake_start_polling  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.WARNING):
+        await app.run()
+
+    assert started["bot"] is bot
+    assert api.supersede_surface_requests[-1]["channel_surface_id"] == "surface-1"
+    assert api.supersede_surface_requests[-1]["reason"] == "telegram_address_unreachable"
+    assert api.supersede_surface_requests[-1]["metadata"]["operation"] == "edit"
+    assert api.supersede_surface_requests[-1]["metadata"]["chat_id"] == 10
+    assert bot.send_message_calls == []
+    assert bot.edit_calls[-1]["chat_id"] == 20
+    assert bot.edit_calls[-1]["message_id"] == 6001
+    assert "BLOCK_HANDLE_TELEGRAM_SURFACE_FAILURE" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_existing_result_surface_prevents_duplicate_delivery_after_restart() -> None:
     api, gateway, app = make_app(bot=FakeBot())
     api.runs.append(
@@ -937,6 +1020,68 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
     assert app.bot.send_message_calls == [{"chat_id": 10, "text": "Recovered transcript."}]
     assert active_surfaces[-1]["surface_type"] == "result_artifact_surface"
     assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9003}
+
+
+@pytest.mark.asyncio
+async def test_addressless_result_surface_failed_send_does_not_create_duplicate_or_clear_collection() -> None:
+    send_error = telegram_bad_request("sendMessage", "Bad Request: chat not found")
+    api, gateway, app = make_app(bot=FakeBot(send_message_errors={10: send_error}))
+    gateway.add_text(owner=owner(), text="keep me until delivery succeeds")
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_snapshot_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+        }
+    )
+    api.internal_artifact_download_access["artifact-1"] = {
+        "artifact_id": "artifact-1",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
+    account = api.resolve_channel_account(owner=owner())
+    api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="result_artifact_surface",
+        surface_key="artifact:artifact-1",
+        address={},
+        address_fingerprint="",
+        display_state={"delivery_mode": "text"},
+        subjects=[{"subject_type": "artifact", "subject_id": "artifact-1", "subject_role": "primary"}],
+    )
+    app._download_artifact_bytes = lambda _url: b"transcript that cannot be delivered"  # type: ignore[method-assign]
+
+    notice, show_alert = await app._deliver_run_result(
+        owner=owner(),
+        analysis_run_id="run-1",
+        expected_version=1,
+        chat_id=10,
+    )
+
+    active_result_surfaces = [
+        surface
+        for surface in api.channel_surfaces
+        if surface["lifecycle_status"] == "active" and surface["surface_type"] == "result_artifact_surface"
+    ]
+    assert notice == "Готовый транскрипт пока недоступен."
+    assert show_alert is True
+    assert api.supersede_surface_requests[-1]["reason"] == "result_surface_missing_telegram_address"
+    assert active_result_surfaces == []
+    assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
+    assert api.remove_requests == []
 
 
 @pytest.mark.asyncio
@@ -1615,6 +1760,81 @@ async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_a
     assert api.items == []
     assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
     assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_unreachable() -> None:
+    send_error = telegram_forbidden("sendMessage", "Forbidden: bot was blocked by the user")
+    api, gateway, app = make_app(page_size=1, bot=FakeBot(send_message_errors={10: send_error}))
+    gateway.add_text(owner=owner(), text="one")
+    base_message = FakeMessage()
+
+    run_status = status_for(gateway)
+    run_keyboard = build_status_keyboard(run_status)
+    run_callback_data = next(
+        button.callback_data
+        for row in run_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rn:")
+    )
+    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+
+    tick = asyncio.Event()
+    original_get_run_status = gateway.get_run_status
+    statuses = iter(("queued", "succeeded"))
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = next(statuses, "succeeded")
+        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app._download_artifact_bytes = lambda _url: b"transcript cannot be delivered"  # type: ignore[method-assign]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 1
+    app.run_status_follow_delay_seconds = 0
+    gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "download": {"url": "https://download.test/transcript.txt"},
+        }
+    )
+    api.internal_artifact_download_access["artifact-1"] = {
+        "artifact_id": "artifact-1",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
+
+    run_callback = FakeCallback(data=run_callback_data, message=base_message)
+    await app._handle_status_callback(run_callback)
+
+    tick.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    superseded_surface_id = api.supersede_surface_requests[-1]["channel_surface_id"]
+    superseded_surface = next(surface for surface in api.channel_surfaces if surface["channel_surface_id"] == superseded_surface_id)
+    active_result_surfaces = [
+        surface
+        for surface in api.channel_surfaces
+        if surface["lifecycle_status"] == "active" and surface["surface_type"] == "result_artifact_surface"
+    ]
+    assert app.run_watch_tasks == {}
+    assert superseded_surface["surface_type"] == "analysis_task_surface"
+    assert api.supersede_surface_requests[-1]["reason"] == "telegram_address_unreachable"
+    assert api.supersede_surface_requests[-1]["metadata"]["operation"] == "send"
+    assert active_result_surfaces == []
+    assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
+    assert api.remove_requests == []
 
 
 @pytest.mark.asyncio

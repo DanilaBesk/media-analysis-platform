@@ -159,13 +159,12 @@
     <M-COPPER-ASR NAME="CopperAsrRuntime" TYPE="EXTERNAL_SUBMODULE_RUNTIME" STATUS="implemented-runtime" OWNER="media-b8s.4">
       <purpose>Provide the external pinned CopperASR source used by the dedicated ASR runtime service for transcription steps.</purpose>
       <path>external/copper-asr</path>
-      <current-path>vendor/copper-asr</current-path>
       <depends>external-git-submodule</depends>
-      <verification-ref>EV-ASR-RUNTIME, media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.2, media-b8s.2.3, media-b8s.2.4, media-b8s.2.5, media-b8s.2.7, media-b8s.2.9, media-b8s.2.10, media-b8s.2.11, media-b8s.3.1</verification-ref>
+      <verification-ref>EV-ASR-RUNTIME, media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.2, media-b8s.2.3, media-b8s.2.4, media-b8s.2.5, media-b8s.2.7, media-b8s.2.9, media-b8s.2.10, media-b8s.2.11, media-b8s.3.1, media-b8s.3.2, media-b8s.3.3, media-b8s.3.4, media-b8s.3, media-b8s</verification-ref>
       <annotations>
         <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
-        <source-pin COMMIT="5184cd4452ac45f0d93fb3e00b6bae005cb597e5" />
-        <source-location-decision TARGET_PATH="external/copper-asr" CURRENT_PATH="vendor/copper-asr" PURPOSE="Keep CopperASR source outside apps/ because this repo consumes it as an external upstream runtime service, not as first-party app code." />
+        <source-pin COMMIT="7aec7bee3a7500a16ce0b3de66c9cad9ed354754" />
+        <source-location-decision TARGET_PATH="external/copper-asr" PURPOSE="Keep CopperASR source outside apps/ because this repo consumes it as an external upstream runtime service, not as first-party app code." />
         <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" LOCAL_CPU_QUOTA_ENV="COPPER_ASR_LOCAL_CPUS" LOCAL_CPU_QUOTA_DEFAULT="4.0" />
         <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
         <worker-client PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="HTTP client, source materialization, response normalization, timeout handling, and asr_* diagnostic mapping." />

@@ -219,7 +219,7 @@ class TelegramInboxGateway:
                 page_size=self.page_size,
             )
             items = list(page.get("items", []))
-            page_meta = dict(page.get("page", {}))
+            page_meta = _page_meta_from_response(page, default_page_size=self.page_size)
         runs_page = self.api_client.list_analysis_runs(channel_account_id=channel_account_id, page_size=10)
         recent_runs = [
             run
@@ -829,6 +829,26 @@ def _telegram_metadata(
 
 def _surface_subject(subject_type: str, subject_id: str, subject_role: str) -> JsonObject:
     return {"subject_type": subject_type, "subject_id": subject_id, "subject_role": subject_role}
+
+
+def _page_meta_from_response(response: JsonObject, *, default_page_size: int) -> JsonObject:
+    page = response.get("page")
+    if isinstance(page, dict):
+        meta = dict(page)
+    else:
+        meta = {}
+        if page is not None:
+            meta["page"] = page
+    if "page_size" in response:
+        meta["page_size"] = response["page_size"]
+    else:
+        meta.setdefault("page_size", default_page_size)
+    meta.setdefault("has_more", bool(response.get("has_more", False)))
+    if response.get("next_cursor"):
+        meta["next_cursor"] = str(response["next_cursor"])
+    else:
+        meta.setdefault("next_cursor", "")
+    return meta
 
 
 def _current_materials_surface_key(owner: JsonObject) -> str:

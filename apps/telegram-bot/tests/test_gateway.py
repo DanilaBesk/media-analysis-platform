@@ -1120,6 +1120,27 @@ def test_restore_status_tolerates_missing_collection_and_renders_without_collect
     assert "run-done" not in text
 
 
+def test_restore_status_tolerates_flat_page_metadata_from_runtime_api() -> None:
+    class FlatPageApiClient(FakeFinalApiClient):
+        def get_inbox_collection(self, **kwargs) -> dict[str, Any]:
+            raise RuntimeError("collection not found")
+
+        def list_media_assets(self, **kwargs) -> dict[str, Any]:
+            return {
+                "items": [{"media_asset_id": "media-1", "display_name": "flat page item", "kind": "text", "status": "ready"}],
+                "page": 1,
+                "page_size": kwargs.get("page_size") or 5,
+            }
+
+    status = TelegramInboxGateway(FlatPageApiClient(), page_size=5).restore_status(owner=owner())
+
+    assert status.collection is None
+    assert status.page["page"] == 1
+    assert status.page["page_size"] == 5
+    assert status.page["has_more"] is False
+    assert status.items[0]["display_name"] == "flat page item"
+
+
 def test_stale_callback_copy_is_safe_and_actionable() -> None:
     answer = safe_callback_answer(RuntimeError("slot_not_visible"))
 

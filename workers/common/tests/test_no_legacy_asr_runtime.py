@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 ACTIVE_PATHS = [
+    ".env.example",
     "AGENTS.md",
     "CLAUDE.md",
     "README.md",

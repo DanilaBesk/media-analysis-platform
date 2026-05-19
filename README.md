@@ -69,20 +69,20 @@ Bootstrap after cloning or switching branches:
 
 ```bash
 git submodule update --init --recursive
-git -C vendor/copper-asr rev-parse HEAD
+git -C external/copper-asr rev-parse HEAD
 ```
 
 Current pin:
 
 ```text
 remote https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git
-vendor/copper-asr f2a8278fb236b2ba471083ca2debcc3e9052cd64
+external/copper-asr 7aec7bee3a7500a16ce0b3de66c9cad9ed354754
 ```
 
 Local install path for CopperASR development:
 
 ```bash
-python -m pip install -e "vendor/copper-asr[server,cpu]"
+python -m pip install -e "external/copper-asr[server,cpu]"
 ```
 
 Container build path for the dedicated runtime source:
@@ -105,7 +105,7 @@ through `media-b8s.*`.
 - `workers/transcription/src` — transcription runtime, local input materialization, and transcript artifact persistence.
 - `workers/agent-runner/src` — AI-model runtime for report/deep-research execution.
 - `workers/common/src/transcriber_workers_common` — shared worker helpers for API transport, artifacts, input materialization, transcription, and document rendering.
-- `vendor/copper-asr` — pinned CopperASR source submodule for the dedicated ASR runtime service.
+- `external/copper-asr` — pinned external CopperASR source submodule for the dedicated ASR runtime service.
 
 Final media_asset, selection_snapshot, analysis_run, artifact, and diagnostic state is owned by API PostgreSQL + MinIO boundaries; worker workspace remains execution-local.
 

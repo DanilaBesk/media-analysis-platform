@@ -31,7 +31,7 @@ Use CopperASR through a dedicated internal HTTP runtime service, not as an embed
 Decision:
 
 - Treat CopperASR source as an external pinned git submodule, not as a first-party `apps/` service and not as editable vendored package code.
-- Target source path: `external/copper-asr`. The already-implemented transition path is `vendor/copper-asr`; `media-b8s.4` must move the pin to `external/copper-asr` before final QA.
+- Source path: `external/copper-asr`.
 - Add a compose service named `copper-asr`.
 - Build the service from a repo-local wrapper Dockerfile under `infra/images/copper-asr/Dockerfile`.
 - The transcription worker calls `http://copper-asr:8000` through a narrow `CopperAsrHttpTranscriber`.
@@ -53,15 +53,15 @@ Initial source pin:
 - Reviewed HEAD: `f2a8278fb236b2ba471083ca2debcc3e9052cd64`
 - Reviewed remote: `https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git`
 
-Current runtime source pin after the CopperASR thread-cap and telemetry update:
+Current runtime source pin after the CopperASR thread-cap, telemetry, and invalid-audio classification updates:
 
 - Runtime branch: `main`
-- Runtime HEAD: `5184cd4452ac45f0d93fb3e00b6bae005cb597e5`
-- Update reason: consumes upstream `fix/runtime-thread-caps-telemetry` without editing the submodule from this repository.
+- Runtime HEAD: `7aec7bee3a7500a16ce0b3de66c9cad9ed354754`
+- Update reason: consumes upstream `fix/runtime-thread-caps-telemetry` and `fix/invalid-audio-decode-classification` without editing the submodule from this repository.
 
 Implementation rule:
 
-- `media-b8s.1.4` pinned the submodule to an exact commit; `media-b8s.4` must align the path with the external ownership boundary and record `git -C external/copper-asr rev-parse HEAD`.
+- `media-b8s.1.4` pinned the submodule to an exact commit; `media-b8s.4` aligns the path with the external ownership boundary and records `git -C external/copper-asr rev-parse HEAD`.
 - Do not track a floating branch for runtime builds.
 - Do not copy generated CopperASR source into this repo.
 - Do not modify the submodule directly from this repo except for an explicit upstream CopperASR change followed by a submodule pointer bump.
@@ -236,8 +236,7 @@ The user-facing Telegram/Web copy must not collapse all of these into a misleadi
 Write scope:
 
 - `.gitmodules`
-- `vendor/copper-asr` as the original transition path
-- `external/copper-asr` as the target source path after `media-b8s.4`
+- `external/copper-asr`
 - `README.md` or local bootstrap docs if needed
 - `docs/technology.xml`
 - `docs/knowledge-graph.xml`
@@ -246,8 +245,8 @@ Write scope:
 Acceptance gates:
 
 - `git submodule status --recursive`
-- transition proof before `media-b8s.4`: `git -C vendor/copper-asr rev-parse HEAD` and `git -C vendor/copper-asr status --short`
-- target proof after `media-b8s.4`: `git -C external/copper-asr rev-parse HEAD` and `git -C external/copper-asr status --short`
+- `git -C external/copper-asr rev-parse HEAD`
+- `git -C external/copper-asr status --short`
 - fresh checkout instructions can run `git submodule update --init --recursive`
 - no Whisper dependency or fallback is added
 
@@ -257,7 +256,6 @@ Write scope:
 
 - `.gitmodules`
 - `external/copper-asr`
-- `vendor/copper-asr`
 - `infra/images/copper-asr/Dockerfile`
 - GRACE XML docs and this source plan
 

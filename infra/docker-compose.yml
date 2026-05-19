@@ -127,6 +127,14 @@ services:
     volumes:
       - ..:/workspace
       - retained-log-volume:/var/log/platform
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS 'http://127.0.0.1:8080/internal/v1/channel-accounts?page_size=1' >/dev/null"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   copper-asr:
     build:
@@ -183,7 +191,7 @@ services:
     depends_on:
       <<: *runtime-infra-depends
       api:
-        condition: service_started
+        condition: service_healthy
       copper-asr:
         condition: service_healthy
     working_dir: /workspace
@@ -219,7 +227,7 @@ services:
     depends_on:
       <<: *runtime-infra-depends
       api:
-        condition: service_started
+        condition: service_healthy
     working_dir: /workspace
     command:
       - uv
@@ -243,7 +251,7 @@ services:
       - ./env/web.env.example
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     working_dir: /workspace/apps/web
     command:
       - node
@@ -271,16 +279,16 @@ services:
     environment:
       PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/workers/common/src:/workspace/src
       DATA_DIR: /tmp/runtime/telegram-bot
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-replace-me}
-      ALLOWED_USER_IDS: ${ALLOWED_USER_IDS:-}
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     env_file:
       - ./env/telegram-bot.env.example
+      - path: ../.env
+        required: false
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     working_dir: /workspace
     command:
       - -m
@@ -304,7 +312,7 @@ services:
       no_proxy: *platform-no-proxy
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     working_dir: /workspace/apps/mcp-server
     command:
       - node
