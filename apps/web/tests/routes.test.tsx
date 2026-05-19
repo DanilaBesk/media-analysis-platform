@@ -551,6 +551,25 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findByText("#1 Call note")).toBeVisible();
   });
 
+  it("renders non-summary run type labels in the run list", async () => {
+    renderRoute("/runs", {
+      listAnalysisRuns: vi.fn().mockResolvedValue({
+        items: [
+          analysisRun({ analysis_run_id: "run-report", run_type: "report" }),
+          analysisRun({ analysis_run_id: "run-research", run_type: "deep_research" }),
+          analysisRun({ analysis_run_id: "run-custom", run_type: "custom" }),
+          analysisRun({ analysis_run_id: "run-special", run_type: "custom_pipeline" }),
+        ],
+        page: { page_size: 25, has_more: false },
+      }),
+    });
+
+    expect((await screen.findAllByText("Отчет")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Глубокое исследование")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Свой сценарий")).length).toBeGreaterThan(0);
+    expect(await screen.findByText("custom pipeline")).toBeVisible();
+  });
+
   it("renders run detail with events, artifacts, and diagnostics", async () => {
     renderRoute("/runs/run-1");
 
@@ -562,6 +581,140 @@ describe("createWebUiRoutes", () => {
     expect((await screen.findAllByText("Готово")).length).toBeGreaterThan(0);
     expect(await screen.findByRole("link", { name: "Краткое содержание" })).toHaveAttribute("href", "/artifacts/artifact-1");
     expect(screen.queryByText(/copperasr|Copperside|CopperASR/i)).toBeNull();
+  });
+
+  it("renders localized progress labels for remaining run stages", async () => {
+    renderRoute("/runs/run-1", {
+      listAnalysisRunEvents: vi.fn().mockResolvedValue({
+        items: [
+          {
+            event_id: "event-created",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.created",
+            version: 0,
+            emitted_at: "2026-05-10T00:00:00Z",
+            payload: {},
+          },
+          {
+            event_id: "event-queued",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 1,
+            emitted_at: "2026-05-10T00:00:00Z",
+            status: "running",
+            payload: { stage: "queued", message: "Waiting for worker" },
+          },
+          {
+            event_id: "event-summarizing",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 2,
+            emitted_at: "2026-05-10T00:00:30Z",
+            status: "running",
+            payload: { stage: "summarizing", message: "Drafting summary" },
+          },
+          {
+            event_id: "event-reporting",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 3,
+            emitted_at: "2026-05-10T00:01:00Z",
+            status: "running",
+            payload: { stage: "reporting", message: "Building report" },
+          },
+          {
+            event_id: "event-research",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 4,
+            emitted_at: "2026-05-10T00:02:00Z",
+            status: "running",
+            payload: { stage: "deep_research", message: "Expanding sources" },
+          },
+          {
+            event_id: "event-upload",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 5,
+            emitted_at: "2026-05-10T00:03:00Z",
+            status: "running",
+            payload: { stage: "artifact_upload", message: "Uploading artifact" },
+          },
+          {
+            event_id: "event-custom",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.progress",
+            version: 6,
+            emitted_at: "2026-05-10T00:04:00Z",
+            status: "running",
+            payload: { stage: "custom_stage", message: "Custom stage" },
+          },
+          {
+            event_id: "event-completed",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.completed",
+            version: 7,
+            emitted_at: "2026-05-10T00:05:00Z",
+            payload: {},
+          },
+          {
+            event_id: "event-failed",
+            analysis_run_id: "run-1",
+            event_type: "analysis_run.failed",
+            version: 8,
+            emitted_at: "2026-05-10T00:06:00Z",
+            payload: {},
+          },
+          {
+            event_id: "event-diagnostic",
+            analysis_run_id: "run-1",
+            event_type: "diagnostic.recorded",
+            version: 9,
+            emitted_at: "2026-05-10T00:07:00Z",
+            payload: {},
+          },
+          {
+            event_id: "event-artifact",
+            analysis_run_id: "run-1",
+            event_type: "artifact.available",
+            version: 10,
+            emitted_at: "2026-05-10T00:08:00Z",
+            payload: {},
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("Запуск создан")).toBeVisible();
+    expect(await screen.findByText("Ожидает очереди: Waiting for worker")).toBeVisible();
+    expect(await screen.findByText("Краткое содержание: Drafting summary")).toBeVisible();
+    expect(await screen.findByText("Отчет: Building report")).toBeVisible();
+    expect(await screen.findByText("Глубокое исследование: Expanding sources")).toBeVisible();
+    expect(await screen.findByText("Сохранение результата: Uploading artifact")).toBeVisible();
+    expect(await screen.findByText("Прогресс: Custom stage")).toBeVisible();
+    expect(await screen.findByText("Запуск завершен")).toBeVisible();
+    expect(await screen.findByText("Ошибка запуска")).toBeVisible();
+    expect(await screen.findByText("Проверка записана")).toBeVisible();
+    expect(await screen.findByText("Результат готов")).toBeVisible();
+  });
+
+  it("renders pending, passed, failed, and fallback evidence gate labels", async () => {
+    const cases = [
+      ["pending", "Ожидает проверки"],
+      ["passed", "Пройдена"],
+      ["failed", "Есть ошибки"],
+      ["manual_review", "manual review"],
+    ] as const;
+
+    for (const [state, label] of cases) {
+      const runtime = renderRoute("/runs/run-1", {
+        getAnalysisRun: vi.fn().mockResolvedValue(analysisRun({ evidence_gate_state: state })),
+      });
+
+      expect(await within(runtime.container).findByText(label)).toBeVisible();
+      runtime.unmount();
+    }
   });
 
   it("opens markdown artifact previews from the artifact browser", async () => {
@@ -633,6 +786,51 @@ describe("createWebUiRoutes", () => {
       });
     });
     expect(await screen.findByText("Удаление ожидает разрешения")).toBeVisible();
+  });
+
+  it("renders collection, selection, and channel diagnostic fallback labels", async () => {
+    renderRoute("/diagnostics", {
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [
+          {
+            diagnostic_id: "diagnostic-collection",
+            owner,
+            subject: { subject_type: "collection", subject_id: "collection-1" },
+            severity: "warning",
+            code: "origin_warning",
+            message: "Collection warning kept visible",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            diagnostic_id: "diagnostic-selection",
+            owner,
+            subject: { subject_type: "selection", subject_id: "snapshot-1" },
+            severity: "warning",
+            code: "origin_warning",
+            message: "Selection warning kept visible",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            diagnostic_id: "diagnostic-channel",
+            owner,
+            subject: { subject_type: "channel", subject_id: "telegram-main" },
+            severity: "info",
+            code: "adapter_notice_without_label",
+            message: "Adapter reported an unknown notice",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+        ],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    expect(await screen.findByText("Collection warning kept visible")).toBeVisible();
+    expect(await screen.findByText("Selection warning kept visible")).toBeVisible();
+    expect(await screen.findByText("Adapter reported an unknown notice")).toBeVisible();
+    expect(screen.getByText("группа")).toBeVisible();
+    expect(screen.getByText("подборка")).toBeVisible();
+    expect(screen.getByText("канал")).toBeVisible();
+    expect(screen.getByText("Проверка")).toBeVisible();
   });
 
   it("covers inbox validation and alternate ingest modes", async () => {
@@ -896,6 +1094,7 @@ describe("createWebUiRoutes", () => {
         items: [
           mediaAsset({
             media_asset_id: "media-url",
+            kind: "url",
             display_name: "URL origin",
             origin: { origin_type: "url", url: "https://example.test/file", origin_ref: "https://example.test/file" },
           }),
@@ -903,6 +1102,89 @@ describe("createWebUiRoutes", () => {
             media_asset_id: "media-raw",
             display_name: "Raw origin",
             origin: { origin_type: "object", origin_ref: "web-local://raw", object_ref: "web-local://raw" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-remote",
+            display_name: "Remote origin",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-upload-kind",
+            kind: "upload",
+            display_name: "Upload kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-binary-kind",
+            kind: "binary",
+            display_name: "Binary kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-video-kind",
+            kind: "video",
+            display_name: "Video kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-image-kind",
+            kind: "image",
+            display_name: "Image kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-file-kind",
+            kind: "file",
+            display_name: "File kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-partial-status",
+            display_name: "Partial status",
+            status: "partially_succeeded",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-canceled-status",
+            display_name: "Canceled status",
+            status: "canceled",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-expired-status",
+            display_name: "Expired status",
+            status: "expired",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-quarantined-status",
+            display_name: "Quarantined status",
+            status: "quarantined",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-queued-status",
+            display_name: "Queued status",
+            status: "queued",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-cancel-requested-status",
+            display_name: "Cancel requested status",
+            status: "cancel_requested",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-pending-status",
+            display_name: "Pending status",
+            status: "pending",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-validating-status",
+            display_name: "Validating status",
+            status: "validating",
+            origin: { origin_type: "remote_ref" },
           }),
         ],
         page: { page_size: 50, has_more: false },
@@ -921,6 +1203,20 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findByText("URL origin")).toBeVisible();
     expect(screen.getByText("https://example.test/file")).toBeVisible();
     expect(screen.getByText("Загруженный файл")).toBeVisible();
+    expect(screen.getAllByText("remote ref").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Ссылка").length).toBeGreaterThan(0);
+    expect(screen.getByText("Видео")).toBeVisible();
+    expect(screen.getByText("Изображение")).toBeVisible();
+    expect(screen.getAllByText("Файл").length).toBeGreaterThan(0);
+    expect(screen.getByText("Данные")).toBeVisible();
+    expect(screen.getByText("Частично готово")).toBeVisible();
+    expect(screen.getByText("Отменено")).toBeVisible();
+    expect(screen.getByText("Истекло")).toBeVisible();
+    expect(screen.getByText("На проверке")).toBeVisible();
+    expect(screen.getByText("В очереди")).toBeVisible();
+    expect(screen.getByText("Остановка")).toBeVisible();
+    expect(screen.getByText("Готовится")).toBeVisible();
+    expect(screen.getByText("Проверяется")).toBeVisible();
     expect(screen.queryByText("in inbox")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Выбрать все" }));
@@ -1107,6 +1403,24 @@ describe("createWebUiRoutes", () => {
             created_at: "2026-05-10T00:00:00Z",
           },
           {
+            artifact_id: "artifact-transcript",
+            analysis_run_id: "run-1",
+            kind: "transcript",
+            status: "available",
+            content_type: "text/plain",
+            size_bytes: 128,
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            artifact_id: "artifact-research",
+            analysis_run_id: "run-1",
+            kind: "deep_research",
+            status: "available",
+            content_type: "text/markdown",
+            size_bytes: 128,
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
             artifact_id: "artifact-log",
             analysis_run_id: "run-1",
             kind: "execution_log",
@@ -1151,11 +1465,48 @@ describe("createWebUiRoutes", () => {
     });
 
     expect((await screen.findAllByText("Данные")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Расшифровка").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Глубокое исследование").length).toBeGreaterThan(0);
     expect(screen.queryByText("Журнал")).toBeNull();
     expect(screen.getAllByText("custom blob").length).toBeGreaterThan(0);
     expect(screen.getByText("{invalid-json")).toBeVisible();
     expect(screen.getAllByText("2.4 MB")).toHaveLength(2);
     expect(screen.queryByRole("link", { name: "Открыть результат" })).toBeNull();
+  });
+
+  it("renders direct source and preview artifact labels", async () => {
+    const cases = [
+      ["artifact-source", "source_manifest", "Список материалов"],
+      ["artifact-preview", "preview", "Предпросмотр"],
+    ] as const;
+
+    for (const [artifactId, kind, label] of cases) {
+      const runtime = renderRoute(`/artifacts/${artifactId}`, {
+        listArtifacts: vi.fn().mockResolvedValue({
+          items: [],
+          page: { page_size: 50, has_more: false },
+        }),
+        getArtifact: vi.fn().mockResolvedValue({
+          artifact_id: artifactId,
+          analysis_run_id: "run-1",
+          kind,
+          status: "available",
+          content_type: "application/json",
+          size_bytes: 128,
+          preview: { available: false, kind: "none" },
+          created_at: "2026-05-10T00:00:00Z",
+          diagnostics: [],
+          download: { available: false, url: "" },
+        }),
+        listDiagnostics: vi.fn().mockResolvedValue({
+          items: [],
+          page: { page_size: 50, has_more: false },
+        }),
+      });
+
+      expect(await within(runtime.container).findByRole("heading", { name: label })).toBeVisible();
+      runtime.unmount();
+    }
   });
 
   it("covers non-record manifest previews, missing collection labels, and generic run load fallback", async () => {
@@ -1422,6 +1773,55 @@ describe("createWebUiRoutes", () => {
         }),
       );
     });
+  });
+
+  it("renders localized selection counts for several selected materials", async () => {
+    const baseRun = analysisRun();
+    const twoItemRuntime = renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          selection_snapshot: {
+            ...baseRun.selection_snapshot,
+            items: [
+              ...baseRun.selection_snapshot.items,
+              {
+                selection_snapshot_item_id: "snapshot-item-2",
+                position: 1,
+                media_asset_id: "media-2",
+                kind: "audio",
+                origin_snapshot: { origin_type: "object", object_ref: "web-local://interview.wav" },
+                display_name: "Interview audio",
+                status_at_selection: "ready",
+              },
+            ],
+          },
+        }),
+      ),
+    });
+
+    expect(await within(twoItemRuntime.container).findByText("2 материала")).toBeVisible();
+    twoItemRuntime.unmount();
+
+    renderRoute("/runs/run-1", {
+      getAnalysisRun: vi.fn().mockResolvedValue(
+        analysisRun({
+          selection_snapshot: {
+            ...baseRun.selection_snapshot,
+            items: Array.from({ length: 5 }, (_, index) => ({
+              selection_snapshot_item_id: `snapshot-item-${index + 1}`,
+              position: index,
+              media_asset_id: `media-${index + 1}`,
+              kind: "text",
+              origin_snapshot: { origin_type: "text", text: `Note ${index + 1}` },
+              display_name: `Note ${index + 1}`,
+              status_at_selection: "ready",
+            })),
+          },
+        }),
+      ),
+    });
+
+    expect(await screen.findByText("5 материалов")).toBeVisible();
   });
 
   it("covers manifest zero-summary defaults and selection-item outcome fallback", async () => {

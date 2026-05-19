@@ -337,6 +337,71 @@ describe("createWebUiApiClient", () => {
     expect(requiresRestReconciliation(1, 2)).toBe(false);
   });
 
+  it("normalizes optional run and websocket event fallback fields", async () => {
+    const socket: {
+      onopen: ((event: Event) => void) | null;
+      onmessage: ((event: MessageEvent<string>) => void) | null;
+      onerror: ((event: Event) => void) | null;
+      onclose: ((event: CloseEvent) => void) | null;
+      close: ReturnType<typeof vi.fn>;
+    } = {
+      onopen: null,
+      onmessage: null,
+      onerror: null,
+      onclose: null,
+      close: vi.fn(),
+    };
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        analysis_run: {
+          analysis_run_id: "run-minimal",
+          channel_account_id: "web-console",
+          selection_snapshot_id: "snapshot-minimal",
+          run_type: "summary",
+          status: "queued",
+          version: 1,
+          evidence_gate_state: "not_required",
+          created_at: "2026-05-10T00:00:00Z",
+        },
+      }),
+    );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+      webSocketFactory: vi.fn().mockReturnValue(socket),
+    });
+    const onMessage = vi.fn();
+
+    await expect(client.getAnalysisRun(owner, "run-minimal")).resolves.toMatchObject({
+      selection_snapshot: {
+        selection_snapshot_id: "snapshot-minimal",
+        items: [],
+      },
+      artifacts: [],
+      diagnostics: [],
+    });
+    client.subscribeToRunEvents({ onMessage });
+    socket.onmessage?.({
+      data: JSON.stringify({
+        analysis_run_event_id: "event-alt-id",
+        analysis_run_id: "run-minimal",
+        event_type: "analysis_run.progress",
+        version: 2,
+        created_at: "2026-05-10T00:01:00Z",
+        status: "running",
+        payload: {},
+      }),
+    } as MessageEvent<string>);
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_id: "event-alt-id",
+        emitted_at: "2026-05-10T00:01:00Z",
+      }),
+    );
+  });
+
   it("calls final admin lifecycle and artifact access endpoints", async () => {
     const fetchImpl = vi
       .fn()
@@ -904,6 +969,7 @@ describe("createWebUiApiClient", () => {
     socket.onopen?.({} as Event);
     socket.onerror?.({ type: "error" } as Event);
     socket.onmessage?.({ data: "not json" } as MessageEvent<string>);
+    socket.onmessage?.({ data: JSON.stringify("not an event object") } as MessageEvent<string>);
     socket.onmessage?.({ data: JSON.stringify({ event_id: "event-ignored" }) } as MessageEvent<string>);
     socket.onclose?.({} as CloseEvent);
     subscription.close();

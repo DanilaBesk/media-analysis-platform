@@ -79,3 +79,75 @@ def test_render_material_summary_lines_limits_items_and_adds_overflow_line() -> 
         "Текст: «Нужен короткий статус»",
         "+ ещё 1 материалов",
     ]
+
+
+def test_summary_fallbacks_cover_minimal_text_url_and_unnamed_materials() -> None:
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-text-fallback",
+            "kind": "text",
+            "origin": {"origin_type": "text"},
+        }
+    ) == "Текст: «media-text-fallback»"
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-url-fallback",
+            "kind": "url",
+            "origin": {"origin_type": "url"},
+        }
+    ) == "media-url-fallback"
+    assert render_material_summary({"kind": "binary"}) == "Материал"
+
+
+def test_file_summary_normalizes_size_duration_and_truncation_edges() -> None:
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-duration-ms",
+            "kind": "voice",
+            "display_name": "long-call.ogg",
+            "origin": {"origin_type": "upload", "size_bytes": 1_099_511_627_776},
+            "metadata": {"duration_ms": "3661000"},
+        }
+    ) == "long-call.ogg · 1 TB · 01:01:01"
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-byte-size",
+            "kind": "document",
+            "display_name": "byte-size.bin",
+            "origin": {"origin_type": "upload", "size_bytes": 512},
+        }
+    ) == "byte-size.bin · 512 B"
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-float-size",
+            "kind": "document",
+            "display_name": "float-size.bin",
+            "size_bytes": 1536.5,
+        }
+    ) == "float-size.bin · 1.5 KB"
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-bad-size",
+            "kind": "document",
+            "display_name": "bad-size.bin",
+            "size_bytes": True,
+            "origin": {"size_bytes": "not-a-number"},
+            "metadata": {"size_bytes": "-1", "duration_ms": ""},
+        }
+    ) == "bad-size.bin"
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-short-text",
+            "kind": "text",
+            "origin": {"origin_type": "text", "origin_ref": "short"},
+        },
+        text_preview_limit=1,
+    ) == "Текст: «…»"
+    assert render_material_summary(
+        {
+            "media_asset_id": "media-plain-url",
+            "kind": "url",
+            "origin": {"origin_type": "url", "origin_ref": "  plain local reference  "},
+        },
+        url_preview_limit=8,
+    ) == "plain l…"
