@@ -54,6 +54,12 @@
     <completed-packet bead="media-b8s.2.3">copper-asr-api-worker-web-mcp-e2e</completed-packet>
     <completed-packet bead="media-b8s.2.4">copper-asr-failure-retry-cancel-e2e</completed-packet>
     <completed-packet bead="media-b8s.2.5">no-legacy-asr-regression-gates</completed-packet>
+    <blocked-packet bead="media-b8s.2.7">copper-asr-long-voice-benchmark waits for media-b8s.2.10 because max CPU burst still fails inside CopperASR VAD.</blocked-packet>
+    <blocked-packet bead="media-b8s.2.9">corrupt-audio-invalid-audio-normalization waits for media-b8s.2.11 because the refreshed CopperASR runtime still returns unexpected_runtime_error.</blocked-packet>
+    <blocked-packet bead="media-b8s.2.10">external-copper-asr-vad-cpu-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR fix or explicit benchmark-contract decision.</blocked-packet>
+    <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR invalid-audio fix or explicit preflight decision.</blocked-packet>
+    <blocked-closure-gate bead="media-b8s.2">coverage epic waits for media-b8s.2.7, media-b8s.2.9, and final coverage inventory closure.</blocked-closure-gate>
+    <blocked-closure-gate bead="media-b8s">root migration waits for full coverage and Pre-MR QA closure.</blocked-closure-gate>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -271,7 +277,7 @@ The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error be
 The benchmark harness consumes representative_long_voice and must record backend/model, input duration, wall time, CPU/memory samples, concurrency settings, warm/cold model state, result delivery latency, threshold status, and blocker linkage when thresholds fail.
 The current evidence proves provider=copperasr, model=Copperside/CoppersideASR, 960.006s input, 105.187s run wall time, 9.127x realtime speed, transcript document delivery, duplicate-result guard, inbox clearing, and CopperASR response processing telemetry.
 The local consumer profile is COPPER_ASR_ONNX_NUM_THREADS=2, COPPER_ASR_TORCH_NUM_THREADS=2, COPPER_ASR_TORCH_INTEROP_THREADS=1, COPPER_ASR_FFMPEG_THREADS=1. The CPU threshold still fails inside copper-asr: max_cpu_percent=875.05, avg_cpu_percent=412.46, while worker-transcription and api stay near idle.
-media-b8s.2.10 blocks closure for remaining CopperASR max-CPU pressure; telemetry is now available through metadata.processing.
+media-b8s.2.10 blocks closure for remaining CopperASR max-CPU pressure; telemetry is now available through metadata.processing. Additional live probing localized the max CPU burst to the Silero VAD/torch stage, with samples above the 450% threshold during the VAD window and ASR inference dropping near the local cap profile afterward.
     ]]></contract-excerpt>
     <verification>
       <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
