@@ -160,7 +160,7 @@
       <purpose>Provide the pinned CopperASR source used by the dedicated ASR runtime service for transcription steps.</purpose>
       <path>vendor/copper-asr</path>
       <depends>external-git-submodule</depends>
-      <verification-ref>EV-ASR-RUNTIME, media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.3, media-b8s.2.4, media-b8s.2.5, media-b8s.2.9, media-b8s.3.1</verification-ref>
+      <verification-ref>EV-ASR-RUNTIME, media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.2, media-b8s.2.3, media-b8s.2.4, media-b8s.2.5, media-b8s.2.9, media-b8s.3.1</verification-ref>
       <annotations>
         <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
         <source-pin COMMIT="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
@@ -171,6 +171,7 @@
         <dependency-cleanup PATH="pyproject.toml" LOCKFILE="uv.lock" PURPOSE="Root worker dependencies no longer carry removed legacy ASR packages; CopperASR dependencies live behind the runtime image/submodule boundary." />
         <cleanup-policy PURPOSE="Legacy ASR imports, model-conversion helpers, provider-specific env, old model-cache volumes, fallback tests, and dual-backend switches must not remain active fallback behavior after migration." />
         <guard-noLegacyAsr PATH="workers/common/tests/test_no_legacy_asr_runtime.py" SCRIPT="infra/scripts/no-legacy-asr-gate.sh" PURPOSE="Regression gate for active runtime, compose, env, dependency manifest, and doc surfaces." />
+        <script-copperAsrTelegramE2E PATH="infra/scripts/copper-asr-telegram-e2e.py" PURPOSE="Live Telegram short-voice proof for inbox materialization, channel surfaces, analysis_run_step progress/finalize events, transcript delivery surface recording, duplicate prevention, and inbox clearing." />
         <script-copperAsrApiWebMcpE2E PATH="infra/scripts/copper-asr-api-web-mcp-e2e.py" PURPOSE="Live short-voice API/worker proof for transcript artifacts, run_manifest provider metadata, diagnostics filtering, artifact download access, cross-channel denial, and history preservation for Web/MCP shared surfaces." />
         <script-copperAsrFailureE2E PATH="infra/scripts/copper-asr-failure-e2e.py" PURPOSE="Live API/worker/CopperASR proof for corrupt-audio failure diagnostics, retry, cancellation, policy artifacts, and resource-limit knobs." />
       </annotations>
@@ -244,6 +245,7 @@
         <fixture-copperAsrE2E PATH="infra/fixtures/target/object-store/media-inputs/copper-asr" PURPOSE="Stores deterministic synthetic short voice, representative long voice, corrupt audio, and cancellation input bytes for CopperASR E2E proof." />
         <fixture-copperAsrArtifact PATH="infra/fixtures/target/object-store/artifacts/copper-asr/short-transcript.txt" PURPOSE="Stores deterministic transcript artifact bytes for CopperASR artifact download E2E proof." />
         <script-copperAsrE2EHarness PATH="infra/scripts/copper-asr-e2e-harness.py" PURPOSE="Validates CopperASR fixture manifest entries, sizes, hashes, required case coverage, and can copy object-store fixture bytes into a deterministic bucket/key tree." />
+        <script-copperAsrTelegramE2E PATH="infra/scripts/copper-asr-telegram-e2e.py" PURPOSE="Runs live Telegram-shaped short-voice transcription through API, worker, and CopperASR, then verifies delivery surfaces, duplicate guard, and inbox clearing." />
         <script-copperAsrApiWebMcpE2E PATH="infra/scripts/copper-asr-api-web-mcp-e2e.py" PURPOSE="Runs live short-voice transcription through API, worker, and CopperASR, then verifies the artifact/diagnostic/download contracts consumed by Web and MCP." />
         <script-copperAsrFailureE2E PATH="infra/scripts/copper-asr-failure-e2e.py" PURPOSE="Runs live corrupt-audio, retry, cancellation, policy artifact, and resource-limit assertions against the API/worker/CopperASR stack." />
         <doc-copperAsrE2EFixtures PATH="docs/architecture/copper-asr-e2e-fixtures.md" PURPOSE="Documents fixture provenance, model access assumptions, commands, and benchmark limits for media-b8s.2.*." />

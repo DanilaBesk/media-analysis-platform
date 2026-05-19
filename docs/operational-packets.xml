@@ -50,6 +50,7 @@
     <completed-packet bead="media-b8s.1.9">legacy-asr-runtime-removal</completed-packet>
     <completed-packet bead="media-b8s.1.10">final-copper-asr-grace-refresh</completed-packet>
     <completed-packet bead="media-b8s.2.1">copper-asr-e2e-fixtures-harness</completed-packet>
+    <completed-packet bead="media-b8s.2.2">copper-asr-telegram-voice-delivery-e2e</completed-packet>
     <completed-packet bead="media-b8s.2.3">copper-asr-api-worker-web-mcp-e2e</completed-packet>
     <completed-packet bead="media-b8s.2.4">copper-asr-failure-retry-cancel-e2e</completed-packet>
     <completed-packet bead="media-b8s.2.5">no-legacy-asr-regression-gates</completed-packet>
@@ -140,6 +141,31 @@ Later E2E tasks must consume these cases instead of inventing ad hoc audio sampl
       <check>python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --copy-object-store /tmp/copper-asr-e2e-object-store --json</check>
       <check>bash infra/scripts/target-reset-smoke.sh</check>
       <check>bash infra/scripts/compose-smoke.sh --check-config</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-b8s.2.2-copper-asr-telegram-voice-delivery-e2e" module="M-COVERAGE,M-INFRA,M-TELEGRAM-ADAPTER,M-WORKER-TRANSCRIPTION,M-COPPER-ASR" phase="CopperAsrCoverage" verification-ref="EV-ASR-RUNTIME,EV-WORKERS,EV-ADAPTERS,EV-RUNTIME,EV-COVERAGE-MATRIX,EV-GRACE">
+    <purpose>Prove the live Telegram voice-to-transcript flow over API-owned state and CopperASR, including result delivery surface recording, duplicate prevention, and inbox clearing.</purpose>
+    <depends-on>media-b8s.2.1</depends-on>
+    <write-scope>
+      <file-1>infra/scripts/copper-asr-telegram-e2e.py</file-1>
+      <file-2>infra/scripts/copper-asr-e2e-harness.py</file-2>
+      <file-3>packages/contracts/tests/test_target_fixtures.py</file-3>
+      <file-4>docs/architecture/copper-asr-e2e-fixtures.md, docs/architecture/target-coverage-matrix.md</file-4>
+      <file-5>docs/requirements.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml, docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram is a thin adapter over channel_account-scoped API state.
+The live Telegram harness consumes the short_voice fixture as a voice upload, then proves inbox collection materialization, current_materials_panel and analysis_task_surface records, selection_snapshot and analysis_run_step creation, CopperASR transcript plus run policy artifacts, run_manifest provider=copperasr, result_artifact_surface recording, duplicate-delivery prevention, and successful inbox collection clearing.
+The harness must fail on missing transcript bytes, backend_unavailable diagnostics, missing result surface, old Whisper wording in run_manifest, or uncleared inbox membership after delivery.
+    ]]></contract-excerpt>
+    <verification>
+      <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
+      <check>python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json</check>
+      <check>python3 infra/scripts/copper-asr-telegram-e2e.py --json</check>
+      <check>PYTHONPATH=apps/telegram-bot/src uv run --with aiogram --with python-dotenv pytest apps/telegram-bot/tests -q</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
     </verification>

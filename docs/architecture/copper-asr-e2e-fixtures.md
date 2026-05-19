@@ -11,6 +11,7 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 - Runtime model: resolved by the `copper-asr` service env/cache at execution time. Model weights are not embedded in the fixture files.
 - Fixture manifest: `infra/fixtures/target/manifest.json`.
 - Fixture harness: `python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json`.
+- Telegram E2E harness: `python3 infra/scripts/copper-asr-telegram-e2e.py --json`.
 - API/Web/MCP E2E harness: `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json`.
 - Failure E2E harness: `python3 infra/scripts/copper-asr-failure-e2e.py --json`.
 
@@ -27,11 +28,14 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 ```bash
 uv run pytest packages/contracts/tests/test_target_fixtures.py -q
 python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json
+python3 infra/scripts/copper-asr-telegram-e2e.py --json
 python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json
 python3 infra/scripts/copper-asr-failure-e2e.py --json
 bash infra/scripts/target-reset-smoke.sh
 bash infra/scripts/compose-smoke.sh --check-config
 ```
+
+The Telegram E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It creates a throwaway Telegram channel account, uploads the `short_voice` fixture as a voice message, asserts inbox materialization and current materials surface persistence, creates a selection snapshot and transcription run, verifies worker progress/finalize events, downloads transcript and run manifest bytes, records a result artifact surface, proves duplicate delivery is blocked by that surface, and clears the inbox collection membership after successful delivery.
 
 The API/Web/MCP E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It creates throwaway Web and MCP channel accounts, uploads the `short_voice` fixture through the public API, starts a transcription run, asserts transcript plus policy artifacts, downloads transcript and manifest bytes, checks diagnostics filtering, proves cross-channel denial, and verifies the run/artifact history survives source media deletion.
 
