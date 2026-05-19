@@ -323,6 +323,14 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 		t.Fatalf("list diagnostics request = %#v", target.listDiagnosticsReq)
 	}
 
+	listStepQueue := httptest.NewRecorder()
+	mux.ServeHTTP(listStepQueue, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/queue?status=queued&run_type=transcription&worker_kind=transcription&step_kind=selection.transcription&page_size=10", nil))
+	assertTargetStatus(t, listStepQueue, http.StatusOK)
+	assertNoLegacyTargetVocabulary(t, listStepQueue.Body.String())
+	if target.listStepQueueReq.StepKind != "selection.transcription" || target.listStepQueueReq.PageSize != 10 {
+		t.Fatalf("list step queue request = %#v", target.listStepQueueReq)
+	}
+
 	claimStep := httptest.NewRecorder()
 	mux.ServeHTTP(claimStep, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/claim", map[string]any{
 		"worker_kind": "transcription",
@@ -357,6 +365,47 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 	assertNoLegacyTargetVocabulary(t, recordStepProgress.Body.String())
 	if target.progressStepReq.ProgressStage != "transcribing" {
 		t.Fatalf("progress step request = %#v", target.progressStepReq)
+	}
+
+	recordArtifacts := httptest.NewRecorder()
+	mux.ServeHTTP(recordArtifacts, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/artifacts", map[string]any{
+		"analysis_run_step_id": "step-1",
+		"artifacts": []map[string]any{{
+			"artifact_kind": "summary_markdown",
+			"mime_type":     "text/markdown",
+			"object_key":    "run-1/summary.md",
+			"size_bytes":    7,
+			"filename":      "summary.md",
+			"format":        "markdown",
+		}},
+	}))
+	assertTargetStatus(t, recordArtifacts, http.StatusAccepted)
+	assertNoLegacyTargetVocabulary(t, recordArtifacts.Body.String())
+	if target.recordArtifactsReq.AnalysisRunStepID != "step-1" ||
+		len(target.recordArtifactsReq.Artifacts) != 1 ||
+		target.recordArtifactsReq.Artifacts[0].ArtifactKind != "summary_markdown" {
+		t.Fatalf("record artifacts request = %#v", target.recordArtifactsReq)
+	}
+
+	recordDiagnostics := httptest.NewRecorder()
+	mux.ServeHTTP(recordDiagnostics, jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/diagnostics", map[string]any{
+		"analysis_run_step_id": "step-1",
+		"diagnostics": []map[string]any{{
+			"diagnostic_id": "diagnostic-1",
+			"subject_type":  "analysis_run",
+			"subject_id":    "run-1",
+			"severity":      "warning",
+			"code":          "transcript_missing",
+			"message":       "Transcript is missing",
+			"context":       map[string]any{"source": "worker"},
+		}},
+	}))
+	assertTargetStatus(t, recordDiagnostics, http.StatusAccepted)
+	assertNoLegacyTargetVocabulary(t, recordDiagnostics.Body.String())
+	if target.recordDiagnosticsReq.AnalysisRunStepID != "step-1" ||
+		len(target.recordDiagnosticsReq.Diagnostics) != 1 ||
+		target.recordDiagnosticsReq.Diagnostics[0].Code != "transcript_missing" {
+		t.Fatalf("record diagnostics request = %#v", target.recordDiagnosticsReq)
 	}
 
 	finalizeStep := httptest.NewRecorder()
@@ -484,6 +533,63 @@ func TestTargetApiEdgeCoverageForValidationConflictAndPagination(t *testing.T) {
 	}))
 	assertErrorCode(t, conflict, http.StatusConflict, "collection_version_conflict")
 	assertNoLegacyTargetVocabulary(t, conflict.Body.String())
+}
+
+func TestTargetApiReturnsDependencyUnavailableWhenTargetMissing(t *testing.T) {
+	t.Parallel()
+
+	mux := newFinalMux(Dependencies{})
+	cases := []struct {
+		name string
+		req  *http.Request
+	}{
+		{name: "resolve channel account", req: jsonRequest(http.MethodPut, "/internal/v1/channel-accounts", map[string]any{"channel": "telegram", "external_account_ref": "chat-1"})},
+		{name: "list channel accounts", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-accounts", nil)},
+		{name: "update channel account", req: jsonRequest(http.MethodPatch, "/internal/v1/channel-accounts/channel-account-1", map[string]any{"display_name": "Danila"})},
+		{name: "create media asset", req: jsonRequest(http.MethodPost, "/v1/media-assets", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "upload media asset", req: httptest.NewRequest(http.MethodPost, "/v1/media-assets/upload", strings.NewReader(""))},
+		{name: "list media assets", req: httptest.NewRequest(http.MethodGet, "/v1/media-assets?channel_account_id=channel-account-1", nil)},
+		{name: "get media asset", req: httptest.NewRequest(http.MethodGet, "/v1/media-assets/media-asset-1?channel_account_id=channel-account-1", nil)},
+		{name: "delete media asset", req: httptest.NewRequest(http.MethodDelete, "/v1/media-assets/media-asset-1?channel_account_id=channel-account-1", nil)},
+		{name: "get inbox", req: httptest.NewRequest(http.MethodGet, "/v1/collections/inbox?channel_account_id=channel-account-1", nil)},
+		{name: "create collection", req: jsonRequest(http.MethodPost, "/v1/collections", map[string]any{"channel_account_id": "channel-account-1", "name": "Research"})},
+		{name: "list collections", req: httptest.NewRequest(http.MethodGet, "/v1/collections?channel_account_id=channel-account-1", nil)},
+		{name: "get collection", req: httptest.NewRequest(http.MethodGet, "/v1/collections/collection-1?channel_account_id=channel-account-1", nil)},
+		{name: "update collection", req: jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{"channel_account_id": "channel-account-1", "expected_version": 1})},
+		{name: "update collection items", req: jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{"channel_account_id": "channel-account-1", "expected_version": 1})},
+		{name: "remove collection item", req: httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/media-asset-1?channel_account_id=channel-account-1&expected_version=1", nil)},
+		{name: "create selection snapshot", req: jsonRequest(http.MethodPost, "/v1/selection-snapshots", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "get selection snapshot", req: httptest.NewRequest(http.MethodGet, "/v1/selection-snapshots/snapshot-1?channel_account_id=channel-account-1", nil)},
+		{name: "create analysis run", req: jsonRequest(http.MethodPost, "/v1/analysis-runs", map[string]any{"channel_account_id": "channel-account-1", "selection_snapshot_id": "snapshot-1", "run_type": "transcription"})},
+		{name: "list analysis runs", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs?channel_account_id=channel-account-1", nil)},
+		{name: "get analysis run", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1?channel_account_id=channel-account-1", nil)},
+		{name: "cancel analysis run", req: jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/cancel", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "retry analysis run", req: jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/retry", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "list analysis run events", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1/events?channel_account_id=channel-account-1", nil)},
+		{name: "list artifacts", req: httptest.NewRequest(http.MethodGet, "/v1/artifacts?channel_account_id=channel-account-1&analysis_run_id=run-1", nil)},
+		{name: "get artifact", req: httptest.NewRequest(http.MethodGet, "/v1/artifacts/artifact-1?channel_account_id=channel-account-1", nil)},
+		{name: "refresh artifact", req: jsonRequest(http.MethodPost, "/v1/artifacts/artifact-1/refresh?channel_account_id=channel-account-1", nil)},
+		{name: "list diagnostics", req: httptest.NewRequest(http.MethodGet, "/v1/diagnostics?channel_account_id=channel-account-1", nil)},
+		{name: "claim step", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/claim", map[string]any{"worker_kind": "transcription"})},
+		{name: "check step cancel", req: httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/run-1/steps/cancel-check?analysis_run_step_id=step-1", nil)},
+		{name: "record step progress", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/progress", map[string]any{"analysis_run_step_id": "step-1"})},
+		{name: "finalize step", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/finalize", map[string]any{"analysis_run_step_id": "step-1"})},
+		{name: "upsert surface", req: jsonRequest(http.MethodPut, "/internal/v1/channel-surfaces", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "list surfaces", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces?channel_account_id=channel-account-1", nil)},
+		{name: "list active surfaces", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/active?channel_account_id=channel-account-1", nil)},
+		{name: "replace display state", req: jsonRequest(http.MethodPatch, "/internal/v1/channel-surfaces/surface-1/display-state", map[string]any{"expected_version": 1})},
+		{name: "supersede surface", req: jsonRequest(http.MethodPost, "/internal/v1/channel-surfaces/surface-1/supersede", map[string]any{"actor_type": "telegram_adapter"})},
+		{name: "list surface events", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/surface-1/events", nil)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, tc.req)
+			assertErrorCode(t, rec, http.StatusServiceUnavailable, "dependency_unavailable")
+			assertNoLegacyTargetVocabulary(t, rec.Body.String())
+		})
+	}
 }
 
 func assertTargetStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {

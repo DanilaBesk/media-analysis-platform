@@ -227,6 +227,543 @@ func TestTargetRuntimeServiceReplaysMediaAssetIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceReadAndLifecycleQueriesUseTargetStore(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 14, 30, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		channelAccount: targetstore.ChannelAccountRecord{
+			ID:                 "channel-account-1",
+			Channel:            "telegram",
+			ExternalAccountRef: "chat-1",
+			DisplayName:        "Danila",
+			Status:             "active",
+			MetadataJSON:       []byte(`{"lang":"ru"}`),
+			CreatedAt:          now.Add(-time.Hour),
+			UpdatedAt:          now.Add(-time.Hour),
+		},
+		snapshotItems: []targetstore.SelectionSnapshotItemRecord{{
+			ID:                  "snapshot-item-1",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            0,
+			MediaAssetID:        "media-asset-1",
+			Kind:                "voice",
+			DisplayName:         "voice.ogg",
+			StatusAtSelection:   "available",
+		}},
+	}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"collection-1",
+			"collection-item-1",
+			"collection-item-2",
+			"cancel-event-1",
+			"retry-run-1",
+			"retry-step-1",
+			"retry-step-input-1",
+			"retry-event-1",
+			"surface-event-replace-1",
+			"finalize-event-1",
+		)),
+	)
+	ctx := context.Background()
+
+	channelAccounts, err := service.ListChannelAccounts(ctx, TargetListChannelAccountsRequest{})
+	if err != nil {
+		t.Fatalf("ListChannelAccounts() error = %v", err)
+	}
+	if channelAccounts.PageSize != 20 || len(channelAccounts.Items) != 1 || channelAccounts.Items[0].ChannelAccountID != "channel-account-1" {
+		t.Fatalf("ListChannelAccounts() = %#v", channelAccounts)
+	}
+
+	updatedAccount, err := service.UpdateChannelAccount(ctx, TargetUpdateChannelAccountRequest{
+		ChannelAccountID: "channel-account-1",
+		DisplayName:      "Danila B",
+		Status:           "disabled",
+	})
+	if err != nil {
+		t.Fatalf("UpdateChannelAccount() error = %v", err)
+	}
+	if updatedAccount.ChannelAccountID != "channel-account-1" || updatedAccount.DisplayName != "Danila B" || updatedAccount.Status != "disabled" {
+		t.Fatalf("UpdateChannelAccount() = %#v", updatedAccount)
+	}
+
+	mediaPage, err := service.ListMediaAssets(ctx, TargetListMediaAssetsRequest{ChannelAccountID: "channel-account-1"})
+	if err != nil {
+		t.Fatalf("ListMediaAssets() error = %v", err)
+	}
+	if mediaPage.PageSize != 20 || len(mediaPage.Items) != 1 || mediaPage.Items[0].MediaAssetID != "media-asset-1" {
+		t.Fatalf("ListMediaAssets() = %#v", mediaPage)
+	}
+
+	media, err := service.GetMediaAsset(ctx, TargetGetMediaAssetRequest{
+		ChannelAccountID: "channel-account-1",
+		MediaAssetID:     "media-asset-1",
+	})
+	if err != nil {
+		t.Fatalf("GetMediaAsset() error = %v", err)
+	}
+	if media.MediaAssetID != "media-asset-1" || media.Status != "available" {
+		t.Fatalf("GetMediaAsset() = %#v", media)
+	}
+
+	deleted, err := service.DeleteMediaAsset(ctx, TargetDeleteMediaAssetRequest{
+		ChannelAccountID: "channel-account-1",
+		MediaAssetID:     "media-asset-1",
+	})
+	if err != nil {
+		t.Fatalf("DeleteMediaAsset() error = %v", err)
+	}
+	if deleted.Status != "deleted" || deleted.DeletedAt == nil {
+		t.Fatalf("DeleteMediaAsset() = %#v", deleted)
+	}
+
+	inbox, err := service.GetInboxCollection(ctx, TargetGetInboxCollectionRequest{ChannelAccountID: "channel-account-1"})
+	if err != nil {
+		t.Fatalf("GetInboxCollection() error = %v", err)
+	}
+	if inbox.CollectionID != "inbox-1" || inbox.Kind != "inbox" {
+		t.Fatalf("GetInboxCollection() = %#v", inbox)
+	}
+
+	createdCollection, err := service.CreateCollection(ctx, TargetCreateCollectionRequest{
+		ChannelAccountID: "channel-account-1",
+		Name:             "Research",
+		Items:            []string{"media-asset-1"},
+	})
+	if err != nil {
+		t.Fatalf("CreateCollection() error = %v", err)
+	}
+	if createdCollection.CollectionID != "collection-1" || len(createdCollection.Items) != 1 || createdCollection.Items[0].CollectionItemID != "collection-item-1" {
+		t.Fatalf("CreateCollection() = %#v", createdCollection)
+	}
+
+	collections, err := service.ListCollections(ctx, TargetListCollectionsRequest{
+		ChannelAccountID: "channel-account-1",
+		PageSize:         7,
+	})
+	if err != nil {
+		t.Fatalf("ListCollections() error = %v", err)
+	}
+	if collections.PageSize != 7 || len(collections.Items) != 1 || collections.Items[0].CollectionID != "collection-1" {
+		t.Fatalf("ListCollections() = %#v", collections)
+	}
+
+	collection, err := service.GetCollection(ctx, TargetGetCollectionRequest{
+		ChannelAccountID: "channel-account-1",
+		CollectionID:     "collection-1",
+	})
+	if err != nil {
+		t.Fatalf("GetCollection() error = %v", err)
+	}
+	if collection.CollectionID != "collection-1" || collection.Version != 1 {
+		t.Fatalf("GetCollection() = %#v", collection)
+	}
+
+	updatedCollection, err := service.UpdateCollection(ctx, TargetUpdateCollectionRequest{
+		ChannelAccountID: "channel-account-1",
+		CollectionID:     "collection-1",
+		ExpectedVersion:  2,
+		Name:             "Research v2",
+		Status:           "active",
+	})
+	if err != nil {
+		t.Fatalf("UpdateCollection() error = %v", err)
+	}
+	if updatedCollection.Name != "Research v2" || updatedCollection.Version != 3 {
+		t.Fatalf("UpdateCollection() = %#v", updatedCollection)
+	}
+
+	replacedItems, err := service.UpdateCollectionItems(ctx, TargetUpdateCollectionItemsRequest{
+		ChannelAccountID: "channel-account-1",
+		CollectionID:     "collection-1",
+		ExpectedVersion:  3,
+		Items: []TargetCollectionItemMutationInput{{
+			MediaAssetID: "media-asset-1",
+			Position:     2,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCollectionItems() error = %v", err)
+	}
+	if replacedItems.Version != 4 || len(replacedItems.Items) != 1 || replacedItems.Items[0].Position != 2 {
+		t.Fatalf("UpdateCollectionItems() = %#v", replacedItems)
+	}
+
+	removedItemCollection, err := service.RemoveCollectionItem(ctx, TargetRemoveCollectionItemRequest{
+		ChannelAccountID: "channel-account-1",
+		CollectionID:     "collection-1",
+		MediaAssetID:     "media-asset-1",
+		ExpectedVersion:  4,
+	})
+	if err != nil {
+		t.Fatalf("RemoveCollectionItem() error = %v", err)
+	}
+	if removedItemCollection.Version != 5 || len(removedItemCollection.Items) != 0 {
+		t.Fatalf("RemoveCollectionItem() = %#v", removedItemCollection)
+	}
+
+	snapshot, err := service.GetSelectionSnapshot(ctx, TargetGetSelectionSnapshotRequest{
+		ChannelAccountID:    "channel-account-1",
+		SelectionSnapshotID: "snapshot-1",
+	})
+	if err != nil {
+		t.Fatalf("GetSelectionSnapshot() error = %v", err)
+	}
+	if snapshot.SelectionSnapshotID != "snapshot-1" || len(snapshot.Items) != 1 || snapshot.Items[0].SelectionSnapshotItemID != "snapshot-item-1" {
+		t.Fatalf("GetSelectionSnapshot() = %#v", snapshot)
+	}
+
+	runs, err := service.ListAnalysisRuns(ctx, TargetListAnalysisRunsRequest{ChannelAccountID: "channel-account-1"})
+	if err != nil {
+		t.Fatalf("ListAnalysisRuns() error = %v", err)
+	}
+	if runs.PageSize != 20 || len(runs.Items) != 1 || runs.Items[0].AnalysisRunID != "run-1" {
+		t.Fatalf("ListAnalysisRuns() = %#v", runs)
+	}
+
+	run, err := service.GetAnalysisRun(ctx, TargetGetAnalysisRunRequest{
+		ChannelAccountID: "channel-account-1",
+		AnalysisRunID:    "run-1",
+	})
+	if err != nil {
+		t.Fatalf("GetAnalysisRun() error = %v", err)
+	}
+	if run.AnalysisRunID != "run-1" || run.Status != "queued" {
+		t.Fatalf("GetAnalysisRun() = %#v", run)
+	}
+
+	canceled, err := service.CancelAnalysisRun(ctx, "run-1", TargetCancelAnalysisRunRequest{
+		ChannelAccountID: "channel-account-1",
+		Message:          "stop",
+	})
+	if err != nil {
+		t.Fatalf("CancelAnalysisRun() error = %v", err)
+	}
+	if canceled.Status != "cancel_requested" || canceled.CancelRequestedAt == nil {
+		t.Fatalf("CancelAnalysisRun() = %#v", canceled)
+	}
+
+	retried, err := service.RetryAnalysisRun(ctx, "run-1", TargetRetryAnalysisRunRequest{
+		ChannelAccountID: "channel-account-1",
+		IdempotencyKey:   "retry-key",
+	})
+	if err != nil {
+		t.Fatalf("RetryAnalysisRun() error = %v", err)
+	}
+	if retried.AnalysisRunID != "retry-run-1" || len(retried.Steps) != 1 || retried.Steps[0].AnalysisRunStepID != "retry-step-1" {
+		t.Fatalf("RetryAnalysisRun() = %#v", retried)
+	}
+
+	events, err := service.ListAnalysisRunEvents(ctx, TargetListAnalysisRunEventsRequest{
+		ChannelAccountID: "channel-account-1",
+		AnalysisRunID:    "run-1",
+	})
+	if err != nil {
+		t.Fatalf("ListAnalysisRunEvents() error = %v", err)
+	}
+	if len(events.Items) != 1 || events.Items[0].AnalysisRunEventID != "event-1" {
+		t.Fatalf("ListAnalysisRunEvents() = %#v", events)
+	}
+
+	artifacts, err := service.ListArtifacts(ctx, TargetListArtifactsRequest{
+		ChannelAccountID: "channel-account-1",
+		AnalysisRunID:    "run-1",
+	})
+	if err != nil {
+		t.Fatalf("ListArtifacts() error = %v", err)
+	}
+	if len(artifacts.Items) != 1 || artifacts.Items[0].ArtifactID != "artifact-1" {
+		t.Fatalf("ListArtifacts() = %#v", artifacts)
+	}
+
+	artifact, err := service.GetArtifact(ctx, TargetGetArtifactRequest{
+		ChannelAccountID: "channel-account-1",
+		ArtifactID:       "artifact-1",
+	})
+	if err != nil {
+		t.Fatalf("GetArtifact() error = %v", err)
+	}
+	if artifact.ArtifactID != "artifact-1" || artifact.Visibility != "channel_deliverable" {
+		t.Fatalf("GetArtifact() = %#v", artifact)
+	}
+
+	diagnostics, err := service.ListDiagnostics(ctx, TargetListDiagnosticsRequest{
+		ChannelAccountID: "channel-account-1",
+		SubjectType:      "analysis_run",
+		SubjectID:        "run-1",
+		Severity:         "warning",
+	})
+	if err != nil {
+		t.Fatalf("ListDiagnostics() error = %v", err)
+	}
+	if len(diagnostics.Items) != 1 || diagnostics.Items[0].SubjectID != "run-1" {
+		t.Fatalf("ListDiagnostics() = %#v", diagnostics)
+	}
+
+	queue, err := service.ListAnalysisRunStepQueue(ctx, TargetAnalysisRunStepQueueRequest{
+		Status:     "queued",
+		RunType:    "transcription",
+		WorkerKind: "transcription",
+		StepKind:   "selection.transcription",
+	})
+	if err != nil {
+		t.Fatalf("ListAnalysisRunStepQueue() error = %v", err)
+	}
+	if queue.PageSize != 20 || len(queue.Items) != 1 || queue.Items[0].AnalysisRunStepID != "step-1" {
+		t.Fatalf("ListAnalysisRunStepQueue() = %#v", queue)
+	}
+
+	cancelState, err := service.CheckAnalysisRunStepCancel(ctx, "run-1", TargetCheckAnalysisRunStepCancelRequest{
+		AnalysisRunStepID: "step-1",
+	})
+	if err != nil {
+		t.Fatalf("CheckAnalysisRunStepCancel() error = %v", err)
+	}
+	if cancelState.CancelRequested || cancelState.Status != "running" {
+		t.Fatalf("CheckAnalysisRunStepCancel() = %#v", cancelState)
+	}
+
+	surfaces, err := service.ListChannelSurfaces(ctx, TargetListChannelSurfacesRequest{
+		ChannelAccountID: "channel-account-1",
+		SubjectType:      "analysis_run",
+		SubjectID:        "run-1",
+		ActiveOnly:       true,
+	})
+	if err != nil {
+		t.Fatalf("ListChannelSurfaces() error = %v", err)
+	}
+	if len(surfaces.Items) != 1 || len(surfaces.Items[0].Subjects) != 1 || surfaces.Items[0].Subjects[0].SubjectID != "run-1" {
+		t.Fatalf("ListChannelSurfaces() = %#v", surfaces)
+	}
+
+	replacedSurface, err := service.ReplaceChannelSurfaceDisplayState(ctx, TargetReplaceChannelSurfaceDisplayStateRequest{
+		SurfaceID:       "surface-1",
+		ExpectedVersion: 1,
+		DisplayState:    []byte(`{"status":"running"}`),
+		ActorType:       "telegram_adapter",
+		ActorID:         "bot",
+		Metadata:        []byte(`{"reason":"progress"}`),
+	})
+	if err != nil {
+		t.Fatalf("ReplaceChannelSurfaceDisplayState() error = %v", err)
+	}
+	if replacedSurface.Version != 2 || string(replacedSurface.DisplayState) != `{"status":"running"}` {
+		t.Fatalf("ReplaceChannelSurfaceDisplayState() = %#v", replacedSurface)
+	}
+
+	surfaceEvents, err := service.ListChannelSurfaceEvents(ctx, TargetListChannelSurfaceEventsRequest{SurfaceID: "surface-1"})
+	if err != nil {
+		t.Fatalf("ListChannelSurfaceEvents() error = %v", err)
+	}
+	if len(surfaceEvents.Items) != 1 || surfaceEvents.Items[0].ChannelSurfaceEventID != "surface-event-1" {
+		t.Fatalf("ListChannelSurfaceEvents() = %#v", surfaceEvents)
+	}
+
+	finalized, err := service.FinalizeAnalysisRunStep(ctx, "run-1", TargetFinalizeAnalysisRunStepRequest{
+		AnalysisRunStepID: "step-1",
+		Outcome:           "partially_succeeded",
+		Message:           "done",
+	})
+	if err != nil {
+		t.Fatalf("FinalizeAnalysisRunStep() error = %v", err)
+	}
+	if finalized.Status != "partially_succeeded" || finalized.CompletedAt == nil {
+		t.Fatalf("FinalizeAnalysisRunStep() = %#v", finalized)
+	}
+}
+
+func TestTargetRuntimeServiceRecordsWorkerWrites(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 15, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"progress-event-1",
+			"artifact-1",
+			"stored-object-1",
+			"subject-run-1",
+			"subject-step-1",
+		)),
+	)
+	ctx := context.Background()
+
+	if err := service.RecordAnalysisRunStepProgress(ctx, "run-1", TargetRecordAnalysisRunStepProgressRequest{
+		AnalysisRunStepID: "step-1",
+		ProgressStage:     "transcribing",
+		ProgressMessage:   "working",
+		Payload:           []byte(`{"percent":50}`),
+	}); err != nil {
+		t.Fatalf("RecordAnalysisRunStepProgress() error = %v", err)
+	}
+	if store.progress.AnalysisRunStepID != "step-1" ||
+		store.progress.Event.ID != "progress-event-1" ||
+		!bytes.Contains(store.progress.Event.PayloadJSON, []byte(`"progress_stage":"transcribing"`)) {
+		t.Fatalf("stored progress = %#v", store.progress)
+	}
+
+	if err := service.RecordAnalysisRunArtifacts(ctx, "run-1", TargetRecordAnalysisRunArtifactsRequest{
+		AnalysisRunStepID: "step-1",
+		Artifacts: []workerArtifactDescriptor{{
+			ArtifactKind: "summary_markdown",
+			MIMEType:     "text/markdown",
+			ObjectKey:    "run-1/summary.md",
+			SizeBytes:    7,
+			Filename:     "summary.md",
+			Format:       "markdown",
+		}},
+	}); err != nil {
+		t.Fatalf("RecordAnalysisRunArtifacts() error = %v", err)
+	}
+	if store.artifactCalls != 1 ||
+		len(store.storedObjects) != 1 ||
+		len(store.artifacts) != 1 ||
+		len(store.artifactSubjects) != 2 ||
+		store.artifacts[0].Kind != "summary" ||
+		store.artifacts[0].StoredObjectID != "stored-object-1" {
+		t.Fatalf("stored artifacts objects=%#v artifacts=%#v subjects=%#v", store.storedObjects, store.artifacts, store.artifactSubjects)
+	}
+
+	if err := service.RecordAnalysisRunDiagnostics(ctx, "run-1", TargetRecordAnalysisRunDiagnosticsRequest{
+		AnalysisRunStepID: "step-1",
+		Diagnostics: []workerDiagnosticDescriptor{{
+			DiagnosticID:       "diagnostic-1",
+			SubjectType:        "analysis_run",
+			SubjectID:          "run-1",
+			Severity:           "warning",
+			Code:               "transcript_missing",
+			Message:            "Transcript is missing",
+			Context:            map[string]any{"source": "worker"},
+			SafeAdapterContext: map[string]any{"chat_id": "chat-1"},
+			CorrelationID:      "corr-1",
+			RemediationHint:    "retry",
+		}},
+	}); err != nil {
+		t.Fatalf("RecordAnalysisRunDiagnostics() error = %v", err)
+	}
+	if store.diagnosticCalls != 1 ||
+		len(store.diagnostics) != 1 ||
+		store.diagnostics[0].ChannelAccountID != "channel-account-1" ||
+		!bytes.Contains(store.diagnostics[0].ContextJSON, []byte(`"analysis_run_step_id":"step-1"`)) ||
+		!bytes.Contains(store.diagnostics[0].SafeChannelContext, []byte(`"chat_id":"chat-1"`)) {
+		t.Fatalf("stored diagnostics = %#v", store.diagnostics)
+	}
+}
+
+func TestTargetRuntimeRecordHelpersCoverPayloadEdges(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 15, 30, 0, 0, time.UTC)
+	expiresAt := now.Add(time.Hour)
+	deletedAt := now.Add(2 * time.Hour)
+	object := targetstore.StoredObjectRecord{
+		ID:             "stored-object-1",
+		Bucket:         "sources",
+		ObjectKey:      "sources/uploads/voice.ogg",
+		ContentType:    "audio/ogg",
+		SizeBytes:      42,
+		Checksum:       "sha256:abc",
+		StorageStatus:  "available",
+		RetentionState: "active",
+		CreatedAt:      now,
+		ExpiresAt:      &expiresAt,
+		DeletedAt:      &deletedAt,
+	}
+
+	textOrigin := targetOriginSnapshotPayload(targetstore.MediaAssetRecord{OriginType: "text", OriginRef: "hello"}, targetstore.StoredObjectRecord{})
+	if textOrigin["origin_type"] != "text" || textOrigin["text"] != "hello" {
+		t.Fatalf("text origin payload = %#v", textOrigin)
+	}
+	urlOrigin := targetOriginSnapshotPayload(targetstore.MediaAssetRecord{OriginType: "url", OriginRef: "https://example.test"}, targetstore.StoredObjectRecord{})
+	if urlOrigin["origin_type"] != "url" || urlOrigin["url"] != "https://example.test" {
+		t.Fatalf("url origin payload = %#v", urlOrigin)
+	}
+	uploadOrigin := targetOriginSnapshotPayload(targetstore.MediaAssetRecord{OriginType: "upload", OriginRef: "fallback.ogg"}, object)
+	if uploadOrigin["origin_type"] != "upload" || uploadOrigin["object_ref"] != "sources/uploads/voice.ogg" || uploadOrigin["content_type"] != "audio/ogg" {
+		t.Fatalf("upload origin payload = %#v", uploadOrigin)
+	}
+	customOrigin := targetOriginSnapshotPayload(targetstore.MediaAssetRecord{OriginType: "custom", OriginRef: "custom-ref"}, targetstore.StoredObjectRecord{})
+	if customOrigin["origin_type"] != "custom" || customOrigin["object_ref"] != "custom-ref" {
+		t.Fatalf("custom origin payload = %#v", customOrigin)
+	}
+
+	emptyStorage := targetStorageSnapshotPayload(targetstore.StoredObjectRecord{})
+	if len(emptyStorage) != 0 {
+		t.Fatalf("empty storage payload = %#v", emptyStorage)
+	}
+	storagePayload := targetStorageSnapshotPayload(object)
+	if storagePayload["stored_object_id"] != "stored-object-1" ||
+		storagePayload["expires_at"] != &expiresAt ||
+		storagePayload["deleted_at"] != &deletedAt {
+		t.Fatalf("storage payload = %#v", storagePayload)
+	}
+
+	item := targetCollectionItemFromRecord(targetstore.CollectionItemRecord{
+		ID:              "collection-item-1",
+		MediaAssetID:    "media-asset-1",
+		Position:        3,
+		AddedViaChannel: "channel-account-1",
+		AddedAt:         now,
+		MediaAsset: &targetstore.MediaAssetRecord{
+			ID:               "media-asset-1",
+			ChannelAccountID: "channel-account-1",
+			OriginType:       "upload",
+			OriginRef:        "sources/uploads/voice.ogg",
+			Kind:             "voice",
+			DisplayName:      "voice.ogg",
+			Status:           "available",
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		},
+	})
+	if item.MediaAsset == nil || item.MediaAsset.MediaAssetID != "media-asset-1" || item.Position != 3 {
+		t.Fatalf("collection item = %#v", item)
+	}
+
+	if !isSpeechMediaKind("video") || isSpeechMediaKind("document") {
+		t.Fatalf("isSpeechMediaKind returned unexpected result")
+	}
+	if withDefaultString("", "fallback") != "fallback" || withDefaultString("value", "fallback") != "value" {
+		t.Fatalf("withDefaultString returned unexpected result")
+	}
+}
+
+func TestTargetOutcomeStatusMapsKnownOutcomes(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		outcome  string
+		wantStep string
+		wantRun  string
+	}{
+		{name: "default", outcome: "", wantStep: "succeeded", wantRun: "succeeded"},
+		{name: "succeeded", outcome: "succeeded", wantStep: "succeeded", wantRun: "succeeded"},
+		{name: "partial", outcome: "partially_succeeded", wantStep: "partially_succeeded", wantRun: "partially_succeeded"},
+		{name: "failed", outcome: "failed", wantStep: "failed", wantRun: "failed"},
+		{name: "canceled", outcome: "canceled", wantStep: "canceled", wantRun: "canceled"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			stepStatus, runStatus, err := targetOutcomeStatus(tc.outcome)
+			if err != nil {
+				t.Fatalf("targetOutcomeStatus(%q) error = %v", tc.outcome, err)
+			}
+			if stepStatus != tc.wantStep || runStatus != tc.wantRun {
+				t.Fatalf("targetOutcomeStatus(%q) = (%q, %q), want (%q, %q)", tc.outcome, stepStatus, runStatus, tc.wantStep, tc.wantRun)
+			}
+		})
+	}
+
+	_, _, err := targetOutcomeStatus("unexpected")
+	if !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("targetOutcomeStatus(unexpected) error = %v, want ErrContractViolation", err)
+	}
+}
+
 func TestTargetRuntimeServicePersistsUploadBodyToSourceObjectStore(t *testing.T) {
 	t.Parallel()
 
@@ -404,8 +941,13 @@ type fakeTargetRuntimeStore struct {
 	getAnalysisRunErr      error
 	checkStepErr           error
 	progressCalls          int
+	progress               targetstore.RecordAnalysisRunProgressParams
 	artifactCalls          int
+	storedObjects          []targetstore.StoredObjectRecord
+	artifacts              []targetstore.ArtifactRecord
+	artifactSubjects       []targetstore.ArtifactSubjectRecord
 	diagnosticCalls        int
+	diagnostics            []targetstore.DiagnosticRecord
 	finalizeCalls          int
 	surface                targetstore.ChannelSurfaceRecord
 	surfaceSubjects        []targetstore.ChannelSurfaceSubjectRecord
@@ -812,18 +1354,23 @@ func (s *fakeTargetRuntimeStore) CheckAnalysisRunStepCancel(_ context.Context, a
 		}, nil
 }
 
-func (s *fakeTargetRuntimeStore) RecordAnalysisRunStepProgress(_ context.Context, _ targetstore.RecordAnalysisRunProgressParams) error {
+func (s *fakeTargetRuntimeStore) RecordAnalysisRunStepProgress(_ context.Context, params targetstore.RecordAnalysisRunProgressParams) error {
 	s.progressCalls++
+	s.progress = params
 	return nil
 }
 
-func (s *fakeTargetRuntimeStore) RecordArtifacts(_ context.Context, _ []targetstore.StoredObjectRecord, _ []targetstore.ArtifactRecord, _ []targetstore.ArtifactSubjectRecord) error {
+func (s *fakeTargetRuntimeStore) RecordArtifacts(_ context.Context, storedObjects []targetstore.StoredObjectRecord, artifacts []targetstore.ArtifactRecord, subjects []targetstore.ArtifactSubjectRecord) error {
 	s.artifactCalls++
+	s.storedObjects = append([]targetstore.StoredObjectRecord(nil), storedObjects...)
+	s.artifacts = append([]targetstore.ArtifactRecord(nil), artifacts...)
+	s.artifactSubjects = append([]targetstore.ArtifactSubjectRecord(nil), subjects...)
 	return nil
 }
 
-func (s *fakeTargetRuntimeStore) RecordDiagnostics(_ context.Context, _ []targetstore.DiagnosticRecord) error {
+func (s *fakeTargetRuntimeStore) RecordDiagnostics(_ context.Context, diagnostics []targetstore.DiagnosticRecord) error {
 	s.diagnosticCalls++
+	s.diagnostics = append([]targetstore.DiagnosticRecord(nil), diagnostics...)
 	return nil
 }
 
