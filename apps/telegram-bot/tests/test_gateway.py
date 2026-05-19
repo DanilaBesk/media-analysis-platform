@@ -28,6 +28,7 @@ from telegram_adapter.bot import (
 )
 from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode, safe_callback_answer, user_error_text
 from telegram_adapter.gateway import TelegramFileInput, TelegramInboxGateway
+from telegram_adapter.gateway import _page_meta_from_response, _telegram_address_fingerprint
 
 
 class FakeFinalApiClient:
@@ -623,6 +624,63 @@ def test_remove_latest_collection_item_removes_last_item_from_full_collection() 
         "media-2",
         "media-3",
     ]
+
+
+def test_gateway_edge_helpers_cover_pagination_surface_and_dedup_branches() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api, page_size=1)
+
+    with pytest.raises(RuntimeError, match="inbox_empty"):
+        gateway.remove_latest_collection_item(
+            owner=owner(),
+            collection_id="inbox-1",
+            expected_version=api.collection["version"],
+        )
+
+    assert gateway.find_result_artifact_surface(owner=owner(), artifact_id=" ") is None
+    assert gateway.result_artifact_surface_exists(owner=owner(), artifact_id=" ") is False
+    assert gateway._load_media_assets_by_id(channel_account_id="channel-account-1", media_asset_ids=[""]) == []
+
+    embedded_items, _ = gateway._restore_collection_items(
+        channel_account_id="channel-account-1",
+        collection={
+            "items": [
+                {
+                    "media_asset_id": "embedded-1",
+                    "media_asset": {"media_asset_id": "embedded-1", "kind": "text", "display_name": "embedded"},
+                }
+            ]
+        },
+        cursor=None,
+    )
+    assert embedded_items == [{"media_asset_id": "embedded-1", "kind": "text", "display_name": "embedded"}]
+
+    for index in range(51):
+        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+    loaded = gateway._load_media_assets_by_id(
+        channel_account_id="channel-account-1",
+        media_asset_ids=["media-51"],
+    )
+    assert [item["media_asset_id"] for item in loaded] == ["media-51"]
+
+    collection = dict(api.collection)
+    before_version = collection["version"]
+    gateway._clear_collection_items(
+        owner=owner(),
+        collection=collection,
+        media_asset_ids=["", "media-1", "media-1", " media-2 "],
+        cursor=None,
+    )
+    assert [request["media_asset_id"] for request in api.remove_requests[-2:]] == ["media-1", "media-2"]
+    assert api.collection["version"] == before_version + 2
+
+    assert _page_meta_from_response(
+        {"page": 2, "page_size": 9, "has_more": True, "next_cursor": 42},
+        default_page_size=5,
+    ) == {"page": 2, "page_size": 9, "has_more": True, "next_cursor": "42"}
+    assert _telegram_address_fingerprint(
+        {"chat_id": 10, "message_id": 42, "message_thread_id": 99}
+    ) == "telegram:10:42:99"
 
 
 def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_list() -> None:

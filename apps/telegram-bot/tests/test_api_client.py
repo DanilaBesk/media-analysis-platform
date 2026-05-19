@@ -317,6 +317,100 @@ def test_channel_account_and_surface_internal_methods_use_target_contracts() -> 
     assert supersede_payload == {"reason": "message_not_editable", "actor_type": "telegram_adapter"}
 
 
+def test_optional_idempotency_actor_and_surface_fields_are_forwarded() -> None:
+    requests = []
+
+    def fake_urlopen(request):
+        requests.append(request)
+        if request.full_url.endswith("/v1/media-assets"):
+            return FakeHttpResponse(json.dumps({"media_asset": {"media_asset_id": "media-1"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/media-assets/upload"):
+            return FakeHttpResponse(json.dumps({"media_asset": {"media_asset_id": "media-2"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/selection-snapshots"):
+            return FakeHttpResponse(json.dumps({"selection_snapshot": {"selection_snapshot_id": "snapshot-1"}}).encode("utf-8"))
+        if request.full_url.endswith("/v1/analysis-runs"):
+            return FakeHttpResponse(json.dumps({"analysis_run": {"analysis_run_id": "run-1"}}).encode("utf-8"))
+        if request.full_url.endswith("/internal/v1/channel-surfaces"):
+            return FakeHttpResponse(json.dumps({"channel_surface": {"channel_surface_id": "surface-1"}}).encode("utf-8"))
+        if "/display-state" in request.full_url:
+            return FakeHttpResponse(json.dumps({"channel_surface": {"channel_surface_id": "surface-1", "version": 2}}).encode("utf-8"))
+        if "/supersede" in request.full_url:
+            return FakeHttpResponse(json.dumps({"channel_surface_event": {"channel_surface_event_id": "event-1"}}).encode("utf-8"))
+        return FakeHttpResponse(json.dumps({"items": []}).encode("utf-8"))
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    client.create_media_asset(
+        channel_account_id="channel-account-1",
+        kind="text",
+        origin={"origin_type": "text", "origin_ref": "hello"},
+        idempotency_key="media-key",
+    )
+    client.upload_media_asset(
+        channel_account_id="channel-account-1",
+        kind="voice",
+        content=b"voice",
+        file_name="voice.ogg",
+        idempotency_key="upload-key",
+    )
+    client.create_selection_snapshot(
+        channel_account_id="channel-account-1",
+        items=[{"media_asset_id": "media-1", "position": 0}],
+        idempotency_key="snapshot-key",
+    )
+    client.create_analysis_run(
+        channel_account_id="channel-account-1",
+        selection_snapshot_id="snapshot-1",
+        idempotency_key="run-key",
+    )
+    client.upsert_channel_surface(
+        channel_account_id="channel-account-1",
+        surface_type="analysis_task_surface",
+        surface_key="analysis_run:run-1",
+        address={"chat_id": 10, "message_id": 42},
+        display_state={"status": "queued"},
+        idempotency_key="surface-key",
+    )
+    client.list_channel_surfaces(
+        channel_account_id="channel-account-1",
+        lifecycle_status="active",
+        page_size=8,
+    )
+    client.replace_channel_surface_display_state(
+        channel_surface_id="surface-1",
+        expected_version=1,
+        display_state={"status": "running"},
+        actor_id="adapter",
+        metadata={"reason": "poll"},
+    )
+    client.supersede_channel_surface(
+        channel_surface_id="surface-1",
+        reason="message_not_editable",
+        actor_id="adapter",
+        metadata={"reason": "fallback"},
+    )
+
+    media_payload = json.loads(requests[0].data.decode("utf-8"))
+    selection_payload = json.loads(requests[2].data.decode("utf-8"))
+    run_payload = json.loads(requests[3].data.decode("utf-8"))
+    surface_payload = json.loads(requests[4].data.decode("utf-8"))
+    replace_payload = json.loads(requests[6].data.decode("utf-8"))
+    supersede_payload = json.loads(requests[7].data.decode("utf-8"))
+
+    assert media_payload["idempotency_key"] == "media-key"
+    assert b'"idempotency_key": "upload-key"' in requests[1].data
+    assert selection_payload["idempotency_key"] == "snapshot-key"
+    assert run_payload["idempotency_key"] == "run-key"
+    assert surface_payload["idempotency_key"] == "surface-key"
+    assert requests[5].full_url == (
+        "http://api:8080/internal/v1/channel-surfaces"
+        "?channel_account_id=channel-account-1&lifecycle_status=active&page_size=8"
+    )
+    assert replace_payload["actor_id"] == "adapter"
+    assert replace_payload["metadata"] == {"reason": "poll"}
+    assert supersede_payload["actor_id"] == "adapter"
+    assert supersede_payload["metadata"] == {"reason": "fallback"}
+
+
 def test_backend_connection_failure_is_categorized_without_raw_exception_copy() -> None:
     def fake_urlopen(request):
         raise URLError("Connection refused at 127.0.0.1:8080")

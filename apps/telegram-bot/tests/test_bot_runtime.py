@@ -11,13 +11,19 @@ from typing import Any
 import warnings
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramUnauthorizedError
 
 from telegram_adapter import __main__ as telegram_main
 from telegram_adapter.api_client import TelegramApiClientError
 from telegram_adapter.bot import (
+    _PageState,
     TelegramInboxApp,
+    _active_run_for_focus,
+    _analysis_run_version,
+    _artifact_download_url,
+    _artifact_filename,
     _artifact_label,
+    _classify_telegram_surface_error,
     _classify_polling_log_message,
     _chat_type,
     _decode_callback_token,
@@ -25,17 +31,38 @@ from telegram_adapter.bot import (
     _decode_optional_callback_token,
     _detail_prefix,
     _diagnostic_label,
+    _display_name_text,
     _encode_callback_token,
     _encode_callback_version,
     _help_text,
+    _item_label,
+    _kind_text,
+    _latest_active_run,
     _media_group_id,
+    _media_status_text,
     _message_files,
     _message_text,
     _normalize_callback_error,
     _normalize_message_error,
+    _owner_from_channel_account,
+    _page_state_from_display_state,
     _parse_callback_payload,
+    _run_for_id,
+    _run_surface_display_state,
+    _select_transcript_artifact,
+    _state_key_from_owner,
+    _status_surface_display_state,
     _TelegramPollingMonitor,
+    _surface_address,
+    _surface_address_matches,
+    _surface_display_state,
+    _surface_message_id,
+    _surface_subject_id,
     _start_text,
+    _telegram_surface_address,
+    _terminal_run_with_payload,
+    _transcript_artifact_rank,
+    _visible_item_lines,
     build_status_keyboard,
 )
 from telegram_adapter.config import TelegramAdapterSettings, load_settings
@@ -1998,6 +2025,160 @@ def test_helper_functions_cover_remaining_callback_token_and_error_branches() ->
 
     with pytest.raises(TelegramUserError):
         _decode_callback_version("not-base36")
+
+
+def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
+    status = InboxStatus(
+        owner=owner(),
+        collection={"collection_id": "inbox-1", "version": 2},
+        items=[],
+        page={},
+        active_runs=[{"analysis_run_id": "run-active", "status": "running"}],
+        recent_runs=[
+            {"analysis_run_id": "run-active", "status": "running", "version": 1},
+            {"analysis_run_id": "run-terminal", "status": "succeeded", "version": 3},
+            {"analysis_run_id": "run-empty-version", "status": "succeeded", "version": 0},
+        ],
+        artifacts_by_run={"run-terminal": [{"artifact_id": "artifact-1"}]},
+        diagnostics_by_run={},
+        rejected=[],
+    )
+    state = _PageState(
+        current_cursor="cursor-1",
+        previous_cursors=["cursor-0"],
+        next_cursor="cursor-2",
+        screen="materials",
+        focused_run_id="run-active",
+    )
+
+    assert _latest_active_run(status)["analysis_run_id"] == "run-active"
+    assert _active_run_for_focus(status, "run-active")["status"] == "running"
+    assert _active_run_for_focus(status, None) is None
+    assert _terminal_run_with_payload(status, {"run-terminal": [{"artifact_id": "artifact-1"}]}, "run-terminal")[
+        "analysis_run_id"
+    ] == "run-terminal"
+    assert _terminal_run_with_payload(status, {"run-terminal": []}, "run-terminal") is None
+    assert _terminal_run_with_payload(status, {"run-terminal": [{"artifact_id": "artifact-1"}]}, None) is None
+    assert _analysis_run_version(status, "run-terminal") == 3
+    assert _analysis_run_version(status, "run-empty-version") is None
+    assert _analysis_run_version(status, "missing") is None
+    assert _run_for_id(status, "run-active")["status"] == "running"
+    assert _run_for_id(status, "missing") is None
+    assert _status_surface_display_state(status, state)["active_run_ids"] == ["run-active"]
+    assert _run_surface_display_state({"analysis_run_id": "run-2", "status": "queued", "version": 1}, _PageState())[
+        "focused_run_id"
+    ] == "run-2"
+
+    surface = {
+        "address": {"chat_id": "10", "message_id": "42"},
+        "display_state": {
+            "screen": "materials",
+            "current_cursor": "cursor-1",
+            "previous_cursors": ["cursor-0"],
+            "next_cursor": "cursor-2",
+        },
+        "subjects": [
+            "bad-subject",
+            {"subject_type": "analysis_run", "subject_role": "primary", "subject_id": "run-active"},
+        ],
+    }
+    assert _telegram_surface_address(chat_id=10, message_id=42) == {"chat_id": 10, "message_id": 42}
+    assert _surface_message_id(surface) == 42
+    assert _surface_address(surface) == (10, 42)
+    assert _surface_address({"address": []}) is None
+    assert _surface_address({"address": {"chat_id": "bad", "message_id": "42"}}) is None
+    assert _surface_address_matches(surface, chat_id=10, message_id=42) is True
+    assert _surface_display_state({"display_state": []}) == {}
+    restored_state = _page_state_from_display_state(_surface_display_state(surface), focused_run_id="run-active")
+    assert restored_state.previous_cursors == ["cursor-0"]
+    assert restored_state.focused_run_id == "run-active"
+    assert _surface_subject_id(surface, subject_type="analysis_run", role="primary") == "run-active"
+    assert _surface_subject_id({"subjects": "bad"}, subject_type="analysis_run", role="primary") is None
+
+    owner_from_metadata = _owner_from_channel_account({"metadata": {"owner": owner()}})
+    owner_from_external_ref = _owner_from_channel_account(
+        {
+            "external_account_ref": "chat:10:user:7",
+            "metadata": {"adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"}},
+        }
+    )
+    assert owner_from_metadata == owner()
+    assert owner_from_external_ref == owner()
+    assert _owner_from_channel_account({"external_account_ref": " "}) is None
+    assert _state_key_from_owner({}) is None
+    assert _state_key_from_owner({"adapter_identity": {"telegram_chat_id": "bad"}}) is None
+    assert _state_key_from_owner(owner()) == (10, 7)
+
+    visible_lines = _visible_item_lines(
+        [
+            {
+                "media_asset_id": "media-1",
+                "kind": "text",
+                "status": "ready",
+                "display_name": "Telegram media",
+                "metadata": {"message_id": 100},
+            },
+            {
+                "media_asset_id": "media-2",
+                "kind": "photo",
+                "status": "validating",
+                "display_name": "Telegram photo",
+                "metadata": {"media_group_id": "album-1"},
+            },
+            {
+                "media_asset_id": "media-3",
+                "kind": "video",
+                "status": "deleted",
+                "display_name": "Telegram video",
+                "metadata": {"media_group_id": "album-1"},
+            },
+        ]
+    )
+    assert visible_lines[0].startswith("1. Медиа из Telegram")
+    assert visible_lines[1] == "Альбом album-1 (2 шт.)"
+    assert _item_label({"media_asset_id": "media-4", "kind": "custom", "status": "custom"}) == "media-4 [custom, custom]"
+    assert _kind_text("text") == "текст"
+    assert _media_status_text("ready") == "готов"
+    assert _display_name_text("Telegram voice") == "Голосовое из Telegram"
+
+    artifacts = [
+        {"artifact_id": "skip-kind", "kind": "report", "status": "available", "content_type": "text/plain"},
+        {"artifact_id": "skip-status", "kind": "transcript", "status": "pending", "content_type": "text/plain"},
+        {"artifact_id": " ", "kind": "transcript", "status": "available", "content_type": "text/plain"},
+        {"artifact_id": "markdown", "kind": "transcript", "status": "ready", "content_type": "text/markdown"},
+        {"artifact_id": "plain", "kind": "transcript", "status": "available", "content_type": "text/plain; charset=utf-8"},
+    ]
+    assert _select_transcript_artifact(artifacts)["artifact_id"] == "plain"
+    assert _select_transcript_artifact([]) is None
+    assert _transcript_artifact_rank("text/markdown") == 1
+    assert _transcript_artifact_rank(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) == 2
+    assert _transcript_artifact_rank("text/html") == 3
+    assert _transcript_artifact_rank("application/json") == 4
+    assert _artifact_download_url({}) is None
+    assert _artifact_download_url({"download": {"url": " https://example.test/a.txt "}}) == "https://example.test/a.txt"
+    assert _artifact_filename({"filename": "nested/transcript.custom"}) == "transcript.custom"
+    assert _artifact_filename({"object_key": "objects/transcript.object"}) == "transcript.object"
+    assert _artifact_filename({"download": {"url": "https://example.test/files/transcript%20url.md"}}) == "transcript url.md"
+    assert _artifact_filename({"content_type": "text/plain"}) == "transcript.txt"
+    assert _artifact_filename({"content_type": "text/markdown"}) == "transcript.md"
+    assert _artifact_filename(
+        {"content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+    ) == "transcript.docx"
+    assert _artifact_filename({"content_type": "application/octet-stream"}) == "transcript.bin"
+
+    assert _classify_telegram_surface_error(telegram_bad_request("editMessageText", "message is not modified")).classification == "telegram_message_not_modified"
+    assert _classify_telegram_surface_error(telegram_bad_request("editMessageText", "chat not found")).lifecycle_reason == "telegram_address_unreachable"
+    assert _classify_telegram_surface_error(telegram_bad_request("editMessageText", "message to edit not found")).lifecycle_reason == "telegram_message_unavailable"
+    assert _classify_telegram_surface_error(telegram_bad_request("editMessageText", "bad request")).fatal is True
+    assert _classify_telegram_surface_error(telegram_forbidden("sendMessage", "bot was blocked")).lifecycle_reason == "telegram_address_unreachable"
+    assert _classify_telegram_surface_error(
+        TelegramNetworkError(method=SimpleNamespace(__api_method__="sendMessage"), message="timeout")
+    ).classification == "transient_telegram_delivery_error"
+    assert _classify_telegram_surface_error(
+        TelegramUnauthorizedError(method=SimpleNamespace(__api_method__="sendMessage"), message="unauthorized")
+    ).fatal is True
 
 
 def test_run_module_executes_script_exit_path(monkeypatch: pytest.MonkeyPatch) -> None:
