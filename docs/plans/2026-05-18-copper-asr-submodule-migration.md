@@ -52,6 +52,12 @@ Initial source pin:
 - Reviewed HEAD: `f2a8278fb236b2ba471083ca2debcc3e9052cd64`
 - Reviewed remote: `https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git`
 
+Current runtime source pin after the CopperASR thread-cap and telemetry update:
+
+- Runtime branch: `main`
+- Runtime HEAD: `5184cd4452ac45f0d93fb3e00b6bae005cb597e5`
+- Update reason: consumes upstream `fix/runtime-thread-caps-telemetry` without editing the submodule from this repository.
+
 Implementation rule:
 
 - `media-b8s.1.4` must pin the submodule to an exact commit and record `git -C vendor/copper-asr rev-parse HEAD`.

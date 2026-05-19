@@ -452,6 +452,13 @@ def run_benchmark(
     worker_env = env_by_service.get("worker-transcription", {})
     backend = run_manifest.get("transcription_backend") if isinstance(run_manifest, dict) else {}
     backend = backend if isinstance(backend, dict) else {}
+    backend_metadata = backend.get("metadata") if isinstance(backend.get("metadata"), dict) else {}
+    processing = backend_metadata.get("processing") if isinstance(backend_metadata.get("processing"), dict) else {}
+    vad_timing_seconds = processing.get("vad_s")
+    vad_segment_count = processing.get("vad_segment_count")
+    chunk_count = processing.get("chunk_count")
+    runtime_exposes_vad_timing = isinstance(vad_timing_seconds, int | float)
+    runtime_exposes_segment_count = isinstance(vad_segment_count, int) and isinstance(chunk_count, int)
     thresholds = _threshold_result(
         run_wall_seconds=run_wall_seconds,
         resources=resources,
@@ -498,6 +505,9 @@ def run_benchmark(
             "concurrency": {
                 "COPPER_ASR_MAX_CONCURRENT_REQUESTS": copper_env.get("COPPER_ASR_MAX_CONCURRENT_REQUESTS", ""),
                 "COPPER_ASR_ONNX_NUM_THREADS": copper_env.get("COPPER_ASR_ONNX_NUM_THREADS", ""),
+                "COPPER_ASR_TORCH_NUM_THREADS": copper_env.get("COPPER_ASR_TORCH_NUM_THREADS", ""),
+                "COPPER_ASR_TORCH_INTEROP_THREADS": copper_env.get("COPPER_ASR_TORCH_INTEROP_THREADS", ""),
+                "COPPER_ASR_FFMPEG_THREADS": copper_env.get("COPPER_ASR_FFMPEG_THREADS", ""),
                 "COPPER_ASR_ACQUIRE_TIMEOUT_S": copper_env.get("COPPER_ASR_ACQUIRE_TIMEOUT_S", ""),
                 "COPPER_ASR_CLIENT_TIMEOUT_S": worker_env.get("COPPER_ASR_CLIENT_TIMEOUT_S", ""),
             },
@@ -520,9 +530,24 @@ def run_benchmark(
             "speedup_vs_realtime": _round(fixture_duration_seconds / run_wall_seconds) if run_wall_seconds else 0,
         },
         "vad_segmentation": {
-            "runtime_exposes_vad_timing": False,
-            "runtime_exposes_segment_count": False,
-            "timing_source": "coarse analysis_run_step progress events only; CopperASR HTTP response/run_manifest do not expose VAD timing yet",
+            "runtime_exposes_vad_timing": runtime_exposes_vad_timing,
+            "runtime_exposes_segment_count": runtime_exposes_segment_count,
+            "timing_source": "CopperASR HTTP response metadata.processing"
+            if runtime_exposes_vad_timing or runtime_exposes_segment_count
+            else "coarse analysis_run_step progress events only; CopperASR HTTP response/run_manifest do not expose VAD timing yet",
+            "runtime_processing_seconds": {
+                "audio_preparation_s": processing.get("audio_preparation_s"),
+                "vad_s": vad_timing_seconds,
+                "asr_inference_s": processing.get("asr_inference_s"),
+                "total_s": processing.get("total_s"),
+                "audio_duration_s": processing.get("audio_duration_s"),
+            },
+            "runtime_counts": {
+                "vad_segment_count": vad_segment_count,
+                "chunk_count": chunk_count,
+                "word_count": processing.get("word_count"),
+                "sentence_count": processing.get("sentence_count"),
+            },
             "coarse_progress_stage_durations_seconds": event_result["stage_durations_seconds"],
         },
         "progress_events": event_result["timeline"],

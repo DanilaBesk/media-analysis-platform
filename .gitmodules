@@ -1,3 +1,4 @@
 [submodule "vendor/copper-asr"]
 	path = vendor/copper-asr
 	url = https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git
+	branch = main

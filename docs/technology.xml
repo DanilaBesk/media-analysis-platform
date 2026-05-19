@@ -179,7 +179,7 @@
   </LifecycleAndRetention>
 
   <AsrRuntime>
-    <source-submodule path="vendor/copper-asr" remote="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" pinned-commit="f2a8278fb236b2ba471083ca2debcc3e9052cd64" />
+    <source-submodule path="vendor/copper-asr" remote="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" branch="main" pinned-commit="5184cd4452ac45f0d93fb3e00b6bae005cb597e5" />
     <contract>media-analysis-platform owns queues, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, and channel surfaces. CopperASR owns ASR model lifecycle, inference, sanitized ASR errors, /health, and /transcribe.</contract>
     <worker-boundary path="workers/common/src/transcriber_workers_common/copper_asr.py" launcher="workers/transcription/src/transcriber_worker_transcription_main.py" env-prefix="COPPER_ASR_" />
     <artifact-contract>TranscriptResult carries provider_metadata so run_manifest can identify CopperASR provider, model, duration, and sanitized runtime metadata while visible transcript artifacts remain plain text, markdown, and DOCX.</artifact-contract>

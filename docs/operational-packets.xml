@@ -243,7 +243,7 @@ CopperASR failures must finalize runs instead of leaving active task cards stuck
 Failed ASR runs and retries must record analysis_run diagnostics and publish only run policy artifacts, never transcript artifacts.
 Cancellation must reach a terminal canceled state and must not publish orphan artifacts.
 The failure E2E must assert runtime concurrency/timeout knobs used for long-audio backpressure.
-The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error because the CopperASR provider returns HTTP 500 unexpected_runtime_error for invalid Ogg bytes; media-b8s.2.9 owns normalization to asr_invalid_audio.
+The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error because the refreshed CopperASR provider still returns HTTP 500 unexpected_runtime_error for invalid Ogg bytes after the platform preflight workaround was removed; media-b8s.2.9 is blocked by media-b8s.2.11 until provider classification or an explicitly approved platform preflight equivalent normalizes this to asr_invalid_audio.
     ]]></contract-excerpt>
     <verification>
       <check>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests/test_transcriber_worker_transcription.py::test_run_transcription_uses_copper_asr_diagnostic_code -q</check>
@@ -269,9 +269,9 @@ The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error be
     </write-scope>
     <contract-excerpt><![CDATA[
 The benchmark harness consumes representative_long_voice and must record backend/model, input duration, wall time, CPU/memory samples, concurrency settings, warm/cold model state, result delivery latency, threshold status, and blocker linkage when thresholds fail.
-The current evidence proves provider=copperasr, model=Copperside/CoppersideASR, 960.006s input, 85.148s run wall time, 11.275x realtime speed, transcript document delivery, duplicate-result guard, and inbox clearing.
-The CPU threshold fails inside copper-asr: max_cpu_percent=884.07, avg_cpu_percent=562.183, while worker-transcription max_cpu_percent=0.0 and api max_cpu_percent=0.43.
-media-b8s.2.10 blocks closure and belongs to the CopperASR submodule repository: cap Torch/BLAS/ffmpeg thread usage and expose VAD/segmentation timing or equivalent benchmark telemetry.
+The current evidence proves provider=copperasr, model=Copperside/CoppersideASR, 960.006s input, 105.187s run wall time, 9.127x realtime speed, transcript document delivery, duplicate-result guard, inbox clearing, and CopperASR response processing telemetry.
+The local consumer profile is COPPER_ASR_ONNX_NUM_THREADS=2, COPPER_ASR_TORCH_NUM_THREADS=2, COPPER_ASR_TORCH_INTEROP_THREADS=1, COPPER_ASR_FFMPEG_THREADS=1. The CPU threshold still fails inside copper-asr: max_cpu_percent=875.05, avg_cpu_percent=412.46, while worker-transcription and api stay near idle.
+media-b8s.2.10 blocks closure for remaining CopperASR max-CPU pressure; telemetry is now available through metadata.processing.
     ]]></contract-excerpt>
     <verification>
       <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>

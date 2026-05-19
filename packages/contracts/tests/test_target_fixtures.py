@@ -152,7 +152,10 @@ def test_copper_asr_long_voice_benchmark_artifact_records_runtime_thresholds() -
 
     concurrency = payload["runtime"]["concurrency"]
     assert concurrency["COPPER_ASR_MAX_CONCURRENT_REQUESTS"] == "1"
-    assert concurrency["COPPER_ASR_ONNX_NUM_THREADS"] == "4"
+    assert concurrency["COPPER_ASR_ONNX_NUM_THREADS"] == "2"
+    assert concurrency["COPPER_ASR_TORCH_NUM_THREADS"] == "2"
+    assert concurrency["COPPER_ASR_TORCH_INTEROP_THREADS"] == "1"
+    assert concurrency["COPPER_ASR_FFMPEG_THREADS"] == "1"
 
     resources = payload["resources"]["services"]
     assert "copper-asr" in resources
@@ -167,3 +170,11 @@ def test_copper_asr_long_voice_benchmark_artifact_records_runtime_thresholds() -
     assert isinstance(thresholds["passed"], bool)
     if not thresholds["passed"]:
         assert str(thresholds["blocker_issue_id"]).startswith("media-")
+
+    vad_segmentation = payload["vad_segmentation"]
+    assert vad_segmentation["runtime_exposes_vad_timing"] is True
+    assert vad_segmentation["runtime_exposes_segment_count"] is True
+    assert vad_segmentation["runtime_processing_seconds"]["vad_s"] > 0
+    assert vad_segmentation["runtime_processing_seconds"]["asr_inference_s"] > 0
+    assert vad_segmentation["runtime_counts"]["vad_segment_count"] > 0
+    assert vad_segmentation["runtime_counts"]["chunk_count"] > 0
