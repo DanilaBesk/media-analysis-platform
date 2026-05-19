@@ -1068,6 +1068,83 @@ def test_run_transcription_uses_copper_asr_diagnostic_code(tmp_path: Path) -> No
     assert diagnostics_bundle["diagnostics"] == list(diagnostics)
 
 
+def test_transcription_failure_diagnostics_uses_all_items_when_no_successful_outcomes() -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-failed",
+            source_kind="uploaded_file",
+            display_name="Failed voice",
+            original_filename="failed.ogg",
+            object_key="uploads/failed.ogg",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-skipped",
+            source_kind="text",
+            display_name="Skipped note",
+        ),
+    )
+    item_outcomes = (
+        {
+            "outcome": "failed",
+            "selection_snapshot_item_id": "selection-snapshot-item-0",
+            "media_asset_id": "media-source-failed",
+        },
+        {
+            "outcome": "skipped",
+            "selection_snapshot_item_id": "selection-snapshot-item-1",
+            "media_asset_id": "media-source-skipped",
+        },
+    )
+
+    diagnostics = worker_module._transcription_failure_diagnostics(
+        execution,
+        item_outcomes,
+        CopperAsrTranscriptionError(
+            "CopperASR request_timeout: request timed out",
+            diagnostic_code="asr_request_timeout",
+            provider_code="request_timeout",
+            status_code=504,
+            retryable=True,
+        ),
+    )
+
+    context = diagnostics[0]["context"]
+    assert context["affected_selection_snapshot_item_ids"] == [
+        "selection-snapshot-item-0",
+        "selection-snapshot-item-1",
+    ]
+    assert context["affected_media_asset_ids"] == ["media-source-failed", "media-source-skipped"]
+    assert diagnostics[0]["remediation_hint"] == "retry"
+
+
+def test_mark_transcription_failed_outcomes_preserves_existing_non_successful_items() -> None:
+    skipped = {
+        "outcome": "skipped",
+        "included": False,
+        "diagnostic_ids": ["diag-skip"],
+    }
+    outcomes = worker_module._mark_transcription_failed_outcomes(
+        (
+            skipped,
+            {
+                "outcome": "succeeded",
+                "included": True,
+                "artifact_kinds": ["transcript_plain"],
+                "diagnostic_ids": [],
+            },
+        ),
+        ({"diagnostic_id": "diag-asr"},),
+    )
+
+    assert outcomes[0] is skipped
+    assert outcomes[1]["outcome"] == "failed"
+    assert outcomes[1]["included"] is False
+    assert outcomes[1]["artifact_kinds"] == []
+    assert outcomes[1]["diagnostic_ids"] == ["diag-asr"]
+
+
 def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure(tmp_path: Path) -> None:
     execution = ClaimedAnalysisRunStep(
         analysis_run_step_id="exec-unsupported",
@@ -1119,6 +1196,23 @@ def test_materialize_unsupported_object_descriptor_returns_none_for_non_object(t
     )
 
     assert worker_module._materialize_unsupported_object_descriptor(descriptor, tmp_path, FakeSourceStore({})) is None
+
+
+def test_supported_direct_youtube_descriptor_requires_external_uri() -> None:
+    descriptor = worker_module.SelectionItemMaterialization(
+        selection_snapshot_item_id="sel-item-url",
+        position=0,
+        media_asset_id="media-url",
+        media_kind="url",
+        role="primary",
+        labels=SelectionItemLabels(display_label="URL without href"),
+        origin_ref="source-url",
+        origin_type="url",
+        materialization_kind="url",
+        external_uri=None,
+    )
+
+    assert worker_module._is_supported_direct_youtube_descriptor(descriptor) is False
 
 
 def test_materialize_single_selection_item_downloads_object_backed_source(tmp_path: Path) -> None:
@@ -1277,6 +1371,16 @@ def test_assert_required_artifacts_exist_rejects_missing_docx(tmp_path: Path) ->
 
     with pytest.raises(RuntimeError, match="required transcript artifact is missing"):
         worker_module._assert_required_artifacts_exist(artifacts)
+
+
+def test_workspace_dir_for_analysis_run_rejects_defensive_token_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(worker_module, "_safe_workspace_token", lambda value: "../outside")
+
+    with pytest.raises(ValueError, match="outside workspace_root"):
+        worker_module._workspace_dir_for_analysis_run(tmp_path, "job-escape")
 
 
 def _build_execution(
