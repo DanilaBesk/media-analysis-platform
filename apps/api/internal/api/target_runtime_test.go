@@ -928,6 +928,171 @@ func TestTargetRuntimeServiceRejectsWorkerWritesForUnknownStep(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceRequiresStoreForAllOperations(t *testing.T) {
+	t.Parallel()
+
+	service := NewTargetRuntimeService(nil)
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "resolve channel account", run: func() error {
+			_, err := service.ResolveChannelAccount(ctx, TargetChannelAccountRequest{})
+			return err
+		}},
+		{name: "list channel accounts", run: func() error {
+			_, err := service.ListChannelAccounts(ctx, TargetListChannelAccountsRequest{})
+			return err
+		}},
+		{name: "update channel account", run: func() error {
+			_, err := service.UpdateChannelAccount(ctx, TargetUpdateChannelAccountRequest{})
+			return err
+		}},
+		{name: "create media asset", run: func() error {
+			_, err := service.CreateMediaAsset(ctx, TargetCreateMediaAssetRequest{})
+			return err
+		}},
+		{name: "list media assets", run: func() error {
+			_, err := service.ListMediaAssets(ctx, TargetListMediaAssetsRequest{})
+			return err
+		}},
+		{name: "get media asset", run: func() error {
+			_, err := service.GetMediaAsset(ctx, TargetGetMediaAssetRequest{})
+			return err
+		}},
+		{name: "delete media asset", run: func() error {
+			_, err := service.DeleteMediaAsset(ctx, TargetDeleteMediaAssetRequest{})
+			return err
+		}},
+		{name: "get inbox collection", run: func() error {
+			_, err := service.GetInboxCollection(ctx, TargetGetInboxCollectionRequest{})
+			return err
+		}},
+		{name: "create collection", run: func() error {
+			_, err := service.CreateCollection(ctx, TargetCreateCollectionRequest{})
+			return err
+		}},
+		{name: "list collections", run: func() error {
+			_, err := service.ListCollections(ctx, TargetListCollectionsRequest{})
+			return err
+		}},
+		{name: "get collection", run: func() error {
+			_, err := service.GetCollection(ctx, TargetGetCollectionRequest{})
+			return err
+		}},
+		{name: "update collection", run: func() error {
+			_, err := service.UpdateCollection(ctx, TargetUpdateCollectionRequest{})
+			return err
+		}},
+		{name: "update collection items", run: func() error {
+			_, err := service.UpdateCollectionItems(ctx, TargetUpdateCollectionItemsRequest{})
+			return err
+		}},
+		{name: "remove collection item", run: func() error {
+			_, err := service.RemoveCollectionItem(ctx, TargetRemoveCollectionItemRequest{})
+			return err
+		}},
+		{name: "create selection snapshot", run: func() error {
+			_, err := service.CreateSelectionSnapshot(ctx, TargetCreateSelectionSnapshotRequest{})
+			return err
+		}},
+		{name: "get selection snapshot", run: func() error {
+			_, err := service.GetSelectionSnapshot(ctx, TargetGetSelectionSnapshotRequest{})
+			return err
+		}},
+		{name: "create analysis run", run: func() error {
+			_, err := service.CreateAnalysisRun(ctx, TargetCreateAnalysisRunRequest{})
+			return err
+		}},
+		{name: "list analysis runs", run: func() error {
+			_, err := service.ListAnalysisRuns(ctx, TargetListAnalysisRunsRequest{})
+			return err
+		}},
+		{name: "get analysis run", run: func() error {
+			_, err := service.GetAnalysisRun(ctx, TargetGetAnalysisRunRequest{})
+			return err
+		}},
+		{name: "cancel analysis run", run: func() error {
+			_, err := service.CancelAnalysisRun(ctx, "run-1", TargetCancelAnalysisRunRequest{})
+			return err
+		}},
+		{name: "retry analysis run", run: func() error {
+			_, err := service.RetryAnalysisRun(ctx, "run-1", TargetRetryAnalysisRunRequest{})
+			return err
+		}},
+		{name: "list analysis run events", run: func() error {
+			_, err := service.ListAnalysisRunEvents(ctx, TargetListAnalysisRunEventsRequest{})
+			return err
+		}},
+		{name: "list artifacts", run: func() error {
+			_, err := service.ListArtifacts(ctx, TargetListArtifactsRequest{})
+			return err
+		}},
+		{name: "get artifact", run: func() error {
+			_, err := service.GetArtifact(ctx, TargetGetArtifactRequest{})
+			return err
+		}},
+		{name: "list diagnostics", run: func() error {
+			_, err := service.ListDiagnostics(ctx, TargetListDiagnosticsRequest{})
+			return err
+		}},
+		{name: "list step queue", run: func() error {
+			_, err := service.ListAnalysisRunStepQueue(ctx, TargetAnalysisRunStepQueueRequest{})
+			return err
+		}},
+		{name: "claim step", run: func() error {
+			_, err := service.ClaimAnalysisRunStep(ctx, "run-1", TargetClaimAnalysisRunStepRequest{})
+			return err
+		}},
+		{name: "check step cancel", run: func() error {
+			_, err := service.CheckAnalysisRunStepCancel(ctx, "run-1", TargetCheckAnalysisRunStepCancelRequest{})
+			return err
+		}},
+		{name: "record progress", run: func() error {
+			return service.RecordAnalysisRunStepProgress(ctx, "run-1", TargetRecordAnalysisRunStepProgressRequest{})
+		}},
+		{name: "record artifacts", run: func() error {
+			return service.RecordAnalysisRunArtifacts(ctx, "run-1", TargetRecordAnalysisRunArtifactsRequest{})
+		}},
+		{name: "record diagnostics", run: func() error {
+			return service.RecordAnalysisRunDiagnostics(ctx, "run-1", TargetRecordAnalysisRunDiagnosticsRequest{})
+		}},
+		{name: "finalize step", run: func() error {
+			_, err := service.FinalizeAnalysisRunStep(ctx, "run-1", TargetFinalizeAnalysisRunStepRequest{})
+			return err
+		}},
+		{name: "upsert surface", run: func() error {
+			_, err := service.UpsertChannelSurface(ctx, TargetUpsertChannelSurfaceRequest{})
+			return err
+		}},
+		{name: "list surfaces", run: func() error {
+			_, err := service.ListChannelSurfaces(ctx, TargetListChannelSurfacesRequest{})
+			return err
+		}},
+		{name: "replace display state", run: func() error {
+			_, err := service.ReplaceChannelSurfaceDisplayState(ctx, TargetReplaceChannelSurfaceDisplayStateRequest{})
+			return err
+		}},
+		{name: "supersede surface", run: func() error {
+			_, err := service.SupersedeChannelSurface(ctx, TargetSupersedeChannelSurfaceRequest{})
+			return err
+		}},
+		{name: "list surface events", run: func() error {
+			_, err := service.ListChannelSurfaceEvents(ctx, TargetListChannelSurfaceEventsRequest{})
+			return err
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.run(); err == nil {
+				t.Fatalf("%s returned nil error without target store", tc.name)
+			}
+		})
+	}
+}
+
 type fakeTargetRuntimeStore struct {
 	channelAccount         targetstore.ChannelAccountRecord
 	operation              targetstore.OperationRequestRecord

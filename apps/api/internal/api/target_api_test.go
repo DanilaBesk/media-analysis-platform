@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -535,6 +536,67 @@ func TestTargetApiEdgeCoverageForValidationConflictAndPagination(t *testing.T) {
 	assertNoLegacyTargetVocabulary(t, conflict.Body.String())
 }
 
+func TestTargetApiCoversInvalidJSONAndUploadEdges(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 12, 45, 0, 0, time.UTC)
+	target := &fakeTargetService{now: now}
+	mux := newFinalMux(Dependencies{Target: target})
+	invalidJSON := []struct {
+		name string
+		req  *http.Request
+		code string
+	}{
+		{name: "resolve channel account", req: invalidTargetJSONRequest(http.MethodPut, "/internal/v1/channel-accounts"), code: "invalid_channel_account"},
+		{name: "update channel account", req: invalidTargetJSONRequest(http.MethodPatch, "/internal/v1/channel-accounts/channel-account-1"), code: "invalid_channel_account"},
+		{name: "create selection snapshot", req: invalidTargetJSONRequest(http.MethodPost, "/v1/selection-snapshots"), code: "invalid_selection_snapshot"},
+		{name: "claim step", req: invalidTargetJSONRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/claim"), code: "invalid_analysis_run_step_claim"},
+		{name: "record progress", req: invalidTargetJSONRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/progress"), code: "invalid_analysis_run_step_progress"},
+		{name: "finalize step", req: invalidTargetJSONRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/finalize"), code: "invalid_analysis_run_step_finalize"},
+		{name: "upsert surface", req: invalidTargetJSONRequest(http.MethodPut, "/internal/v1/channel-surfaces"), code: "invalid_channel_surface"},
+		{name: "replace display state", req: invalidTargetJSONRequest(http.MethodPatch, "/internal/v1/channel-surfaces/surface-1/display-state"), code: "invalid_channel_surface_display_state"},
+		{name: "supersede surface", req: invalidTargetJSONRequest(http.MethodPost, "/internal/v1/channel-surfaces/surface-1/supersede"), code: "invalid_channel_surface_supersede"},
+	}
+	for _, tc := range invalidJSON {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, tc.req)
+			assertErrorCode(t, rec, http.StatusBadRequest, tc.code)
+			assertNoLegacyTargetVocabulary(t, rec.Body.String())
+		})
+	}
+
+	invalidMetadata := httptest.NewRecorder()
+	mux.ServeHTTP(invalidMetadata, rawMultipartTargetUploadRequest(t, "/v1/media-assets/upload", "{", "voice.ogg", "voice-bytes", "audio/ogg", true))
+	assertErrorCode(t, invalidMetadata, http.StatusBadRequest, "invalid_media_asset")
+	assertNoLegacyTargetVocabulary(t, invalidMetadata.Body.String())
+
+	missingFile := httptest.NewRecorder()
+	mux.ServeHTTP(missingFile, rawMultipartTargetUploadRequest(t, "/v1/media-assets/upload", `{"channel_account_id":"channel-account-1","kind":"voice"}`, "", "", "", false))
+	assertErrorCode(t, missingFile, http.StatusBadRequest, "invalid_media_asset")
+	assertNoLegacyTargetVocabulary(t, missingFile.Body.String())
+
+	blankFilename := httptest.NewRecorder()
+	mux.ServeHTTP(blankFilename, rawMultipartTargetUploadRequest(t, "/v1/media-assets/upload", `{"channel_account_id":"channel-account-1","kind":"voice"}`, " ", "voice-bytes", "", true))
+	assertTargetStatus(t, blankFilename, http.StatusCreated)
+	if target.mediaAssetReq.DisplayName != "upload.bin" ||
+		target.mediaAssetReq.Origin.OriginalFilename != "upload.bin" ||
+		target.mediaAssetReq.Origin.ContentType != "application/octet-stream" {
+		t.Fatalf("blank filename upload request = %#v", target.mediaAssetReq)
+	}
+	assertNoLegacyTargetVocabulary(t, blankFilename.Body.String())
+
+	errorTarget := &fakeTargetService{now: now, err: storage.ErrAnalysisRunNotFound}
+	errorMux := newFinalMux(Dependencies{Target: errorTarget})
+	uploadError := httptest.NewRecorder()
+	errorMux.ServeHTTP(uploadError, multipartTargetUploadRequest(t, "/v1/media-assets/upload", map[string]any{
+		"channel_account_id": "channel-account-1",
+		"kind":               "document",
+	}, "notes.txt", "hello"))
+	assertErrorCode(t, uploadError, http.StatusNotFound, "not_found")
+	assertNoLegacyTargetVocabulary(t, uploadError.Body.String())
+}
+
 func TestTargetApiReturnsDependencyUnavailableWhenTargetMissing(t *testing.T) {
 	t.Parallel()
 
@@ -592,6 +654,125 @@ func TestTargetApiReturnsDependencyUnavailableWhenTargetMissing(t *testing.T) {
 	}
 }
 
+func TestTargetApiCoversQueryFallbackAndTargetQueueErrors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC)
+	target := &fakeTargetService{now: now, listStepQueueErr: storage.ErrAnalysisRunNotFound}
+	mux := newFinalMux(Dependencies{Target: target})
+
+	cancel := httptest.NewRecorder()
+	mux.ServeHTTP(cancel, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/cancel?channel_account_id=channel-account-1", map[string]any{
+		"message": "stop",
+	}))
+	assertTargetStatus(t, cancel, http.StatusOK)
+	if target.cancelRunReq.ChannelAccountID != "channel-account-1" || target.cancelRunReq.Message != "stop" {
+		t.Fatalf("cancel request = %#v", target.cancelRunReq)
+	}
+
+	retry := httptest.NewRecorder()
+	mux.ServeHTTP(retry, jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/retry?channel_account_id=channel-account-1", map[string]any{
+		"idempotency_key": "retry-1",
+	}))
+	assertTargetStatus(t, retry, http.StatusAccepted)
+	if target.retryRunReq.ChannelAccountID != "channel-account-1" || target.retryRunReq.IdempotencyKey != "retry-1" {
+		t.Fatalf("retry request = %#v", target.retryRunReq)
+	}
+
+	queue := httptest.NewRecorder()
+	mux.ServeHTTP(queue, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/queue?page_size=10", nil))
+	assertErrorCode(t, queue, http.StatusNotFound, "not_found")
+}
+
+func TestTargetApiMapsTargetServiceErrors(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 17, 11, 0, 0, 0, time.UTC)
+	target := &fakeTargetService{now: now, err: storage.ErrAnalysisRunNotFound}
+	mux := newFinalMux(Dependencies{Target: target})
+	cases := []struct {
+		name string
+		req  *http.Request
+	}{
+		{name: "resolve channel account", req: jsonRequest(http.MethodPut, "/internal/v1/channel-accounts", map[string]any{"channel": "telegram", "external_account_ref": "chat-1"})},
+		{name: "list channel accounts", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-accounts", nil)},
+		{name: "update channel account", req: jsonRequest(http.MethodPatch, "/internal/v1/channel-accounts/channel-account-1", map[string]any{"display_name": "Danila"})},
+		{name: "create media asset", req: jsonRequest(http.MethodPost, "/v1/media-assets", map[string]any{
+			"channel_account_id": "channel-account-1",
+			"kind":               "voice",
+			"origin":             map[string]any{"origin_type": "telegram_file", "origin_ref": "voice-file-id"},
+		})},
+		{name: "list media assets", req: httptest.NewRequest(http.MethodGet, "/v1/media-assets?channel_account_id=channel-account-1", nil)},
+		{name: "get media asset", req: httptest.NewRequest(http.MethodGet, "/v1/media-assets/media-asset-1?channel_account_id=channel-account-1", nil)},
+		{name: "delete media asset", req: httptest.NewRequest(http.MethodDelete, "/v1/media-assets/media-asset-1?channel_account_id=channel-account-1", nil)},
+		{name: "get inbox", req: httptest.NewRequest(http.MethodGet, "/v1/collections/inbox?channel_account_id=channel-account-1", nil)},
+		{name: "create collection", req: jsonRequest(http.MethodPost, "/v1/collections", map[string]any{"channel_account_id": "channel-account-1", "name": "Research"})},
+		{name: "list collections", req: httptest.NewRequest(http.MethodGet, "/v1/collections?channel_account_id=channel-account-1", nil)},
+		{name: "get collection", req: httptest.NewRequest(http.MethodGet, "/v1/collections/collection-1?channel_account_id=channel-account-1", nil)},
+		{name: "update collection", req: jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{
+			"channel_account_id": "channel-account-1",
+			"expected_version":   1,
+			"name":               "Research v2",
+		})},
+		{name: "update collection items", req: jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{
+			"channel_account_id": "channel-account-1",
+			"expected_version":   1,
+			"items":              []map[string]any{{"media_asset_id": "media-asset-1", "position": 0}},
+		})},
+		{name: "remove collection item", req: httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/media-asset-1?channel_account_id=channel-account-1&expected_version=1", nil)},
+		{name: "create selection snapshot", req: jsonRequest(http.MethodPost, "/v1/selection-snapshots", map[string]any{
+			"channel_account_id":   "channel-account-1",
+			"source_collection_id": "collection-1",
+			"items":                []map[string]any{{"media_asset_id": "media-asset-1", "position": 0}},
+		})},
+		{name: "get selection snapshot", req: httptest.NewRequest(http.MethodGet, "/v1/selection-snapshots/snapshot-1?channel_account_id=channel-account-1", nil)},
+		{name: "create analysis run", req: jsonRequest(http.MethodPost, "/v1/analysis-runs", map[string]any{
+			"channel_account_id":    "channel-account-1",
+			"selection_snapshot_id": "snapshot-1",
+			"run_type":              "transcription",
+		})},
+		{name: "list analysis runs", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs?channel_account_id=channel-account-1", nil)},
+		{name: "get analysis run", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1?channel_account_id=channel-account-1", nil)},
+		{name: "cancel analysis run", req: jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/cancel", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "retry analysis run", req: jsonRequest(http.MethodPost, "/v1/analysis-runs/run-1/retry", map[string]any{"channel_account_id": "channel-account-1"})},
+		{name: "list analysis run events", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1/events?channel_account_id=channel-account-1", nil)},
+		{name: "list artifacts", req: httptest.NewRequest(http.MethodGet, "/v1/artifacts?channel_account_id=channel-account-1&analysis_run_id=run-1", nil)},
+		{name: "get artifact", req: httptest.NewRequest(http.MethodGet, "/v1/artifacts/artifact-1?channel_account_id=channel-account-1", nil)},
+		{name: "refresh artifact", req: jsonRequest(http.MethodPost, "/v1/artifacts/artifact-1/refresh?channel_account_id=channel-account-1", nil)},
+		{name: "list diagnostics", req: httptest.NewRequest(http.MethodGet, "/v1/diagnostics?channel_account_id=channel-account-1", nil)},
+		{name: "list step queue", req: httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/queue?page_size=10", nil)},
+		{name: "claim step", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/claim", map[string]any{"worker_kind": "transcription", "step_kind": "selection.transcription"})},
+		{name: "check step cancel", req: httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/run-1/steps/cancel-check?analysis_run_step_id=step-1", nil)},
+		{name: "record step progress", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/progress", map[string]any{"analysis_run_step_id": "step-1"})},
+		{name: "record artifacts", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/artifacts", map[string]any{"analysis_run_step_id": "step-1", "artifacts": []map[string]any{}})},
+		{name: "record diagnostics", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/diagnostics", map[string]any{"analysis_run_step_id": "step-1", "diagnostics": []map[string]any{}})},
+		{name: "finalize step", req: jsonRequest(http.MethodPost, "/internal/v1/analysis-runs/run-1/steps/finalize", map[string]any{"analysis_run_step_id": "step-1", "outcome": "failed"})},
+		{name: "upsert surface", req: jsonRequest(http.MethodPut, "/internal/v1/channel-surfaces", map[string]any{
+			"channel_account_id": "channel-account-1",
+			"channel":            "telegram",
+			"surface_type":       "message",
+			"surface_key":        "run:run-1",
+		})},
+		{name: "list surfaces", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces?channel_account_id=channel-account-1", nil)},
+		{name: "list active surfaces", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/active?channel_account_id=channel-account-1", nil)},
+		{name: "replace display state", req: jsonRequest(http.MethodPatch, "/internal/v1/channel-surfaces/surface-1/display-state", map[string]any{
+			"expected_version": 1,
+			"display_state":    map[string]any{"status": "running"},
+		})},
+		{name: "supersede surface", req: jsonRequest(http.MethodPost, "/internal/v1/channel-surfaces/surface-1/supersede", map[string]any{"actor_type": "telegram_adapter"})},
+		{name: "list surface events", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/surface-1/events", nil)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, tc.req)
+			assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+			assertNoLegacyTargetVocabulary(t, rec.Body.String())
+		})
+	}
+}
+
 func assertTargetStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	if rec.Code != want {
@@ -627,6 +808,12 @@ func assertNoLegacyTargetVocabulary(t *testing.T, body string) {
 	}
 }
 
+func invalidTargetJSONRequest(method, path string) *http.Request {
+	req := httptest.NewRequest(method, path, strings.NewReader("{"))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
 func multipartTargetUploadRequest(t *testing.T, path string, metadata map[string]any, filename, body string) *http.Request {
 	t.Helper()
 	var buf bytes.Buffer
@@ -653,6 +840,35 @@ func multipartTargetUploadRequest(t *testing.T, path string, metadata map[string
 	return req
 }
 
+func rawMultipartTargetUploadRequest(t *testing.T, path, metadata, filename, body, contentType string, includeFile bool) *http.Request {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("metadata", metadata); err != nil {
+		t.Fatalf("WriteField(metadata) error = %v", err)
+	}
+	if includeFile {
+		header := make(textproto.MIMEHeader)
+		header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filename))
+		if contentType != "" {
+			header.Set("Content-Type", contentType)
+		}
+		file, err := writer.CreatePart(header)
+		if err != nil {
+			t.Fatalf("CreatePart(file) error = %v", err)
+		}
+		if _, err := file.Write([]byte(body)); err != nil {
+			t.Fatalf("file.Write() error = %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer.Close() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, path, &buf)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	return req
+}
+
 func legacyTargetUploadStoredObjectID(channelAccountID, filename string, body []byte) string {
 	sum := sha256.Sum256(body)
 	checksum := fmt.Sprintf("sha256:%x", sum[:])
@@ -661,7 +877,9 @@ func legacyTargetUploadStoredObjectID(channelAccountID, filename string, body []
 
 type fakeTargetService struct {
 	now                 time.Time
+	err                 error
 	updateCollectionErr error
+	listStepQueueErr    error
 
 	channelAccountReq        TargetChannelAccountRequest
 	listChannelAccountsReq   TargetListChannelAccountsRequest
@@ -705,6 +923,9 @@ type fakeTargetService struct {
 
 func (f *fakeTargetService) ResolveChannelAccount(_ context.Context, req TargetChannelAccountRequest) (TargetChannelAccount, error) {
 	f.channelAccountReq = req
+	if f.err != nil {
+		return TargetChannelAccount{}, f.err
+	}
 	return TargetChannelAccount{
 		ChannelAccountID:   "channel-account-1",
 		Channel:            req.Channel,
@@ -718,6 +939,9 @@ func (f *fakeTargetService) ResolveChannelAccount(_ context.Context, req TargetC
 
 func (f *fakeTargetService) ListChannelAccounts(_ context.Context, req TargetListChannelAccountsRequest) (TargetChannelAccountPage, error) {
 	f.listChannelAccountsReq = req
+	if f.err != nil {
+		return TargetChannelAccountPage{}, f.err
+	}
 	return TargetChannelAccountPage{
 		Items: []TargetChannelAccount{{
 			ChannelAccountID:   "channel-account-1",
@@ -735,6 +959,9 @@ func (f *fakeTargetService) ListChannelAccounts(_ context.Context, req TargetLis
 
 func (f *fakeTargetService) UpdateChannelAccount(_ context.Context, req TargetUpdateChannelAccountRequest) (TargetChannelAccount, error) {
 	f.updateChannelAccountReq = req
+	if f.err != nil {
+		return TargetChannelAccount{}, f.err
+	}
 	return TargetChannelAccount{
 		ChannelAccountID:   req.ChannelAccountID,
 		Channel:            "telegram",
@@ -748,6 +975,9 @@ func (f *fakeTargetService) UpdateChannelAccount(_ context.Context, req TargetUp
 
 func (f *fakeTargetService) CreateMediaAsset(_ context.Context, req TargetCreateMediaAssetRequest) (TargetMediaAsset, error) {
 	f.mediaAssetReq = req
+	if f.err != nil {
+		return TargetMediaAsset{}, f.err
+	}
 	return TargetMediaAsset{
 		MediaAssetID:     "media-asset-1",
 		ChannelAccountID: req.ChannelAccountID,
@@ -763,11 +993,17 @@ func (f *fakeTargetService) CreateMediaAsset(_ context.Context, req TargetCreate
 
 func (f *fakeTargetService) ListMediaAssets(_ context.Context, req TargetListMediaAssetsRequest) (TargetMediaAssetPage, error) {
 	f.listMediaAssetsReq = req
+	if f.err != nil {
+		return TargetMediaAssetPage{}, f.err
+	}
 	return TargetMediaAssetPage{Items: []TargetMediaAsset{}, Page: 1, PageSize: req.PageSize}, nil
 }
 
 func (f *fakeTargetService) GetMediaAsset(_ context.Context, req TargetGetMediaAssetRequest) (TargetMediaAsset, error) {
 	f.getMediaAssetReq = req
+	if f.err != nil {
+		return TargetMediaAsset{}, f.err
+	}
 	return TargetMediaAsset{
 		MediaAssetID:     req.MediaAssetID,
 		ChannelAccountID: req.ChannelAccountID,
@@ -782,6 +1018,9 @@ func (f *fakeTargetService) GetMediaAsset(_ context.Context, req TargetGetMediaA
 
 func (f *fakeTargetService) DeleteMediaAsset(_ context.Context, req TargetDeleteMediaAssetRequest) (TargetMediaAsset, error) {
 	f.deleteMediaAssetReq = req
+	if f.err != nil {
+		return TargetMediaAsset{}, f.err
+	}
 	return TargetMediaAsset{
 		MediaAssetID:     req.MediaAssetID,
 		ChannelAccountID: req.ChannelAccountID,
@@ -797,16 +1036,25 @@ func (f *fakeTargetService) DeleteMediaAsset(_ context.Context, req TargetDelete
 
 func (f *fakeTargetService) GetInboxCollection(_ context.Context, req TargetGetInboxCollectionRequest) (TargetCollection, error) {
 	f.getInboxCollectionReq = req
+	if f.err != nil {
+		return TargetCollection{}, f.err
+	}
 	return fakeTargetCollection("inbox-1", req.ChannelAccountID, "inbox", "Inbox", f.now), nil
 }
 
 func (f *fakeTargetService) CreateCollection(_ context.Context, req TargetCreateCollectionRequest) (TargetCollection, error) {
 	f.createCollectionReq = req
+	if f.err != nil {
+		return TargetCollection{}, f.err
+	}
 	return fakeTargetCollection("collection-1", req.ChannelAccountID, "user", req.Name, f.now), nil
 }
 
 func (f *fakeTargetService) ListCollections(_ context.Context, req TargetListCollectionsRequest) (TargetCollectionPage, error) {
 	f.listCollectionsReq = req
+	if f.err != nil {
+		return TargetCollectionPage{}, f.err
+	}
 	return TargetCollectionPage{
 		Items:    []TargetCollection{fakeTargetCollection("collection-1", req.ChannelAccountID, "user", "Research", f.now)},
 		Page:     1,
@@ -816,14 +1064,20 @@ func (f *fakeTargetService) ListCollections(_ context.Context, req TargetListCol
 
 func (f *fakeTargetService) GetCollection(_ context.Context, req TargetGetCollectionRequest) (TargetCollection, error) {
 	f.getCollectionReq = req
+	if f.err != nil {
+		return TargetCollection{}, f.err
+	}
 	return fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now), nil
 }
 
 func (f *fakeTargetService) UpdateCollection(_ context.Context, req TargetUpdateCollectionRequest) (TargetCollection, error) {
+	f.updateCollectionReq = req
 	if f.updateCollectionErr != nil {
 		return TargetCollection{}, f.updateCollectionErr
 	}
-	f.updateCollectionReq = req
+	if f.err != nil {
+		return TargetCollection{}, f.err
+	}
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", req.Name, f.now)
 	collection.Version = req.ExpectedVersion + 1
 	return collection, nil
@@ -831,6 +1085,9 @@ func (f *fakeTargetService) UpdateCollection(_ context.Context, req TargetUpdate
 
 func (f *fakeTargetService) UpdateCollectionItems(_ context.Context, req TargetUpdateCollectionItemsRequest) (TargetCollection, error) {
 	f.updateCollectionItemsReq = req
+	if f.err != nil {
+		return TargetCollection{}, f.err
+	}
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now)
 	collection.Version = req.ExpectedVersion + 1
 	return collection, nil
@@ -838,6 +1095,9 @@ func (f *fakeTargetService) UpdateCollectionItems(_ context.Context, req TargetU
 
 func (f *fakeTargetService) RemoveCollectionItem(_ context.Context, req TargetRemoveCollectionItemRequest) (TargetCollection, error) {
 	f.removeCollectionItemReq = req
+	if f.err != nil {
+		return TargetCollection{}, f.err
+	}
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now)
 	collection.Version = req.ExpectedVersion + 1
 	collection.Items = []TargetCollectionItem{}
@@ -846,6 +1106,9 @@ func (f *fakeTargetService) RemoveCollectionItem(_ context.Context, req TargetRe
 
 func (f *fakeTargetService) CreateSelectionSnapshot(_ context.Context, req TargetCreateSelectionSnapshotRequest) (TargetSelectionSnapshot, error) {
 	f.selectionSnapshotReq = req
+	if f.err != nil {
+		return TargetSelectionSnapshot{}, f.err
+	}
 	return TargetSelectionSnapshot{
 		SelectionSnapshotID: "snapshot-1",
 		ChannelAccountID:    req.ChannelAccountID,
@@ -868,6 +1131,9 @@ func (f *fakeTargetService) CreateSelectionSnapshot(_ context.Context, req Targe
 
 func (f *fakeTargetService) GetSelectionSnapshot(_ context.Context, req TargetGetSelectionSnapshotRequest) (TargetSelectionSnapshot, error) {
 	f.getSelectionSnapshotReq = req
+	if f.err != nil {
+		return TargetSelectionSnapshot{}, f.err
+	}
 	return TargetSelectionSnapshot{
 		SelectionSnapshotID: req.SelectionSnapshotID,
 		ChannelAccountID:    req.ChannelAccountID,
@@ -909,6 +1175,9 @@ func fakeTargetCollection(id, channelAccountID, kind, name string, now time.Time
 
 func (f *fakeTargetService) CreateAnalysisRun(_ context.Context, req TargetCreateAnalysisRunRequest) (TargetAnalysisRun, error) {
 	f.analysisRunReq = req
+	if f.err != nil {
+		return TargetAnalysisRun{}, f.err
+	}
 	return TargetAnalysisRun{
 		AnalysisRunID:       "run-1",
 		ChannelAccountID:    req.ChannelAccountID,
@@ -925,6 +1194,9 @@ func (f *fakeTargetService) CreateAnalysisRun(_ context.Context, req TargetCreat
 
 func (f *fakeTargetService) ListAnalysisRuns(_ context.Context, req TargetListAnalysisRunsRequest) (TargetAnalysisRunPage, error) {
 	f.listAnalysisRunsReq = req
+	if f.err != nil {
+		return TargetAnalysisRunPage{}, f.err
+	}
 	return TargetAnalysisRunPage{
 		Items: []TargetAnalysisRun{{
 			AnalysisRunID:       "run-1",
@@ -943,6 +1215,9 @@ func (f *fakeTargetService) ListAnalysisRuns(_ context.Context, req TargetListAn
 
 func (f *fakeTargetService) GetAnalysisRun(_ context.Context, req TargetGetAnalysisRunRequest) (TargetAnalysisRun, error) {
 	f.getAnalysisRunReq = req
+	if f.err != nil {
+		return TargetAnalysisRun{}, f.err
+	}
 	return TargetAnalysisRun{
 		AnalysisRunID:       req.AnalysisRunID,
 		ChannelAccountID:    req.ChannelAccountID,
@@ -957,6 +1232,9 @@ func (f *fakeTargetService) GetAnalysisRun(_ context.Context, req TargetGetAnaly
 
 func (f *fakeTargetService) CancelAnalysisRun(_ context.Context, analysisRunID string, req TargetCancelAnalysisRunRequest) (TargetAnalysisRun, error) {
 	f.cancelRunReq = req
+	if f.err != nil {
+		return TargetAnalysisRun{}, f.err
+	}
 	return TargetAnalysisRun{
 		AnalysisRunID:       analysisRunID,
 		ChannelAccountID:    req.ChannelAccountID,
@@ -972,6 +1250,9 @@ func (f *fakeTargetService) CancelAnalysisRun(_ context.Context, analysisRunID s
 
 func (f *fakeTargetService) RetryAnalysisRun(_ context.Context, analysisRunID string, req TargetRetryAnalysisRunRequest) (TargetAnalysisRun, error) {
 	f.retryRunReq = req
+	if f.err != nil {
+		return TargetAnalysisRun{}, f.err
+	}
 	return TargetAnalysisRun{
 		AnalysisRunID:       "retry-" + analysisRunID,
 		ChannelAccountID:    req.ChannelAccountID,
@@ -986,6 +1267,9 @@ func (f *fakeTargetService) RetryAnalysisRun(_ context.Context, analysisRunID st
 
 func (f *fakeTargetService) ListAnalysisRunEvents(_ context.Context, req TargetListAnalysisRunEventsRequest) (TargetAnalysisRunEventPage, error) {
 	f.listRunEventsReq = req
+	if f.err != nil {
+		return TargetAnalysisRunEventPage{}, f.err
+	}
 	return TargetAnalysisRunEventPage{
 		Items: []TargetAnalysisRunEvent{{
 			AnalysisRunEventID: "event-1",
@@ -1002,6 +1286,9 @@ func (f *fakeTargetService) ListAnalysisRunEvents(_ context.Context, req TargetL
 
 func (f *fakeTargetService) ListArtifacts(_ context.Context, req TargetListArtifactsRequest) (TargetArtifactPage, error) {
 	f.listArtifactsReq = req
+	if f.err != nil {
+		return TargetArtifactPage{}, f.err
+	}
 	return TargetArtifactPage{
 		Items: []TargetArtifact{{
 			ArtifactID:       "artifact-1",
@@ -1020,6 +1307,9 @@ func (f *fakeTargetService) ListArtifacts(_ context.Context, req TargetListArtif
 
 func (f *fakeTargetService) GetArtifact(_ context.Context, req TargetGetArtifactRequest) (TargetArtifact, error) {
 	f.getArtifactReq = req
+	if f.err != nil {
+		return TargetArtifact{}, f.err
+	}
 	return TargetArtifact{
 		ArtifactID:       req.ArtifactID,
 		ChannelAccountID: req.ChannelAccountID,
@@ -1034,6 +1324,9 @@ func (f *fakeTargetService) GetArtifact(_ context.Context, req TargetGetArtifact
 
 func (f *fakeTargetService) ListDiagnostics(_ context.Context, req TargetListDiagnosticsRequest) (TargetDiagnosticPage, error) {
 	f.listDiagnosticsReq = req
+	if f.err != nil {
+		return TargetDiagnosticPage{}, f.err
+	}
 	return TargetDiagnosticPage{
 		Items: []TargetDiagnostic{{
 			DiagnosticID:     "diagnostic-1",
@@ -1052,6 +1345,12 @@ func (f *fakeTargetService) ListDiagnostics(_ context.Context, req TargetListDia
 
 func (f *fakeTargetService) ListAnalysisRunStepQueue(_ context.Context, req TargetAnalysisRunStepQueueRequest) (TargetAnalysisRunStepQueueResponse, error) {
 	f.listStepQueueReq = req
+	if f.listStepQueueErr != nil {
+		return TargetAnalysisRunStepQueueResponse{}, f.listStepQueueErr
+	}
+	if f.err != nil {
+		return TargetAnalysisRunStepQueueResponse{}, f.err
+	}
 	return TargetAnalysisRunStepQueueResponse{
 		Items: []TargetAnalysisRunStepQueueItem{{
 			AnalysisRunID:     "run-1",
@@ -1071,6 +1370,9 @@ func (f *fakeTargetService) ListAnalysisRunStepQueue(_ context.Context, req Targ
 
 func (f *fakeTargetService) ClaimAnalysisRunStep(_ context.Context, analysisRunID string, req TargetClaimAnalysisRunStepRequest) (TargetClaimAnalysisRunStepResponse, error) {
 	f.claimStepReq = req
+	if f.err != nil {
+		return TargetClaimAnalysisRunStepResponse{}, f.err
+	}
 	return TargetClaimAnalysisRunStepResponse{
 		AnalysisRunStepID: "step-1",
 		AnalysisRunID:     analysisRunID,
@@ -1110,26 +1412,41 @@ func (f *fakeTargetService) ClaimAnalysisRunStep(_ context.Context, analysisRunI
 
 func (f *fakeTargetService) CheckAnalysisRunStepCancel(_ context.Context, _ string, req TargetCheckAnalysisRunStepCancelRequest) (TargetAnalysisRunStepCancelState, error) {
 	f.checkStepCancelReq = req
+	if f.err != nil {
+		return TargetAnalysisRunStepCancelState{}, f.err
+	}
 	return TargetAnalysisRunStepCancelState{CancelRequested: false, Status: "running"}, nil
 }
 
 func (f *fakeTargetService) RecordAnalysisRunStepProgress(_ context.Context, _ string, req TargetRecordAnalysisRunStepProgressRequest) error {
 	f.progressStepReq = req
+	if f.err != nil {
+		return f.err
+	}
 	return nil
 }
 
 func (f *fakeTargetService) RecordAnalysisRunArtifacts(_ context.Context, _ string, req TargetRecordAnalysisRunArtifactsRequest) error {
 	f.recordArtifactsReq = req
+	if f.err != nil {
+		return f.err
+	}
 	return nil
 }
 
 func (f *fakeTargetService) RecordAnalysisRunDiagnostics(_ context.Context, _ string, req TargetRecordAnalysisRunDiagnosticsRequest) error {
 	f.recordDiagnosticsReq = req
+	if f.err != nil {
+		return f.err
+	}
 	return nil
 }
 
 func (f *fakeTargetService) FinalizeAnalysisRunStep(_ context.Context, analysisRunID string, req TargetFinalizeAnalysisRunStepRequest) (TargetAnalysisRun, error) {
 	f.finalizeStepReq = req
+	if f.err != nil {
+		return TargetAnalysisRun{}, f.err
+	}
 	return TargetAnalysisRun{
 		AnalysisRunID:       analysisRunID,
 		ChannelAccountID:    "channel-account-1",
@@ -1145,6 +1462,9 @@ func (f *fakeTargetService) FinalizeAnalysisRunStep(_ context.Context, analysisR
 
 func (f *fakeTargetService) UpsertChannelSurface(_ context.Context, req TargetUpsertChannelSurfaceRequest) (TargetChannelSurface, error) {
 	f.surfaceReq = req
+	if f.err != nil {
+		return TargetChannelSurface{}, f.err
+	}
 	return TargetChannelSurface{
 		ChannelSurfaceID:   "surface-1",
 		ChannelAccountID:   req.ChannelAccountID,
@@ -1168,6 +1488,9 @@ func (f *fakeTargetService) ListChannelSurfaces(_ context.Context, req TargetLis
 	} else {
 		f.listSurfacesReq = req
 	}
+	if f.err != nil {
+		return TargetChannelSurfacePage{}, f.err
+	}
 	return TargetChannelSurfacePage{
 		Items: []TargetChannelSurface{{
 			ChannelSurfaceID:   "surface-1",
@@ -1190,6 +1513,9 @@ func (f *fakeTargetService) ListChannelSurfaces(_ context.Context, req TargetLis
 
 func (f *fakeTargetService) ReplaceChannelSurfaceDisplayState(_ context.Context, req TargetReplaceChannelSurfaceDisplayStateRequest) (TargetChannelSurface, error) {
 	f.displayStateReq = req
+	if f.err != nil {
+		return TargetChannelSurface{}, f.err
+	}
 	return TargetChannelSurface{
 		ChannelSurfaceID: "surface-1",
 		ChannelAccountID: "channel-account-1",
@@ -1206,6 +1532,9 @@ func (f *fakeTargetService) ReplaceChannelSurfaceDisplayState(_ context.Context,
 
 func (f *fakeTargetService) SupersedeChannelSurface(_ context.Context, req TargetSupersedeChannelSurfaceRequest) (TargetChannelSurfaceEvent, error) {
 	f.supersedeReq = req
+	if f.err != nil {
+		return TargetChannelSurfaceEvent{}, f.err
+	}
 	return TargetChannelSurfaceEvent{
 		ChannelSurfaceEventID: "surface-event-1",
 		ChannelSurfaceID:      req.SurfaceID,
@@ -1219,6 +1548,9 @@ func (f *fakeTargetService) SupersedeChannelSurface(_ context.Context, req Targe
 
 func (f *fakeTargetService) ListChannelSurfaceEvents(_ context.Context, req TargetListChannelSurfaceEventsRequest) (TargetChannelSurfaceEventPage, error) {
 	f.listSurfaceEventsReq = req
+	if f.err != nil {
+		return TargetChannelSurfaceEventPage{}, f.err
+	}
 	return TargetChannelSurfaceEventPage{
 		Items: []TargetChannelSurfaceEvent{{
 			ChannelSurfaceEventID: "surface-event-1",

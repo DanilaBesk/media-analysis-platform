@@ -1328,6 +1328,124 @@ func TestApiInternalWorkerRouteErrorMappings(t *testing.T) {
 	}
 }
 
+func TestApiTargetWorkerFallbackHandlerBranches(t *testing.T) {
+	t.Parallel()
+
+	target := &fakeTargetService{now: time.Date(2026, 5, 17, 11, 0, 0, 0, time.UTC)}
+
+	invalidMux := newFinalMux(Dependencies{Target: target, Worker: &errorWorkerService{err: storage.ErrContractViolation}})
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+		code string
+	}{
+		{
+			name: "target artifacts invalid json",
+			path: "/internal/v1/analysis-runs/run-1/artifacts",
+			body: `{"analysis_run_step_id":`,
+			code: "invalid_execution_artifacts",
+		},
+		{
+			name: "target diagnostics invalid json",
+			path: "/internal/v1/analysis-runs/run-1/diagnostics",
+			body: `{"analysis_run_step_id":`,
+			code: "invalid_execution_diagnostics",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			invalidMux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusBadRequest, tc.code)
+		})
+	}
+
+	noWorkerMux := newFinalMux(Dependencies{Target: target})
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+		code string
+	}{
+		{
+			name: "target artifacts legacy execution id without worker",
+			path: "/internal/v1/analysis-runs/run-1/artifacts",
+			body: `{"execution_id":"exec-1","artifacts":[]}`,
+			code: "dependency_unavailable",
+		},
+		{
+			name: "target diagnostics legacy execution id without worker",
+			path: "/internal/v1/analysis-runs/run-1/diagnostics",
+			body: `{"execution_id":"exec-1","diagnostics":[]}`,
+			code: "dependency_unavailable",
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			noWorkerMux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusServiceUnavailable, tc.code)
+		})
+	}
+
+	workerErrMux := newFinalMux(Dependencies{Target: target, Worker: &errorWorkerService{err: storage.ErrAnalysisRunNotFound}})
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "target artifacts legacy execution id worker error",
+			path: "/internal/v1/analysis-runs/run-1/artifacts",
+			body: `{"execution_id":"exec-1","artifacts":[]}`,
+		},
+		{
+			name: "target diagnostics legacy execution id worker error",
+			path: "/internal/v1/analysis-runs/run-1/diagnostics",
+			body: `{"execution_id":"exec-1","diagnostics":[]}`,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			workerErrMux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusNotFound, "not_found")
+		})
+	}
+}
+
+func TestApiRuntimeDependencyConstructorCreatesTargetWhenStateIsProvided(t *testing.T) {
+	t.Parallel()
+
+	deps, err := NewRuntimeDependenciesWithTargetObjectStore(
+		&storage.Repository{},
+		&fakeTargetRuntimeStore{},
+		&fakeTargetObjectStore{},
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewRuntimeDependenciesWithTargetObjectStore() error = %v", err)
+	}
+	if deps.Target == nil {
+		t.Fatalf("Target dependency is nil, want configured target runtime")
+	}
+}
+
 type capturingLogger struct {
 	lines []string
 }
