@@ -164,7 +164,7 @@
       <annotations>
         <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
         <source-pin COMMIT="5184cd4452ac45f0d93fb3e00b6bae005cb597e5" />
-        <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" />
+        <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" LOCAL_CPU_QUOTA_ENV="COPPER_ASR_LOCAL_CPUS" LOCAL_CPU_QUOTA_DEFAULT="4.0" />
         <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
         <worker-client PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="HTTP client, source materialization, response normalization, timeout handling, and asr_* diagnostic mapping." />
         <manifest-contract PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Stores sanitized CopperASR provider metadata only in run_manifest/service artifacts while content artifacts stay provider-agnostic." />
@@ -248,7 +248,7 @@
         <script-copperAsrTelegramE2E PATH="infra/scripts/copper-asr-telegram-e2e.py" PURPOSE="Runs live Telegram-shaped short-voice transcription through API, worker, and CopperASR, then verifies delivery surfaces, duplicate guard, and inbox clearing." />
         <script-copperAsrApiWebMcpE2E PATH="infra/scripts/copper-asr-api-web-mcp-e2e.py" PURPOSE="Runs live short-voice transcription through API, worker, and CopperASR, then verifies the artifact/diagnostic/download contracts consumed by Web and MCP." />
         <script-copperAsrFailureE2E PATH="infra/scripts/copper-asr-failure-e2e.py" PURPOSE="Runs live corrupt-audio, retry, cancellation, policy artifact, and resource-limit assertions against the API/worker/CopperASR stack." />
-        <script-copperAsrBenchmarkE2E PATH="infra/scripts/copper-asr-benchmark-e2e.py" PURPOSE="Runs live representative long Telegram-shaped voice through API, worker, and CopperASR while sampling compose CPU/memory and writing the benchmark artifact." />
+        <script-copperAsrBenchmarkE2E PATH="infra/scripts/copper-asr-benchmark-e2e.py" PURPOSE="Runs live representative long Telegram-shaped voice through API, worker, and CopperASR while sampling compose CPU/memory, recording compose resource limits, and writing the benchmark artifact." />
         <artifact-copperAsrBenchmarkLatest PATH="docs/benchmarks/copper-asr-long-voice-benchmark-latest.json" PURPOSE="Stores latest long-voice benchmark proof, resource samples, thresholds, and blocker linkage when performance thresholds fail." />
         <doc-copperAsrE2EFixtures PATH="docs/architecture/copper-asr-e2e-fixtures.md" PURPOSE="Documents fixture provenance, model access assumptions, commands, and benchmark limits for media-b8s.2.*." />
         <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />

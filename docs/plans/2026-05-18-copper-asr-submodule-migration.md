@@ -129,8 +129,15 @@ Runtime env:
 - `COPPER_ASR_MAX_UPLOAD_MB=4096`
 - `COPPER_ASR_UPLOAD_CHUNK_BYTES=1048576`
 - `COPPER_ASR_MAX_CONCURRENT_REQUESTS=1`
-- `COPPER_ASR_ONNX_NUM_THREADS=4`
+- `COPPER_ASR_ONNX_NUM_THREADS=2`
+- `COPPER_ASR_TORCH_NUM_THREADS=2`
+- `COPPER_ASR_TORCH_INTEROP_THREADS=1`
+- `COPPER_ASR_FFMPEG_THREADS=1`
 - `COPPER_ASR_LOG_LEVEL=info`
+
+Local compose resource cap:
+
+- `COPPER_ASR_LOCAL_CPUS=4.0` in `infra/docker-compose.yml` caps only the local consumer `copper-asr` container and is recorded by the benchmark artifact. It does not modify CopperASR source or upstream production defaults.
 
 Volumes:
 

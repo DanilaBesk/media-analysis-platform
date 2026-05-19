@@ -4,6 +4,8 @@
 
 Normal compose runtime is container-native. `copper-asr` owns ASR inference, `worker-transcription` owns transcript step orchestration and artifact publication, and report/deep-research AI execution is routed through the single `worker-agent-runner` model worker. Dedicated report/deep-research LLM worker services are no longer part of the compose topology.
 
+The local compose service caps `copper-asr` with `COPPER_ASR_LOCAL_CPUS` and defaults it to `4.0` CPUs. This is a consumer-side Mac/local-stack guardrail: it does not edit CopperASR, does not change CopperASR production defaults, and can be overridden from the shell or `.env` before running compose.
+
 ```bash
 bash infra/scripts/compose-smoke.sh --check-config
 docker compose -f infra/docker-compose.yml up -d --build --wait

@@ -106,6 +106,34 @@ def _container_env(container_name: str) -> dict[str, str]:
     return env
 
 
+def _container_resource_limits(container_name: str) -> dict[str, Any]:
+    completed = _run_command(
+        ["docker", "inspect", "--format", "{{json .HostConfig}}", container_name],
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        return {"nano_cpus": 0, "cpu_quota": 0, "cpu_period": 0, "cpus": 0}
+    try:
+        host_config = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {"nano_cpus": 0, "cpu_quota": 0, "cpu_period": 0, "cpus": 0}
+    if not isinstance(host_config, dict):
+        return {"nano_cpus": 0, "cpu_quota": 0, "cpu_period": 0, "cpus": 0}
+
+    nano_cpus = int(host_config.get("NanoCpus") or 0)
+    cpu_quota = int(host_config.get("CpuQuota") or 0)
+    cpu_period = int(host_config.get("CpuPeriod") or 0)
+    cpus = nano_cpus / 1_000_000_000 if nano_cpus > 0 else 0
+    if cpus == 0 and cpu_quota > 0 and cpu_period > 0:
+        cpus = cpu_quota / cpu_period
+    return {
+        "nano_cpus": nano_cpus,
+        "cpu_quota": cpu_quota,
+        "cpu_period": cpu_period,
+        "cpus": _round(cpus),
+    }
+
+
 def _wait_copper_asr_healthy(timeout_seconds: float = 600) -> None:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
@@ -378,6 +406,10 @@ def run_benchmark(
         service: _container_env(str(item.get("Name") or item.get("Names") or ""))
         for service, item in services.items()
     }
+    resource_limits_by_service = {
+        service: _container_resource_limits(str(item.get("Name") or item.get("Names") or ""))
+        for service, item in services.items()
+    }
 
     suffix = uuid.uuid4().hex[:12]
     case, stored_object = _case("representative_long_voice")
@@ -519,6 +551,7 @@ def run_benchmark(
                 "COPPER_ASR_MODEL_PATH": copper_env.get("COPPER_ASR_MODEL_PATH", ""),
                 "COPPER_ASR_CACHE_DIR": copper_env.get("COPPER_ASR_CACHE_DIR", ""),
             },
+            "compose_resource_limits": resource_limits_by_service,
         },
         "timings": {
             "input_duration_seconds": fixture_duration_seconds,

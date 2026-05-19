@@ -172,6 +172,7 @@ validate_static_contract() {
   require_service_block_snippet "minio-init" "/init/bootstrap-buckets.sh"
   require_service_block_snippet "copper-asr" "dockerfile: infra/images/copper-asr/Dockerfile"
   require_service_block_snippet "copper-asr" "image: media-analysis-copper-asr:local"
+  require_service_block_snippet "copper-asr" 'cpus: ${COPPER_ASR_LOCAL_CPUS:-4.0}'
   require_service_block_snippet "copper-asr" "COPPER_ASR_CACHE_DIR: /var/cache/copper-asr"
   require_service_block_snippet "copper-asr" "COPPER_ASR_TMP_DIR: /tmp/copper-asr"
   require_service_block_snippet "copper-asr" "healthcheck:"

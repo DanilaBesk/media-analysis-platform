@@ -157,6 +157,10 @@ def test_copper_asr_long_voice_benchmark_artifact_records_runtime_thresholds() -
     assert concurrency["COPPER_ASR_TORCH_INTEROP_THREADS"] == "1"
     assert concurrency["COPPER_ASR_FFMPEG_THREADS"] == "1"
 
+    compose_limits = payload["runtime"]["compose_resource_limits"]
+    assert compose_limits["copper-asr"]["cpus"] == 4.0
+    assert compose_limits["copper-asr"]["nano_cpus"] == 4_000_000_000
+
     resources = payload["resources"]["services"]
     assert "copper-asr" in resources
     assert resources["copper-asr"]["sample_count"] > 0

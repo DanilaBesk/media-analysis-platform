@@ -134,6 +134,7 @@ services:
       dockerfile: infra/images/copper-asr/Dockerfile
     image: media-analysis-copper-asr:local
     restart: unless-stopped
+    cpus: ${COPPER_ASR_LOCAL_CPUS:-4.0}
     env_file:
       - ./env/copper-asr.env.example
     environment:
