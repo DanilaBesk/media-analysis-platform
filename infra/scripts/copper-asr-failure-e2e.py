@@ -232,9 +232,11 @@ def _assert_failed_run_has_diagnostics_and_policy_artifacts(
     }
 
 
-def _run_corrupt_and_retry_case(account: ChannelAccount) -> dict[str, Any]:
+def _run_corrupt_and_retry_case(account: ChannelAccount, *, require_invalid_audio: bool) -> dict[str, Any]:
     case, stored_object = _case("corrupt_audio")
-    allowed_codes = set(case.get("accepted_live_diagnostic_codes") or [case.get("expected_diagnostic_code")])
+    expected_code = str(case.get("expected_diagnostic_code") or "").strip()
+    accepted_codes = case.get("accepted_live_diagnostic_codes") or [expected_code]
+    allowed_codes = {expected_code} if require_invalid_audio else set(accepted_codes)
     media = _multipart_upload(account, stored_object, case_id=str(case["case_id"]))
     run = _create_transcription_run(account, str(media["media_asset_id"]), label="corrupt")
     terminal = _poll_run(account, str(run["analysis_run_id"]))
@@ -299,14 +301,15 @@ def _resource_limit_config() -> dict[str, str]:
     return required
 
 
-def run_failure_e2e() -> dict[str, Any]:
+def run_failure_e2e(*, require_invalid_audio: bool = False) -> dict[str, Any]:
     suffix = str(int(time.time()))
     _wait_for_api()
     account = _resolve_channel_account(label="primary", suffix=suffix)
     return {
         "channel_account_id": account.channel_account_id,
-        "corrupt_and_retry": _run_corrupt_and_retry_case(account),
+        "corrupt_and_retry": _run_corrupt_and_retry_case(account, require_invalid_audio=require_invalid_audio),
         "cancellation": _run_cancel_case(account),
+        "require_invalid_audio": require_invalid_audio,
         "resource_limits": _resource_limit_config(),
     }
 
@@ -314,9 +317,17 @@ def run_failure_e2e() -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run live CopperASR failure, retry, cancellation, and limit E2E checks.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable proof.")
+    parser.add_argument(
+        "--require-invalid-audio",
+        action="store_true",
+        help=(
+            "Require corrupt/retry diagnostics to be exactly the manifest expected invalid-audio code. "
+            "Use this as the final media-b8s.2.9 gate after CopperASR fixes corrupt audio classification."
+        ),
+    )
     args = parser.parse_args(argv)
     try:
-        result = run_failure_e2e()
+        result = run_failure_e2e(require_invalid_audio=args.require_invalid_audio)
     except FailureE2EError as exc:
         print(f"[CopperAsrFailureE2E] {exc}", file=sys.stderr)
         return 1

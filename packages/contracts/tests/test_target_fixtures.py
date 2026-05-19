@@ -132,6 +132,18 @@ def test_copper_asr_e2e_harness_reports_deterministic_fixture_plan() -> None:
     assert COPPER_ASR_BENCHMARK_E2E.stat().st_mode & 0o111
 
 
+def test_copper_asr_failure_e2e_exposes_strict_invalid_audio_gate() -> None:
+    result = subprocess.run(
+        [sys.executable, str(COPPER_ASR_FAILURE_E2E), "--help"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--require-invalid-audio" in result.stdout
+
+
 def test_copper_asr_long_voice_benchmark_artifact_records_runtime_thresholds() -> None:
     payload = json.loads(COPPER_ASR_BENCHMARK_ARTIFACT.read_text(encoding="utf-8"))
 
