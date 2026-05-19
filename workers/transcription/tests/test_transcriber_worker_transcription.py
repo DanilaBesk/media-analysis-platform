@@ -1038,6 +1038,32 @@ def test_run_transcription_uses_copper_asr_diagnostic_code(tmp_path: Path) -> No
             "error_message": "CopperASR invalid_audio: Invalid or unsupported audio",
         },
     )
+    diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
+    diagnostics = diagnostics_call[1]["diagnostics"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["subject_type"] == "analysis_run"
+    assert diagnostics[0]["subject_id"] == execution.analysis_run_id
+    assert diagnostics[0]["severity"] == "error"
+    assert diagnostics[0]["code"] == "asr_invalid_audio"
+    assert diagnostics[0]["message"] == "CopperASR invalid_audio: Invalid or unsupported audio"
+    assert diagnostics[0]["context"]["provider_code"] == "invalid_audio"
+    assert diagnostics[0]["context"]["status_code"] == 422
+    assert diagnostics[0]["context"]["retryable"] is False
+    assert diagnostics[0]["context"]["request_id"] == "req-1"
+    assert diagnostics[0]["context"]["affected_media_asset_ids"] == ["media-source-1"]
+
+    register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
+    assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
+        "run_manifest",
+        "run_diagnostics",
+    ]
+    assert not any(call["object_key"].endswith("/transcript/plain/transcript.txt") for call in artifact_store.calls)
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert manifest["summary"] == {"included_count": 0, "skipped_count": 0, "failed_count": 1}
+    assert manifest["items"][0]["outcome"] == "failed"
+    assert manifest["items"][0]["diagnostic_ids"] == [diagnostics[0]["diagnostic_id"]]
+    diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
+    assert diagnostics_bundle["diagnostics"] == list(diagnostics)
 
 
 def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure(tmp_path: Path) -> None:

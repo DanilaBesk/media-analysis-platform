@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = ROOT / "infra" / "fixtures" / "target" / "manifest.json"
 COPPER_ASR_HARNESS = ROOT / "infra" / "scripts" / "copper-asr-e2e-harness.py"
+COPPER_ASR_FAILURE_E2E = ROOT / "infra" / "scripts" / "copper-asr-failure-e2e.py"
 UUID_RE = re.compile(r"^00000000-0000-4000-8000-[0-9]{12}$")
 
 
@@ -84,6 +85,10 @@ def test_copper_asr_e2e_fixture_manifest_covers_required_inputs_and_hashes() -> 
     assert cases["short_voice"]["media_kind"] == "voice"
     assert cases["representative_long_voice"]["benchmark_role"] == "representative_long_voice"
     assert cases["corrupt_audio"]["expected_diagnostic_code"] == "asr_invalid_audio"
+    assert cases["corrupt_audio"]["accepted_live_diagnostic_codes"] == [
+        "asr_invalid_audio",
+        "asr_unexpected_runtime_error",
+    ]
     assert cases["cancellation_voice"]["cancellation_checkpoint"] == "before_or_during_asr"
     assert cases["artifact_download"]["assertions"] == ["artifact_download_non_empty", "backend_is_copperasr"]
 
@@ -109,3 +114,6 @@ def test_copper_asr_e2e_harness_reports_deterministic_fixture_plan() -> None:
     ]
     assert payload["commands"]["reset"] == "bash infra/scripts/target-reset-smoke.sh"
     assert payload["commands"]["compose_config"] == "bash infra/scripts/compose-smoke.sh --check-config"
+    assert payload["commands"]["failure_e2e"] == "python3 infra/scripts/copper-asr-failure-e2e.py --json"
+    assert COPPER_ASR_FAILURE_E2E.is_file()
+    assert COPPER_ASR_FAILURE_E2E.stat().st_mode & 0o111

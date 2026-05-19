@@ -243,6 +243,7 @@
     <bead id="media-b8s.1.9" status="completed">Active legacy ASR runtime code, dependencies, env switches, tests, and docs are removed or reduced to historical planning/research context.</bead>
     <bead id="media-b8s.1.10" status="completed">GRACE requirements, technology, development, verification, knowledge graph, and operational packet docs are refreshed for the final CopperASR contract.</bead>
     <bead id="media-b8s.2.1" status="completed">Deterministic CopperASR E2E fixtures now cover short voice, representative long voice, corrupt audio, cancellation, and artifact download cases without private chat history.</bead>
+    <bead id="media-b8s.2.4" status="completed">CopperASR failure-path coverage now proves failed corrupt-audio runs and retries emit analysis_run diagnostics plus run policy artifacts instead of transcript artifacts or generic backend-unavailable loops, cancellation reaches a terminal canceled state without orphan artifacts, and runtime concurrency/timeout knobs are asserted.</bead>
     <bead id="media-b8s.2.5" status="completed">A dedicated no-legacy ASR gate now scans active runtime, env, compose, dependency manifest, and runtime-doc surfaces and is wired into the coverage inventory and target gate.</bead>
   </BeadsTrace>
 

@@ -50,6 +50,7 @@
     <completed-packet bead="media-b8s.1.9">legacy-asr-runtime-removal</completed-packet>
     <completed-packet bead="media-b8s.1.10">final-copper-asr-grace-refresh</completed-packet>
     <completed-packet bead="media-b8s.2.1">copper-asr-e2e-fixtures-harness</completed-packet>
+    <completed-packet bead="media-b8s.2.4">copper-asr-failure-retry-cancel-e2e</completed-packet>
     <completed-packet bead="media-b8s.2.5">no-legacy-asr-regression-gates</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
@@ -164,6 +165,37 @@ The target no-legacy gate may compose this ASR guard, but the ASR guard must rem
       <check>bash infra/scripts/no-legacy-asr-gate.sh</check>
       <check>bash infra/scripts/no-legacy-target-gate.sh</check>
       <check>bash infra/scripts/coverage-inventory.sh</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-b8s.2.4-copper-asr-failure-retry-cancel-e2e" module="M-COVERAGE,M-INFRA,M-WORKER-TRANSCRIPTION,M-COPPER-ASR" phase="CopperAsrCoverage" verification-ref="EV-ASR-RUNTIME,EV-WORKERS,EV-COVERAGE-MATRIX,EV-GRACE">
+    <purpose>Prove CopperASR failure, retry, cancellation, and backpressure/resource-limit behavior against both worker regression tests and the live API/worker/CopperASR stack.</purpose>
+    <depends-on>media-b8s.2.1</depends-on>
+    <write-scope>
+      <file-1>workers/transcription/src/transcriber_worker_transcription.py</file-1>
+      <file-2>workers/transcription/tests/test_transcriber_worker_transcription.py</file-2>
+      <file-3>infra/scripts/copper-asr-failure-e2e.py</file-3>
+      <file-4>infra/scripts/copper-asr-e2e-harness.py</file-4>
+      <file-5>infra/fixtures/target/manifest.json</file-5>
+      <file-6>packages/contracts/tests/test_target_fixtures.py</file-6>
+      <file-7>docs/architecture/copper-asr-e2e-fixtures.md, docs/architecture/target-coverage-matrix.md</file-7>
+      <file-8>docs/requirements.xml, docs/development-plan.xml, docs/verification-plan.xml, docs/knowledge-graph.xml, docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+CopperASR failures must finalize runs instead of leaving active task cards stuck.
+Failed ASR runs and retries must record analysis_run diagnostics and publish only run policy artifacts, never transcript artifacts.
+Cancellation must reach a terminal canceled state and must not publish orphan artifacts.
+The failure E2E must assert runtime concurrency/timeout knobs used for long-audio backpressure.
+The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error because the CopperASR provider returns HTTP 500 unexpected_runtime_error for invalid Ogg bytes; media-b8s.2.9 owns normalization to asr_invalid_audio.
+    ]]></contract-excerpt>
+    <verification>
+      <check>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests/test_transcriber_worker_transcription.py::test_run_transcription_uses_copper_asr_diagnostic_code -q</check>
+      <check>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests -q</check>
+      <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
+      <check>python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json</check>
+      <check>python3 infra/scripts/copper-asr-failure-e2e.py --json</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
     </verification>

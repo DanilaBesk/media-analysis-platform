@@ -41,6 +41,7 @@ from transcriber_workers_common.api import (
     SelectionItemMaterialization,
 )
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
+from transcriber_workers_common.copper_asr import CopperAsrTranscriptionError
 from transcriber_workers_common.documents import build_transcript_markdown, write_transcript_docx
 from transcriber_workers_common.domain import SourceCandidate, TranscriptArtifacts, TranscriptResult
 from transcriber_workers_common.source_extractor import extract_youtube_video_id
@@ -129,6 +130,8 @@ def runTranscription(
     )
     workspace_dir = _workspace_dir_for_analysis_run(workspace_root, execution.analysis_run_id)
     workspace_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics: tuple[Mapping[str, object], ...] = ()
+    item_outcomes: tuple[Mapping[str, object], ...] = ()
 
     try:
         # START_BLOCK_BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE
@@ -222,6 +225,36 @@ def runTranscription(
             progress_message="Cancellation requested",
             error_code=None,
             error_message=None,
+        )
+        raise
+    except CopperAsrTranscriptionError as exc:
+        failure_diagnostics = _transcription_failure_diagnostics(execution, item_outcomes, exc)
+        combined_diagnostics = (*diagnostics, *failure_diagnostics)
+        if failure_diagnostics:
+            api_client.register_diagnostics(
+                execution.analysis_run_id,
+                analysis_run_step_id=execution.analysis_run_step_id,
+                diagnostics=failure_diagnostics,
+            )
+        policy_artifacts = _persist_run_policy_artifacts(
+            execution,
+            artifact_store,
+            diagnostics=combined_diagnostics,
+            item_outcomes=_mark_transcription_failed_outcomes(item_outcomes, failure_diagnostics),
+        )
+        api_client.register_artifacts(
+            execution.analysis_run_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
+            artifacts=policy_artifacts,
+        )
+        api_client.finalize_analysis_run(
+            execution.analysis_run_id,
+            analysis_run_step_id=execution.analysis_run_step_id,
+            outcome="failed",
+            progress_stage="failed",
+            progress_message="Transcription failed",
+            error_code=_classify_error_code(exc),
+            error_message=str(exc),
         )
         raise
     except SourceMaterializationError as exc:
@@ -787,6 +820,86 @@ def _outcomes_from_diagnostics(
             )
         )
     return tuple(outcomes)
+
+
+def _transcription_failure_diagnostics(
+    execution: ClaimedAnalysisRunStep,
+    item_outcomes: tuple[Mapping[str, object], ...],
+    error: CopperAsrTranscriptionError,
+) -> tuple[Mapping[str, object], ...]:
+    affected_items = [item for item in item_outcomes if item.get("outcome") == "succeeded"]
+    if not affected_items:
+        affected_items = list(item_outcomes)
+    affected_selection_item_ids = [
+        str(item.get("selection_snapshot_item_id"))
+        for item in affected_items
+        if str(item.get("selection_snapshot_item_id") or "").strip()
+    ]
+    affected_media_asset_ids = [
+        str(item.get("media_asset_id"))
+        for item in affected_items
+        if str(item.get("media_asset_id") or "").strip()
+    ]
+    context: dict[str, object] = {
+        "analysis_run_id": execution.analysis_run_id,
+        "analysis_run_step_id": execution.analysis_run_step_id,
+        "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
+        "affected_selection_snapshot_item_ids": affected_selection_item_ids,
+        "affected_media_asset_ids": affected_media_asset_ids,
+        "provider_code": error.provider_code,
+        "status_code": error.status_code,
+        "retryable": error.retryable,
+    }
+    if error.request_id:
+        context["request_id"] = error.request_id
+    code = _classify_error_code(error)
+    diagnostic_id = str(
+        uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "media-analysis-platform:diagnostic:"
+            + ":".join(
+                (
+                    execution.analysis_run_step_id,
+                    execution.selection_snapshot.selection_snapshot_id,
+                    code,
+                    ",".join(affected_selection_item_ids),
+                    "transcription-failed",
+                )
+            ),
+        )
+    )
+    return (
+        {
+            "diagnostic_id": diagnostic_id,
+            "subject_type": "analysis_run",
+            "subject_id": execution.analysis_run_id,
+            "severity": "error",
+            "code": code,
+            "message": str(error),
+            "context": context,
+            "remediation_hint": "retry" if error.retryable else "replace_or_remove_source",
+            "created_at": execution.claimed_at,
+        },
+    )
+
+
+def _mark_transcription_failed_outcomes(
+    item_outcomes: tuple[Mapping[str, object], ...],
+    diagnostics: tuple[Mapping[str, object], ...],
+) -> tuple[Mapping[str, object], ...]:
+    diagnostic_ids = [str(diagnostic["diagnostic_id"]) for diagnostic in diagnostics]
+    updated: list[Mapping[str, object]] = []
+    for item in item_outcomes:
+        if item.get("outcome") != "succeeded":
+            updated.append(item)
+            continue
+        patched = dict(item)
+        patched["outcome"] = "failed"
+        patched["included"] = False
+        patched["artifact_kinds"] = []
+        patched["diagnostic_ids"] = diagnostic_ids
+        updated.append(patched)
+    return tuple(updated)
 
 
 def _canonical_json(payload: Mapping[str, object]) -> str:

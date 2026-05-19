@@ -10,13 +10,14 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 - Audio encoding: `ffmpeg` Opus in Ogg container, mono, 16 kHz, 24 kbit/s.
 - Runtime model: resolved by the `copper-asr` service env/cache at execution time. Model weights are not embedded in the fixture files.
 - Fixture manifest: `infra/fixtures/target/manifest.json`.
-- Harness: `python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json`.
+- Fixture harness: `python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json`.
+- Failure E2E harness: `python3 infra/scripts/copper-asr-failure-e2e.py --json`.
 
 ## Cases
 
 - `short_voice`: short Russian voice input for Telegram transcript delivery and basic artifact assertions.
 - `representative_long_voice`: 960 second synthetic voice input for performance and backpressure proof.
-- `corrupt_audio`: invalid Ogg-named bytes for `asr_invalid_audio` diagnostics.
+- `corrupt_audio`: invalid Ogg-named bytes for failed-run diagnostics. Target diagnostic is `asr_invalid_audio`; the live CopperASR runtime currently returns provider code `unexpected_runtime_error` for this fixture, so the harness accepts `asr_unexpected_runtime_error` until follow-up `media-b8s.2.9` normalizes corrupt-audio classification.
 - `cancellation_voice`: long voice input reused for cancellation before or during ASR.
 - `artifact_download`: deterministic transcript artifact bytes for download-path assertions.
 
@@ -25,9 +26,12 @@ The speech fixtures are synthetic and do not come from private Telegram history.
 ```bash
 uv run pytest packages/contracts/tests/test_target_fixtures.py -q
 python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json
+python3 infra/scripts/copper-asr-failure-e2e.py --json
 bash infra/scripts/target-reset-smoke.sh
 bash infra/scripts/compose-smoke.sh --check-config
 ```
+
+The failure E2E command requires the local compose API, transcription worker, and CopperASR service to be running. It creates throwaway channel accounts and analysis runs, then asserts corrupt-audio failure, retry failure, cancellation, policy artifact publication, absence of transcript artifacts on failed runs, and the CopperASR resource-limit env knobs.
 
 The harness can also copy fixture bytes into a bucket/object-key directory tree for later MinIO seed work:
 
