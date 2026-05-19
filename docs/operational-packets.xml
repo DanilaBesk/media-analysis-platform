@@ -260,6 +260,7 @@ Cancellation must reach a terminal canceled state and must not publish orphan ar
 The failure E2E must assert runtime concurrency/timeout knobs used for long-audio backpressure.
 The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error because the refreshed CopperASR provider still returns HTTP 500 unexpected_runtime_error for invalid Ogg bytes after the platform preflight workaround was removed; media-b8s.2.9 is blocked by media-b8s.2.11 until provider classification or an explicitly approved platform preflight equivalent normalizes this to asr_invalid_audio.
 Additional blocker evidence: all advertised CopperASR GitLab MR refs and the separate local CopperASR checkout were inspected; none contains a corrupt-audio invalid_audio classification fix, and the available MR refs keep the ffmpeg CalledProcessError to RuntimeError path.
+Final closure of media-b8s.2.9 must run the strict verifier: python3 infra/scripts/copper-asr-failure-e2e.py --json --require-invalid-audio.
     ]]></contract-excerpt>
     <verification>
       <check>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests/test_transcriber_worker_transcription.py::test_run_transcription_uses_copper_asr_diagnostic_code -q</check>
