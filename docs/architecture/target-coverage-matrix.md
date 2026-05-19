@@ -3,6 +3,7 @@
 Status: coverage epic `media-7f3.10` closed; QA readiness remains in `media-7f3.11`
 Source plan: `docs/architecture/single-user-channel-aware-target-architecture.md`  
 Fixture manifest: `infra/fixtures/target/manifest.json`
+CopperASR E2E fixture provenance: `docs/architecture/copper-asr-e2e-fixtures.md`
 
 This document is the target rebuild coverage map. It is not a final readiness claim. It names every source-plan area that must be proven, points to the current implementation or fixture evidence, and routes remaining proof into the coverage and QA Beads.
 
@@ -100,6 +101,7 @@ If `TARGET_DATABASE_URL` is set, the reset smoke uses that database. Otherwise i
 | Clean schema initializes from empty database. | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`. | `apps/api/internal/storage/target_schema_test.go`; `target-reset-smoke.sh`; `TestTargetStorePostgresContracts`. | Runtime compose reset in `media-7f3.10.3`. |
 | Deterministic seed data exists. | `apps/api/internal/storage/target/fixtures.go`. | `TestDeterministicSeedFixturesAreStable`; manifest validator; `TestTargetStorePostgresContracts` seed insertion. | Adapter/runtime E2E in `media-7f3.10.3` must consume it. |
 | Object-store fixtures are deterministic. | Manifest declares bucket, object key, content type, size, and SHA-256. | `test_target_fixture_manifest_has_stable_channel_accounts_and_media_bytes`. | `media-7f3.10.3` artifact/download runtime tests. |
+| CopperASR E2E fixtures are deterministic. | Manifest declares short voice, representative long voice, corrupt audio, cancellation voice, and artifact download cases under `copper_asr_e2e`; `infra/scripts/copper-asr-e2e-harness.py` validates hashes and can copy object-store bytes into a deterministic bucket/key tree. | `test_copper_asr_e2e_fixture_manifest_covers_required_inputs_and_hashes`; `test_copper_asr_e2e_harness_reports_deterministic_fixture_plan`. | `media-b8s.2.2` through `media-b8s.2.7` must consume the cases in runtime E2E and benchmark proof. |
 | Channel identities are stable across adapters. | Manifest declares `local`, `telegram`, `web`, and `mcp` channel accounts. | Manifest validator enforces ids and refs. | Adapter/E2E tests in `media-7f3.10.3`. |
 
 ## Table Coverage Matrix

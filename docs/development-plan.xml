@@ -250,6 +250,7 @@
     <completed bead="media-b8s.1.8">Telegram, Web, and MCP behavior is aligned with provider-agnostic user flows and explicit service metadata reads.</completed>
     <completed bead="media-b8s.1.9">Legacy ASR runtime code, root dependencies, env switches, old model cache surfaces, and active tests are removed or confined to historical research/planning context.</completed>
     <completed bead="media-b8s.1.10">GRACE artifacts and operational packets now describe the final CopperASR contract and verification gates.</completed>
+    <completed bead="media-b8s.2.1">Deterministic CopperASR E2E fixture files, manifest cases, harness validation, and provenance docs are prepared for the coverage wave.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>

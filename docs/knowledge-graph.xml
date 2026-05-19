@@ -239,6 +239,10 @@
       <annotations>
         <fixture-manifest PATH="infra/fixtures/target/manifest.json" PURPOSE="Defines stable channel_account, collection, media_asset, selection_snapshot, analysis_run, artifact, and stored_object fixture ids." />
         <fixture-objectStore PATH="infra/fixtures/target/object-store" PURPOSE="Stores deterministic object-store bytes with manifest sizes and SHA-256 hashes." />
+        <fixture-copperAsrE2E PATH="infra/fixtures/target/object-store/media-inputs/copper-asr" PURPOSE="Stores deterministic synthetic short voice, representative long voice, corrupt audio, and cancellation input bytes for CopperASR E2E proof." />
+        <fixture-copperAsrArtifact PATH="infra/fixtures/target/object-store/artifacts/copper-asr/short-transcript.txt" PURPOSE="Stores deterministic transcript artifact bytes for CopperASR artifact download E2E proof." />
+        <script-copperAsrE2EHarness PATH="infra/scripts/copper-asr-e2e-harness.py" PURPOSE="Validates CopperASR fixture manifest entries, sizes, hashes, required case coverage, and can copy object-store fixture bytes into a deterministic bucket/key tree." />
+        <doc-copperAsrE2EFixtures PATH="docs/architecture/copper-asr-e2e-fixtures.md" PURPOSE="Documents fixture provenance, model access assumptions, commands, and benchmark limits for media-b8s.2.*." />
         <script-targetResetSmoke PATH="infra/scripts/target-reset-smoke.sh" PURPOSE="Applies target migration twice to fresh Postgres, validates target/legacy table state, checks selection_snapshot triggers, and inserts deterministic channel/inbox seed." />
         <script-runtimeFinalE2E PATH="infra/scripts/runtime-final-e2e.py" PURPOSE="Runs target-only channel_account, media_asset, selection_snapshot, analysis_run, artifact download, diagnostics, cross-channel denial, and soft-delete history proof against the compose API." />
         <script-composeSmoke PATH="infra/scripts/compose-smoke.sh" PURPOSE="Builds and force-recreates the local compose stack, enforces runtime proof vocabulary guards, and runs the runtime-final target proof." />

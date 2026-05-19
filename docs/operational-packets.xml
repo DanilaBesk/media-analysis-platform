@@ -49,6 +49,7 @@
     <completed-packet bead="media-b8s.1.8">copper-asr-adapter-behavior</completed-packet>
     <completed-packet bead="media-b8s.1.9">legacy-asr-runtime-removal</completed-packet>
     <completed-packet bead="media-b8s.1.10">final-copper-asr-grace-refresh</completed-packet>
+    <completed-packet bead="media-b8s.2.1">copper-asr-e2e-fixtures-harness</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -108,6 +109,36 @@ Removed legacy ASR code, env, dependencies, cache volumes, fallback tests, and d
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>media-b8s.2.* must add deterministic E2E fixtures, full application transcription proof, performance evidence, and failure-path coverage.</check>
       <check>media-b8s.3.* must run traceability, channel UX/runtime QA, security/ops QA, and final readiness checks before closing media-b8s.</check>
+    </verification>
+  </ExecutionPacket>
+
+  <ExecutionPacket packet-id="media-b8s.2.1-copper-asr-e2e-fixtures-harness" module="M-COVERAGE,M-INFRA,M-COPPER-ASR" phase="CopperAsrCoverage" verification-ref="EV-ASR-RUNTIME,EV-COVERAGE-MATRIX,EV-GRACE">
+    <purpose>Prepare deterministic CopperASR E2E fixture files and harness commands for the Telegram, API/worker, failure/cancel, no-legacy, and benchmark coverage tasks.</purpose>
+    <depends-on>media-b8s.1.10</depends-on>
+    <write-scope>
+      <file-1>infra/fixtures/target/manifest.json</file-1>
+      <file-2>infra/fixtures/target/object-store/media-inputs/copper-asr</file-2>
+      <file-3>infra/fixtures/target/object-store/artifacts/copper-asr/short-transcript.txt</file-3>
+      <file-4>infra/scripts/copper-asr-e2e-harness.py</file-4>
+      <file-5>packages/contracts/tests/test_target_fixtures.py</file-5>
+      <file-6>docs/architecture/copper-asr-e2e-fixtures.md</file-6>
+      <file-7>docs/architecture/target-coverage-matrix.md</file-7>
+      <file-8>docs/requirements.xml, docs/verification-plan.xml, docs/knowledge-graph.xml, docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The fixture manifest exposes copper_asr_e2e cases for short_voice, representative_long_voice, corrupt_audio, cancellation_voice, and artifact_download.
+Fixtures are synthetic and do not depend on private chat history.
+The harness validates file existence, sizes, SHA-256 hashes, required case coverage, backend=CopperASR assertions, and deterministic reset/compose commands.
+Later E2E tasks must consume these cases instead of inventing ad hoc audio samples.
+    ]]></contract-excerpt>
+    <verification>
+      <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
+      <check>python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --json</check>
+      <check>python3 infra/scripts/copper-asr-e2e-harness.py --check-fixtures --copy-object-store /tmp/copper-asr-e2e-object-store --json</check>
+      <check>bash infra/scripts/target-reset-smoke.sh</check>
+      <check>bash infra/scripts/compose-smoke.sh --check-config</check>
+      <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
+      <check>git diff --check</check>
     </verification>
   </ExecutionPacket>
 

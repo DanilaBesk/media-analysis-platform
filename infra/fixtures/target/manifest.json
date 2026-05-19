@@ -47,6 +47,33 @@
         "sha256": "8b8ce790edea50bcb3ed61fb96c62cb32fc3a7b8fa25be68c5a8cc01c93fe1b0"
       },
       {
+        "stored_object_id": "00000000-0000-4000-8000-000000000302",
+        "bucket": "media-inputs",
+        "object_key": "copper-asr/short-ru-voice.ogg",
+        "fixture_path": "infra/fixtures/target/object-store/media-inputs/copper-asr/short-ru-voice.ogg",
+        "content_type": "audio/ogg; codecs=opus",
+        "size_bytes": 19777,
+        "sha256": "a478407fd397e54e212a9f9475571337f8a166ded9f0b91736becd39e8564954"
+      },
+      {
+        "stored_object_id": "00000000-0000-4000-8000-000000000303",
+        "bucket": "media-inputs",
+        "object_key": "copper-asr/representative-long-ru-voice.ogg",
+        "fixture_path": "infra/fixtures/target/object-store/media-inputs/copper-asr/representative-long-ru-voice.ogg",
+        "content_type": "audio/ogg; codecs=opus",
+        "size_bytes": 2834743,
+        "sha256": "b8cfbe566903964fab28ca9b245ce3b7bd11b0b3eb532611a469ac28d1531d1c"
+      },
+      {
+        "stored_object_id": "00000000-0000-4000-8000-000000000304",
+        "bucket": "media-inputs",
+        "object_key": "copper-asr/corrupt-audio.ogg",
+        "fixture_path": "infra/fixtures/target/object-store/media-inputs/copper-asr/corrupt-audio.ogg",
+        "content_type": "audio/ogg; codecs=opus",
+        "size_bytes": 56,
+        "sha256": "34b4f55b328e32c5d99e81672ae02dc285cedbcfcf8c9cc9608e8f00e6e6c74d"
+      },
+      {
         "stored_object_id": "00000000-0000-4000-8000-000000000701",
         "bucket": "artifacts",
         "object_key": "run-summary/report.md",
@@ -54,6 +81,15 @@
         "content_type": "text/markdown; charset=utf-8",
         "size_bytes": 122,
         "sha256": "9dc6aae57b399aaf855268994bcbc0ff93403258d5d3e939e7314c22296c47e4"
+      },
+      {
+        "stored_object_id": "00000000-0000-4000-8000-000000000702",
+        "bucket": "artifacts",
+        "object_key": "copper-asr/short-transcript.txt",
+        "fixture_path": "infra/fixtures/target/object-store/artifacts/copper-asr/short-transcript.txt",
+        "content_type": "text/plain; charset=utf-8",
+        "size_bytes": 106,
+        "sha256": "0d35d6fd1d0e2a0b7d90cf1e19f2629f7883096c6ae0ce155afca190823f17e2"
       }
     ],
     "media_assets": [
@@ -113,6 +149,68 @@
         "kind": "report",
         "status": "available"
       }
-    ]
+    ],
+    "copper_asr_e2e": {
+      "backend": "CopperASR",
+      "fixture_manifest": "infra/fixtures/target/manifest.json",
+      "provenance_doc": "docs/architecture/copper-asr-e2e-fixtures.md",
+      "model_access_assumptions": {
+        "private_chat_history_required": false,
+        "source": "synthetic speech generated with macOS say voice Milena and encoded with ffmpeg/libopus",
+        "runtime_model": "CopperASR service model is resolved by the copper-asr runtime env and cache, not embedded in these fixtures"
+      },
+      "run_manifest_assertions": {
+        "transcription_backend": "copperasr",
+        "legacy_asr_allowed": false
+      },
+      "cases": [
+        {
+          "case_id": "short_voice",
+          "owner_bead": "media-b8s.2.2",
+          "stored_object_id": "00000000-0000-4000-8000-000000000302",
+          "media_kind": "voice",
+          "duration_seconds": 6.695,
+          "expected_backend": "CopperASR",
+          "expected_transcript_hint": "korotkaya golosovaya zapis",
+          "assertions": ["backend_is_copperasr", "transcript_delivered", "result_surface_recorded"]
+        },
+        {
+          "case_id": "representative_long_voice",
+          "owner_bead": "media-b8s.2.7",
+          "stored_object_id": "00000000-0000-4000-8000-000000000303",
+          "media_kind": "voice",
+          "duration_seconds": 960.006,
+          "benchmark_role": "representative_long_voice",
+          "expected_backend": "CopperASR",
+          "assertions": ["backend_is_copperasr", "wall_time_recorded", "resource_usage_recorded"]
+        },
+        {
+          "case_id": "corrupt_audio",
+          "owner_bead": "media-b8s.2.4",
+          "stored_object_id": "00000000-0000-4000-8000-000000000304",
+          "media_kind": "voice",
+          "expected_backend": "CopperASR",
+          "expected_diagnostic_code": "asr_invalid_audio",
+          "assertions": ["backend_is_copperasr", "diagnostic_recorded", "no_stuck_run"]
+        },
+        {
+          "case_id": "cancellation_voice",
+          "owner_bead": "media-b8s.2.4",
+          "stored_object_id": "00000000-0000-4000-8000-000000000303",
+          "media_kind": "voice",
+          "expected_backend": "CopperASR",
+          "cancellation_checkpoint": "before_or_during_asr",
+          "assertions": ["backend_is_copperasr", "cancel_terminal_state", "no_duplicate_delivery"]
+        },
+        {
+          "case_id": "artifact_download",
+          "owner_bead": "media-b8s.2.3",
+          "stored_object_id": "00000000-0000-4000-8000-000000000702",
+          "media_kind": "artifact",
+          "expected_backend": "CopperASR",
+          "assertions": ["artifact_download_non_empty", "backend_is_copperasr"]
+        }
+      ]
+    }
   }
 }
