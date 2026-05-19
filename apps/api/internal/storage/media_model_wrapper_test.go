@@ -165,6 +165,16 @@ type orphanCleanupRecordErrorStateStore struct {
 	cleanupCalls int
 }
 
+type noInternalPresignObjectStore struct{}
+
+func (s *noInternalPresignObjectStore) PutObject(context.Context, string, string, string, []byte) error {
+	return nil
+}
+
+func (s *noInternalPresignObjectStore) PresignGetObject(context.Context, string, string, time.Duration) (string, time.Time, error) {
+	return "https://minio.local/presigned", time.Now().UTC().Add(time.Minute), nil
+}
+
 func (s *orphanCleanupRecordErrorStateStore) DetectOrphanObjects(context.Context) ([]OrphanObjectRecord, error) {
 	return []OrphanObjectRecord{{
 		SubjectType: "source",
@@ -340,6 +350,28 @@ func TestRepositoryWrapperValidationAndLateErrorBranches(t *testing.T) {
 	}
 	if _, err := repo.FinalizeAnalysisRunTask(ctx, owner, " run-1 ", AnalysisRunStatusExpired, ""); !errors.Is(err, ErrContractViolation) {
 		t.Fatalf("FinalizeAnalysisRunTask(contract violation) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := repo.CancelAnalysisRun(ctx, OwnerScope{}, "run-1", "cancel"); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("CancelAnalysisRun(contract violation) error = %v, want ErrContractViolation", err)
+	}
+
+	artifactState := newMemoryStateStore()
+	artifactState.artifacts["artifact-internal"] = ArtifactRecord{
+		ID:            "artifact-internal",
+		Owner:         OwnerScope{OwnerType: "web", OwnerID: "owner-1"},
+		AnalysisRunID: "run-1",
+		Kind:          "summary",
+		Status:        ArtifactStatusAvailable,
+		ObjectKey:     "run-1/summary/summary.md",
+		ContentType:   "text/markdown",
+		Visibility:    "worker_internal",
+	}
+	artifactRepo, err := NewRepository(artifactState, &noInternalPresignObjectStore{})
+	if err != nil {
+		t.Fatalf("NewRepository(artifactRepo) error = %v", err)
+	}
+	if _, err := artifactRepo.GetInternalArtifactDownloadAccess(ctx, "artifact-internal"); !errors.Is(err, ErrContractViolation) {
+		t.Fatalf("GetInternalArtifactDownloadAccess(no internal presigner) error = %v, want ErrContractViolation", err)
 	}
 }
 

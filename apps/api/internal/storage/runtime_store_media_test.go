@@ -2386,6 +2386,215 @@ func TestSQLStateStoreRequestAnalysisRunCancellation(t *testing.T) {
 	}
 }
 
+func TestSQLStateStoreRequestAnalysisRunCancellationErrorBranches(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 16, 15, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-5 * time.Minute)
+	expiresAt := now.Add(2 * time.Hour)
+	owner := OwnerScope{OwnerType: "web", OwnerID: "user-1"}
+	stepErr := errors.New("cancel branch failed")
+	baseEvent := RunEventRecord{
+		ID:            "event-cancel",
+		AnalysisRunID: "run-1",
+		EventType:     "analysis_run.cancel_requested",
+		Status:        AnalysisRunStatusCancelRequested,
+		CreatedAt:     now,
+	}
+	runningRun := analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusRunning, 2, &startedAt, nil, nil)
+
+	t.Run("missing run maps to not found", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+				columns: analysisRunColumns(),
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(missing) error = %v", err)
+		}
+		if _, err := store.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", baseEvent, now); !errors.Is(err, ErrAnalysisRunNotFound) {
+			t.Fatalf("RequestAnalysisRunCancellation(missing) error = %v, want ErrAnalysisRunNotFound", err)
+		}
+	})
+
+	t.Run("owner mismatch is rejected before mutation", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+				columns: analysisRunColumns(),
+				rows:    [][]driver.Value{runningRun},
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(owner mismatch) error = %v", err)
+		}
+		otherOwner := OwnerScope{OwnerType: "web", OwnerID: "other-user"}
+		if _, err := store.RequestAnalysisRunCancellation(context.Background(), otherOwner, "run-1", baseEvent, now); !errors.Is(err, ErrOwnerMismatch) {
+			t.Fatalf("RequestAnalysisRunCancellation(owner mismatch) error = %v, want ErrOwnerMismatch", err)
+		}
+	})
+
+	t.Run("terminal run returns existing state without mutation", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{analysisRunDriverRowWithState(now, expiresAt, AnalysisRunStatusSucceeded, 5, &startedAt, &now, nil)},
+				},
+				{
+					match:   "FROM selections\nWHERE id=$1 AND owner_type=$2",
+					columns: selectionColumns(),
+					rows:    [][]driver.Value{selectionDriverRow("selection-1", "collection-1", now)},
+				},
+				{
+					match:   "FROM selection_items WHERE selection_id=$1",
+					columns: selectionItemColumns(),
+					rows:    [][]driver.Value{selectionItemDriverRow(now)},
+				},
+			},
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(terminal) error = %v", err)
+		}
+		run, err := store.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", baseEvent, now)
+		if err != nil {
+			t.Fatalf("RequestAnalysisRunCancellation(terminal) error = %v", err)
+		}
+		if run.Status != AnalysisRunStatusSucceeded || run.Version != 5 {
+			t.Fatalf("terminal run = %#v", run)
+		}
+		config.assertExhausted(t)
+	})
+
+	t.Run("claimed lookup errors are propagated", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{runningRun},
+				},
+				{
+					match:   "SELECT EXISTS",
+					columns: []string{"exists"},
+					err:     stepErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(claimed lookup) error = %v", err)
+		}
+		if _, err := store.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", baseEvent, now); !errors.Is(err, stepErr) {
+			t.Fatalf("RequestAnalysisRunCancellation(claimed lookup) error = %v, want stepErr", err)
+		}
+	})
+
+	t.Run("version scan errors are propagated", func(t *testing.T) {
+		t.Parallel()
+
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{runningRun},
+				},
+				{
+					match:   "SELECT EXISTS",
+					columns: []string{"exists"},
+					rows:    [][]driver.Value{{false}},
+				},
+				{
+					match:   "UPDATE analysis_runs\nSET status=$5",
+					columns: []string{"version"},
+					rows:    [][]driver.Value{{"bad-version"}},
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(version scan) error = %v", err)
+		}
+		if _, err := store.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", baseEvent, now); err == nil {
+			t.Fatalf("RequestAnalysisRunCancellation(version scan) error = nil, want scan failure")
+		}
+	})
+
+	t.Run("task update and event insert errors are propagated", func(t *testing.T) {
+		t.Parallel()
+
+		storeTaskErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{runningRun},
+				},
+				{
+					match:   "SELECT EXISTS",
+					columns: []string{"exists"},
+					rows:    [][]driver.Value{{false}},
+				},
+				{
+					match:   "UPDATE analysis_runs\nSET status=$5",
+					columns: []string{"version"},
+					rows:    [][]driver.Value{{int64(3)}},
+				},
+			},
+			execResponses: []scriptedExecResponse{{
+				match: "UPDATE analysis_run_tasks\nSET status='canceled'",
+				err:   stepErr,
+			}},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(task update) error = %v", err)
+		}
+		if _, err := storeTaskErr.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", baseEvent, now); !errors.Is(err, stepErr) {
+			t.Fatalf("RequestAnalysisRunCancellation(task update) error = %v, want stepErr", err)
+		}
+
+		storeEventErr, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM analysis_runs\nWHERE id=$1::uuid",
+					columns: analysisRunColumns(),
+					rows:    [][]driver.Value{runningRun},
+				},
+				{
+					match:   "SELECT EXISTS",
+					columns: []string{"exists"},
+					rows:    [][]driver.Value{{false}},
+				},
+				{
+					match:   "UPDATE analysis_runs\nSET status=$5",
+					columns: []string{"version"},
+					rows:    [][]driver.Value{{int64(3)}},
+				},
+			},
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE analysis_run_tasks\nSET status='canceled'", affected: 1},
+				{match: "INSERT INTO analysis_run_events", err: stepErr},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(event insert) error = %v", err)
+		}
+		if _, err := storeEventErr.RequestAnalysisRunCancellation(context.Background(), owner, "run-1", baseEvent, now); !errors.Is(err, stepErr) {
+			t.Fatalf("RequestAnalysisRunCancellation(event insert) error = %v, want stepErr", err)
+		}
+	})
+}
+
 func TestSQLStateStoreExecutionErrorMappings(t *testing.T) {
 	t.Parallel()
 
@@ -3704,6 +3913,92 @@ func TestRuntimeStoreArtifactAndOpsDiagnosticErrorBranches(t *testing.T) {
 			artifact.Owner.OwnerID != "channel-account-1" ||
 			artifact.ObjectKey != "run-target/report/markdown/report.md" {
 			t.Fatalf("target fallback artifact = %#v", artifact)
+		}
+	})
+
+	t.Run("get artifact by id target fallback maps no rows", func(t *testing.T) {
+		t.Parallel()
+
+		schemaErr := errors.New("ERROR: column a.owner_type does not exist (SQLSTATE 42703)")
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM artifacts a",
+					columns: artifactColumns(),
+					err:     schemaErr,
+				},
+				{
+					match: "LEFT JOIN stored_objects so ON so.id = a.stored_object_id",
+					columns: []string{
+						"id",
+						"channel_account_id",
+						"analysis_run_id",
+						"kind",
+						"status",
+						"object_key",
+						"content_type",
+						"checksum",
+						"size_bytes",
+						"visibility",
+						"preview",
+						"retention_state",
+						"created_at",
+						"expires_at",
+						"deleted_at",
+					},
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(target artifact missing) error = %v", err)
+		}
+
+		if _, err := store.GetArtifactByID(context.Background(), "missing-target-artifact"); !errors.Is(err, ErrArtifactNotFound) {
+			t.Fatalf("GetArtifactByID(target fallback missing) error = %v, want ErrArtifactNotFound", err)
+		}
+	})
+
+	t.Run("get artifact by id target fallback propagates generic errors", func(t *testing.T) {
+		t.Parallel()
+
+		schemaErr := errors.New("ERROR: column a.owner_type does not exist (SQLSTATE 42703)")
+		targetErr := errors.New("target artifact query failed")
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "FROM artifacts a",
+					columns: artifactColumns(),
+					err:     schemaErr,
+				},
+				{
+					match: "LEFT JOIN stored_objects so ON so.id = a.stored_object_id",
+					columns: []string{
+						"id",
+						"channel_account_id",
+						"analysis_run_id",
+						"kind",
+						"status",
+						"object_key",
+						"content_type",
+						"checksum",
+						"size_bytes",
+						"visibility",
+						"preview",
+						"retention_state",
+						"created_at",
+						"expires_at",
+						"deleted_at",
+					},
+					err: targetErr,
+				},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(target artifact error) error = %v", err)
+		}
+
+		if _, err := store.GetArtifactByID(context.Background(), "artifact-target"); !errors.Is(err, targetErr) {
+			t.Fatalf("GetArtifactByID(target fallback error) error = %v, want targetErr", err)
 		}
 	})
 
