@@ -219,6 +219,8 @@
     <bead id="media-b8s.2.9">Normalize corrupt or unsupported CopperASR audio classification so the live failure E2E no longer needs asr_unexpected_runtime_error as an accepted corrupt-audio code.</bead>
     <bead id="media-b8s.2.10">Blocked in the consumer repo until CopperASR fixes the Silero VAD/torch max-CPU burst under local caps, or the benchmark contract explicitly accepts sustained/avg/p95 CPU instead of max burst; then rerun media-b8s.2.7.</bead>
     <bead id="media-b8s.2.11">Blocked in the consumer repo until CopperASR returns stable non-retryable invalid-audio for corrupt/unsupported audio, or an explicit platform preflight equivalent is approved; then rerun media-b8s.2.9.</bead>
+    <bead id="media-b8s.2.12">Blocked waiting for explicit user decision. If sustained/avg/p95 CPU is accepted, update benchmark thresholds/docs and rerun media-b8s.2.7; otherwise keep media-b8s.2.10 blocked on CopperASR.</bead>
+    <bead id="media-b8s.2.13">Blocked waiting for explicit user decision. If consumer preflight is approved, implement the smallest preflight and rerun failure E2E; otherwise keep media-b8s.2.11 blocked on CopperASR.</bead>
     <bead id="media-b8s.3">Blocked until media-b8s.2 closes; then run Pre-MR QA audits and final readiness packet with exact commands, runtime proof, residual risks, and blocker state.</bead>
     <bead id="media-b8s.3.1">Blocked until media-b8s.2 closes; then run the no-legacy Whisper QA audit against code, dependency, env, compose, docs, logs, and runtime wrappers.</bead>
     <bead id="media-b8s.3.2">Blocked until media-b8s.2 closes; then audit CopperASR contracts, security, ops, submodule pin/update flow, model provenance, health, observability, cancellation, and failure isolation.</bead>
