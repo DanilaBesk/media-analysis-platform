@@ -70,6 +70,7 @@
     <completed-packet bead="media-b8s.3.4">final-readiness-packet closed with coverage inventory, runtime evidence, Beads state, residual risks, and readiness context.</completed-packet>
     <completed-closure-gate bead="media-b8s.3">Pre-MR QA is complete after no-legacy, contracts/security/ops, runtime soak, and final readiness packets.</completed-closure-gate>
     <completed-closure-gate bead="media-b8s">root migration is complete after implementation, full E2E coverage, QA, final readiness, and live compose proof.</completed-closure-gate>
+    <completed-packet bead="media-pyj">telegram-transcription-result-auto-document-delivery</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>
@@ -1191,6 +1192,25 @@ Telegram main-card result and diagnostics buttons are shown only for the analysi
     <verification>
       <check>Focused gateway regressions prove historical terminal runs do not create generic result buttons and focused terminal runs produce callbacks for their own analysis_run_id.</check>
       <check>Focused runtime regression proves manual result delivery sends the transcript and clears the active collection membership.</check>
+    </verification>
+  </HotfixPacket>
+  <HotfixPacket id="media-pyj-telegram-transcription-result-auto-document-delivery" status="completed" bead="media-pyj">
+    <purpose>Fix the Telegram successful transcription UX so the result is delivered immediately as a document message instead of depending on a Result button.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/verification-plan.xml</file-4>
+      <file-5>docs/knowledge-graph.xml</file-5>
+      <file-6>docs/operational-packets.xml</file-6>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Successful Telegram transcription results are auto-delivered as document messages. The status card records result_artifact_surface delivery for duplicate prevention, clears active inbox membership after successful delivery, and does not keep the normal Result button visible after the automatic success path. Failed delivery must not create a result surface or clear inbox membership.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused runtime regressions prove short transcripts use send_document/answer_document rather than inline text messages.</check>
+      <check>Focused watcher regression proves successful auto-delivery clears inbox membership and hides the Result button.</check>
+      <check>Focused failure regression proves failed document delivery supersedes the task surface, creates no result surface, and preserves inbox membership.</check>
     </verification>
   </HotfixPacket>
   <HotfixPacket id="telegram-focused-run-cancel" status="completed" bead="media-dph">

@@ -41,7 +41,7 @@ bash infra/scripts/compose-smoke.sh --check-config
 ## CopperASR E2E
 
 - Telegram E2E succeeded with `provider=copperasr`,
-  `model=Copperside/CoppersideASR`, text delivery, duplicate delivery
+  `model=Copperside/CoppersideASR`, document delivery, duplicate delivery
   prevention, and inbox clear.
 - API/Web/MCP E2E succeeded with channel-scoped artifact/run denial,
   public `transcript` surface, and MCP-visible `run_manifest` provider

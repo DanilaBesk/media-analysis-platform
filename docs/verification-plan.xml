@@ -79,7 +79,7 @@
         <item>Inline actions manage API-owned inbox or collection items, create selections, start analysis_run records, view diagnostics, and fetch artifacts.</item>
         <item>Focused queued or running analysis_run cards expose cancellation through a run id and version checked callback, unfocused cards can cancel the latest visible active run, and background active runs do not block starting a new current selection.</item>
         <item>Inbox visible items, remove actions, and clear-visible actions follow collection membership rather than the broad media inventory.</item>
-        <item>Status text and inline action labels are Russian-first and make refresh, collection actions, and run-specific result buttons self-explanatory.</item>
+        <item>Status text and inline action labels are Russian-first and make refresh, collection actions, cancellation, diagnostics, and transcription launch controls self-explanatory; successful transcription results auto-deliver as Telegram document messages rather than requiring a Result button.</item>
         <item>Callbacks use API ids and versions and cannot mutate another channel-account state.</item>
         <item>No user-facing execution mode is required to accumulate multiple items.</item>
       </Telegram>
@@ -101,7 +101,7 @@
         <item>Retention smoke expires or soft-deletes an artifact without corrupting selection or run history.</item>
         <item>Compose topology starts copper-asr, exposes /health internally, wires the transcription worker to COPPER_ASR_BASE_URL, and has no active legacy ASR model cache or dual-backend env switch.</item>
         <item>CopperASR E2E fixture harness validates short voice, representative long voice, corrupt audio, cancellation, and artifact-download cases before runtime suites consume them.</item>
-        <item>CopperASR Telegram E2E uploads the short voice fixture through a Telegram channel_account, proves inbox and channel_surface materialization, creates selection_snapshot and analysis_run_step-backed transcription, downloads transcript bytes, records result_artifact_surface delivery, blocks duplicate delivery, and clears inbox membership after success.</item>
+        <item>CopperASR Telegram E2E uploads the short voice fixture through a Telegram channel_account, proves inbox and channel_surface materialization, creates selection_snapshot and analysis_run_step-backed transcription, downloads transcript bytes, records result_artifact_surface document delivery, blocks duplicate delivery, and clears inbox membership after success.</item>
       </required>
     </RuntimeTests>
   </TestingStrategy>
@@ -141,7 +141,7 @@
     </Gate>
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
-      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-telegram-e2e.py --json` must prove the live Telegram voice-to-transcript delivery, result surface, duplicate guard, and inbox clear contract; `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP; `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
+      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-telegram-e2e.py --json` must prove the live Telegram voice-to-transcript delivery, result surface, duplicate guard, and inbox clear contract; focused Telegram regressions must prove successful transcript delivery uses Telegram document messages and hides the normal Result button after auto-delivery; `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP; `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
     </Gate>
     <Gate id="EV-COVERAGE-INVENTORY">
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
@@ -227,6 +227,7 @@
     <bead id="media-b8s.3.2">Closed by CopperASR contracts, security, ops, submodule pin/update flow, model provenance, health, observability, cancellation, and failure-isolation audit evidence.</bead>
     <bead id="media-b8s.3.3">Closed by runtime soak and full compose E2E gate: compose live-smoke, repeated short Telegram/API flows, strict failure E2E, long-voice benchmark, log scans, and stale Telegram surface recovery proof.</bead>
     <bead id="media-b8s.3.4">Closed by docs/architecture/copper-asr-final-readiness-packet.md, with exact verification commands, runtime proof, Beads closure state, residual risks, and blocker/follow-up status.</bead>
+    <bead id="media-pyj">Closed by focused Telegram runtime regressions proving transcript result auto-delivery as a document, no normal Result button after successful auto-delivery, stale addressless result-surface recovery, and failed send isolation.</bead>
     <bead id="media-11o">Closed by CopperASR runtime migration plus passing long-voice performance proof under the local compose CPU quota.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>

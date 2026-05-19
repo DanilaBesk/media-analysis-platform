@@ -215,7 +215,7 @@
         <export-runAnalysisAction PURPOSE="Create a selection_snapshot and analysis_run from explicit user action." />
         <export-targetTelegramVocabulary PURPOSE="Use media_asset_id, selection_snapshot_id, and channel_account_id in active Telegram API request and callback paths." />
         <export-channelSurfaceRecovery PURPOSE="Persist current materials panels, active run cards, and result artifact deliveries through channel_surfaces and recover them after restart." />
-        <export-resultDeliveryDeduplication PURPOSE="Use result_artifact_surface records with valid Telegram addresses to avoid duplicate result delivery after restart without mutating product lifecycle; supersede addressless stale result surfaces and retry delivery." />
+        <export-resultDeliveryDeduplication PURPOSE="Auto-deliver successful transcript results as Telegram document messages, then use result_artifact_surface records with valid Telegram addresses to avoid duplicate delivery after restart without mutating product lifecycle; supersede addressless stale result surfaces and retry delivery." />
         <contract-selectionTranscriptionCards PATH="docs/architecture/telegram-selection-transcription-cards.md" PURPOSE="Define Telegram user-facing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>

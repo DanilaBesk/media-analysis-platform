@@ -303,11 +303,13 @@ class FakeBot:
         edit_error: Exception | None = None,
         edit_errors: dict[tuple[int, int], Exception] | None = None,
         send_message_errors: dict[int, Exception] | None = None,
+        send_document_errors: dict[int, Exception] | None = None,
     ) -> None:
         self.file_bytes = file_bytes or {}
         self.edit_error = edit_error
         self.edit_errors = edit_errors or {}
         self.send_message_errors = send_message_errors or {}
+        self.send_document_errors = send_document_errors or {}
         self.set_commands_calls: list[tuple[list[Any], str]] = []
         self.get_file_calls: list[str] = []
         self.download_calls: list[str] = []
@@ -349,6 +351,9 @@ class FakeBot:
         return SimpleNamespace(message_id=9003)
 
     async def send_document(self, chat_id: int, document: Any, **kwargs) -> SimpleNamespace:
+        scoped_error = self.send_document_errors.get(chat_id)
+        if scoped_error is not None:
+            raise scoped_error
         self.send_document_calls.append({"chat_id": chat_id, "document": document, **kwargs})
         return SimpleNamespace(message_id=9004)
 
@@ -1013,19 +1018,23 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
         for surface in api.channel_surfaces
         if surface["lifecycle_status"] == "active"
     ]
-    assert notice == "Транскрипт отправлен в чат"
+    assert notice == "Транскрипт отправлен файлом"
     assert show_alert is False
     assert api.supersede_surface_requests[-1]["reason"] == "result_surface_missing_telegram_address"
     assert api.internal_artifact_download_access_requests == ["artifact-1"]
-    assert app.bot.send_message_calls == [{"chat_id": 10, "text": "Recovered transcript."}]
+    assert app.bot.send_message_calls == []
+    assert len(app.bot.send_document_calls) == 1
+    assert app.bot.send_document_calls[0]["chat_id"] == 10
+    assert app.bot.send_document_calls[0]["document"].filename == "transcript.txt"
+    assert app.bot.send_document_calls[0]["document"].data == b"Recovered transcript."
     assert active_surfaces[-1]["surface_type"] == "result_artifact_surface"
-    assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9003}
+    assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9004}
 
 
 @pytest.mark.asyncio
 async def test_addressless_result_surface_failed_send_does_not_create_duplicate_or_clear_collection() -> None:
-    send_error = telegram_bad_request("sendMessage", "Bad Request: chat not found")
-    api, gateway, app = make_app(bot=FakeBot(send_message_errors={10: send_error}))
+    send_error = telegram_bad_request("sendDocument", "Bad Request: chat not found")
+    api, gateway, app = make_app(bot=FakeBot(send_document_errors={10: send_error}))
     gateway.add_text(owner=owner(), text="keep me until delivery succeeds")
     api.runs.append(
         {
@@ -1334,11 +1343,13 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     await app._handle_status_callback(artifacts_callback)
     await app._handle_status_callback(diagnostics_callback)
 
-    assert artifacts_callback.answers[-1]["text"] == "Транскрипт отправлен в чат"
+    assert artifacts_callback.answers[-1]["text"] == "Транскрипт отправлен файлом"
     assert api.internal_artifact_download_access_requests == ["artifact-1"]
     assert api.get_artifact_requests == []
     assert diagnostics_callback.answers[-1]["text"] == "Открыта диагностика"
-    assert base_message.answers[-1]["text"] == "Completed transcript."
+    assert base_message.answers == []
+    assert base_message.documents[-1]["document"].filename == "transcript.txt"
+    assert base_message.documents[-1]["document"].data == b"Completed transcript."
     assert "run-1" not in base_message.edits[-2]["text"]
     assert "Диагностика" in base_message.edits[-1]["text"]
     assert "run-1" not in base_message.edits[-1]["text"]
@@ -1399,8 +1410,10 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
     result_callback = FakeCallback(data=result_callback_data, message=base_message)
     await app._handle_status_callback(result_callback)
 
-    assert result_callback.answers[-1] == {"text": "Транскрипт отправлен в чат", "show_alert": False}
-    assert base_message.answers[-1]["text"] == "manual transcript"
+    assert result_callback.answers[-1] == {"text": "Транскрипт отправлен файлом", "show_alert": False}
+    assert base_message.answers == []
+    assert base_message.documents[-1]["document"].filename == "transcript.txt"
+    assert base_message.documents[-1]["document"].data == b"manual transcript"
     assert api.collection["items"] == []
     assert api.items == []
     assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
@@ -1692,7 +1705,7 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
 
 
 @pytest.mark.asyncio
-async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_after_success() -> None:
+async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button_after_success() -> None:
     api, gateway, app = make_app(page_size=1, bot=FakeBot())
     gateway.add_text(owner=owner(), text="one")
     gateway.add_text(owner=owner(), text="two")
@@ -1753,19 +1766,24 @@ async def test_run_watcher_auto_delivers_transcript_and_clears_full_collection_a
     await asyncio.sleep(0)
 
     assert app.run_watch_tasks == {}
-    assert app.bot.send_message_calls == [{"chat_id": 10, "text": "transcript ready"}]
+    assert app.bot.send_message_calls == []
+    assert len(app.bot.send_document_calls) == 1
+    assert app.bot.send_document_calls[0]["chat_id"] == 10
+    assert app.bot.send_document_calls[0]["document"].filename == "transcript.txt"
+    assert app.bot.send_document_calls[0]["document"].data == b"transcript ready"
     assert api.internal_artifact_download_access_requests == ["artifact-1"]
     assert api.get_artifact_requests == []
     assert api.collection["items"] == []
     assert api.items == []
     assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
     assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
+    assert "Результат" not in [button.text for row in app.bot.edit_calls[-1]["reply_markup"].inline_keyboard for button in row]
 
 
 @pytest.mark.asyncio
 async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_unreachable() -> None:
-    send_error = telegram_forbidden("sendMessage", "Forbidden: bot was blocked by the user")
-    api, gateway, app = make_app(page_size=1, bot=FakeBot(send_message_errors={10: send_error}))
+    send_error = telegram_forbidden("sendDocument", "Forbidden: bot was blocked by the user")
+    api, gateway, app = make_app(page_size=1, bot=FakeBot(send_document_errors={10: send_error}))
     gateway.add_text(owner=owner(), text="one")
     base_message = FakeMessage()
 
@@ -1831,7 +1849,7 @@ async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_un
     assert app.run_watch_tasks == {}
     assert superseded_surface["surface_type"] == "analysis_task_surface"
     assert api.supersede_surface_requests[-1]["reason"] == "telegram_address_unreachable"
-    assert api.supersede_surface_requests[-1]["metadata"]["operation"] == "send"
+    assert api.supersede_surface_requests[-1]["metadata"]["operation"] == "send_document"
     assert active_result_surfaces == []
     assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
     assert api.remove_requests == []
