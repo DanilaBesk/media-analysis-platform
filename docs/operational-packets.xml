@@ -61,7 +61,7 @@
     <completed-packet bead="media-b8s.2.13">invalid-audio-preflight-decision-not-approved-for-this-cycle</completed-packet>
     <blocked-packet bead="media-b8s.2.6">coverage inventory waits for corrupt-audio normalization closure.</blocked-packet>
     <blocked-packet bead="media-b8s.2.9">corrupt-audio-invalid-audio-normalization waits for media-b8s.2.11 because the refreshed CopperASR runtime still returns unexpected_runtime_error.</blocked-packet>
-    <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR invalid-audio fix or explicit preflight decision.</blocked-packet>
+    <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR invalid-audio fix. Consumer preflight is not approved for this migration cycle.</blocked-packet>
     <blocked-packet bead="media-b8s.3.1">no-legacy-whisper-qa waits for full CopperASR coverage closure.</blocked-packet>
     <blocked-packet bead="media-b8s.3.2">contracts-security-ops-submodule-qa waits for full CopperASR coverage closure.</blocked-packet>
     <blocked-packet bead="media-b8s.3.3">runtime-soak-full-compose-qa waits for full CopperASR coverage closure and runtime blocker resolution.</blocked-packet>
@@ -258,7 +258,7 @@ CopperASR failures must finalize runs instead of leaving active task cards stuck
 Failed ASR runs and retries must record analysis_run diagnostics and publish only run policy artifacts, never transcript artifacts.
 Cancellation must reach a terminal canceled state and must not publish orphan artifacts.
 The failure E2E must assert runtime concurrency/timeout knobs used for long-audio backpressure.
-The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error because the refreshed CopperASR provider still returns HTTP 500 unexpected_runtime_error for invalid Ogg bytes after the platform preflight workaround was removed; media-b8s.2.9 is blocked by media-b8s.2.11 until provider classification or an explicitly approved platform preflight equivalent normalizes this to asr_invalid_audio.
+The live corrupt_audio fixture currently accepts asr_unexpected_runtime_error because the refreshed CopperASR provider still returns HTTP 500 unexpected_runtime_error for invalid Ogg bytes after the platform preflight workaround was removed; media-b8s.2.9 is blocked by media-b8s.2.11 until provider classification normalizes this to asr_invalid_audio.
 Additional blocker evidence: all visible CopperASR heads, GitLab MR head/merge refs, tag refs, and the separate local CopperASR checkout were inspected; none contains a corrupt-audio invalid_audio classification fix, and every visible ref keeps the ffmpeg CalledProcessError to RuntimeError path.
 Final closure of media-b8s.2.9 must run the strict verifier: python3 infra/scripts/copper-asr-failure-e2e.py --json --require-invalid-audio.
     ]]></contract-excerpt>
