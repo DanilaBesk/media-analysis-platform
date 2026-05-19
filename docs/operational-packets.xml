@@ -58,10 +58,10 @@
     <completed-packet bead="media-b8s.2.7">copper-asr-long-voice-benchmark</completed-packet>
     <completed-packet bead="media-b8s.2.10">consumer-compose-cpu-quota</completed-packet>
     <completed-packet bead="media-b8s.2.12">cpu-benchmark-threshold-decision-not-needed</completed-packet>
+    <completed-packet bead="media-b8s.2.13">invalid-audio-preflight-decision-not-approved-for-this-cycle</completed-packet>
     <blocked-packet bead="media-b8s.2.6">coverage inventory waits for corrupt-audio normalization closure.</blocked-packet>
     <blocked-packet bead="media-b8s.2.9">corrupt-audio-invalid-audio-normalization waits for media-b8s.2.11 because the refreshed CopperASR runtime still returns unexpected_runtime_error.</blocked-packet>
     <blocked-packet bead="media-b8s.2.11">external-copper-asr-invalid-audio-follow-up: consumer repo cannot edit vendor/copper-asr; update submodule after CopperASR invalid-audio fix or explicit preflight decision.</blocked-packet>
-    <blocked-packet bead="media-b8s.2.13">invalid-audio-preflight-decision waits for explicit user approval before adding a consumer-side preflight exception.</blocked-packet>
     <blocked-packet bead="media-b8s.3.1">no-legacy-whisper-qa waits for full CopperASR coverage closure.</blocked-packet>
     <blocked-packet bead="media-b8s.3.2">contracts-security-ops-submodule-qa waits for full CopperASR coverage closure.</blocked-packet>
     <blocked-packet bead="media-b8s.3.3">runtime-soak-full-compose-qa waits for full CopperASR coverage closure and runtime blocker resolution.</blocked-packet>

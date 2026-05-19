@@ -262,7 +262,7 @@
     <completed bead="media-b8s.2.10">Consumer-side compose CPU quota `COPPER_ASR_LOCAL_CPUS=4.0` bounds local CopperASR CPU pressure without editing vendor/copper-asr or changing benchmark semantics.</completed>
     <blocked bead="media-b8s.2.11" blocker="vendor/copper-asr">Corrupt or unsupported audio still needs a stable CopperASR invalid-audio response, or an explicitly approved consumer preflight, before media-b8s.2.9 can close. Source checks found no such fix in origin/main, all visible GitLab MR head/merge refs, tag refs, or the separate local CopperASR checkout.</blocked>
     <completed bead="media-b8s.2.12">CPU benchmark threshold semantics did not change; max CPU remains the contract and passes after the compose CPU quota.</completed>
-    <blocked bead="media-b8s.2.13" blocker="user-decision">Consumer-side invalid-audio preflight requires explicit user approval before implementing a platform exception while CopperASR still returns unexpected_runtime_error.</blocked>
+    <completed bead="media-b8s.2.13">Consumer-side invalid-audio preflight is not approved for this migration cycle; the platform path is to keep media-b8s.2.11 blocked on CopperASR until the provider returns stable invalid_audio.</completed>
     <blocked bead="media-b8s.2" blocker="media-b8s.2.9">Coverage cannot reach 100% until the corrupt-audio classification blocker is resolved and media-b8s.2.6 produces the final coverage inventory.</blocked>
     <blocked bead="media-b8s.3" blocker="media-b8s.2">Pre-MR QA cannot start while full coverage is blocked by unresolved runtime blockers.</blocked>
     <blocked bead="media-b8s.3.1" blocker="media-b8s.2">No-legacy Whisper QA waits for full CopperASR coverage closure.</blocked>
