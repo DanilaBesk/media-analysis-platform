@@ -1692,6 +1692,78 @@ def test_agent_runner_helper_branches_cover_policy_and_numeric_validation(tmp_pa
         agent_runner._parse_positive_int("0", 1)
 
 
+def test_declared_step_input_artifacts_validate_artifact_id_presence() -> None:
+    execution = _execution(
+        {"harness_name": "fixture"},
+        step_inputs=(
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-selection",
+                analysis_run_step_id="exec-agent",
+                input_kind="selection_context",
+                position=0,
+                required=True,
+            ),
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-optional",
+                analysis_run_step_id="exec-agent",
+                input_kind="transcript_artifact",
+                position=1,
+                required=False,
+            ),
+        ),
+    )
+    assert agent_runner._declared_step_input_artifacts(execution) == []
+
+    required_execution = _execution(
+        {"harness_name": "fixture"},
+        step_inputs=(
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-required",
+                analysis_run_step_id="exec-agent",
+                input_kind="transcript_artifact",
+                position=0,
+                required=True,
+            ),
+        ),
+    )
+    with pytest.raises(AgentHarnessExecutionFailed, match="required transcript_artifact input is missing artifact_id"):
+        agent_runner._declared_step_input_artifacts(required_execution)
+
+
+def test_merge_input_artifact_declarations_preserves_request_shape_and_deduplicates() -> None:
+    assert agent_runner._merge_input_artifact_declarations("inline", [{"artifact_id": "step-a"}]) == "inline"
+
+    merged = agent_runner._merge_input_artifact_declarations(
+        [
+            {"artifact_id": "artifact-a", "input_kind": "transcript_artifact"},
+            {"artifact_id": 42, "input_kind": "legacy-inline"},
+        ],
+        [
+            "not-a-mapping",
+            {"artifact_id": "artifact-a", "input_kind": "duplicate"},
+            {"artifact_id": "artifact-b", "input_kind": "text_corpus_artifact"},
+            {"input_kind": "artifact-without-id"},
+        ],
+    )
+
+    assert merged == [
+        {"artifact_id": "artifact-a", "input_kind": "transcript_artifact"},
+        {"artifact_id": 42, "input_kind": "legacy-inline"},
+        {"artifact_id": "artifact-b", "input_kind": "text_corpus_artifact"},
+        {"input_kind": "artifact-without-id"},
+    ]
+
+
+def test_agent_runner_workspace_dir_rejects_defensive_token_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(agent_runner, "_safe_workspace_token", lambda value: "../outside")
+
+    with pytest.raises(ValueError, match="outside workspace_root"):
+        agent_runner._workspace_dir_for_analysis_run(tmp_path, "job-escape")
+
+
 def test_agent_runner_prompt_context_requires_some_prompt_material(tmp_path: Path) -> None:
     with pytest.raises(AgentHarnessExecutionFailed, match="contains no prompt, payload, or input artifacts"):
         agent_runner._load_agent_run_prompt_context(
