@@ -73,6 +73,7 @@
     <completed-packet bead="media-pyj">telegram-transcription-result-auto-document-delivery</completed-packet>
     <completed-packet bead="media-h2a.1">stale-legacy-instruction-and-compatibility-schema-guard</completed-packet>
     <completed-packet bead="media-h2a.2">worker-test-fixture-analysis-run-vocabulary-normalization</completed-packet>
+    <completed-packet bead="media-h2a.3">worker-domain-processed-analysis-run-vocabulary</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>

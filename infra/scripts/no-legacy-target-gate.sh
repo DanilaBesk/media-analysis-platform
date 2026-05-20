@@ -95,6 +95,11 @@ reject_regex \
   workers/transcription/tests
 
 reject_regex \
+  "worker common source vocabulary" \
+  '\bProcessedJob\b|\bprocessed_job\b' \
+  workers/common/src
+
+reject_regex \
   "target storage implementation" \
   '\b(media_items|selection_items|analysis_run_tasks|owner_type|owner_id|tenant_id|safe_adapter_context)\b' \
   apps/api/internal/storage/target/fixtures.go \
