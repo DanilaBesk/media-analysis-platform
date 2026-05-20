@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added CopperASR HTTP transcriber boundary without retaining legacy ASR fallback behavior.
+#   LAST_CHANGE: v1.0.0 - Added CopperASR HTTP transcriber boundary as the only active ASR path.
 # END_CHANGE_SUMMARY
 # START_MODULE_MAP
 #   CopperAsrClientConfig - Immutable CopperASR client/env configuration.
