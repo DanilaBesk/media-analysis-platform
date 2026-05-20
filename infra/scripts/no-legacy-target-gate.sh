@@ -39,6 +39,19 @@ reject_regex() {
   printf '%s ok %s excludes %s\n' "${MARKER}" "${description}" "${pattern}"
 }
 
+reject_path_exists() {
+  local description="$1"
+  shift
+
+  local path
+  for path in "$@"; do
+    if [ -e "${path}" ]; then
+      fail "${description}: forbidden path still exists: ${path}"
+    fi
+  done
+  printf '%s ok %s paths are absent\n' "${MARKER}" "${description}"
+}
+
 active_target_paths=(
   apps/telegram-bot/src
   apps/web/src
@@ -105,6 +118,18 @@ reject_regex \
   apps/web/src/lib/api \
   apps/web/src/features/media \
   apps/web/tests
+
+reject_regex \
+  "worker pre-target test fixtures" \
+  'pre-target|preTarget' \
+  workers/common/tests \
+  workers/agent-runner/tests \
+  workers/transcription/tests
+
+reject_path_exists \
+  "legacy active jobs directories" \
+  apps/web/src/features/jobs \
+  apps/api/internal/jobs
 
 reject_regex \
   "target storage implementation" \

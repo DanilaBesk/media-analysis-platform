@@ -75,6 +75,7 @@
     <completed-packet bead="media-h2a.2">worker-test-fixture-analysis-run-vocabulary-normalization</completed-packet>
     <completed-packet bead="media-h2a.3">worker-domain-processed-analysis-run-vocabulary</completed-packet>
     <completed-packet bead="media-h2a.4">web-api-request-input-vocabulary-normalization</completed-packet>
+    <completed-packet bead="media-h2a.5">worker-pre-target-fixture-and-jobs-ghost-guard</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>

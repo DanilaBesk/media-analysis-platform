@@ -1736,7 +1736,7 @@ def test_merge_input_artifact_declarations_preserves_request_shape_and_deduplica
     merged = agent_runner._merge_input_artifact_declarations(
         [
             {"artifact_id": "artifact-a", "input_kind": "transcript_artifact"},
-            {"artifact_id": 42, "input_kind": "pre-target-inline"},
+            {"artifact_id": 42, "input_kind": "inline_context"},
         ],
         [
             "not-a-mapping",
@@ -1748,7 +1748,7 @@ def test_merge_input_artifact_declarations_preserves_request_shape_and_deduplica
 
     assert merged == [
         {"artifact_id": "artifact-a", "input_kind": "transcript_artifact"},
-        {"artifact_id": 42, "input_kind": "pre-target-inline"},
+        {"artifact_id": 42, "input_kind": "inline_context"},
         {"artifact_id": "artifact-b", "input_kind": "text_corpus_artifact"},
         {"input_kind": "artifact-without-id"},
     ]
