@@ -3447,21 +3447,19 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 	now := time.Date(2026, 5, 11, 19, 45, 0, 0, time.UTC)
 	stepErr := errors.New("retention-orphan branch failed")
 
-	t.Run("target reset missing legacy tables are no-op for admin runtime sweeps", func(t *testing.T) {
+	t.Run("target reset probes avoid legacy admin runtime SQL", func(t *testing.T) {
 		t.Parallel()
 
-		missingLegacyRelation := errors.New(`ERROR: relation "media_items" does not exist (SQLSTATE 42P01)`)
-		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
-			execResponses: []scriptedExecResponse{
-				{match: "UPDATE media_items mi", err: missingLegacyRelation},
-			},
+		config := &scriptedRuntimeStoreConfig{
 			queryResponses: []scriptedQueryResponse{
-				{match: "SELECT 'source', s.id::text", err: missingLegacyRelation},
+				{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{nil}}},
+				{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{nil}}},
 				{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{nil}}},
 				{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{nil}}},
 				{match: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{false}}},
 			},
-		}))
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
 		if err != nil {
 			t.Fatalf("NewSQLStateStore() error = %v", err)
 		}
@@ -3485,6 +3483,47 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 		diagnostics, err := store.ListOperationalDiagnostics(context.Background(), []string{"artifact_resolution_failed"})
 		if err != nil || len(diagnostics) != 0 {
 			t.Fatalf("ListOperationalDiagnostics(target reset) = %#v err=%v, want empty nil", diagnostics, err)
+		}
+		config.assertExhausted(t)
+	})
+
+	t.Run("legacy schema mismatch after positive retention probe is still a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		missingLegacyRelation := errors.New(`ERROR: relation "media_items" does not exist (SQLSTATE 42P01)`)
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: legacyRetentionProbeResponses(),
+			execResponses: []scriptedExecResponse{
+				{match: "UPDATE media_items mi", err: missingLegacyRelation},
+			},
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		retention, err := store.ApplyRetentionPolicies(context.Background(), now)
+		if err != nil || retention != (RetentionSweepResult{}) {
+			t.Fatalf("ApplyRetentionPolicies(schema mismatch) = %#v err=%v, want zero nil", retention, err)
+		}
+	})
+
+	t.Run("legacy schema mismatch after positive orphan probe is still a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		missingLegacyRelation := errors.New(`ERROR: relation "sources" does not exist (SQLSTATE 42P01)`)
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
+			queryResponses: append(legacyRetentionProbeResponses(), scriptedQueryResponse{
+				match: "SELECT 'source', s.id::text",
+				err:   missingLegacyRelation,
+			}),
+		}))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		orphans, err := store.DetectOrphanObjects(context.Background())
+		if err != nil || len(orphans) != 0 {
+			t.Fatalf("DetectOrphanObjects(schema mismatch) = %#v err=%v, want empty nil", orphans, err)
 		}
 	})
 
@@ -5216,6 +5255,17 @@ func analysisRunTaskColumns() []string {
 
 func analysisRunQueueColumns() []string {
 	return []string{"analysis_run_id", "run_type", "worker_kind", "task_type", "status", "version", "attempt_no", "created_at"}
+}
+
+func legacyRetentionProbeResponses() []scriptedQueryResponse {
+	return []scriptedQueryResponse{
+		{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{"sources"}}},
+		{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{"media_items"}}},
+		{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{"selection_items"}}},
+		{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{"selections"}}},
+		{match: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}},
+		{match: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{true}}},
+	}
 }
 
 func orphanColumns() []string {

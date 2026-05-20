@@ -760,6 +760,9 @@ VALUES ($1,$2,$3,$4,$5,$6,$7)
 
 func (s *SQLStateStore) ApplyRetentionPolicies(ctx context.Context, now time.Time) (RetentionSweepResult, error) {
 	var result RetentionSweepResult
+	if !s.hasLegacyRetentionSchema(ctx) {
+		return result, nil
+	}
 	err := withTx(ctx, s.db, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, `
 UPDATE media_items mi
@@ -850,6 +853,9 @@ WHERE expires_at IS NOT NULL
 }
 
 func (s *SQLStateStore) DetectOrphanObjects(ctx context.Context) ([]OrphanObjectRecord, error) {
+	if !s.hasLegacyRetentionSchema(ctx) {
+		return []OrphanObjectRecord{}, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT 'source', s.id::text, s.owner_type, s.owner_id, COALESCE(s.tenant_id,''), 'sources', s.object_key,
        CASE WHEN mi.retention_state='expired' THEN 'expired_media_source' ELSE 'deleted_media_source' END
@@ -880,6 +886,17 @@ ORDER BY 1, 2`)
 		orphans = append(orphans, orphan)
 	}
 	return orphans, rows.Err()
+}
+
+func (s *SQLStateStore) hasLegacyRetentionSchema(ctx context.Context) bool {
+	if !s.relationExists(ctx, "sources") ||
+		!s.relationExists(ctx, "media_items") ||
+		!s.relationExists(ctx, "selection_items") ||
+		!s.relationExists(ctx, "selections") {
+		return false
+	}
+	return s.columnExists(ctx, "artifacts", "owner_type", true) &&
+		s.columnExists(ctx, "artifacts", "retention_state", true)
 }
 
 func (s *SQLStateStore) RecordOrphanObjectCleanup(ctx context.Context, orphan OrphanObjectRecord, deleted bool, message string, now time.Time) error {
