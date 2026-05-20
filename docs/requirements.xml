@@ -2,7 +2,7 @@
   <Project>
     <name>media-analysis-platform</name>
     <annotation>GRACE requirements source of truth for the single-user channel-aware target media analysis product model.</annotation>
-    <keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, operation_request, telegram, web, mcp, postgres, minio, redis, workers, copperasr</keywords>
+    <keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, operation_request, telegram, web, mcp, postgres, minio, workers, copperasr</keywords>
   </Project>
 
   <Purpose>
@@ -18,7 +18,7 @@
     <rule>Channel identity is modeled through channel_accounts and channel_surfaces; channels can store presentation and recovery state but cannot own product lifecycle.</rule>
     <rule>The target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, selection_snapshot_item, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, and operation_request.</rule>
     <rule>The current local database is disposable for the target rebuild. Implementations may delete, recreate, truncate, or rebuild current schema/data and must not spend effort preserving or backfilling existing local rows unless a future production-data requirement is approved.</rule>
-    <rule>Existing implementation-era names such as media_item, source, selection, analysis_run_task, owner, and interaction_surface remain migration context only when they appear below. New target work must prefer the target vocabulary unless a compatibility packet explicitly says otherwise.</rule>
+    <rule>Removed implementation-era product names may appear only as historical deletion evidence or negative regression checks. Active contracts, code paths, user flows, and new documentation use the target vocabulary only.</rule>
     <rule>If any older GRACE section conflicts with the target architecture document, the target architecture document wins until the corresponding migration packet rewrites the older section.</rule>
   </TargetArchitectureReset>
 
@@ -33,7 +33,6 @@
     <term name="analysis_run_step_input">An internal execution input declaration that says which selection_snapshot_item or artifact a worker step may read.</term>
     <term name="artifact">A durable result or diagnostic object produced by analysis_run execution and resolved through API-governed access rules.</term>
     <term name="artifact_subject">A lineage link from an artifact to the run, step, selection snapshot, selected item, media asset, or diagnostic it represents.</term>
-    <term name="compatibility_names">media_item, source, selection, analysis_run_task, owner, and interaction_surface are implementation-era names allowed only in deprecated compatibility, migration notes, or historical evidence.</term>
   </CanonicalVocabulary>
 
   <ModelChain>
@@ -49,7 +48,7 @@
     <rule>Cross-channel-account reads, writes, selection reuse, run access, and artifact access are rejected before storage mutation.</rule>
     <rule>Idempotency keys, pagination cursors, optimistic versions, and diagnostic queries are channel-account-scoped.</rule>
     <rule>Public collection and paginated list envelopes always encode items as an array, including empty collections and empty pages.</rule>
-    <rule>owner is a deprecated compatibility label for caller/access scope, not a target product entity.</rule>
+    <rule>No alternate caller-scope product entity exists in the target model; channel_account is the only access scope.</rule>
   </AccessScope>
 
   <LifecycleStatuses>
@@ -142,7 +141,7 @@
     <Requirement id="REQ-INTERACTION-SURFACE-001">
       <Action>Persist external interaction surfaces without coupling domain entities to consumer-specific UI.</Action>
       <AcceptanceCriteria>Channel surfaces store channel_account-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. Subject links are stored separately with subject type, subject id, and subject role; event history is append-only. Domain tables must not gain Telegram-specific or consumer-specific message fields, and channel surface display state must not alter media_asset, collection, selection_snapshot, analysis_run, artifact, or diagnostic lifecycle.</AcceptanceCriteria>
-      <AcceptanceCriteria>When a channel reuses one active address for a different surface key, the internal channel_surface upsert must supersede the previous active address owner before creating or updating the new active surface, so presentation rebinding cannot leak a database uniqueness failure to users.</AcceptanceCriteria>
+      <AcceptanceCriteria>When a channel reuses one active address for a different surface key, the internal channel_surface upsert must supersede the previous active surface before creating or updating the new active surface, so presentation rebinding cannot leak a database uniqueness failure to users.</AcceptanceCriteria>
     </Requirement>
   </FunctionalRequirements>
 
@@ -165,7 +164,7 @@
       <rule>After accepted Telegram input, a status refresh or channel_surface persistence failure must not turn the saved inbox mutation into a user-facing backend failure; the adapter confirms the saved material and offers /inbox recovery while logging the presentation-layer failure.</rule>
       <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
       <rule>Internal active channel_surface listing must honor subject_type and subject_id filters so current materials or task-card surfaces cannot be mistaken for delivered result artifact surfaces.</rule>
-      <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics; compatibility media item and selection routes are not part of the active Telegram path.</rule>
+      <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics.</rule>
       <rule>Repeated Telegram chat/user channel_account resolution must return the persisted channel_account row id from the API conflict path before media_asset create or upload requests reference that id.</rule>
     </Telegram>
     <Web>
@@ -181,19 +180,19 @@
     <gate id="GATE-TARGET-ARCHITECTURE">Planning proof shows the target table set, API operations, DTO/type names, app boundaries, user flows, implementation stages, and test matrix are all covered by docs/architecture/single-user-channel-aware-target-architecture.md.</gate>
     <gate id="GATE-CONTRACTS">Contracts prove public vocabulary uses the target names media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account where needed, and channel_surface only for internal channel runtime APIs.</gate>
     <gate id="GATE-STORAGE">Storage tests prove single-user/channel-account scope, channel identity boundaries, immutable selection snapshots, analysis_run_step_inputs, artifact_subject lineage, lifecycle transitions, idempotency, retention, diagnostics persistence, and channel surface recovery.</gate>
-    <gate id="GATE-API">API tests prove adapters share the same state, prerequisite planning is visible through runs/diagnostics, and old public product routes are absent from the target contract except explicitly deprecated compatibility paths.</gate>
+    <gate id="GATE-API">API tests prove adapters share the same state, prerequisite planning is visible through runs/diagnostics, and removed public product routes are absent from the target contract.</gate>
     <gate id="GATE-WORKERS">Worker tests prove execution consumes sealed snapshots and declared step inputs, agent-runner consumes ready transcript/text-corpus artifacts for report and research work, and results are reported through analysis_run artifacts and diagnostics.</gate>
     <gate id="GATE-ASR-RUNTIME">ASR runtime tests and docs prove CopperASR is the only active transcription backend, provider metadata is service-scoped, legacy ASR paths are absent from active runtime surfaces, and failures resolve into stable diagnostics rather than generic unavailable errors.</gate>
     <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions; Web tests also prove normal UI copy stays human and avoids internal technical vocabulary.</gate>
     <gate id="GATE-RUNTIME">Compose or equivalent runtime proof verifies end-to-end ingestion, selection, run, artifact, diagnostics, and retention behavior.</gate>
-    <gate id="GATE-COVERAGE-MATRIX">The target coverage matrix maps every table, API operation, user flow, failure mode, compatibility rule, non-goal, app boundary, and data reset rule to implementation proof, automated proof, QA proof, or an explicit remaining Bead.</gate>
-    <gate id="GATE-COVERAGE-INVENTORY">The coverage inventory reports native per-surface metrics where tools support them, records pass/fail-only probes separately, and fails if active target paths reintroduce deprecated public vocabulary or target reset migrations recreate legacy tables.</gate>
+    <gate id="GATE-COVERAGE-MATRIX">The target coverage matrix maps every table, API operation, user flow, failure mode, deleted-surface rule, non-goal, app boundary, and data reset rule to implementation proof, automated proof, QA proof, or an explicit remaining Bead.</gate>
+    <gate id="GATE-COVERAGE-INVENTORY">The coverage inventory reports native per-surface metrics where tools support them, records pass/fail-only probes separately, and fails if active target paths reintroduce removed public vocabulary or target reset migrations recreate removed tables.</gate>
   </EvidenceGates>
 
   <BeadsTrace>
     <bead id="media-36a" status="completed">GRACE source-of-truth rewrite is complete.</bead>
     <bead id="media-49h" status="completed">Public contracts and schemas now expose the canonical inbox-first vocabulary.</bead>
-    <bead id="media-7f3.9.1" status="completed">Target contracts now expose media_asset, stored_object, selection_snapshot, analysis_run_step, artifact_subject, channel_account, channel_surface, operation_request, diagnostics, and explicit deprecated compatibility mappings.</bead>
+    <bead id="media-7f3.9.1" status="completed">Target contracts now expose media_asset, stored_object, selection_snapshot, analysis_run_step, artifact_subject, channel_account, channel_surface, operation_request, and diagnostics without public aliases.</bead>
     <bead id="media-7f3.9.2" status="completed">Target storage reset now recreates the channel-aware table set, target schema fragments, target SQL repositories, immutable selection_snapshot guards, operation_request idempotency, channel_surface supersede rules, and deterministic seed fixtures.</bead>
     <bead id="media-7f3.9.3" status="completed">Target API/domain services now route channel_accounts, media_assets/upload, collections, selection_snapshots, analysis_runs/events/cancel/retry, artifacts, diagnostics, analysis_run_step lifecycle, prerequisite speech planning, and channel_surfaces through TargetRuntimeService over target storage.</bead>
     <bead id="media-7f3.9.4" status="completed">Telegram now persists current_materials_panel, analysis_task_surface, and result_artifact_surface records through channel_surfaces, restores active surfaces after restart, supersedes uneditable messages, and prevents duplicate result delivery with result artifact surfaces.</bead>
@@ -221,7 +220,7 @@
     <bead id="media-7f3.10.1" status="completed">Target coverage matrix, deterministic channel fixtures, object-store fixture bytes, and fresh Postgres reset smoke are prepared for later coverage Beads.</bead>
     <bead id="media-7f3.10.2" status="completed">Storage and API target coverage now proves clean reset, live Postgres constraints, operation idempotency replay, channel-account isolation, collection conflicts, immutable selection_snapshots, analysis_run lifecycle/events/cancellation, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/events.</bead>
     <bead id="media-7f3.10.3" status="completed">Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download, and compose runtime proof now cover the target E2E chain from channel_account media_asset ingestion through sealed selection_snapshot, analysis_run, worker artifact publication, diagnostics query shape, cross-channel denial, and preserved history after soft delete.</bead>
-    <bead id="media-7f3.10.4" status="completed">Coverage inventory now reports native per-surface metrics plus pass/fail-only gates, no-legacy target regression checks reject deprecated active vocabulary and recreated legacy target schema, and admin observability/reconcile/runtime sweeps tolerate target-reset legacy schema absence without hiding real target failures.</bead>
+    <bead id="media-7f3.10.4" status="completed">Coverage inventory now reports native per-surface metrics plus pass/fail-only gates, no-legacy target regression checks reject removed active vocabulary and recreated removed target schema, and admin observability/runtime sweeps tolerate target-reset removed schema absence without hiding real target failures.</bead>
     <bead id="media-7f3.11" status="completed">Pre-MR QA epic closed after traceability, backend/security/worker, channel UX/Web/MCP/runtime, and final readiness packet evidence.</bead>
     <bead id="media-7f3.11.1" status="completed">QA traceability audit maps source-plan requirements to implementation, coverage proof, GRACE artifacts, Beads state, and remaining QA owners; stale closure and coverage wording was corrected.</bead>
     <bead id="media-7f3.11.2" status="completed">Backend, storage, security, object storage, diagnostics, cancellation, and worker review fixed worker workspace path sanitization, bucket-relative object-key validation, worker step write validation, and HTTP server timeout/header hardening.</bead>

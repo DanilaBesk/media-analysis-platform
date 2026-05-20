@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
 const EmitVersionedEventMarker = "[ApiEvents][emitRunEvent][BLOCK_EMIT_VERSIONED_EVENT]"
@@ -40,22 +38,13 @@ type RunEventEnvelope struct {
 	EmittedAt     time.Time `json:"emitted_at"`
 }
 
-func NewService(_ *storage.Repository, broadcaster Broadcaster, dispatcher Dispatcher) (*Service, error) {
+func NewService(broadcaster Broadcaster, dispatcher Dispatcher) (*Service, error) {
 	return &Service{broadcaster: broadcaster, dispatcher: dispatcher}, nil
 }
 
-func (s *Service) EmitRunEvent(ctx context.Context, event storage.RunEventRecord) error {
-	if strings.TrimSpace(event.AnalysisRunID) == "" || strings.TrimSpace(event.EventType) == "" || event.Version < 1 {
+func (s *Service) EmitRunEvent(ctx context.Context, envelope RunEventEnvelope) error {
+	if strings.TrimSpace(envelope.AnalysisRunID) == "" || strings.TrimSpace(envelope.EventType) == "" || envelope.Version < 1 {
 		return ErrInvalidEventState
-	}
-	envelope := RunEventEnvelope{
-		EventID:       event.ID,
-		AnalysisRunID: event.AnalysisRunID,
-		EventType:     event.EventType,
-		Version:       event.Version,
-		Status:        event.Status,
-		Payload:       event.PayloadJSON,
-		EmittedAt:     event.CreatedAt,
 	}
 	if s.broadcaster != nil {
 		if err := s.broadcaster.Broadcast(ctx, envelope); err != nil {
@@ -68,40 +57,6 @@ func (s *Service) EmitRunEvent(ctx context.Context, event storage.RunEventRecord
 		}
 	}
 	return nil
-}
-
-type HTTPWebhookDispatcher struct{}
-
-type WebhookOption func(*HTTPWebhookDispatcher)
-
-func WithWebhookLogger(_ interface {
-	Printf(format string, args ...any)
-}) WebhookOption {
-	return func(*HTTPWebhookDispatcher) {}
-}
-
-func NewHTTPWebhookDispatcher(_ *storage.Repository, opts ...WebhookOption) (*HTTPWebhookDispatcher, error) {
-	dispatcher := &HTTPWebhookDispatcher{}
-	for _, opt := range opts {
-		opt(dispatcher)
-	}
-	return dispatcher, nil
-}
-
-func (d *HTTPWebhookDispatcher) Dispatch(context.Context, RunEventEnvelope) error {
-	return nil
-}
-
-func (d *HTTPWebhookDispatcher) Run(ctx context.Context, interval time.Duration, _ int) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
 }
 
 func EventStreamHandler(service *Service) http.HandlerFunc {

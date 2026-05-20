@@ -7,8 +7,8 @@ import {
 } from "../src/lib/api/client";
 import type { ChannelAccountId } from "../src/lib/api/types";
 
-const owner: ChannelAccountId = "web-console";
-const tenantOwner: ChannelAccountId = "web-console";
+const channelAccountId: ChannelAccountId = "web-console";
+const tenantChannelAccountId: ChannelAccountId = "web-console";
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -168,7 +168,7 @@ describe("createWebUiApiClient", () => {
     });
 
     await expect(
-      client.addMediaAsset(owner, {
+      client.addMediaAsset(channelAccountId, {
         kind: "text",
         displayName: "Note",
         origin: { origin_type: "text", text: "Meeting note" },
@@ -230,13 +230,13 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    const selection = await client.createSelectionSnapshot(owner, {
+    const selection = await client.createSelectionSnapshot(channelAccountId, {
       items: [{ media_asset_id: "media-1", position: 0 }],
       sourceCollectionId: "collection-1",
       optionSnapshot: { language: "ru" },
     });
     await expect(
-      client.createAnalysisRun(owner, {
+      client.createAnalysisRun(channelAccountId, {
         selectionSnapshotId: selection.selection_snapshot_id,
         runType: "summary",
         params: { tone: "brief" },
@@ -276,9 +276,9 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await client.listCollections(owner, { pageSize: 50 });
-    await client.getArtifact(owner, "artifact-1");
-    await client.listDiagnostics(owner, {
+    await client.listCollections(channelAccountId, { pageSize: 50 });
+    await client.getArtifact(channelAccountId, "artifact-1");
+    await client.listDiagnostics(channelAccountId, {
       subjectType: "analysis_run",
       subjectId: "run-1",
       severity: "warning",
@@ -373,7 +373,7 @@ describe("createWebUiApiClient", () => {
     });
     const onMessage = vi.fn();
 
-    await expect(client.getAnalysisRun(owner, "run-minimal")).resolves.toMatchObject({
+    await expect(client.getAnalysisRun(channelAccountId, "run-minimal")).resolves.toMatchObject({
       selection_snapshot: {
         selection_snapshot_id: "snapshot-minimal",
         items: [],
@@ -434,7 +434,7 @@ describe("createWebUiApiClient", () => {
             content_type: "text/plain",
             checksum: null,
             size_bytes: 42,
-            visibility: "owner",
+            visibility: "channel_deliverable",
             preview: { available: true, kind: "text", text_excerpt: "ready" },
             download: {
               available: true,
@@ -446,7 +446,6 @@ describe("createWebUiApiClient", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ reconciled: 2 }, 202))
       .mockResolvedValueOnce(
         jsonResponse({
           observability: {
@@ -464,9 +463,8 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await client.cancelAnalysisRun(owner, "run-1");
-    await client.refreshArtifact(owner, "artifact-1");
-    await expect(client.reconcileAnalysisRunQueue(10)).resolves.toEqual({ reconciled: 2 });
+    await client.cancelAnalysisRun(channelAccountId, "run-1");
+    await client.refreshArtifact(channelAccountId, "artifact-1");
     await expect(client.getObservabilitySnapshot()).resolves.toMatchObject({ queue_lag_seconds: 42 });
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), (call[1] as RequestInit | undefined)?.body])).toEqual([
@@ -478,7 +476,6 @@ describe("createWebUiApiClient", () => {
         "http://localhost:8080/v1/artifacts/artifact-1/refresh?channel_account_id=web-console",
         JSON.stringify({}),
       ],
-      ["http://localhost:8080/v1/admin/reconcile-queue", JSON.stringify({ limit: 10 })],
       ["http://localhost:8080/v1/admin/observability", undefined],
     ]);
   });
@@ -489,7 +486,7 @@ describe("createWebUiApiClient", () => {
         {
           error: {
             code: "invalid_request",
-            message: "invalid owner",
+            message: "invalid channel account",
           },
         },
         400,
@@ -501,12 +498,12 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.listMediaAssets(owner)).rejects.toMatchObject({
+    await expect(client.listMediaAssets(channelAccountId)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       path: "/v1/media-assets?channel_account_id=web-console",
       status: 400,
       code: "invalid_request",
-      message: "invalid owner",
+      message: "invalid channel account",
     });
   });
 
@@ -524,7 +521,7 @@ describe("createWebUiApiClient", () => {
     });
 
     await expect(
-      client.listMediaAssets(tenantOwner, {
+      client.listMediaAssets(tenantChannelAccountId, {
         cursor: " cursor-1 ",
         pageSize: 25,
         query: "  note search  ",
@@ -578,13 +575,13 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.getMediaAsset(owner, "media-1")).resolves.toMatchObject({ media_asset_id: "media-1" });
-    await expect(client.getInboxCollection(owner)).resolves.toMatchObject({ collection_id: "inbox" });
-    await expect(client.getCollection(owner, "collection-1", { cursor: " cursor-2 ", pageSize: 10 })).resolves.toMatchObject({
+    await expect(client.getMediaAsset(channelAccountId, "media-1")).resolves.toMatchObject({ media_asset_id: "media-1" });
+    await expect(client.getInboxCollection(channelAccountId)).resolves.toMatchObject({ collection_id: "inbox" });
+    await expect(client.getCollection(channelAccountId, "collection-1", { cursor: " cursor-2 ", pageSize: 10 })).resolves.toMatchObject({
       collection_id: "collection-1",
     });
-    await expect(client.getSelectionSnapshot(owner, "selection-1")).resolves.toMatchObject({ selection_snapshot_id: "selection-1" });
-    await expect(client.getAnalysisRun(owner, "run-1")).resolves.toMatchObject({ analysis_run_id: "run-1", version: 7 });
+    await expect(client.getSelectionSnapshot(channelAccountId, "selection-1")).resolves.toMatchObject({ selection_snapshot_id: "selection-1" });
+    await expect(client.getAnalysisRun(channelAccountId, "run-1")).resolves.toMatchObject({ analysis_run_id: "run-1", version: 7 });
 
     expect(fetchImpl.mock.calls.map((call) => String(call[0]))).toEqual([
       "http://localhost:8080/v1/media-assets/media-1?channel_account_id=web-console",
@@ -608,20 +605,20 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await client.createCollection(tenantOwner, {
+    await client.createCollection(tenantChannelAccountId, {
       name: "  Alpha  ",
       items: ["media-1"],
     });
-    await client.updateCollection(tenantOwner, "collection-1", {
+    await client.updateCollection(tenantChannelAccountId, "collection-1", {
       expectedVersion: 3,
       name: "  Beta  ",
       status: "archived",
     });
-    await client.replaceCollectionItems(tenantOwner, "collection-1", {
+    await client.replaceCollectionItems(tenantChannelAccountId, "collection-1", {
       expectedVersion: 4,
       items: [{ media_asset_id: "media-2", position: 0 }],
     });
-    await client.removeCollectionItem(owner, "collection-1", "media-2", 5);
+    await client.removeCollectionItem(channelAccountId, "collection-1", "media-2", 5);
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), call[1]])).toEqual([
       [
@@ -697,12 +694,12 @@ describe("createWebUiApiClient", () => {
     });
 
     await expect(
-      client.listAnalysisRuns(owner, { status: "running", runType: "summary", cursor: " cursor-3 ", pageSize: 25 }),
+      client.listAnalysisRuns(channelAccountId, { status: "running", runType: "summary", cursor: " cursor-3 ", pageSize: 25 }),
     ).resolves.toMatchObject({
       items: [expect.objectContaining({ analysis_run_id: "run-1" })],
     });
-    await expect(client.retryAnalysisRun(tenantOwner, "run-2")).resolves.toMatchObject({ analysis_run_id: "run-2" });
-    await expect(client.listAnalysisRunEvents(owner, "run-2", { cursor: "cursor-4", pageSize: 10 })).resolves.toMatchObject({
+    await expect(client.retryAnalysisRun(tenantChannelAccountId, "run-2")).resolves.toMatchObject({ analysis_run_id: "run-2" });
+    await expect(client.listAnalysisRunEvents(channelAccountId, "run-2", { cursor: "cursor-4", pageSize: 10 })).resolves.toMatchObject({
       page: expect.objectContaining({ cursor: "next" }),
     });
 
@@ -734,11 +731,11 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.listArtifacts(owner, { analysisRunId: " run-1 ", pageSize: 50 })).resolves.toMatchObject({
+    await expect(client.listArtifacts(channelAccountId, { analysisRunId: " run-1 ", pageSize: 50 })).resolves.toMatchObject({
       items: [expect.objectContaining({ artifact_id: "artifact-1" })],
     });
     await expect(
-      client.listDiagnostics(owner, {
+      client.listDiagnostics(channelAccountId, {
         subjectType: "artifact",
         subjectId: " artifact-1 ",
         severity: "error",
@@ -748,7 +745,7 @@ describe("createWebUiApiClient", () => {
     ).resolves.toMatchObject({
       items: [expect.objectContaining({ diagnostic_id: "diag-1" })],
     });
-    await expect(client.listDiagnostics(owner, { subjectId: "   " })).resolves.toMatchObject({
+    await expect(client.listDiagnostics(channelAccountId, { subjectId: "   " })).resolves.toMatchObject({
       items: [],
     });
 
@@ -773,10 +770,10 @@ describe("createWebUiApiClient", () => {
       fetchImpl: failingFetch,
     });
 
-    await expect(envelopeClient.getMediaAsset(owner, "media-1")).rejects.toThrowError(
+    await expect(envelopeClient.getMediaAsset(channelAccountId, "media-1")).rejects.toThrowError(
       "API response does not include media_asset",
     );
-    await expect(failingClient.listCollections(owner)).rejects.toMatchObject({
+    await expect(failingClient.listCollections(channelAccountId)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 502,
       path: "/v1/collections?channel_account_id=web-console",
@@ -797,20 +794,20 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await client.addMediaAsset(owner, {
+    await client.addMediaAsset(channelAccountId, {
       kind: "text",
       displayName: "   ",
       origin: { origin_type: "text", text: "Meeting note" },
     });
-    await client.updateCollection(owner, "collection-1", {
+    await client.updateCollection(channelAccountId, "collection-1", {
       expectedVersion: 4,
       name: "   ",
     });
-    await client.createSelectionSnapshot(owner, {
+    await client.createSelectionSnapshot(channelAccountId, {
       items: [{ media_asset_id: "media-1", position: 0 }],
       sourceCollectionId: "",
     });
-    await client.removeMediaAsset(owner, "media-1");
+    await client.removeMediaAsset(channelAccountId, "media-1");
 
     expect(fetchImpl.mock.calls.map((call) => [String(call[0]), call[1]])).toEqual([
       [
@@ -884,21 +881,20 @@ describe("createWebUiApiClient", () => {
       fetchImpl,
     });
 
-    await expect(client.listMediaAssets(owner)).rejects.toMatchObject({
+    await expect(client.listMediaAssets(channelAccountId)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 400,
       path: "/v1/media-assets?channel_account_id=web-console",
       code: undefined,
       message: "API request failed for /v1/media-assets?channel_account_id=web-console",
     });
-    await expect(client.listCollections(owner)).rejects.toMatchObject({
+    await expect(client.listCollections(channelAccountId)).rejects.toMatchObject({
       name: "WebUiApiClientError",
       status: 400,
       path: "/v1/collections?channel_account_id=web-console",
       code: undefined,
       message: "API request failed for /v1/collections?channel_account_id=web-console",
     });
-    await expect(client.reconcileAnalysisRunQueue()).resolves.toBeUndefined();
   });
 
   it("uses slash-normalized base URLs and the default websocket transport", async () => {
@@ -923,7 +919,7 @@ describe("createWebUiApiClient", () => {
         fetchImpl,
       });
 
-      await client.listCollections(owner);
+      await client.listCollections(channelAccountId);
       const subscription = client.subscribeToRunEvents({ onMessage: vi.fn() });
       subscription.close();
 

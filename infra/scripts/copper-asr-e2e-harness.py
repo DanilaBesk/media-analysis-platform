@@ -107,7 +107,7 @@ def build_plan(*, copy_object_store_to: Path | None = None) -> dict[str, Any]:
         planned_cases.append(
             {
                 "case_id": case_id,
-                "owner_bead": case["owner_bead"],
+                "source_bead": case["source_bead"],
                 "media_kind": case["media_kind"],
                 "stored_object_id": stored_object_id,
                 "stored_object": stored_object,

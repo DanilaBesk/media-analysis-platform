@@ -1342,21 +1342,21 @@ def _manifest_items_with_diagnostics(
     artifact_kinds: tuple[str, ...],
     diagnostics: tuple[Mapping[str, object], ...],
 ) -> tuple[list[Mapping[str, object]], Mapping[str, int]]:
-    items = sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position)
-    diagnostics_by_selection_item_id: dict[str, list[str]] = {}
+    items = sorted(execution.selection_snapshot.items, key=lambda snapshot_item: snapshot_item.position)
+    diagnostics_by_snapshot_item_id: dict[str, list[str]] = {}
     for diagnostic in diagnostics:
         context = diagnostic.get("context")
         if not isinstance(context, Mapping):
             continue
-        selection_item_id = context.get("selection_snapshot_item_id")
-        if isinstance(selection_item_id, str) and selection_item_id.strip():
-            diagnostics_by_selection_item_id.setdefault(selection_item_id.strip(), []).append(str(diagnostic["diagnostic_id"]))
+        snapshot_item_id = context.get("selection_snapshot_item_id")
+        if isinstance(snapshot_item_id, str) and snapshot_item_id.strip():
+            diagnostics_by_snapshot_item_id.setdefault(snapshot_item_id.strip(), []).append(str(diagnostic["diagnostic_id"]))
 
     manifest_items: list[Mapping[str, object]] = []
     included_count = 0
     skipped_count = 0
     for item in items:
-        diagnostic_ids = diagnostics_by_selection_item_id.get(str(item.selection_snapshot_item_id), [])
+        diagnostic_ids = diagnostics_by_snapshot_item_id.get(str(item.selection_snapshot_item_id), [])
         included = len(diagnostic_ids) == 0
         outcome = "succeeded" if included else "skipped"
         if included:

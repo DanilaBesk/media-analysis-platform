@@ -51,13 +51,13 @@ from telegram_adapter.bot import (
     _message_text,
     _normalize_callback_error,
     _normalize_message_error,
-    _owner_from_channel_account,
+    _channel_identity_from_channel_account,
     _page_state_from_display_state,
     _parse_callback_payload,
     _run_for_id,
     _run_surface_display_state,
     _select_transcript_artifact,
-    _state_key_from_owner,
+    _state_key_from_channel_identity,
     _status_surface_display_state,
     _TelegramPollingMonitor,
     _surface_address,
@@ -234,18 +234,18 @@ class FakeFinalApiClient:
         }
 
     def resolve_channel_account(self, **kwargs) -> dict[str, Any]:
-        owner_value = kwargs["owner"]
-        owner_id = str(owner_value["owner_id"])
-        existing = next((account for account in self.channel_accounts if account["external_account_ref"] == owner_id), None)
+        owner_value = kwargs["channel_identity"]
+        external_account_ref = str(owner_value["external_account_ref"])
+        existing = next((account for account in self.channel_accounts if account["external_account_ref"] == external_account_ref), None)
         if existing is not None:
             return existing
         account = {
             "channel_account_id": f"channel-account-{len(self.channel_accounts) + 1}",
             "channel": "telegram",
-            "external_account_ref": owner_id,
-            "display_name": owner_id,
+            "external_account_ref": external_account_ref,
+            "display_name": external_account_ref,
             "status": "active",
-            "metadata": {"owner": owner_value, "adapter_identity": owner_value.get("adapter_identity", {})},
+            "metadata": {"channel_identity": owner_value, "adapter_identity": owner_value.get("adapter_identity", {})},
         }
         self.channel_accounts.append(account)
         return account
@@ -455,11 +455,11 @@ class FakeCallback:
         self.answers.append({"text": text, "show_alert": show_alert})
 
 
-def owner(chat_id: int = 10, user_id: int | None = 7) -> dict[str, Any]:
+def channel_identity(chat_id: int = 10, user_id: int | None = 7) -> dict[str, Any]:
     user_suffix = "" if user_id is None else f":user:{user_id}"
     return {
-        "owner_type": "telegram",
-        "owner_id": f"chat:{chat_id}{user_suffix}",
+        "channel": "telegram",
+        "external_account_ref": f"chat:{chat_id}{user_suffix}",
         "adapter_identity": {
             "telegram_chat_id": str(chat_id),
             "telegram_user_id": "" if user_id is None else str(user_id),
@@ -492,7 +492,7 @@ def status_for(
     rejected: list[IngressRecord] | None = None,
     cursor: str | None = None,
 ) -> InboxStatus:
-    return gateway.restore_status(owner=owner(), rejected=rejected, cursor=cursor)
+    return gateway.restore_status(channel_identity=channel_identity(), rejected=rejected, cursor=cursor)
 
 
 def test_load_settings_reads_explicit_env_mapping() -> None:
@@ -739,7 +739,7 @@ async def test_download_message_files_hydrates_content_and_rejects_empty_downloa
 async def test_send_or_edit_status_prefers_edit_then_falls_back_to_new_message() -> None:
     edit_bot = FakeBot()
     _, gateway, app = make_app(bot=edit_bot)
-    gateway.add_text(owner=owner(), text="first item")
+    gateway.add_text(channel_identity=channel_identity(), text="first item")
     message = FakeMessage()
     app.status_message_ids[(10, 7)] = 5001
 
@@ -751,7 +751,7 @@ async def test_send_or_edit_status_prefers_edit_then_falls_back_to_new_message()
 
     failing_bot = FakeBot(edit_error=RuntimeError("stale message"))
     _, failing_gateway, failing_app = make_app(bot=failing_bot)
-    failing_gateway.add_text(owner=owner(), text="fallback item")
+    failing_gateway.add_text(channel_identity=channel_identity(), text="fallback item")
     fallback_message = FakeMessage()
     failing_app.status_message_ids[(10, 7)] = 5002
 
@@ -770,7 +770,7 @@ async def test_send_or_edit_status_treats_not_modified_as_success() -> None:
     )
     bot = FakeBot(edit_error=not_modified)
     _, gateway, app = make_app(bot=bot)
-    gateway.add_text(owner=owner(), text="same status")
+    gateway.add_text(channel_identity=channel_identity(), text="same status")
     message = FakeMessage()
     app.status_message_ids[(10, 7)] = 5001
 
@@ -785,7 +785,7 @@ async def test_send_or_edit_status_treats_not_modified_as_success() -> None:
 async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message() -> None:
     edit_bot = FakeBot()
     _, gateway, app = make_app(bot=edit_bot)
-    gateway.add_text(owner=owner(), text="fresh inbound item")
+    gateway.add_text(channel_identity=channel_identity(), text="fresh inbound item")
     message = FakeMessage()
     app.status_message_ids[(10, 7)] = 5001
 
@@ -817,7 +817,7 @@ async def test_post_ingest_refresh_failure_confirms_saved_inbox_without_unavaila
 @pytest.mark.asyncio
 async def test_status_surface_failure_does_not_block_inbound_status_reply() -> None:
     _, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="surface API is unavailable")
+    gateway.add_text(channel_identity=channel_identity(), text="surface API is unavailable")
     message = FakeMessage()
 
     def fail_find_surface(**kwargs: Any) -> dict[str, Any] | None:
@@ -843,8 +843,8 @@ async def test_status_surface_supersedes_uneditable_message_and_creates_replacem
         message="message to edit not found",
     )
     api, gateway, app = make_app(bot=FakeBot(edit_error=edit_error))
-    gateway.add_text(owner=owner(), text="surface replacement")
-    account = api.resolve_channel_account(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="surface replacement")
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     api.channel_surfaces.append(
         {
             "channel_surface_id": "surface-old",
@@ -875,8 +875,8 @@ async def test_status_surface_supersedes_uneditable_message_and_creates_replacem
 @pytest.mark.asyncio
 async def test_status_surface_supersedes_current_surface_after_generic_edit_failure() -> None:
     api, gateway, app = make_app(bot=FakeBot(edit_error=RuntimeError("edit transport failed")))
-    gateway.add_text(owner=owner(), text="surface fallback")
-    account = api.resolve_channel_account(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="surface fallback")
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     api.channel_surfaces.append(
         {
             "channel_surface_id": "surface-old",
@@ -904,10 +904,10 @@ async def test_status_surface_supersedes_current_surface_after_generic_edit_fail
 @pytest.mark.asyncio
 async def test_restart_recovery_restores_materials_surface_and_resumes_active_run_watcher() -> None:
     api, gateway, app = make_app(bot=FakeBot())
-    gateway.add_text(owner=owner(), text="recover me")
-    selection = gateway.create_selection_snapshot(owner=owner(), collection_id="inbox-1", expected_version=1)
-    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
-    account = api.resolve_channel_account(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="recover me")
+    selection = gateway.create_selection_snapshot(channel_identity=channel_identity(), collection_id="inbox-1", expected_version=1)
+    run = gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id=selection["selection_snapshot_id"])
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     api.upsert_channel_surface(
         channel_account_id=account["channel_account_id"],
         surface_type="current_materials_panel",
@@ -947,8 +947,8 @@ async def test_restart_recovery_restores_materials_surface_and_resumes_active_ru
 async def test_restart_recovery_supersedes_unreachable_surface_and_starts_polling_for_healthy_surfaces(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    stale_owner = owner()
-    healthy_owner = owner(chat_id=20, user_id=8)
+    stale_channel_identity = channel_identity()
+    healthy_channel_identity = channel_identity(chat_id=20, user_id=8)
     edit_error = telegram_bad_request("editMessageText", "Bad Request: chat not found")
     send_error = telegram_bad_request("sendMessage", "Bad Request: chat not found")
     bot = FakeBot(
@@ -956,10 +956,10 @@ async def test_restart_recovery_supersedes_unreachable_surface_and_starts_pollin
         send_message_errors={10: send_error},
     )
     api, gateway, app = make_app(bot=bot)
-    gateway.add_text(owner=stale_owner, text="stale surface")
-    gateway.add_text(owner=healthy_owner, text="healthy surface")
-    stale_account = api.resolve_channel_account(owner=stale_owner)
-    healthy_account = api.resolve_channel_account(owner=healthy_owner)
+    gateway.add_text(channel_identity=stale_channel_identity, text="stale surface")
+    gateway.add_text(channel_identity=healthy_channel_identity, text="healthy surface")
+    stale_account = api.resolve_channel_account(channel_identity=stale_channel_identity)
+    healthy_account = api.resolve_channel_account(channel_identity=healthy_channel_identity)
     api.upsert_channel_surface(
         channel_account_id=stale_account["channel_account_id"],
         surface_type="current_materials_panel",
@@ -1004,8 +1004,8 @@ async def test_recover_current_materials_surface_replaces_missing_message() -> N
     edit_error = telegram_bad_request("editMessageText", "Bad Request: message to edit not found")
     bot = FakeBot(edit_error=edit_error)
     api, gateway, app = make_app(bot=bot)
-    gateway.add_text(owner=owner(), text="recover replacement")
-    account = api.resolve_channel_account(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="recover replacement")
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     surface = api.upsert_channel_surface(
         channel_account_id=account["channel_account_id"],
         surface_type="current_materials_panel",
@@ -1016,7 +1016,7 @@ async def test_recover_current_materials_surface_replaces_missing_message() -> N
         subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
     )
 
-    await app._recover_current_materials_surface(owner=owner(), surface=surface)
+    await app._recover_current_materials_surface(channel_identity=channel_identity(), surface=surface)
 
     assert api.supersede_surface_requests[-1]["reason"] == "telegram_message_unavailable"
     assert bot.send_message_calls[-1]["chat_id"] == 10
@@ -1031,8 +1031,8 @@ async def test_recover_current_materials_surface_clears_status_when_replacement_
     send_error = telegram_bad_request("sendMessage", "Bad Request: chat not found")
     bot = FakeBot(edit_error=edit_error, send_message_errors={10: send_error})
     api, gateway, app = make_app(bot=bot)
-    gateway.add_text(owner=owner(), text="recover replacement failure")
-    account = api.resolve_channel_account(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="recover replacement failure")
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     surface = api.upsert_channel_surface(
         channel_account_id=account["channel_account_id"],
         surface_type="current_materials_panel",
@@ -1043,7 +1043,7 @@ async def test_recover_current_materials_surface_clears_status_when_replacement_
         subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
     )
 
-    await app._recover_current_materials_surface(owner=owner(), surface=surface)
+    await app._recover_current_materials_surface(channel_identity=channel_identity(), surface=surface)
 
     assert api.supersede_surface_requests[-1]["reason"] == "telegram_message_unavailable"
     assert app.status_message_ids == {}
@@ -1053,8 +1053,8 @@ async def test_recover_current_materials_surface_clears_status_when_replacement_
 @pytest.mark.asyncio
 async def test_recover_active_surfaces_skips_invalid_accounts_and_handles_recover_errors() -> None:
     api, gateway, app = make_app(bot=FakeBot())
-    gateway.add_text(owner=owner(), text="recover error")
-    good_account = api.resolve_channel_account(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="recover error")
+    good_account = api.resolve_channel_account(channel_identity=channel_identity())
     api.channel_accounts.extend(
         [
             {
@@ -1074,10 +1074,10 @@ async def test_recover_active_surfaces_skips_invalid_accounts_and_handles_recove
                 "metadata": {"adapter_identity": {"telegram_chat_id": "21", "telegram_user_id": "8"}},
             },
             {
-                "channel_account_id": "skip-owner",
+                "channel_account_id": "skip-channel_identity",
                 "channel": "telegram",
                 "external_account_ref": " ",
-                "display_name": "missing owner",
+                "display_name": "missing channel_identity",
                 "status": "active",
                 "metadata": {},
             },
@@ -1105,12 +1105,12 @@ async def test_recover_active_surfaces_skips_invalid_accounts_and_handles_recove
 
 
 @pytest.mark.asyncio
-async def test_recover_current_materials_surface_ignores_missing_address_and_owner_key() -> None:
+async def test_recover_current_materials_surface_ignores_missing_address_and_channel_identity_key() -> None:
     _, _, app = make_app(bot=FakeBot())
 
-    await app._recover_current_materials_surface(owner=owner(), surface={"address": {}, "display_state": {"screen": "main"}})
+    await app._recover_current_materials_surface(channel_identity=channel_identity(), surface={"address": {}, "display_state": {"screen": "main"}})
     await app._recover_current_materials_surface(
-        owner={"owner_type": "telegram", "owner_id": "chat:10:user:7"},
+        channel_identity={"channel": "telegram", "external_account_ref": "chat:10:user:7"},
         surface={"address": {"chat_id": 10, "message_id": 5001}, "display_state": {"screen": "main"}},
     )
 
@@ -1121,7 +1121,7 @@ async def test_recover_current_materials_surface_ignores_missing_address_and_own
 def test_recover_analysis_task_surface_ignores_missing_inputs_and_terminal_runs() -> None:
     api, _, app = make_app(bot=FakeBot())
     app._recover_analysis_task_surface(
-        owner=owner(),
+        channel_identity=channel_identity(),
         surface={"address": {"chat_id": 10, "message_id": 5001}, "subjects": []},
     )
     api.runs.append(
@@ -1134,7 +1134,7 @@ def test_recover_analysis_task_surface_ignores_missing_inputs_and_terminal_runs(
         }
     )
     app._recover_analysis_task_surface(
-        owner=owner(),
+        channel_identity=channel_identity(),
         surface={
             "address": {"chat_id": 10, "message_id": 5001},
             "display_state": {"screen": "main"},
@@ -1147,7 +1147,7 @@ def test_recover_analysis_task_surface_ignores_missing_inputs_and_terminal_runs(
 
 def test_surface_persistence_helpers_cover_conflict_supersede_failure_and_missing_chat() -> None:
     api, gateway, app = make_app(bot=FakeBot())
-    gateway.add_text(owner=owner(), text="persist conflict")
+    gateway.add_text(channel_identity=channel_identity(), text="persist conflict")
     status = status_for(gateway)
     state = _PageState(screen="main")
     surface = {
@@ -1162,7 +1162,7 @@ def test_surface_persistence_helpers_cover_conflict_supersede_failure_and_missin
     gateway.replace_channel_surface_display_state = fail_replace  # type: ignore[method-assign]
 
     persisted = app._persist_current_materials_surface(
-        owner=owner(),
+        channel_identity=channel_identity(),
         status=status,
         state=state,
         chat_id=10,
@@ -1180,7 +1180,7 @@ def test_surface_persistence_helpers_cover_conflict_supersede_failure_and_missin
 
     with pytest.raises(TelegramApiClientError):
         app._persist_current_materials_surface(
-            owner=owner(),
+            channel_identity=channel_identity(),
             status=status,
             state=state,
             chat_id=10,
@@ -1197,7 +1197,7 @@ def test_surface_persistence_helpers_cover_conflict_supersede_failure_and_missin
 
     with pytest.raises(RuntimeError, match="telegram_result_chat_missing"):
         app._persist_result_artifact_surface(
-            owner=owner(),
+            channel_identity=channel_identity(),
             artifact={"artifact_id": "artifact-1"},
             chat_id=None,
             message_id=9001,
@@ -1239,7 +1239,7 @@ async def test_existing_result_surface_prevents_duplicate_delivery_after_restart
             "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
         }
     )
-    account = api.resolve_channel_account(owner=owner())
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     api.upsert_channel_surface(
         channel_account_id=account["channel_account_id"],
         surface_type="result_artifact_surface",
@@ -1251,7 +1251,7 @@ async def test_existing_result_surface_prevents_duplicate_delivery_after_restart
     )
 
     notice, show_alert = await app._deliver_run_result(
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
         chat_id=10,
@@ -1291,7 +1291,7 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
         "mime_type": "text/plain",
         "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
     }
-    account = api.resolve_channel_account(owner=owner())
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     api.upsert_channel_surface(
         channel_account_id=account["channel_account_id"],
         surface_type="result_artifact_surface",
@@ -1310,7 +1310,7 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
     app._download_artifact_bytes = lambda _url: b"Recovered transcript."  # type: ignore[method-assign]
 
     notice, show_alert = await app._deliver_run_result(
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
         chat_id=10,
@@ -1338,7 +1338,7 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
 async def test_addressless_result_surface_failed_send_does_not_create_duplicate_or_clear_collection() -> None:
     send_error = telegram_bad_request("sendDocument", "Bad Request: chat not found")
     api, gateway, app = make_app(bot=FakeBot(send_document_errors={10: send_error}))
-    gateway.add_text(owner=owner(), text="keep me until delivery succeeds")
+    gateway.add_text(channel_identity=channel_identity(), text="keep me until delivery succeeds")
     api.runs.append(
         {
             "analysis_run_id": "run-1",
@@ -1364,7 +1364,7 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
         "mime_type": "text/plain",
         "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
     }
-    account = api.resolve_channel_account(owner=owner())
+    account = api.resolve_channel_account(channel_identity=channel_identity())
     api.upsert_channel_surface(
         channel_account_id=account["channel_account_id"],
         surface_type="result_artifact_surface",
@@ -1377,7 +1377,7 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
     app._download_artifact_bytes = lambda _url: b"transcript that cannot be delivered"  # type: ignore[method-assign]
 
     notice, show_alert = await app._deliver_run_result(
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
         chat_id=10,
@@ -1401,7 +1401,7 @@ async def test_deliver_run_result_requires_destination_and_download_url() -> Non
     api, _, app = make_app(bot=FakeBot())
 
     notice, show_alert = await app._deliver_run_result(
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
     )
@@ -1437,7 +1437,7 @@ async def test_deliver_run_result_requires_destination_and_download_url() -> Non
     }
 
     missing_url_notice, missing_url_show_alert = await app._deliver_run_result(
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
         chat_id=10,
@@ -1452,21 +1452,21 @@ async def test_deliver_run_result_requires_destination_and_download_url() -> Non
 @pytest.mark.asyncio
 async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_active() -> None:
     api, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="queued run")
-    status = gateway.restore_status(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="queued run")
+    status = gateway.restore_status(channel_identity=channel_identity())
     selection = gateway.create_selection_snapshot(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=status.collection["collection_id"],
         expected_version=int(status.collection["version"]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
+    run = gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id=selection["selection_snapshot_id"])
 
     async def no_sleep(_seconds: float) -> None:
         return None
 
     app._sleep = no_sleep  # type: ignore[assignment]
     status, prefix, answer_text, track_run_id, terminal_status = await app._resolve_run_start_status(
-        owner=owner(),
+        channel_identity=channel_identity(),
         run=run,
     )
 
@@ -1481,18 +1481,18 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
 @pytest.mark.asyncio
 async def test_resolve_run_start_status_returns_terminal_status_after_initial_poll() -> None:
     api, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="terminal run")
-    status = gateway.restore_status(owner=owner())
+    gateway.add_text(channel_identity=channel_identity(), text="terminal run")
+    status = gateway.restore_status(channel_identity=channel_identity())
     selection = gateway.create_selection_snapshot(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=status.collection["collection_id"],
         expected_version=int(status.collection["version"]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
+    run = gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id=selection["selection_snapshot_id"])
     api.runs[0]["status"] = "succeeded"
 
     status, prefix, answer_text, track_run_id, terminal_status = await app._resolve_run_start_status(
-        owner=owner(),
+        channel_identity=channel_identity(),
         run=run,
     )
 
@@ -1534,8 +1534,8 @@ async def test_access_checks_cover_allowlist_and_scope_errors() -> None:
 @pytest.mark.asyncio
 async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_back() -> None:
     api, gateway, app = make_app(page_size=1)
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
     base_message = FakeMessage()
 
     refresh_status = status_for(gateway)
@@ -1578,7 +1578,7 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     assert api.remove_requests[-1]["media_asset_id"] == "media-2"
     assert app.page_states[(10, 7)].screen == "materials"
 
-    gateway.add_text(owner=owner(), text="three")
+    gateway.add_text(channel_identity=channel_identity(), text="three")
     next_page_status = status_for(gateway, cursor="media-1")
     clear_keyboard = build_status_keyboard(next_page_status, can_go_back=True, current_cursor="media-1", screen="materials")
     remove_latest_callback_data = next(
@@ -1609,8 +1609,8 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
 @pytest.mark.asyncio
 async def test_callback_materials_previous_page_and_clear_visible_rollback() -> None:
     api, gateway, app = make_app(page_size=1)
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
     base_message = FakeMessage()
 
     page_one_status = status_for(gateway)
@@ -1660,7 +1660,7 @@ async def test_callback_materials_previous_page_and_clear_visible_rollback() -> 
 @pytest.mark.asyncio
 async def test_refresh_callback_tolerates_message_not_modified() -> None:
     api, gateway, app = make_app(page_size=1)
-    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
     base_message = FakeMessage()
     original_edit_text = base_message.edit_text
 
@@ -1680,7 +1680,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     assert refresh_callback.answers[-1]["text"] == "Состояние обновлено"
     base_message.edit_text = original_edit_text  # type: ignore[method-assign]
 
-    gateway.add_text(owner=owner(), text="run item 2")
+    gateway.add_text(channel_identity=channel_identity(), text="run item 2")
     run_status = status_for(gateway)
     run_keyboard = build_status_keyboard(run_status)
     run_callback_data = next(
@@ -1698,9 +1698,9 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     original_get_run_status = gateway.get_run_status
     statuses = iter(("queued", "running", "succeeded"))
 
-    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+    def staged_run_status(*, channel_identity: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
         api.runs[0]["status"] = next(statuses, "succeeded")
-        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+        return original_get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
 
     app._sleep = no_sleep  # type: ignore[assignment]
     app.run_status_poll_attempts = 1
@@ -1790,8 +1790,8 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
 @pytest.mark.asyncio
 async def test_result_callback_sends_transcript_and_clears_collection_after_success() -> None:
     api, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
     base_message = FakeMessage()
     api.runs.append(
         {
@@ -1908,7 +1908,7 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
 @pytest.mark.asyncio
 async def test_unfocused_active_run_can_be_canceled_while_new_transcription_can_start() -> None:
     api, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="new independent material")
+    gateway.add_text(channel_identity=channel_identity(), text="new independent material")
     base_message = FakeMessage()
     api.runs.append(
         {
@@ -2085,8 +2085,8 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
 @pytest.mark.asyncio
 async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> None:
     api, gateway, app = make_app(page_size=1)
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
     base_message = FakeMessage()
 
     run_status = status_for(gateway)
@@ -2107,9 +2107,9 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
     async def gated_sleep(_seconds: float) -> None:
         await tick.wait()
 
-    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+    def staged_run_status(*, channel_identity: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
         api.runs[0]["status"] = next(statuses, "running")
-        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+        return original_get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
 
     app._sleep = gated_sleep  # type: ignore[assignment]
     app.run_status_poll_attempts = 1
@@ -2139,7 +2139,7 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
 @pytest.mark.asyncio
 async def test_legacy_collection_and_selection_callbacks_start_terminal_runs() -> None:
     api, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="ready to finish")
+    gateway.add_text(channel_identity=channel_identity(), text="ready to finish")
     status = status_for(gateway)
     base_message = FakeMessage()
     original_start_analysis = gateway.start_analysis
@@ -2169,7 +2169,7 @@ async def test_legacy_collection_and_selection_callbacks_start_terminal_runs() -
     assert app.run_watch_tasks == {}
 
     selection = gateway.create_selection_snapshot(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=collection_id,
         expected_version=collection_version,
     )
@@ -2188,7 +2188,7 @@ async def test_legacy_collection_and_selection_callbacks_start_terminal_runs() -
 @pytest.mark.asyncio
 async def test_legacy_collection_callback_schedules_tracking_for_active_run() -> None:
     _, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="watch legacy run")
+    gateway.add_text(channel_identity=channel_identity(), text="watch legacy run")
     status = status_for(gateway)
     base_message = FakeMessage()
     tick = asyncio.Event()
@@ -2222,8 +2222,8 @@ async def test_legacy_collection_callback_schedules_tracking_for_active_run() ->
 @pytest.mark.asyncio
 async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button_after_success() -> None:
     api, gateway, app = make_app(page_size=1, bot=FakeBot())
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
     base_message = FakeMessage()
 
     run_status = status_for(gateway)
@@ -2243,9 +2243,9 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
     async def gated_sleep(_seconds: float) -> None:
         await tick.wait()
 
-    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+    def staged_run_status(*, channel_identity: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
         api.runs[0]["status"] = next(statuses, "succeeded")
-        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+        return original_get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
 
     app._sleep = gated_sleep  # type: ignore[assignment]
     app._download_artifact_bytes = lambda _url: b"transcript ready"  # type: ignore[method-assign]
@@ -2299,7 +2299,7 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
 async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_unreachable() -> None:
     send_error = telegram_forbidden("sendDocument", "Forbidden: bot was blocked by the user")
     api, gateway, app = make_app(page_size=1, bot=FakeBot(send_document_errors={10: send_error}))
-    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
     base_message = FakeMessage()
 
     run_status = status_for(gateway)
@@ -2319,9 +2319,9 @@ async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_un
     async def gated_sleep(_seconds: float) -> None:
         await tick.wait()
 
-    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+    def staged_run_status(*, channel_identity: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
         api.runs[0]["status"] = next(statuses, "succeeded")
-        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+        return original_get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
 
     app._sleep = gated_sleep  # type: ignore[assignment]
     app._download_artifact_bytes = lambda _url: b"transcript cannot be delivered"  # type: ignore[method-assign]
@@ -2373,7 +2373,7 @@ async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_un
 @pytest.mark.asyncio
 async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
     api, gateway, app = make_app(bot=FakeBot())
-    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
     base_message = FakeMessage()
 
     run_status = status_for(gateway)
@@ -2393,9 +2393,9 @@ async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
     async def gated_sleep(_seconds: float) -> None:
         await tick.wait()
 
-    def staged_run_status(*, owner: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+    def staged_run_status(*, channel_identity: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
         api.runs[0]["status"] = next(statuses, "failed")
-        return original_get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+        return original_get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
 
     app._sleep = gated_sleep  # type: ignore[assignment]
     app.run_status_poll_attempts = 1
@@ -2435,7 +2435,7 @@ async def test_run_watcher_replaces_existing_task_and_logs_unexpected_failures(
     app.run_status_follow_delay_seconds = 0
     app._schedule_run_status_tracking(
         key=key,
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-old",
         chat_id=10,
         message_id=5001,
@@ -2444,7 +2444,7 @@ async def test_run_watcher_replaces_existing_task_and_logs_unexpected_failures(
 
     app._schedule_run_status_tracking(
         key=key,
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-new",
         chat_id=10,
         message_id=5001,
@@ -2468,7 +2468,7 @@ async def test_run_watcher_replaces_existing_task_and_logs_unexpected_failures(
         task = asyncio.create_task(
             app._track_run_status_until_terminal(
                 key=key,
-                owner=owner(),
+                channel_identity=channel_identity(),
                 analysis_run_id="run-new",
                 chat_id=10,
                 message_id=5001,
@@ -2484,7 +2484,7 @@ async def test_run_watcher_replaces_existing_task_and_logs_unexpected_failures(
 @pytest.mark.asyncio
 async def test_callback_error_paths_cover_stale_unknown_and_normalized_failures() -> None:
     _, gateway, app = make_app()
-    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
     message = FakeMessage()
 
     missing_message_callback = FakeCallback(data="ib:rf", message=None)
@@ -2639,7 +2639,7 @@ def test_helper_functions_cover_remaining_callback_token_and_error_branches() ->
 
 def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
     status = InboxStatus(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection={"collection_id": "inbox-1", "version": 2},
         items=[],
         page={},
@@ -2706,19 +2706,19 @@ def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
     assert _surface_subject_id({"subjects": "bad"}, subject_type="analysis_run", role="primary") is None
     assert _surface_subject_id({"subjects": [{"subject_type": "artifact"}]}, subject_type="analysis_run", role="primary") is None
 
-    owner_from_metadata = _owner_from_channel_account({"metadata": {"owner": owner()}})
-    owner_from_external_ref = _owner_from_channel_account(
+    channel_identity_from_metadata = _channel_identity_from_channel_account({"metadata": {"channel_identity": channel_identity()}})
+    channel_identity_from_external_ref = _channel_identity_from_channel_account(
         {
             "external_account_ref": "chat:10:user:7",
             "metadata": {"adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"}},
         }
     )
-    assert owner_from_metadata == owner()
-    assert owner_from_external_ref == owner()
-    assert _owner_from_channel_account({"external_account_ref": " "}) is None
-    assert _state_key_from_owner({}) is None
-    assert _state_key_from_owner({"adapter_identity": {"telegram_chat_id": "bad"}}) is None
-    assert _state_key_from_owner(owner()) == (10, 7)
+    assert channel_identity_from_metadata == channel_identity()
+    assert channel_identity_from_external_ref == channel_identity()
+    assert _channel_identity_from_channel_account({"external_account_ref": " "}) is None
+    assert _state_key_from_channel_identity({}) is None
+    assert _state_key_from_channel_identity({"adapter_identity": {"telegram_chat_id": "bad"}}) is None
+    assert _state_key_from_channel_identity(channel_identity()) == (10, 7)
 
     visible_lines = _visible_item_lines(
         [
@@ -2754,7 +2754,7 @@ def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
     assert "· готовится" in _artifact_label({"artifact_id": "artifact-pending", "kind": "transcript", "status": "pending"})
     assert "Активные задачи: 2" in render_status_text(
         InboxStatus(
-            owner=owner(),
+            channel_identity=channel_identity(),
             collection={"collection_id": "inbox-1", "version": 2, "items": []},
             items=[],
             page={},

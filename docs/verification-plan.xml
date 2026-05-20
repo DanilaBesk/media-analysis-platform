@@ -2,11 +2,11 @@
   <GlobalPolicy>
     <deterministic-first>true</deterministic-first>
     <source-of-truth>Verify the target chain media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; artifacts, plus channel_account/channel_surface recovery where channels render state.</source-of-truth>
-    <access-scope>The target product is single-user; verification must prove channel_account isolation, no accidental multi-user/workspace dependency, and no cross-channel mutation through stale callback or stale idempotency data. owner may appear only as deprecated compatibility wording.</access-scope>
+    <access-scope>The target product is single-user; verification must prove channel_account isolation, no accidental multi-user/workspace dependency, and no cross-channel mutation through stale callback or stale idempotency data.</access-scope>
     <diagnostics-policy>Rejected and partially processed records must produce stable diagnostics instead of disappearing.</diagnostics-policy>
     <retention-policy>Retention checks must prove metadata, stored object bodies, artifacts, diagnostics, and selection snapshots follow their separate lifecycle rules.</retention-policy>
     <coverage-policy>Coverage closure is reported per surface with the metric each tool can actually emit; missing metrics remain explicit gaps and do not collapse into a fake repo-wide 100% claim.</coverage-policy>
-    <target-coverage-policy>For the target rebuild, 100% means every declared table invariant, API operation, DTO compatibility rule, user flow, worker step, channel surface recovery path, and diagnostic failure mode has explicit automated or runtime proof.</target-coverage-policy>
+    <target-coverage-policy>For the target rebuild, 100% means every declared table invariant, API operation, deleted-alias rule, user flow, worker step, channel surface recovery path, and diagnostic failure mode has explicit automated or runtime proof.</target-coverage-policy>
     <asr-runtime-policy>For transcription, 100% means CopperASR is proven as the only active ASR backend across worker runtime, compose, dependencies, env, adapters, service artifacts, diagnostics, and no-legacy guardrails.</asr-runtime-policy>
     <data-reset-policy>The current local database is disposable. Verification should prove clean schema reset/recreate, deterministic seed fixtures, and target behavior from fresh data; it must not require preserving or backfilling current local rows.</data-reset-policy>
     <redaction>Never assert on raw secrets, raw bot tokens, private object URLs, or full prompt payloads.</redaction>
@@ -16,7 +16,7 @@
     <ContractTests>
       <required>
         <item>OpenAPI validates media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, lifecycle, retention, pagination, idempotency, and error envelopes.</item>
-        <item>Schema tests fail if target public contracts expose old product route vocabulary, grouped-submission concepts, or non-deprecated compatibility names.</item>
+        <item>Schema tests fail if target public contracts expose removed product route vocabulary, grouped-submission concepts, or aliases.</item>
         <item>Enum tests cover media_asset, collection, selection_snapshot, analysis_run, analysis_run_step, artifact, and diagnostic statuses.</item>
         <item>Diagnostic code tests cover ingestion rejection, channel-account mismatch, invalid selection snapshot, unavailable stored object, analysis prerequisite missing/failed/unavailable, worker failure, artifact expiry, retention denial, and adapter conflict.</item>
       </required>
@@ -26,7 +26,7 @@
       <required>
         <item>Create media_asset from text, URL, and uploaded body with channel-account scope, stored_object/origin metadata, and a durable sources object-store write before worker materialization.</item>
         <item>Repeated channel_account upsert by channel and external account reference returns the persisted row id, not the caller's newly generated candidate id, before media_asset create/upload paths reference it.</item>
-        <item>Target migration and required schema fragments create channel_accounts, operation_requests, stored_objects, media_assets, selection_snapshots, analysis_run_steps, analysis_run_step_inputs, artifact_subjects, diagnostics, channel_surfaces, and channel surface event tables without recreating legacy sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, or safe_adapter_context.</item>
+        <item>Target migration and required schema fragments create channel_accounts, operation_requests, stored_objects, media_assets, selection_snapshots, analysis_run_steps, analysis_run_step_inputs, artifact_subjects, diagnostics, channel_surfaces, and channel surface event tables without recreating removed product tables or caller-scope columns.</item>
         <item>Deterministic seed fixtures create a stable channel_account and inbox collection for fresh local reset/bootstrap tests.</item>
         <item>Default inbox membership is created for accepted media_asset records.</item>
         <item>Adding media to an existing inbox or user collection appends after the current highest active position without duplicate active positions.</item>
@@ -117,11 +117,11 @@
     </Gate>
     <Gate id="EV-STALENESS">
       <description>Stale public product vocabulary is isolated from active target contracts and normal UI copy.</description>
-      <required-evidence>Focused repository searches across the six GRACE XML files and Web visible copy show old names only in explicit deprecated, compatibility, migration, historical, or admin/debug contexts.</required-evidence>
+      <required-evidence>Focused repository searches across active code, contracts, the six GRACE XML files, and Web visible copy show removed product vocabulary only in negative regression checks or historical evidence.</required-evidence>
     </Gate>
     <Gate id="EV-CONTRACTS">
       <description>Public API and schemas match target vocabulary.</description>
-      <required-evidence>Contract tests validate target DTOs and fail on removed public product surfaces outside deprecated compatibility contracts.</required-evidence>
+      <required-evidence>Contract tests validate target DTOs and fail on removed public product surfaces and aliases.</required-evidence>
     </Gate>
     <Gate id="EV-STORAGE">
       <description>Storage implements channel-account scope, immutable selection snapshots, step inputs, artifact lineage, lifecycle, retention, and diagnostics.</description>
@@ -145,11 +145,11 @@
     </Gate>
     <Gate id="EV-COVERAGE-INVENTORY">
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
-      <required-evidence>`bash infra/scripts/coverage-inventory.sh` records statement, line, branch, or function coverage where supported, records pass/fail-only surfaces separately, runs contract fixture checks, runs `bash infra/scripts/no-legacy-asr-gate.sh`, runs `bash infra/scripts/no-legacy-target-gate.sh`, validates compose topology/runtime-proof wiring, runs MCP typecheck, and returns non-zero while any declared surface still has an unwired metric or failing probe. The no-legacy gates must reject removed ASR runtime references, deprecated active route/table/DTO vocabulary from target paths, and legacy table/column recreation in the target reset migration. Admin observability/reconcile/runtime inventory over a target-reset database must return empty/no-op results when only removed legacy tables or columns are absent.</required-evidence>
+      <required-evidence>`bash infra/scripts/coverage-inventory.sh` records statement, line, branch, or function coverage where supported, records pass/fail-only surfaces separately, runs contract fixture checks, runs `bash infra/scripts/no-legacy-asr-gate.sh`, runs `bash infra/scripts/no-legacy-target-gate.sh`, validates compose topology/runtime-proof wiring, runs MCP typecheck, and returns non-zero while any declared surface still has an unwired metric or failing probe. The no-legacy gates must reject removed ASR runtime references, removed active route/table/DTO vocabulary from target paths, and removed table/column recreation in the target reset migration.</required-evidence>
     </Gate>
     <Gate id="EV-COVERAGE-MATRIX">
       <description>Target coverage matrix and deterministic fixtures prepare the full proof wave.</description>
-      <required-evidence>docs/architecture/target-coverage-matrix.md maps source-plan tables, API operations, user flows, failure modes, compatibility rules, non-goals, app boundaries, and data reset rules to implementation proof, automated proof, QA proof, and remaining Beads; infra/fixtures/target/manifest.json and infra/scripts/target-reset-smoke.sh validate deterministic fixture and reset assumptions.</required-evidence>
+      <required-evidence>docs/architecture/target-coverage-matrix.md maps source-plan tables, API operations, user flows, failure modes, deleted-surface rules, non-goals, app boundaries, and data reset rules to implementation proof, automated proof, QA proof, and remaining Beads; infra/fixtures/target/manifest.json and infra/scripts/target-reset-smoke.sh validate deterministic fixture and reset assumptions.</required-evidence>
     </Gate>
     <Gate id="EV-RUNTIME">
       <description>Runtime smoke proves end-to-end behavior.</description>
@@ -181,7 +181,7 @@
     <bead id="media-7f3">Validate target architecture document, GRACE references, XML parsing, and architecture coverage checklist.</bead>
     <bead id="media-36a">Validate GRACE XML and stale vocabulary searches only.</bead>
     <bead id="media-49h">Run contract and schema checks.</bead>
-    <bead id="media-7f3.9.1">Run target contract and compatibility isolation checks.</bead>
+    <bead id="media-7f3.9.1">Run target contract and deleted-alias absence checks.</bead>
     <bead id="media-7f3.9.2">Run target storage schema, repository, deterministic fixture, and stale storage vocabulary checks.</bead>
     <bead id="media-7f3.9.3">Run target API/domain service checks for channel-account scope, media_asset upload/list/get/delete, collections, selection_snapshot, analysis_run events/cancel/retry, artifacts, diagnostics, analysis_run_step lifecycle, and channel_surface list/update/event operations.</bead>
     <bead id="media-7f3.9.4">Run Telegram channel surface checks for current_materials_panel persistence, analysis_task_surface restart watcher recovery, result_artifact_surface duplicate-delivery prevention, supersede on uneditable messages, and target channel_surface storage upsert behavior.</bead>
@@ -192,7 +192,7 @@
     <bead id="media-7f3.10.1">Run target coverage matrix review, deterministic fixture manifest validation, and target reset smoke before starting storage/API coverage expansion.</bead>
     <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and legacy storage package tests before starting adapter/worker/runtime E2E coverage.</bead>
     <bead id="media-7f3.10.3">Run Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download, target runtime proof, compose smoke, and GRACE XML checks before starting inventory/no-legacy gates.</bead>
-    <bead id="media-7f3.10.4">Run full coverage inventory, no-legacy target gate, admin target-reset regression tests, live admin observability/reconcile proof, GRACE XML checks, and git diff checks before starting QA traceability.</bead>
+    <bead id="media-7f3.10.4">Run full coverage inventory, no-legacy target gate, admin target-reset regression tests, live admin observability proof, GRACE XML checks, and git diff checks before starting QA traceability.</bead>
     <bead id="media-7f3.11.1">Run source-plan to artifact traceability audit, Beads graph status audit, GRACE XML checks, no-legacy target gate, contract fixture tests, stale closure wording scan, and git diff checks before starting backend/security/worker QA.</bead>
     <bead id="media-7f3.11.2">Run backend/storage/security/worker QA, focused worker-common/transcription/agent-runner regressions, focused API/storage regressions, full worker-common/transcription/agent-runner suites, API/storage tests, target reset smoke, no-legacy target gate, GRACE XML checks, and git diff checks before starting channel UX/runtime QA.</bead>
     <bead id="media-7f3.11.3">Run Web, Telegram, MCP, API prerequisite planning, agent-runner step-input, runtime-final E2E, compose config, target reset, no-legacy target gate, GRACE XML, and git diff checks before starting final readiness packaging.</bead>

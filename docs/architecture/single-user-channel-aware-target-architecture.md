@@ -110,7 +110,7 @@ Avoid in target public contracts:
 - `media_item`;
 - `selection` when the object is immutable;
 - `job` as user-facing execution;
-- `adapter_projection`;
+- adapter projection aliases;
 - Telegram-specific table names.
 
 ## Target Table Set
@@ -207,9 +207,9 @@ Normal Web UI must not make `media_asset`, `selection_snapshot`, `analysis_run_s
 
 Owns technical tool contracts. MCP may expose target API vocabulary because its users are tools/agents, not casual human UI users.
 
-### Compatibility Context
+### Removed-Surface Context
 
-Current implementation-era names such as `media_item`, `source`, `selection`, `analysis_run_task`, `owner`, and `interaction_surface` are compatibility or migration terms only. If retained temporarily, they must be marked deprecated, mapped to target terms, tested as transitional, and excluded from new target contracts and normal adapter UX.
+Pre-target implementation names are not an active product vocabulary. Current contracts, adapters, workers, Web, MCP, and GRACE packets must use the target terms in this document.
 
 ## Table Contracts
 
@@ -1032,24 +1032,23 @@ Operations:
 - agent-runner steps fail through prerequisite diagnostics rather than attempting speech-to-text or raw media discovery;
 - finalization respects `cancel_requested`.
 
-### Compatibility Routes
+### Removed Public Surfaces
 
-Compatibility routes are transitional only:
+The target architecture does not keep public compatibility routes or execution wrappers. Current public clients use these surfaces directly:
 
 ```text
-/v1/media-items          -> /v1/media-assets
-/v1/selections           -> /v1/selection-snapshots
-analysis_run_tasks table -> analysis_run_steps
-source fields            -> stored_object or media_asset origin metadata
-owner query/body fields  -> channel_account/single-user caller scope
+/v1/media-assets
+/v1/selection-snapshots
+/v1/analysis-runs
+/v1/artifacts
+/v1/diagnostics
 ```
 
 Rules:
 
-- compatibility routes must be documented as deprecated;
-- compatibility DTOs must map one-to-one into target DTOs without adding target behavior;
-- no new adapter or worker code should be authored against compatibility names;
-- tests must prove compatibility does not leak into target OpenAPI, Web copy, Telegram copy, MCP tool names, or worker DTO names.
+- no adapter, worker, Web, or MCP code should depend on removed public surfaces;
+- contracts must expose the target DTOs directly;
+- tests must prove removed vocabulary does not leak into target OpenAPI, Web copy, Telegram copy, MCP tool names, or worker DTO names.
 
 ## DTO And Type Naming
 
@@ -1113,15 +1112,13 @@ address_fingerprint
 Avoid:
 
 ```text
-media_item_id
-selection_id
-job_id
-task_id
-adapter_projection_id
-telegram_message_id
+pre-target media identifiers
+mutable selection aliases
+external job aliases
+transport-specific message identifiers
 ```
 
-Exception: old names may exist only in migration compatibility layers and must be marked as deprecated.
+No migration compatibility layer remains in the active runtime.
 
 ## App Responsibilities
 
@@ -1303,20 +1300,20 @@ Verification:
 
 ### Stage 1: Contract And Type Rename
 
-Goal: introduce target DTO names without changing runtime behavior first.
+Goal: expose target DTO names directly and remove pre-target contract surfaces.
 
 Work:
 
 - define target schemas;
-- implement the compatibility policy for `/v1/media-items`, `/v1/selections`, `analysis_run_tasks`, `source`, and `owner` as deprecated migration surfaces only;
-- add new route names behind feature flag or v2 namespace if needed;
+- remove public compatibility routes and wrappers;
+- use target route names without a feature flag or parallel namespace;
 - update generated client types if any.
 
 Verification:
 
 - contract tests for new DTOs;
 - stale public vocabulary tests;
-- adapters still pass with compatibility layer until migrated.
+- adapters pass against target routes only.
 
 ### Stage 2: Storage Reset And Rebuild
 
@@ -1328,8 +1325,8 @@ Work:
 - add `operation_requests`;
 - add `stored_objects`;
 - add `media_assets`;
-- rebuild `selections` as `selection_snapshots` or replace the table entirely;
-- rebuild `analysis_run_tasks` as `analysis_run_steps` or replace the table entirely;
+- create immutable `selection_snapshots`;
+- create worker-claimable `analysis_run_steps`;
 - add `analysis_run_step_inputs`;
 - add `artifact_subjects`;
 - add `channel_surfaces`, `channel_surface_subjects`, `channel_surface_events`;
@@ -1480,7 +1477,7 @@ The executable Beads graph follows the `plan-to-beads` three-stage shape. The so
 
 Tasks:
 
-1. `media-7f3.9.1`: Implement target contracts and compatibility policy.
+1. `media-7f3.9.1`: Implement target contracts and removed-surface policy.
 2. `media-7f3.9.2`: Implement target storage reset/rebuild and repositories.
 3. `media-7f3.9.3`: Implement target API domain services and operations.
 4. `media-7f3.9.4`: Implement channel surfaces and restart recovery.
@@ -1530,7 +1527,7 @@ Superseded flat tasks:
 - No workspaces yet.
 - No public Telegram-specific API.
 - No local durable Telegram state outside API.
-- No user-facing `job`, `task`, `adapter_projection`, or `selection` when meaning is snapshot.
+- No user-facing job/task aliases, adapter projection aliases, or mutable-selection wording when meaning is snapshot.
 - No shortcut that lets workers read mutable collections.
 
 ## Final Architecture Rule

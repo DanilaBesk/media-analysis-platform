@@ -54,7 +54,7 @@ _RUN_TYPES = frozenset({"transcription", "summary", "report", "deep_research", "
 _MEDIA_KINDS = frozenset({"text", "url", "file", "photo", "image", "audio", "voice", "video", "document"})
 _SOURCE_ORIGINS = frozenset({"text", "url", "object"})
 _MATERIALIZATION_KINDS = frozenset({"text", "url", "object", "unsupported"})
-_JOB_STATUSES = frozenset({"queued", "running", "cancel_requested", "succeeded", "failed", "canceled"})
+_ANALYSIS_RUN_STEP_STATUSES = frozenset({"queued", "running", "cancel_requested", "succeeded", "failed", "canceled"})
 _WORKER_OUTCOMES = frozenset({"succeeded", "partially_succeeded", "failed", "canceled"})
 _MIME_EXTENSION_OVERRIDES = {
     "audio/aac": ".aac",
@@ -81,7 +81,6 @@ __all__ = [
     "ArtifactResolutionResult",
     "CancelCheckResult",
     "AnalysisRunStepInput",
-    "ClaimedAnalysisRunExecution",
     "ClaimedAnalysisRunStep",
     "AnalysisRunControlClient",
     "AnalysisRunQueueItem",
@@ -90,7 +89,6 @@ __all__ = [
     "JsonTransport",
     "MediaSourceSnapshot",
     "OrderedWorkerInput",
-    "SealedSelectionInput",
     "SealedSelectionSnapshotInput",
     "SelectionItemLabels",
     "SelectionItemMaterialization",
@@ -193,7 +191,7 @@ class AnalysisRunQueueItem:
         _require(self.run_type in _RUN_TYPES, "invalid listed run_type")
         _require(self.worker_kind in _WORKER_KINDS, "invalid listed worker_kind")
         _require(self.step_kind in _STEP_KINDS, "invalid listed step_kind")
-        _require(self.status in _JOB_STATUSES, "invalid listed analysis run step status")
+        _require(self.status in _ANALYSIS_RUN_STEP_STATUSES, "invalid listed analysis run step status")
         _require(self.version >= 1, "listed analysis run version must be >= 1")
         _require(self.attempt_no >= 1, "listed analysis run step attempt_no must be >= 1")
 
@@ -358,14 +356,6 @@ class SelectionSnapshotItemInput:
             )
         _require(bool(self.display_name.strip()), "selection_snapshot item display_name must not be empty")
 
-    @property
-    def selection_item_id(self) -> str:
-        return str(self.selection_snapshot_item_id)
-
-    @property
-    def media_item_id(self) -> str:
-        return self.media_asset_id
-
     @classmethod
     def from_payload(
         cls,
@@ -511,14 +501,6 @@ class SelectionItemMaterialization:
         return self.materialization_kind == "object"
 
     @property
-    def selection_item_id(self) -> str:
-        return self.selection_snapshot_item_id
-
-    @property
-    def media_item_id(self) -> str:
-        return self.media_asset_id
-
-    @property
     def source_id(self) -> str:
         return self.origin_ref
 
@@ -538,7 +520,7 @@ class OrderedWorkerInput:
 
     @classmethod
     def from_payload(cls, payload: object) -> "OrderedWorkerInput":
-        mapping = _expect_mapping(payload, context="claim ordered input compatibility helper")
+        mapping = _expect_mapping(payload, context="claim ordered input")
         return cls(
             position=_expect_int(mapping.get("position"), context="claim ordered input position", minimum=0),
             source_id=_expect_str(mapping.get("source_id"), context="claim ordered input source_id"),
@@ -579,10 +561,6 @@ class SealedSelectionSnapshotInput:
 
     def __post_init__(self) -> None:
         _require(bool(self.items), "claimed selection_snapshot must include at least one item")
-
-    @property
-    def selection_id(self) -> str:
-        return self.selection_snapshot_id
 
     @classmethod
     def from_payload(cls, payload: object) -> "SealedSelectionSnapshotInput":
@@ -673,14 +651,6 @@ class ClaimedAnalysisRunStep:
     def ordered_inputs(self) -> tuple[OrderedWorkerInput, ...]:
         return tuple(OrderedWorkerInput.from_selection_item(item) for item in self.selection_snapshot.items)
 
-    @property
-    def execution_id(self) -> str:
-        return self.analysis_run_step_id
-
-    @property
-    def selection(self) -> SealedSelectionSnapshotInput:
-        return self.selection_snapshot
-
     @classmethod
     def from_payload(cls, payload: object) -> "ClaimedAnalysisRunStep":
         # START_BLOCK_BLOCK_VALIDATE_STEP_CLAIM_RESPONSE
@@ -716,10 +686,6 @@ class ClaimedAnalysisRunStep:
         # END_BLOCK_BLOCK_VALIDATE_STEP_CLAIM_RESPONSE
 
 
-ClaimedAnalysisRunExecution = ClaimedAnalysisRunStep
-SealedSelectionInput = SealedSelectionSnapshotInput
-
-
 # START_CONTRACT: CancelCheckResult
 # PURPOSE: Represent the authoritative cancel-check response used by worker control flow.
 # INPUTS: { cancel_requested: bool - Whether cancellation was requested, status: str - Canonical analysis run status, cancel_requested_at: str | None - Optional timestamp }
@@ -734,7 +700,7 @@ class CancelCheckResult:
     cancel_requested_at: str | None = None
 
     def __post_init__(self) -> None:
-        _require(self.status in _JOB_STATUSES, "invalid cancel-check status")
+        _require(self.status in _ANALYSIS_RUN_STEP_STATUSES, "invalid cancel-check status")
 
     @classmethod
     def from_payload(cls, payload: object) -> "CancelCheckResult":
@@ -855,7 +821,7 @@ class AnalysisRunControlClient:
         page_size: int = 20,
     ) -> tuple[AnalysisRunQueueItem, ...]:
         if status is not None:
-            _require(status in _JOB_STATUSES, "invalid analysis run step status filter")
+            _require(status in _ANALYSIS_RUN_STEP_STATUSES, "invalid analysis run step status filter")
         if run_type is not None:
             _require(run_type in _RUN_TYPES, "invalid run_type filter")
         if worker_kind is not None:
@@ -994,10 +960,6 @@ class AnalysisRunControlClient:
         )
         return CancelCheckResult.from_payload(response)
 
-    def claim_analysis_run(self, analysis_run_id: str, *, worker_kind: str, task_type: str) -> ClaimedAnalysisRunStep:
-        step_kind = "selection.transcription" if task_type == "selection.transcription" else "report.analysis"
-        return self.claim_analysis_run_step(analysis_run_id, worker_kind=worker_kind, step_kind=step_kind)
-
     def resolve_artifact(self, artifact_id: str) -> ArtifactResolutionResult:
         response = self._call_internal_api("GET", f"/internal/v1/artifacts/{artifact_id}/download-access")
         return ArtifactResolutionResult.from_payload(response)
@@ -1006,15 +968,13 @@ class AnalysisRunControlClient:
         self,
         analysis_run_id: str,
         *,
-        analysis_run_step_id: str | None = None,
-        execution_id: str | None = None,
+        analysis_run_step_id: str,
     ) -> AgentRunRequestAccessResult:
-        step_id = analysis_run_step_id or execution_id
-        _require(step_id is not None and bool(step_id.strip()), "analysis_run_step_id is required")
+        _require(bool(analysis_run_step_id.strip()), "analysis_run_step_id is required")
         response = self._call_internal_api(
             "GET",
             f"/internal/v1/analysis-runs/{analysis_run_id}/request-access",
-            query={"analysis_run_step_id": step_id},
+            query={"analysis_run_step_id": analysis_run_step_id},
         )
         return AgentRunRequestAccessResult.from_payload(response)
 

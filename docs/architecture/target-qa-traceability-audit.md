@@ -40,7 +40,7 @@ No source-plan requirement was found orphaned from implementation, coverage proo
 | User flows | Target coverage matrix maps add media, start transcription, worker completion, report/research prerequisites, and restart recovery. | Runtime-final E2E, Telegram/Web/MCP/worker suites. | `media-7f3.11.3` does exploratory UX/runtime challenge. |
 | Implementation stages | `docs/operational-packets.xml` has execution packets for implementation and coverage slices; Beads graph has closed `9` and `10` epics. | `bd list --all` status audit. | `media-7f3.11.4` packages final readiness. |
 | Verification matrix | `docs/verification-plan.xml`, `docs/architecture/final-closure-matrix.md`, `infra/scripts/coverage-inventory.sh`. | Coverage inventory, XML validation, no-legacy gate, compose smoke, focused unit/integration suites. | `media-7f3.11.*` reviews depth and final evidence freshness. |
-| Non-goals | Source plan and GRACE forbid owners/workspaces, public Telegram-specific API, local durable Telegram state outside API, user-facing job/task/adapter_projection, and workers reading mutable collections. | Contract tests, no-legacy target gate, target reset migration checks, runtime and adapter suites. | `media-7f3.11.1` traceability; `11.2`/`11.3` deeper code/runtime review. |
+| Non-goals | Source plan and GRACE forbid owners/workspaces, public Telegram-specific API, local durable Telegram state outside API, user-facing job/task aliases, adapter projection aliases, and workers reading mutable collections. | Contract tests, no-legacy target gate, target reset migration checks, runtime and adapter suites. | `media-7f3.11.1` traceability; `11.2`/`11.3` deeper code/runtime review. |
 
 ## Special Traceability Checks
 

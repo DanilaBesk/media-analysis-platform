@@ -20,13 +20,12 @@
     </M-TARGET-ARCHITECTURE>
 
     <M-CONTRACTS NAME="Contracts" TYPE="UTILITY" STATUS="implemented" OWNER="media-7f3.9.1">
-      <purpose>Own OpenAPI and shared schemas for the target product vocabulary plus explicit deprecated compatibility contracts.</purpose>
+      <purpose>Own OpenAPI and shared schemas for the target product vocabulary.</purpose>
       <path>packages/contracts</path>
       <depends>M-TARGET-ARCHITECTURE</depends>
       <verification-ref>EV-CONTRACTS</verification-ref>
       <annotations>
         <export-mediaAssetSchemas PURPOSE="Define media_asset create, read, list, delete, stored_object/origin metadata, status, retention, and diagnostics envelopes." />
-        <export-compatibilitySchemas PURPOSE="Define deprecated media_item, source, selection, owner, and analysis_run_task compatibility mappings without adding target behavior." />
         <export-collectionSchemas PURPOSE="Define inbox, collection, collection item, version conflict, archive, restore, and membership mutation envelopes." />
         <export-selectionSnapshotSchemas PURPOSE="Define immutable selection snapshots, option snapshots, validation diagnostics, and sealed status." />
         <export-analysisRunSchemas PURPOSE="Define analysis_run creation, status, event, cancel, artifact summary, diagnostics summary, and idempotency envelopes." />
@@ -39,11 +38,10 @@
     <M-API-HTTP NAME="ApiHttp" TYPE="ENTRY_POINT" STATUS="implemented" OWNER="media-7f3.9.3">
       <purpose>Expose the public API for media_asset ingestion, collection management, selection_snapshot sealing, analysis_run lifecycle, artifact access, and diagnostics.</purpose>
       <path>apps/api/internal/api</path>
-      <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
+      <depends>M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE, M-API-STEP-CONTROL, M-API-EVENTS</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
         <export-registerMediaAssetRoutes PURPOSE="Bind add, list, get, and delete media_asset routes." />
-        <export-registerCompatibilityRoutes PURPOSE="Bind deprecated media_items and selections routes only where transitional clients still require them." />
         <export-registerCollectionRoutes PURPOSE="Bind inbox and collection management routes." />
         <export-registerSelectionSnapshotRoutes PURPOSE="Bind immutable selection snapshot creation and read routes." />
         <export-registerAnalysisRunRoutes PURPOSE="Bind analysis_run create, read, list, events, and cancel routes." />
@@ -57,7 +55,7 @@
     <M-API-DOMAIN NAME="ApiDomain" TYPE="CORE_LOGIC" STATUS="implemented" OWNER="media-7f3.9.3">
       <purpose>Own product rules for channel-account access, ingestion, inbox membership, collection mutation, selection snapshot immutability, analysis_run lifecycle, prerequisite planning, retention, and diagnostics.</purpose>
       <path>apps/api/internal/api/target_runtime.go</path>
-      <depends>M-CONTRACTS, M-API-STORAGE, M-API-QUEUE, M-API-EVENTS</depends>
+      <depends>M-CONTRACTS, M-API-STORAGE, M-API-STEP-CONTROL, M-API-EVENTS</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
         <export-addMedia PURPOSE="Normalize input into stored_object/media_asset records plus inbox membership." />
@@ -69,7 +67,7 @@
         <export-applyRetention PURPOSE="Evaluate stored_object, media_asset, selection_snapshot, run, artifact, and diagnostics retention actions." />
         <export-recordDiagnostic PURPOSE="Persist safe diagnostic evidence for rejected and partial flows." />
         <export-recordWorkerArtifacts PURPOSE="Persist worker artifact registrations as stored_objects, artifacts, and artifact_subject lineage keyed by analysis_run_step_id." />
-        <export-targetRuntimeService PURPOSE="Routes target operations through apps/api/internal/storage/target.Store while compatibility services remain available for deprecated clients." />
+        <export-targetRuntimeService PURPOSE="Routes target operations through apps/api/internal/storage/target.Store only." />
       </annotations>
     </M-API-DOMAIN>
 
@@ -102,16 +100,16 @@
       </annotations>
     </M-API-STORAGE>
 
-    <M-API-QUEUE NAME="ApiQueue" TYPE="INFRASTRUCTURE" STATUS="implemented-runtime-proof-pending" OWNER="media-7f3.9.6">
-      <purpose>Expose internal analysis_run_step control-plane and bounded queue recovery without defining public product vocabulary.</purpose>
-      <path>apps/api/internal/queue</path>
+    <M-API-STEP-CONTROL NAME="ApiStepControl" TYPE="INFRASTRUCTURE" STATUS="implemented" OWNER="media-29f">
+      <purpose>Expose the internal analysis_run_step control plane over target storage without a separate queue package.</purpose>
+      <path>apps/api/internal/api</path>
       <depends>M-API-DOMAIN</depends>
       <verification-ref>EV-API</verification-ref>
       <annotations>
-        <export-enqueueAnalysisRunSteps PURPOSE="Create queue messages for planned analysis_run_steps." />
-        <export-enqueueRetentionWork PURPOSE="Schedule stored object and artifact cleanup when retention policy allows it." />
+        <export-listAnalysisRunSteps PURPOSE="List queued analysis_run_steps from PostgreSQL target storage." />
+        <export-claimAndFinalizeSteps PURPOSE="Claim, progress, cancel-check, and finalize analysis_run_steps by analysis_run_step_id." />
       </annotations>
-    </M-API-QUEUE>
+    </M-API-STEP-CONTROL>
 
     <M-API-EVENTS NAME="ApiEvents" TYPE="INFRASTRUCTURE" STATUS="implemented-runtime-proof-pending" OWNER="media-7f3.9.3">
       <purpose>Publish polling and live-update event surfaces for media_asset, collection, selection_snapshot, analysis_run, artifact, and diagnostic changes.</purpose>
@@ -166,7 +164,7 @@
         <source-pin COMMIT="7aec7bee3a7500a16ce0b3de66c9cad9ed354754" />
         <source-location-decision TARGET_PATH="external/copper-asr" PURPOSE="Keep CopperASR source outside apps/ because this repo consumes it as an external upstream runtime service, not as first-party app code." />
         <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" LOCAL_CPU_QUOTA_ENV="COPPER_ASR_LOCAL_CPUS" LOCAL_CPU_QUOTA_DEFAULT="4.0" />
-        <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns queues, progress, cancellation, artifacts, diagnostics, and user-visible state." />
+        <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns analysis_run_steps, progress, cancellation, artifacts, diagnostics, and user-visible state." />
         <worker-client PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="HTTP client, source materialization, response normalization, timeout handling, and asr_* diagnostic mapping." />
         <manifest-contract PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Stores sanitized CopperASR provider metadata only in run_manifest/service artifacts while content artifacts stay provider-agnostic." />
         <dependency-cleanup PATH="pyproject.toml" LOCKFILE="uv.lock" PURPOSE="Root worker dependencies no longer carry removed legacy ASR packages; CopperASR dependencies live behind the runtime image/submodule boundary." />
@@ -257,12 +255,12 @@
         <script-composeSmoke PATH="infra/scripts/compose-smoke.sh" PURPOSE="Builds and force-recreates the local compose stack, enforces runtime proof vocabulary guards, and runs the runtime-final target proof." />
         <script-coverageInventory PATH="infra/scripts/coverage-inventory.sh" PURPOSE="Reports native coverage metrics per supported surface and runs pass/fail-only contract fixture, ASR no-legacy, target no-legacy, compose topology, runtime-proof wiring, and MCP typecheck gates." />
         <script-noLegacyAsrGate PATH="infra/scripts/no-legacy-asr-gate.sh" PURPOSE="Rejects removed ASR runtime references from active code, env, compose, dependency manifests, and runtime docs." />
-        <script-noLegacyTargetGate PATH="infra/scripts/no-legacy-target-gate.sh" PURPOSE="Requires target runtime proof snippets and rejects deprecated active vocabulary plus legacy target reset schema recreation from target code paths." />
+        <script-noLegacyTargetGate PATH="infra/scripts/no-legacy-target-gate.sh" PURPOSE="Requires target runtime proof snippets and rejects removed active vocabulary plus removed target reset schema recreation from target code paths." />
         <test-fixtureValidation PATH="packages/contracts/tests/test_target_fixtures.py" PURPOSE="Validates fixture manifest vocabulary, channel identities, object-store files, sizes, and hashes." />
         <test-storageApiCoverage PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers target API success, validation errors, empty arrays, pagination clamping, and conflict mapping." />
         <test-workerClaimTargetMetadata PATH="workers/common/tests/test_api.py" PURPOSE="Covers target selection_snapshot metadata accepted by worker claim DTO parsing." />
-        <test-runtimeArtifactAccess PATH="apps/api/internal/storage/runtime_store_media_test.go" PURPOSE="Covers internal artifact download-access fallback from legacy artifact query shape to target artifact rows." />
-        <test-adminTargetResetNoop PATH="apps/api/internal/storage/runtime_store_media_test.go" PURPOSE="Covers admin observability, retention, orphan detection, and legacy queue inventory as empty/no-op when removed legacy tables or columns are absent after target reset." />
+        <test-runtimeArtifactAccess PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers internal artifact download-access through target artifact rows." />
+        <test-adminTargetReset PATH="apps/api/internal/api/target_api_test.go" PURPOSE="Covers target admin observability through the target service envelope." />
       </annotations>
     </M-COVERAGE>
 
@@ -301,8 +299,8 @@
       <CrossLink from="M-TARGET-ARCHITECTURE" to="M-QA-READINESS" relation="defines-qa-readiness-source-for" />
       <CrossLink from="M-API-HTTP" to="M-CONTRACTS" relation="implements-public-contracts" />
       <CrossLink from="M-API-DOMAIN" to="M-API-STORAGE" relation="persists-product-state-through" />
-      <CrossLink from="M-API-DOMAIN" to="M-API-QUEUE" relation="schedules-internal-execution-through" />
-      <CrossLink from="M-INTERACTION-SURFACES" to="M-API-DOMAIN" relation="historically-validated-owner-scoped-subjects-through" />
+      <CrossLink from="M-API-DOMAIN" to="M-API-STEP-CONTROL" relation="schedules-internal-execution-through" />
+      <CrossLink from="M-INTERACTION-SURFACES" to="M-API-DOMAIN" relation="validates-channel-scoped-subjects-through" />
       <CrossLink from="M-TELEGRAM-ADAPTER" to="M-INTERACTION-SURFACES" relation="persists-external-card-mappings-through" />
       <CrossLink from="M-WORKER-TRANSCRIPTION" to="M-API-HTTP" relation="publishes-run-artifacts-through" />
       <CrossLink from="M-WORKER-AGENT-RUNNER" to="M-API-HTTP" relation="publishes-run-artifacts-through" />

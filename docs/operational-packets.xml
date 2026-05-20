@@ -16,7 +16,7 @@
     <completed-packet>media-vim-telegram-russian-status-ux</completed-packet>
     <completed-closure-gate bead="media-gna">GRACE packet truth now reflects the actual closed state of the repo.</completed-closure-gate>
     <completed-closure-gate bead="media-i7m">The final ordered closure verification matrix for contracts, runtime, coverage, and docs is published and current.</completed-closure-gate>
-    <completed-packet bead="media-7f3.9.1">target-contracts-compatibility-policy</completed-packet>
+    <completed-packet bead="media-7f3.9.1">target-contracts-no-alias-policy</completed-packet>
     <completed-packet bead="media-7f3.9.2">target-storage-reset-repositories</completed-packet>
     <completed-packet bead="media-7f3.9.3">target-api-domain-services-and-operations</completed-packet>
     <completed-packet bead="media-7f3.9.4">channel-surfaces-restart-recovery</completed-packet>
@@ -107,7 +107,7 @@ Run the focused checks assigned to the packet and prove stale public product voc
     </write-scope>
     <contract-excerpt><![CDATA[
 CopperASR is the only active ASR backend.
-The platform owns queues, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, channel_surfaces, and all user-visible status.
+The platform owns analysis_run_steps, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, channel_surfaces, and all user-visible status.
 CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe.
 Transcription workers call CopperASR through COPPER_ASR_BASE_URL and publish transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics through the API.
 Provider metadata is service-scoped: normal Telegram and Web surfaces stay provider-agnostic, while MCP can expose explicit run_manifest previews when requested.
@@ -333,8 +333,8 @@ The internal active channel_surface list preserves channel_account_id, subject_t
     <contract-excerpt><![CDATA[
 The target product model is media_asset -> collection/inbox -> immutable selection_snapshot -> analysis_run -> artifacts, with analysis_run_step_inputs and artifact_subjects carrying execution input and lineage.
 Canonical target vocabulary is media_asset, stored_object, collection/inbox, selection_snapshot, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, and operation_request.
-Deprecated compatibility names such as media_item, source, selection, analysis_run_task, owner, and interaction_surface may appear only in migration notes, historical packets, or explicit compatibility contracts.
-Jobs, queue messages, and worker attempts may exist only as internal backend execution details behind analysis_run.
+Removed implementation-era product names may appear only in historical packets or negative regression checks.
+Worker steps and attempts exist only as internal backend execution details behind analysis_run.
 Old public product architecture centered on immediate execution requests, grouped submission state, public source grouping, and user-facing mode toggles is deleted rather than wrapped.
     ]]></contract-excerpt>
     <acceptance-criteria>
@@ -373,7 +373,7 @@ The current local database is disposable for this rebuild: do not preserve rows,
       <check>Target architecture document covers table contracts, API operations, DTO/type naming, app responsibilities, user flows, migration stages, and verification matrix.</check>
       <check>GRACE requirements, development plan, verification plan, knowledge graph, and operational packets reference the target document and expose the single-user/channel-aware decision.</check>
       <check>XML validation succeeds for all six GRACE XML documents.</check>
-      <check>Stale target vocabulary appears only in avoid, deprecated, or migration context inside the target architecture document.</check>
+      <check>Removed target vocabulary appears only in historical evidence or negative regression checks.</check>
     </verification>
   </PlanningPacket>
 
@@ -387,12 +387,11 @@ The current local database is disposable for this rebuild: do not preserve rows,
     </write-scope>
     <contract-excerpt><![CDATA[
 Define target public DTOs and routes for media_asset, stored_object metadata, collection, inbox, selection_snapshot, analysis_run, artifact, diagnostic, channel_account access scope, lifecycle, retention, idempotency, pagination, optimistic version checks, and error envelopes.
-Define /v1/media-items, /v1/selections, media_item, source, selection, owner, and analysis_run_task only as deprecated compatibility mappings while transitional clients require them.
     ]]></contract-excerpt>
     <implementation-notes>
       <note>Public clients create analysis_run from a sealed selection_snapshot only.</note>
       <note>Contracts must include text, URL, generic file, photo/image, audio/voice, and video/document inputs.</note>
-      <note>Schema tests must fail if removed public product vocabulary reappears outside deprecated compatibility contracts.</note>
+      <note>Schema tests must fail if removed public product vocabulary or aliases reappear.</note>
     </implementation-notes>
     <verification>
       <check>OpenAPI parses and schema tests pass.</check>
@@ -400,8 +399,8 @@ Define /v1/media-items, /v1/selections, media_item, source, selection, owner, an
     </verification>
   </ExecutionPacket>
 
-  <ExecutionPacket packet-id="media-7f3.9.1-target-contracts-compatibility-policy" module="M-CONTRACTS" phase="TargetRebuildContracts" verification-ref="EV-CONTRACTS,EV-STALENESS">
-    <purpose>Implement the first target rebuild slice: target DTOs/routes for media_asset, stored_object, selection_snapshot, analysis_run_step, channel_account, channel_surface, operation_request, artifacts, diagnostics, and explicit deprecated compatibility mappings.</purpose>
+  <ExecutionPacket packet-id="media-7f3.9.1-target-contracts-no-alias-policy" module="M-CONTRACTS" phase="TargetRebuildContracts" verification-ref="EV-CONTRACTS,EV-STALENESS">
+    <purpose>Implement the first target rebuild slice: target DTOs/routes for media_asset, stored_object, selection_snapshot, analysis_run_step, channel_account, channel_surface, operation_request, artifacts, and diagnostics without public aliases.</purpose>
     <depends-on>single-user-channel-aware-target-architecture</depends-on>
     <write-scope>
       <file-1>packages/contracts/openapi/openapi.yaml</file-1>
@@ -413,19 +412,18 @@ Define /v1/media-items, /v1/selections, media_item, source, selection, owner, an
     </write-scope>
     <contract-excerpt><![CDATA[
 Target OpenAPI now exposes /v1/media-assets, /v1/media-assets/upload, /v1/selection-snapshots, internal channel account/surface routes, and internal analysis_run_step routes.
-/v1/media-items and /v1/selections remain only as deprecated_transition_only compatibility operations with one-to-one mappings into media_asset and selection_snapshot DTOs.
-Target operation tests reject media_item, media-item, owner, selection_id, analysis_run_task, adapter_projection, and telegram_message_id inside new target operations.
+Target operation tests reject removed product vocabulary inside new target operations.
     ]]></contract-excerpt>
     <verification>
       <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
-      <check>Focused stale vocabulary search shows deprecated terms only in compatibility, migration, historical, or admin/debug contexts.</check>
+      <check>Focused stale vocabulary search shows removed terms only in historical evidence or negative regression checks.</check>
     </verification>
   </ExecutionPacket>
 
   <ExecutionPacket packet-id="media-7f3.9.2-target-storage-reset-repositories" module="M-API-STORAGE" phase="TargetRebuildStorage" verification-ref="EV-STORAGE,EV-GRACE,EV-STALENESS">
     <purpose>Implement the target storage reset/rebuild slice: destructive local schema reset, target table set, schema fragments, target SQL repositories, and deterministic seed fixtures.</purpose>
-    <depends-on>media-7f3.9.1-target-contracts-compatibility-policy</depends-on>
+    <depends-on>media-7f3.9.1-target-contracts-no-alias-policy</depends-on>
     <write-scope>
       <file-1>apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql</file-1>
       <file-2>apps/api/internal/storage/testdata/required_schema_fragments.txt</file-2>
@@ -443,14 +441,14 @@ The migration recreates channel_accounts, operation_requests, stored_objects, me
 selection_snapshots are protected by update/delete rejection triggers.
 operation_requests use channel_account_id + operation_type + idempotency_key uniqueness.
 channel_surfaces use active key and address-fingerprint uniqueness plus explicit supersede events.
-Target repository code lives in apps/api/internal/storage/target alongside legacy API-facing storage until media-7f3.9.3 migrates services to the target domain.
+Target repository code lives in apps/api/internal/storage/target and is the active API storage path.
     ]]></contract-excerpt>
     <verification>
       <check>go test ./internal/storage/...</check>
       <check>go test ./...</check>
       <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
-      <check>Focused stale storage search proves target migration and target repository do not create sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, or safe_adapter_context.</check>
+      <check>Focused stale storage search proves target migration and target repository do not create removed product tables or caller-scope columns.</check>
     </verification>
   </ExecutionPacket>
 
@@ -471,11 +469,11 @@ Target repository code lives in apps/api/internal/storage/target alongside legac
     <contract-excerpt><![CDATA[
 TargetRuntimeService wires channel_accounts, media_assets/upload, collections/inbox, selection_snapshots, analysis_runs, analysis_run_events, artifacts, diagnostics, analysis_run_step claim/cancel/progress/finalize, and channel_surfaces through apps/api/internal/storage/target.
 Target HTTP responses use channel_account_id, media_asset_id, collection_id, selection_snapshot_id, analysis_run_id, analysis_run_step_id, artifact_id, diagnostic_id, and channel_surface_id vocabulary.
-Legacy /v1/media-items, /v1/selections, owner-scoped collection handlers, and execution routes remain compatibility surfaces only until later adapter and worker migration packets replace their callers.
+Removed route aliases and execution-route variants are absent; target HTTP responses use target vocabulary only.
     ]]></contract-excerpt>
     <implementation-notes>
       <note>cmd/api constructs target.Store from the live DB and NewRuntimeDependenciesWithTarget installs TargetRuntimeService.</note>
-      <note>Target API tests reject media_item, media-item, owner, selection_id, analysis_run_task, adapter_projection, and telegram_message_id in target responses.</note>
+      <note>Target API tests reject removed product vocabulary in target responses.</note>
       <note>media-7f3.9.4 remains responsible for Telegram restart recovery behavior over channel_surfaces; media-7f3.9.6 remains responsible for moving actual workers to target step routes.</note>
     </implementation-notes>
     <verification>
@@ -525,7 +523,7 @@ Result artifact surfaces prevent duplicate Telegram delivery after restart while
   </ExecutionPacket>
 
   <ExecutionPacket packet-id="media-7f3.9.5-telegram-target-materials-run-cards" module="M-TELEGRAM-ADAPTER,M-API-HTTP" phase="Telegram Migration" verification-ref="EV-ADAPTERS,EV-STALENESS">
-    <purpose>Move the Telegram adapter's active materials and run-card flow from compatibility request shapes to target media_asset, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account operations.</purpose>
+    <purpose>Move the Telegram adapter's active materials and run-card flow to target media_asset, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account operations.</purpose>
     <depends-on>media-7f3.9.3, media-7f3.9.4</depends-on>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter</file-1>
@@ -544,13 +542,13 @@ Current-material actions mutate collection membership by media_asset_id, create 
 Artifacts and diagnostics are read with channel_account_id; callback payloads carry media_asset, collection, selection_snapshot, and analysis_run identifiers plus optimistic versions where mutation is allowed.
     ]]></contract-excerpt>
     <implementation-notes>
-      <note>TelegramApiClient no longer calls /v1/media-items, /v1/selections, or owner-scoped public query shapes in the active adapter path.</note>
+      <note>TelegramApiClient calls only target public query shapes in the active adapter path.</note>
       <note>TelegramInboxGateway maps Telegram text and URL content into media_asset origin_ref values and keeps presentation wording Russian and non-technical.</note>
       <note>Channel surface recovery from media-7f3.9.4 continues to own Telegram message-address persistence; product lifecycle remains API-owned.</note>
     </implementation-notes>
     <verification>
       <check>uv run --project apps/telegram-bot pytest apps/telegram-bot/tests</check>
-      <check>rg -n "media_item|media-items|/v1/selections|selection_id|source\b|adapter_projection|analysis_run_task|telegram_message_id" apps/telegram-bot/src apps/telegram-bot/tests</check>
+      <check>Run a focused removed-vocabulary search across apps/telegram-bot/src and apps/telegram-bot/tests.</check>
       <check>uv run pytest packages/contracts/tests/test_contract_surfaces.py</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
@@ -583,7 +581,7 @@ Artifact registration records stored_objects, artifacts, and artifact_subject li
     ]]></contract-excerpt>
     <implementation-notes>
       <note>WorkerRuntimeConfig now carries step_kind instead of task_type; launcher defaults are selection.transcription for transcription and report.analysis for agent-runner.</note>
-      <note>Worker-control schemas and OpenAPI target step requests use analysis_run_step_id; legacy execution routes remain compatibility-only where still registered.</note>
+      <note>Worker-control schemas and OpenAPI target step requests use analysis_run_step_id; removed execution route variants are not registered.</note>
       <note>TargetRuntimeService records worker artifacts with stored_object rows in the artifacts bucket and artifact_subject links to analysis_run and analysis_run_step.</note>
       <note>Agent-runner merges declared analysis_run_step_input artifact declarations with private operation-envelope input_artifacts before Claude Code materialization.</note>
     </implementation-notes>
@@ -596,7 +594,7 @@ Artifact registration records stored_objects, artifacts, and artifact_subject li
       <check>python3 -m py_compile worker runtime modules</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
-      <check>Focused stale vocabulary search shows remaining old worker names only in explicit legacy/compatibility surfaces or compatibility aliases, not active worker call paths.</check>
+      <check>Focused stale vocabulary search shows removed worker-route names only in negative regression checks, not active worker call paths.</check>
     </verification>
   </ExecutionPacket>
 
@@ -619,7 +617,7 @@ Artifact registration records stored_objects, artifacts, and artifact_subject li
     </write-scope>
     <contract-excerpt><![CDATA[
 Web API client calls target public routes for media_assets, selection_snapshots, analysis_runs, artifacts, diagnostics, and channel_account_id scope, while normal Web UI copy says materials, groups, selection, progress, results, checks, and downloads instead of load-bearing internal names or raw ids.
-MCP exposes target technical tools create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. Deprecated media_item, selection, owner, and legacy route terms are compatibility-only implementation context.
+MCP exposes target technical tools create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.
     ]]></contract-excerpt>
     <verification>
       <check>pnpm exec tsc --noEmit in apps/web</check>
@@ -648,7 +646,7 @@ MCP exposes target technical tools create_media_asset, list_media_assets, search
       <file-11>docs/operational-packets.xml</file-11>
     </write-scope>
     <contract-excerpt><![CDATA[
-The matrix maps every target table, API operation group, source-plan user flow, failure mode, compatibility rule, non-goal, app boundary, and data reset rule to implementation evidence, current automated proof, QA proof, and the Bead that must close remaining proof.
+The matrix maps every target table, API operation group, source-plan user flow, failure mode, deleted-surface rule, non-goal, app boundary, and data reset rule to implementation evidence, current automated proof, QA proof, and the Bead that must close remaining proof.
 The deterministic fixture catalog defines stable local, Telegram, Web, and MCP channel_accounts, media_asset ids, selection_snapshot, analysis_run, artifact ids, and object-store fixture bytes with SHA-256 hashes.
 The reset smoke applies the target migration twice to fresh Postgres, verifies all 18 target tables, verifies forbidden legacy tables are absent, checks immutable selection_snapshot triggers, and inserts the deterministic channel/inbox seed.
     ]]></contract-excerpt>
@@ -680,7 +678,7 @@ The reset smoke applies the target migration twice to fresh Postgres, verifies a
     <contract-excerpt><![CDATA[
 Storage/API coverage must prove clean target schema reset/recreate, deterministic seed use, operation_request idempotent replay, channel-account isolation, collection optimistic conflicts, immutable selection_snapshots, analysis_run_step declared inputs, analysis_run_events, cancellation races, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/event history.
 Repeated media_asset creates with the same channel_account_id, operation type, and idempotency key return the original target and do not create another media_asset/inbox membership.
-Target route tests must cover invalid request bodies, empty arrays, pagination clamping, and conflict error mapping without leaking deprecated public vocabulary.
+	Target route tests must cover invalid request bodies, empty arrays, pagination clamping, and conflict error mapping without leaking removed public vocabulary.
     ]]></contract-excerpt>
     <verification>
       <check>cd apps/api &amp;&amp; go test ./internal/storage/target -run TestTargetStorePostgresContracts -count=1 -v</check>
@@ -702,8 +700,8 @@ Target route tests must cover invalid request bodies, empty arrays, pagination c
       <file-2>infra/scripts/compose-smoke.sh</file-2>
       <file-3>workers/common/src/transcriber_workers_common/api.py</file-3>
       <file-4>workers/common/tests/test_api.py</file-4>
-      <file-5>apps/api/internal/storage/runtime_store_media.go</file-5>
-      <file-6>apps/api/internal/storage/runtime_store_media_test.go</file-6>
+      <file-5>apps/api/internal/storage/runtime_store.go</file-5>
+      <file-6>apps/api/internal/api/target_runtime_test.go</file-6>
       <file-7>apps/api/internal/api/target_runtime.go</file-7>
       <file-8>apps/api/internal/api/target_runtime_test.go</file-8>
       <file-9>apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql</file-9>
@@ -715,11 +713,11 @@ Target route tests must cover invalid request bodies, empty arrays, pagination c
       <file-15>docs/operational-packets.xml</file-15>
     </write-scope>
     <contract-excerpt><![CDATA[
-Runtime E2E must use target routes and channel_account_id scope, not deprecated media_item, selection, owner_type, owner_id, or media_item_id proof paths.
+Runtime E2E must use target routes and channel_account_id scope only.
 The compose smoke must force-recreate the stack before runtime proof, tolerate cold worker dependency startup, and still require a terminal analysis_run with real artifact download bytes.
 Workers must accept target selection_snapshot metadata in claim responses and must consume sealed selection_snapshot/analysis_run_step_input facts rather than mutable collection state.
 Internal artifact download access must resolve target artifact rows produced by workers, and cross-channel run misses must return not_found instead of leaking SQL errors.
-Known follow-up: inventory/no-legacy gates must address legacy admin observability, reconcile, and retention paths that still reference removed legacy tables after target reset.
+Inventory/no-legacy gates must address admin observability and target-reset behavior without removed-table dependencies.
     ]]></contract-excerpt>
     <verification>
       <check>python3 -m py_compile infra/scripts/runtime-final-e2e.py</check>
@@ -744,8 +742,8 @@ Known follow-up: inventory/no-legacy gates must address legacy admin observabili
     <write-scope>
       <file-1>infra/scripts/coverage-inventory.sh</file-1>
       <file-2>infra/scripts/no-legacy-target-gate.sh</file-2>
-      <file-3>apps/api/internal/storage/runtime_store_media.go</file-3>
-      <file-4>apps/api/internal/storage/runtime_store_media_test.go</file-4>
+      <file-3>apps/api/internal/storage/runtime_store.go</file-3>
+      <file-4>apps/api/internal/api/target_runtime_test.go</file-4>
       <file-5>docs/architecture/target-coverage-matrix.md</file-5>
       <file-6>docs/requirements.xml</file-6>
       <file-7>docs/development-plan.xml</file-7>
@@ -756,20 +754,20 @@ Known follow-up: inventory/no-legacy gates must address legacy admin observabili
     <contract-excerpt><![CDATA[
 Coverage inventory must report every declared target proof surface honestly using native metrics where supported and pass/fail-only gates where not supported.
 No repo-wide 100% claim is allowed unless every source-plan requirement has explicit automated or runtime proof.
-Deprecated terms such as media_item, selection, analysis_run_task, owner, adapter_projection, telegram_message_id, sources, media_items, selections, selection_items, analysis_run_tasks, owner_type, owner_id, tenant_id, and safe_adapter_context are allowed only in explicit compatibility, historical, or migration contexts.
-Active target adapter, worker, Web, MCP, runtime proof, storage target, and target reset migration paths must fail the no-legacy gate if compatibility names leak into the target contract.
-After target reset, admin observability, reconcile, retention, orphan detection, and legacy queue inventory must not fail only because removed legacy tables or columns are absent.
+Removed product vocabulary is allowed only in historical evidence or negative regression checks.
+Active target adapter, worker, Web, MCP, runtime proof, storage target, and target reset migration paths must fail the no-legacy gate if removed names leak into the target contract.
+After target reset, admin observability and target runtime inventory must not depend on removed tables or columns.
     ]]></contract-excerpt>
     <implementation-notes>
       <note>coverage-inventory.sh labels metric surfaces by native output type and separates contract fixtures, no-legacy, compose topology/runtime-proof wiring, and MCP typecheck as pass/fail-only probes.</note>
-      <note>no-legacy-target-gate.sh requires target runtime snippets and rejects deprecated active vocabulary while allowing explicitly scoped compatibility aliases.</note>
-      <note>RuntimeStore legacy admin sweeps map SQLSTATE 42P01 and 42703 legacy schema absence to empty/no-op results only for legacy runtime surfaces.</note>
+      <note>no-legacy-target-gate.sh requires target runtime snippets and rejects removed active vocabulary.</note>
+      <note>Target admin sweeps map missing removed schema to empty/no-op results only where the active target runtime explicitly treats that absence as expected.</note>
     </implementation-notes>
     <verification>
       <check>bash infra/scripts/coverage-inventory.sh</check>
       <check>bash infra/scripts/no-legacy-target-gate.sh</check>
       <check>go test ./internal/api ./internal/storage -count=1 in apps/api</check>
-      <check>Live API restart proof for /v1/admin/observability and POST /v1/admin/reconcile-queue after target reset.</check>
+      <check>Live API restart proof for /v1/admin/observability after target reset.</check>
       <check>xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml</check>
       <check>git diff --check</check>
     </verification>
@@ -792,7 +790,7 @@ After target reset, admin observability, reconcile, retention, orphan detection,
     <contract-excerpt><![CDATA[
 Every source-plan area must map to implementation evidence, test evidence, GRACE artifacts, Beads state, and either a closed proof slice or an explicit remaining QA owner.
 Stale flat Beads must remain superseded by the media-7f3.9, media-7f3.10, and media-7f3.11 graph.
-Old compatibility names may appear only in deprecated compatibility, migration, historical, or admin/debug contexts.
+Removed product names may appear only in historical evidence or negative regression checks.
 Coverage wording must preserve per-surface native metrics and pass/fail-only gates rather than reintroducing fake 100 percent repo-wide claims.
     ]]></contract-excerpt>
     <implementation-notes>
@@ -931,7 +929,7 @@ Final readiness packet must list source plan, implemented scope, branch/commit s
       <file-1>apps/api/internal/storage</file-1>
       <file-2>apps/api/internal/api</file-2>
       <file-3>apps/api/internal/api/media_runtime.go</file-3>
-      <file-4>apps/api/internal/queue</file-4>
+      <file-4>apps/api/internal/api/target_runtime.go</file-4>
       <file-5>apps/api/internal/ws</file-5>
       <file-6>server tests</file-6>
     </write-scope>
@@ -1009,7 +1007,7 @@ Web manages materials, groups, current selection, progress, results, errors, dow
       <file-2>MCP tests</file-2>
     </write-scope>
     <contract-excerpt><![CDATA[
-MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. MCP may expose target technical vocabulary because it is a tool contract context, but it must not use deprecated compatibility names as new target tool semantics.
+MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics. MCP may expose target technical vocabulary because it is a tool contract context, but it must not use removed names as new target tool semantics.
     ]]></contract-excerpt>
     <verification>
       <check>MCP tests prove tool behavior matches API channel-account access, lifecycle, retention, and diagnostics envelopes.</check>
@@ -1026,21 +1024,21 @@ MCP tools: create_media_asset, list_media_assets, search_media_assets, get_media
   </RuntimePacket>
 
   <HotfixPacket packet-id="media-xgf-sql-collection-append" module="M-API-STORAGE" phase="RuntimeBugfix" verification-ref="EV-STORAGE,EV-API,EV-RUNTIME">
-    <purpose>Historical compatibility hotfix for API-owned inbox ingestion when an owner already has active collection_items; target collection behavior is covered by media-7f3.9.</purpose>
+    <purpose>Historical hotfix for API-owned inbox ingestion when a caller already has active collection_items; target collection behavior is covered by media-7f3.9.</purpose>
     <write-scope>
-      <file-1>apps/api/internal/storage/runtime_store_media.go</file-1>
-      <file-2>apps/api/internal/storage/runtime_store_media_test.go</file-2>
+      <file-1>apps/api/internal/storage/runtime_store.go</file-1>
+      <file-2>apps/api/internal/storage/target/store_test.go</file-2>
       <file-3>docs/requirements.xml</file-3>
       <file-4>docs/verification-plan.xml</file-4>
       <file-5>docs/operational-packets.xml</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-Historical compatibility behavior kept media_item records API-owned and appended them to inbox or named collection membership using the next active collection position. Target Telegram, Web, and MCP must not carry durable local inbox state or legacy fallback buffers.
+Historical behavior kept input records API-owned and appended them to inbox or named collection membership using the next active collection position. Target Telegram, Web, and MCP must not carry durable local inbox state or fallback buffers.
     ]]></contract-excerpt>
     <verification>
       <check>Focused SQL storage regression proves existing inbox and target collection appends do not reuse position 0.</check>
       <check>Storage and API package tests pass.</check>
-      <check>Historical compose API accepted a second media_item for an owner with an existing inbox item; target proof uses media_asset collection membership.</check>
+      <check>Historical compose API accepted a second input for a caller with an existing inbox item; target proof uses media_asset collection membership.</check>
     </verification>
   </HotfixPacket>
 
@@ -1059,17 +1057,17 @@ Public paginated list envelopes must encode items as an array on every page, inc
     <verification>
       <check>Focused API regression proves nil source slices encode as items: [] through the shared paging helper.</check>
       <check>Historical live diagnostics endpoint for the Telegram owner returned items: [] for an empty run diagnostic page; target checks use channel_account.</check>
-      <check>Historical Telegram gateway restore_status completed against the live API for the affected owner and terminal run; target checks use channel_account.</check>
+      <check>Historical Telegram gateway restore_status completed against the live API for the affected channel account and terminal run; target checks use channel_account.</check>
     </verification>
   </HotfixPacket>
 
   <HotfixPacket packet-id="media-722-collection-empty-array" module="M-API-STORAGE,M-API-HTTP" phase="RuntimeBugfix" verification-ref="EV-STORAGE,EV-API,EV-RUNTIME">
     <purpose>Fix Telegram callback UI refresh when the inbox collection becomes empty after mutation.</purpose>
     <write-scope>
-      <file-1>apps/api/internal/storage/runtime_store_media.go</file-1>
-      <file-2>apps/api/internal/storage/runtime_store_media_test.go</file-2>
-      <file-3>apps/api/internal/api/media_handlers.go</file-3>
-      <file-4>apps/api/internal/api/api_test.go</file-4>
+      <file-1>apps/api/internal/storage/runtime_store.go</file-1>
+      <file-2>apps/api/internal/storage/target/store_test.go</file-2>
+      <file-3>apps/api/internal/api/target_api.go</file-3>
+      <file-4>apps/api/internal/api/target_api_test.go</file-4>
       <file-5>docs/requirements.xml</file-5>
       <file-6>docs/verification-plan.xml</file-6>
       <file-7>docs/operational-packets.xml</file-7>
@@ -1286,12 +1284,12 @@ Telegram separates background active tasks from the current material selection. 
   <HotfixPacket id="analysis-run-cooperative-cancellation" status="completed" bead="media-n48">
     <purpose>Make public analysis_run cancellation cooperative before terminal worker completion.</purpose>
     <write-scope>
-      <file-1>apps/api/internal/storage/media_model.go</file-1>
-      <file-2>apps/api/internal/storage/runtime_store_media.go</file-2>
+      <file-1>apps/api/internal/storage/storage.go</file-1>
+      <file-2>apps/api/internal/storage/runtime_store.go</file-2>
       <file-3>apps/api/internal/api/runtime_services.go</file-3>
-      <file-4>apps/api/internal/storage/api_storage_test.go</file-4>
-      <file-5>apps/api/internal/storage/runtime_store_media_test.go</file-5>
-      <file-6>apps/api/internal/api/api_coverage_test.go</file-6>
+      <file-4>apps/api/internal/storage/target/store_test.go</file-4>
+      <file-5>apps/api/internal/api/target_runtime_test.go</file-5>
+      <file-6>apps/api/internal/api/target_api_test.go</file-6>
       <file-7>docs/requirements.xml</file-7>
       <file-8>docs/operational-packets.xml</file-8>
       <file-9>docs/verification-plan.xml</file-9>
@@ -1314,10 +1312,10 @@ Public cancel requests terminally cancel unclaimed queued analysis_run records, 
       <file-5>docs/architecture/telegram-selection-transcription-cards.md</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-Historical interaction surfaces persisted owner-scoped channel, surface type, surface key, opaque address, address fingerprint, opaque display state, lifecycle status, version, and timestamps through an internal API. The target architecture supersedes this wording with channel_surface and channel_account contracts.
+Historical interaction surfaces persisted channel-scoped external presentation state through an internal API. The target architecture supersedes this wording with channel_surface and channel_account contracts.
     ]]></contract-excerpt>
     <verification>
-      <check>Historical architecture document defined boundaries, three-table schema, internal endpoints, Telegram usage, owner-scope rules, retention, observability, and staged implementation; target checks use channel_surface and channel_account vocabulary.</check>
+      <check>Historical architecture document defined boundaries, three-table schema, internal endpoints, Telegram usage, channel-account rules, retention, observability, and staged implementation; target checks use channel_surface and channel_account vocabulary.</check>
       <check>GRACE requirements and knowledge graph link the Interaction Surfaces boundary without moving it into public product vocabulary.</check>
     </verification>
   </PlanningPacket>

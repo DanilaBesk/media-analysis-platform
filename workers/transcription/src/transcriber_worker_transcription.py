@@ -795,19 +795,19 @@ def _outcomes_from_diagnostics(
     execution: ClaimedAnalysisRunStep,
     diagnostics: tuple[Mapping[str, object], ...],
 ) -> tuple[Mapping[str, object], ...]:
-    diagnostics_by_selection_item: dict[str, Mapping[str, object]] = {}
+    diagnostics_by_snapshot_item: dict[str, Mapping[str, object]] = {}
     for diagnostic in diagnostics:
         context = diagnostic.get("context")
         if not isinstance(context, Mapping):
             continue
-        selection_item_id = context.get("selection_snapshot_item_id")
-        if isinstance(selection_item_id, str):
-            diagnostics_by_selection_item[selection_item_id] = diagnostic
+        snapshot_item_id = context.get("selection_snapshot_item_id")
+        if isinstance(snapshot_item_id, str):
+            diagnostics_by_snapshot_item[snapshot_item_id] = diagnostic
 
     outcomes: list[Mapping[str, object]] = []
-    for item in sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position):
+    for item in sorted(execution.selection_snapshot.items, key=lambda snapshot_item: snapshot_item.position):
         materialization = SelectionItemMaterialization.from_selection_item(item)
-        diagnostic = diagnostics_by_selection_item.get(materialization.selection_snapshot_item_id)
+        diagnostic = diagnostics_by_snapshot_item.get(materialization.selection_snapshot_item_id)
         if diagnostic is None:
             outcomes.append(_item_outcome(execution, materialization, "failed"))
             continue
@@ -832,7 +832,7 @@ def _transcription_failure_diagnostics(
     affected_items = [item for item in item_outcomes if item.get("outcome") == "succeeded"]
     if not affected_items:
         affected_items = list(item_outcomes)
-    affected_selection_item_ids = [
+    affected_snapshot_item_ids = [
         str(item.get("selection_snapshot_item_id"))
         for item in affected_items
         if str(item.get("selection_snapshot_item_id") or "").strip()
@@ -846,7 +846,7 @@ def _transcription_failure_diagnostics(
         "analysis_run_id": execution.analysis_run_id,
         "analysis_run_step_id": execution.analysis_run_step_id,
         "selection_snapshot_id": execution.selection_snapshot.selection_snapshot_id,
-        "affected_selection_snapshot_item_ids": affected_selection_item_ids,
+        "affected_selection_snapshot_item_ids": affected_snapshot_item_ids,
         "affected_media_asset_ids": affected_media_asset_ids,
         "provider_code": error.provider_code,
         "status_code": error.status_code,
@@ -864,7 +864,7 @@ def _transcription_failure_diagnostics(
                     execution.analysis_run_step_id,
                     execution.selection_snapshot.selection_snapshot_id,
                     code,
-                    ",".join(affected_selection_item_ids),
+                    ",".join(affected_snapshot_item_ids),
                     "transcription-failed",
                 )
             ),

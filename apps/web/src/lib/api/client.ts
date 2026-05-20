@@ -14,7 +14,6 @@ import type {
   MediaAssetSummary,
   ObservabilitySnapshot,
   PaginatedResponse,
-  ReconcileQueueResponse,
   ReplaceCollectionItemsDraft,
   RunDraft,
   RunEvent,
@@ -74,7 +73,6 @@ export interface WebUiApiClient {
   getArtifact(channelAccountId: ChannelAccountId, artifactId: string): Promise<Artifact>;
   refreshArtifact(channelAccountId: ChannelAccountId, artifactId: string): Promise<Artifact>;
   listDiagnostics(channelAccountId: ChannelAccountId, filter?: ListDiagnosticsFilter): Promise<PaginatedResponse<Diagnostic>>;
-  reconcileAnalysisRunQueue(limit?: number): Promise<ReconcileQueueResponse>;
   getObservabilitySnapshot(): Promise<ObservabilitySnapshot>;
   subscribeToRunEvents(options: SubscribeToRunEventsOptions): RunEventSubscription;
 }
@@ -480,10 +478,6 @@ export function createWebUiApiClient({
         search.set("severity", filter.severity);
       }
       return requestJson<PaginatedResponse<Diagnostic>>(`/v1/diagnostics?${search.toString()}`);
-    },
-
-    reconcileAnalysisRunQueue(limit = 100) {
-      return postJson<ReconcileQueueResponse>("/v1/admin/reconcile-queue", { limit });
     },
 
     async getObservabilitySnapshot() {

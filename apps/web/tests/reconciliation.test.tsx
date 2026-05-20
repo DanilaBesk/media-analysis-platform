@@ -119,7 +119,6 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
         items: [],
         page: { page_size: 50, has_more: false },
       }),
-      reconcileAnalysisRunQueue: vi.fn(),
       getObservabilitySnapshot: vi.fn().mockResolvedValue({
         queue_tasks: 0,
         queue_lag_seconds: 0,

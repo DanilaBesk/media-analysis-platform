@@ -40,7 +40,7 @@ from transcriber_workers_common.api import (
     ClaimedAnalysisRunStep,
     MediaSourceSnapshot,
     OrderedWorkerInput,
-    SealedSelectionInput,
+    SealedSelectionSnapshotInput,
     SelectionItemLabels,
     SelectionItemSnapshot,
 )
@@ -659,7 +659,7 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
         analysis_run_step_id="exec-v2",
         analysis_run_id="run-v2",
         run_type="transcription",
-        selection_snapshot=SealedSelectionInput(
+        selection_snapshot=SealedSelectionSnapshotInput(
             selection_snapshot_id="selection-v2",
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
@@ -1150,7 +1150,7 @@ def test_materialize_execution_source_tolerates_unsupported_object_fetch_failure
         analysis_run_step_id="exec-unsupported",
         analysis_run_id="run-unsupported",
         run_type="transcription",
-        selection_snapshot=SealedSelectionInput(
+        selection_snapshot=SealedSelectionSnapshotInput(
             selection_snapshot_id="selection-unsupported",
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
@@ -1325,7 +1325,7 @@ def test_concatenate_media_inputs_validates_input_count_and_ffmpeg_result(tmp_pa
         worker_module._concatenate_media_inputs([first, second], output_path)
 
 
-def test_outcomes_from_diagnostics_marks_missing_selection_items_as_failed() -> None:
+def test_outcomes_from_diagnostics_marks_missing_selection_snapshot_items_as_failed() -> None:
     execution = _build_execution(
         OrderedWorkerInput(
             position=0,
@@ -1409,7 +1409,7 @@ def _build_execution(
         analysis_run_step_id="exec-1",
         analysis_run_id=analysis_run_id,
         run_type="transcription",
-        selection_snapshot=SealedSelectionInput(
+        selection_snapshot=SealedSelectionSnapshotInput(
             selection_snapshot_id=root_analysis_run_id,
             items=items,
             option_snapshot={},

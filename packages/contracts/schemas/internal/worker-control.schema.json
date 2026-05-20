@@ -93,26 +93,6 @@
       },
       "additionalProperties": false
     },
-    "claimRequest": {
-      "type": "object",
-      "required": [
-        "worker_kind",
-        "task_type"
-      ],
-      "properties": {
-        "worker_kind": {
-          "$ref": "../common/enums.schema.json#/$defs/workerKind"
-        },
-        "task_type": {
-          "$ref": "../common/enums.schema.json#/$defs/taskType"
-        },
-        "lease_owner": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "additionalProperties": false
-    },
     "analysisRunQueueItem": {
       "type": "object",
       "required": [
@@ -192,68 +172,6 @@
         "page_size": {
           "type": "integer",
           "minimum": 1
-        }
-      },
-      "additionalProperties": false
-    },
-    "sealedSelectionInput": {
-      "type": "object",
-      "required": [
-        "selection_id",
-        "items",
-        "option_snapshot",
-        "sealed_at"
-      ],
-      "properties": {
-        "selection_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
-        },
-        "items": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "$ref": "../http/selection.schema.json#/$defs/selectionItemSnapshot"
-          }
-        },
-        "option_snapshot": {
-          "type": "object"
-        },
-        "sealed_at": {
-          "type": "string",
-          "format": "date-time"
-        }
-      },
-      "additionalProperties": false
-    },
-    "claimResponse": {
-      "type": "object",
-      "required": [
-        "execution_id",
-        "analysis_run_id",
-        "run_type",
-        "selection",
-        "params",
-        "claimed_at"
-      ],
-      "properties": {
-        "execution_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
-        },
-        "analysis_run_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
-        },
-        "run_type": {
-          "$ref": "../common/enums.schema.json#/$defs/runType"
-        },
-        "selection": {
-          "$ref": "#/$defs/sealedSelectionInput"
-        },
-        "params": {
-          "type": "object"
-        },
-        "claimed_at": {
-          "type": "string",
-          "format": "date-time"
         }
       },
       "additionalProperties": false
@@ -525,9 +443,6 @@
         "context": {
           "type": "object"
         },
-        "safe_adapter_context": {
-          "type": "object"
-        },
         "correlation_id": {
           "type": [
             "string",
@@ -545,6 +460,9 @@
         "created_at": {
           "type": "string",
           "format": "date-time"
+        },
+        "safe_channel_context": {
+          "type": "object"
         }
       },
       "additionalProperties": false
@@ -577,58 +495,6 @@
       ],
       "properties": {
         "analysis_run_step_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
-        },
-        "outcome": {
-          "$ref": "../common/enums.schema.json#/$defs/workerOutcome"
-        },
-        "message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "legacyExecutionProgressRequest": {
-      "type": "object",
-      "required": [
-        "execution_id",
-        "progress_stage"
-      ],
-      "properties": {
-        "execution_id": {
-          "$ref": "../common/enums.schema.json#/$defs/uuid"
-        },
-        "progress_stage": {
-          "type": "string",
-          "minLength": 1
-        },
-        "progress_message": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "item_position": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
-    "legacyExecutionFinalizeRequest": {
-      "type": "object",
-      "required": [
-        "execution_id",
-        "outcome"
-      ],
-      "properties": {
-        "execution_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
         },
         "outcome": {

@@ -325,6 +325,14 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 		t.Fatalf("list diagnostics request = %#v", target.listDiagnosticsReq)
 	}
 
+	observability := httptest.NewRecorder()
+	mux.ServeHTTP(observability, httptest.NewRequest(http.MethodGet, "/v1/admin/observability", nil))
+	assertTargetStatus(t, observability, http.StatusOK)
+	assertNoLegacyTargetVocabulary(t, observability.Body.String())
+	if !strings.Contains(observability.Body.String(), `"observability":`) || !strings.Contains(observability.Body.String(), `"queue_tasks":1`) {
+		t.Fatalf("observability response must be enveloped: %s", observability.Body.String())
+	}
+
 	listStepQueue := httptest.NewRecorder()
 	mux.ServeHTTP(listStepQueue, httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/queue?status=queued&run_type=transcription&worker_kind=transcription&step_kind=selection.transcription&page_size=10", nil))
 	assertTargetStatus(t, listStepQueue, http.StatusOK)
@@ -854,6 +862,45 @@ func assertTargetStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) 
 	}
 }
 
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status = %d want %d body=%s", rec.Code, wantStatus, rec.Body.String())
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error response must be JSON: %v body=%s", err, rec.Body.String())
+	}
+	if body.Error.Code != wantCode {
+		t.Fatalf("error.code = %q want %q body=%s", body.Error.Code, wantCode, rec.Body.String())
+	}
+}
+
+func newFinalMux(deps Dependencies) *http.ServeMux {
+	server := NewServer(deps)
+	mux := http.NewServeMux()
+	server.RegisterRoutes(mux)
+	return mux
+}
+
+func jsonRequest(method, path string, body any) *http.Request {
+	var reader io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			panic(err)
+		}
+		reader = bytes.NewReader(encoded)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
 func assertTargetEnvelopeID(t *testing.T, body []byte, envelope, idKey, want string) {
 	t.Helper()
 	var raw map[string]map[string]any
@@ -980,10 +1027,12 @@ type fakeTargetService struct {
 	listRunEventsReq         TargetListAnalysisRunEventsRequest
 	listArtifactsReq         TargetListArtifactsRequest
 	getArtifactReq           TargetGetArtifactRequest
+	refreshArtifactReq       TargetRefreshArtifactRequest
 	listDiagnosticsReq       TargetListDiagnosticsRequest
 	listStepQueueReq         TargetAnalysisRunStepQueueRequest
 	claimStepReq             TargetClaimAnalysisRunStepRequest
 	checkStepCancelReq       TargetCheckAnalysisRunStepCancelRequest
+	requestAccessReq         TargetRequestAccessRequest
 	progressStepReq          TargetRecordAnalysisRunStepProgressRequest
 	recordArtifactsReq       TargetRecordAnalysisRunArtifactsRequest
 	recordDiagnosticsReq     TargetRecordAnalysisRunDiagnosticsRequest
@@ -1442,6 +1491,24 @@ func (f *fakeTargetService) GetArtifact(_ context.Context, req TargetGetArtifact
 	}, nil
 }
 
+func (f *fakeTargetService) RefreshArtifactLink(_ context.Context, req TargetRefreshArtifactRequest) (TargetArtifact, error) {
+	f.refreshArtifactReq = req
+	f.getArtifactReq = TargetGetArtifactRequest{ChannelAccountID: req.ChannelAccountID, ArtifactID: req.ArtifactID}
+	if f.err != nil {
+		return TargetArtifact{}, f.err
+	}
+	return TargetArtifact{
+		ArtifactID:       req.ArtifactID,
+		ChannelAccountID: req.ChannelAccountID,
+		AnalysisRunID:    "run-1",
+		Kind:             "transcript",
+		Status:           "available",
+		ContentType:      "text/plain",
+		Visibility:       "channel_deliverable",
+		CreatedAt:        f.now,
+	}, nil
+}
+
 func (f *fakeTargetService) ListDiagnostics(_ context.Context, req TargetListDiagnosticsRequest) (TargetDiagnosticPage, error) {
 	f.listDiagnosticsReq = req
 	if f.err != nil {
@@ -1464,6 +1531,18 @@ func (f *fakeTargetService) ListDiagnostics(_ context.Context, req TargetListDia
 		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
+	}, nil
+}
+
+func (f *fakeTargetService) GetObservabilitySnapshot(context.Context) (TargetObservabilitySnapshot, error) {
+	if f.err != nil {
+		return TargetObservabilitySnapshot{}, f.err
+	}
+	return TargetObservabilitySnapshot{
+		QueueTasks:                 1,
+		QueueLagSeconds:            5,
+		ObservabilityWindowSeconds: 900,
+		GeneratedAt:                f.now,
 	}, nil
 }
 
@@ -1544,6 +1623,41 @@ func (f *fakeTargetService) CheckAnalysisRunStepCancel(_ context.Context, _ stri
 		return TargetAnalysisRunStepCancelState{}, f.err
 	}
 	return TargetAnalysisRunStepCancelState{CancelRequested: false, Status: "running"}, nil
+}
+
+func (f *fakeTargetService) ResolveAnalysisRunStepRequestAccess(_ context.Context, _ string, req TargetRequestAccessRequest) (RequestAccessResponse, error) {
+	f.requestAccessReq = req
+	if f.err != nil {
+		return RequestAccessResponse{}, f.err
+	}
+	return RequestAccessResponse{
+		Provider:            "object_store",
+		URL:                 "http://minio/request.json",
+		ExpiresAt:           f.now.Add(time.Minute).Format(time.RFC3339),
+		RequestRef:          "request.json",
+		RequestDigestSHA256: "sha256:abc",
+		RequestBytes:        10,
+	}, nil
+}
+
+func (f *fakeTargetService) ResolveArtifactDownloadAccess(_ context.Context, artifactID string) (ArtifactDownloadAccessResponse, error) {
+	if f.err != nil {
+		return ArtifactDownloadAccessResponse{}, f.err
+	}
+	return ArtifactDownloadAccessResponse{
+		ArtifactID:    artifactID,
+		AnalysisRunID: "run-1",
+		ArtifactKind:  "transcript_plain",
+		Filename:      "transcript.txt",
+		MIMEType:      "text/plain",
+		SizeBytes:     10,
+		CreatedAt:     f.now,
+		Download: storage.DownloadDescriptor{
+			Provider:  "minio",
+			URL:       "http://minio/transcript.txt",
+			ExpiresAt: f.now.Add(time.Minute),
+		},
+	}, nil
 }
 
 func (f *fakeTargetService) RecordAnalysisRunStepProgress(_ context.Context, _ string, req TargetRecordAnalysisRunStepProgressRequest) error {

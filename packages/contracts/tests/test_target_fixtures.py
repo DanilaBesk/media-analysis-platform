@@ -79,7 +79,7 @@ def test_copper_asr_e2e_fixture_manifest_covers_required_inputs_and_hashes() -> 
 
     for case in cases.values():
         assert case["expected_backend"] == "CopperASR"
-        assert case["owner_bead"].startswith("media-b8s.2.")
+        assert case["source_bead"].startswith("media-b8s.2.")
         assert "backend_is_copperasr" in case["assertions"]
         stored_object = stored_by_id[case["stored_object_id"]]
         path = ROOT / stored_object["fixture_path"]

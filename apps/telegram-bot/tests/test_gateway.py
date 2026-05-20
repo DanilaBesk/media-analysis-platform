@@ -171,18 +171,18 @@ class FakeFinalApiClient:
         }
 
     def resolve_channel_account(self, **kwargs) -> dict[str, Any]:
-        owner_value = kwargs["owner"]
-        owner_id = str(owner_value["owner_id"])
-        existing = next((account for account in self.channel_accounts if account["external_account_ref"] == owner_id), None)
+        owner_value = kwargs["channel_identity"]
+        external_account_ref = str(owner_value["external_account_ref"])
+        existing = next((account for account in self.channel_accounts if account["external_account_ref"] == external_account_ref), None)
         if existing is not None:
             return existing
         account = {
             "channel_account_id": f"channel-account-{len(self.channel_accounts) + 1}",
             "channel": "telegram",
-            "external_account_ref": owner_id,
-            "display_name": owner_id,
+            "external_account_ref": external_account_ref,
+            "display_name": external_account_ref,
             "status": "active",
-            "metadata": {"owner": owner_value, "adapter_identity": owner_value.get("adapter_identity", {})},
+            "metadata": {"channel_identity": owner_value, "adapter_identity": owner_value.get("adapter_identity", {})},
         }
         self.channel_accounts.append(account)
         return account
@@ -269,23 +269,23 @@ class FakeFinalApiClient:
         return event
 
 
-def owner() -> dict[str, Any]:
+def channel_identity() -> dict[str, Any]:
     return {
-        "owner_type": "telegram",
-        "owner_id": "chat:10:user:7",
+        "channel": "telegram",
+        "external_account_ref": "chat:10:user:7",
         "adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"},
     }
 
 
 def create_selection_and_run(gateway: TelegramInboxGateway) -> tuple[dict[str, Any], dict[str, Any]]:
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     assert status.collection is not None
     selection = gateway.create_selection_snapshot(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=status.collection["collection_id"],
         expected_version=int(status.collection["version"]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
+    run = gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id=selection["selection_snapshot_id"])
     return selection, run
 
 
@@ -293,7 +293,7 @@ def test_text_and_link_messages_become_inbox_media_assets() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
 
-    records = gateway.add_message_inputs(owner=owner(), text="Meeting notes https://example.com/a", message_id=42)
+    records = gateway.add_message_inputs(channel_identity=channel_identity(), text="Meeting notes https://example.com/a", message_id=42)
 
     assert [record.status for record in records] == ["accepted", "accepted"]
     assert [request["kind"] for request in api.add_requests] == ["url", "text"]
@@ -309,9 +309,9 @@ def test_private_chat_scope_is_deterministic_and_groups_are_not_supported() -> N
 
     assert private_scope.visibility == "private"
     assert private_scope.state_key == (10, 7)
-    assert private_scope.owner == {
-        "owner_type": "telegram",
-        "owner_id": "chat:10:user:7",
+    assert private_scope.channel_identity == {
+        "channel": "telegram",
+        "external_account_ref": "chat:10:user:7",
         "adapter_identity": {
             "telegram_chat_id": "10",
             "telegram_user_id": "7",
@@ -346,7 +346,7 @@ def test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files() -> No
     ]
 
     records = gateway.add_message_inputs(
-        owner=owner(),
+        channel_identity=channel_identity(),
         text="Keep this https://ok.example/a ftp://bad.example/file",
         files=files,
         message_id=43,
@@ -370,7 +370,7 @@ def test_photo_video_document_and_media_group_inputs_keep_telegram_metadata() ->
         TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", content=b"pdf-body", size_bytes=30, media_group_id="grp", message_id=3),
     ]
 
-    records = gateway.add_message_inputs(owner=owner(), files=files)
+    records = gateway.add_message_inputs(channel_identity=channel_identity(), files=files)
 
     assert [record.status for record in records] == ["accepted", "accepted", "accepted"]
     assert api.add_requests == []
@@ -386,7 +386,7 @@ def test_voice_file_ingress_uses_multipart_upload_and_never_add_media_asset_obje
     gateway = TelegramInboxGateway(api)
 
     record = gateway.add_file(
-        owner=owner(),
+        channel_identity=channel_identity(),
         file_input=TelegramFileInput(
             kind="voice",
             file_id="voice-file",
@@ -418,9 +418,9 @@ def test_album_status_preview_groups_visible_media_together() -> None:
         TelegramFileInput(kind="video", file_id="video-file", file_name="clip.mp4", content_type="video/mp4", content=b"video-body", size_bytes=20, media_group_id="grp", message_id=2),
         TelegramFileInput(kind="document", file_id="doc-file", file_name="brief.pdf", content_type="application/pdf", content=b"pdf-body", size_bytes=30, media_group_id="grp", message_id=3),
     ]
-    gateway.add_message_inputs(owner=owner(), files=files)
+    gateway.add_message_inputs(channel_identity=channel_identity(), files=files)
 
-    text = render_status_text(gateway.restore_status(owner=owner()))
+    text = render_status_text(gateway.restore_status(channel_identity=channel_identity()))
 
     assert text.startswith("Транскрибация\nМатериалов: 3\n")
     assert "Фото из Telegram · 10 B" in text
@@ -433,8 +433,8 @@ def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
 
-    records = gateway.add_message_inputs(owner=owner())
-    missing_file = gateway.add_message_inputs(owner=owner(), files=[TelegramFileInput(kind="photo", file_id="")])
+    records = gateway.add_message_inputs(channel_identity=channel_identity())
+    missing_file = gateway.add_message_inputs(channel_identity=channel_identity(), files=[TelegramFileInput(kind="photo", file_id="")])
 
     assert records[0].status == "rejected"
     assert records[0].reason == "unsupported_message"
@@ -442,7 +442,7 @@ def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
     assert missing_file[0].reason == "missing_file_id"
     assert api.add_requests == []
 
-    text = render_status_text(gateway.restore_status(owner=owner(), rejected=[records[0], missing_file[0]]))
+    text = render_status_text(gateway.restore_status(channel_identity=channel_identity(), rejected=[records[0], missing_file[0]]))
     assert "Отклонено: Telegram message (неподдерживаемый ввод:" in text
     assert "Отклонено: photo (неподдерживаемый ввод:" in text
 
@@ -450,10 +450,10 @@ def test_invalid_or_empty_messages_return_explicit_rejected_records() -> None:
 def test_status_surface_splits_main_card_and_materials_actions() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api, page_size=1)
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(status, can_go_back=True, current_cursor=None)
     text = render_status_text(status)
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
@@ -466,7 +466,7 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     remove_callback = next(callback for callback in materials_callbacks if callback.startswith("ib:rm:"))
     remove_action, remove_tokens = _parse_callback_payload(remove_callback)
     updated = gateway.remove_collection_item(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=_decode_callback_token(remove_tokens[0]),
         media_asset_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
@@ -476,11 +476,11 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     updated_run_callback = next(callback for callback in updated_callbacks if callback.startswith("ib:rn:"))
     updated_run_action, updated_run_tokens = _parse_callback_payload(updated_run_callback)
     selection = gateway.create_selection_snapshot(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=_decode_callback_token(updated_run_tokens[0]),
         expected_version=_decode_callback_version(updated_run_tokens[1]),
     )
-    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
+    run = gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id=selection["selection_snapshot_id"])
 
     assert text.startswith("Транскрибация\nМатериалов: 2\n")
     assert [button.text for button in keyboard.inline_keyboard[0]] == ["Материалы"]
@@ -514,9 +514,9 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api, page_size=5)
     for index in range(12):
-        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+        gateway.add_text(channel_identity=channel_identity(), text=f"item {index + 1}")
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     main_keyboard = build_status_keyboard(status, current_cursor=None)
     assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Материалы"]
     assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (12)"]
@@ -531,12 +531,12 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     assert max(len(callback) for callback in callbacks) <= 64
     remove_action, remove_tokens = _parse_callback_payload(callbacks[1])
     after_slot_remove = gateway.remove_collection_item(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=_decode_callback_token(remove_tokens[0]),
         media_asset_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
     )
-    page_two_status = gateway.restore_status(owner=owner(), cursor="media-6")
+    page_two_status = gateway.restore_status(channel_identity=channel_identity(), cursor="media-6")
     page_two_keyboard = build_status_keyboard(page_two_status, current_cursor="media-6", screen="materials")
     clear_callback = next(
         button.callback_data
@@ -546,7 +546,7 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     )
     clear_action, clear_tokens = _parse_callback_payload(clear_callback)
     after_clear = gateway.clear_visible_items(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=_decode_callback_token(clear_tokens[0]),
         expected_version=_decode_callback_version(clear_tokens[1]),
         cursor=_decode_optional_callback_token(clear_tokens[2]),
@@ -581,11 +581,11 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
 def test_clear_collection_removes_all_items_across_pages() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api, page_size=1)
-    gateway.add_text(owner=owner(), text="one")
-    gateway.add_text(owner=owner(), text="two")
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    gateway.add_text(channel_identity=channel_identity(), text="two")
 
     cleared = gateway.clear_collection(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id="inbox-1",
         expected_version=api.collection["version"],
     )
@@ -600,9 +600,9 @@ def test_remove_latest_collection_item_removes_last_item_from_full_collection() 
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api, page_size=2)
     for index in range(4):
-        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+        gateway.add_text(channel_identity=channel_identity(), text=f"item {index + 1}")
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(status, screen="materials")
     remove_latest_callback = next(
         button.callback_data
@@ -612,7 +612,7 @@ def test_remove_latest_collection_item_removes_last_item_from_full_collection() 
     )
     action, tokens = _parse_callback_payload(remove_latest_callback)
     updated = gateway.remove_latest_collection_item(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=_decode_callback_token(tokens[0]),
         expected_version=_decode_callback_version(tokens[1]),
     )
@@ -632,13 +632,13 @@ def test_gateway_edge_helpers_cover_pagination_surface_and_dedup_branches() -> N
 
     with pytest.raises(RuntimeError, match="inbox_empty"):
         gateway.remove_latest_collection_item(
-            owner=owner(),
+            channel_identity=channel_identity(),
             collection_id="inbox-1",
             expected_version=api.collection["version"],
         )
 
-    assert gateway.find_result_artifact_surface(owner=owner(), artifact_id=" ") is None
-    assert gateway.result_artifact_surface_exists(owner=owner(), artifact_id=" ") is False
+    assert gateway.find_result_artifact_surface(channel_identity=channel_identity(), artifact_id=" ") is None
+    assert gateway.result_artifact_surface_exists(channel_identity=channel_identity(), artifact_id=" ") is False
     assert gateway._load_media_assets_by_id(channel_account_id="channel-account-1", media_asset_ids=[""]) == []
 
     embedded_items, _ = gateway._restore_collection_items(
@@ -656,7 +656,7 @@ def test_gateway_edge_helpers_cover_pagination_surface_and_dedup_branches() -> N
     assert embedded_items == [{"media_asset_id": "embedded-1", "kind": "text", "display_name": "embedded"}]
 
     for index in range(51):
-        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+        gateway.add_text(channel_identity=channel_identity(), text=f"item {index + 1}")
     loaded = gateway._load_media_assets_by_id(
         channel_account_id="channel-account-1",
         media_asset_ids=["media-51"],
@@ -666,7 +666,7 @@ def test_gateway_edge_helpers_cover_pagination_surface_and_dedup_branches() -> N
     collection = dict(api.collection)
     before_version = collection["version"]
     gateway._clear_collection_items(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection=collection,
         media_asset_ids=["", "media-1", "media-1", " media-2 "],
         cursor=None,
@@ -683,7 +683,7 @@ def test_gateway_edge_helpers_cover_pagination_surface_and_dedup_branches() -> N
     ) == "telegram:10:42:99"
 
 
-def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_list() -> None:
+def test_restore_status_uses_collection_membership_instead_of_channel_account_wide_media_list() -> None:
     class CollectionOnlyRemovalApiClient(FakeFinalApiClient):
         def remove_collection_item(self, **kwargs) -> dict[str, Any]:
             media_asset_id = kwargs["media_asset_id"]
@@ -697,9 +697,9 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
     api = CollectionOnlyRemovalApiClient()
     gateway = TelegramInboxGateway(api, page_size=5)
     for index in range(5):
-        gateway.add_text(owner=owner(), text=f"item {index + 1}")
+        gateway.add_text(channel_identity=channel_identity(), text=f"item {index + 1}")
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(status, screen="materials")
     remove_callback = next(
         button.callback_data
@@ -709,7 +709,7 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
     )
     _, remove_tokens = _parse_callback_payload(remove_callback)
     updated = gateway.remove_collection_item(
-        owner=owner(),
+        channel_identity=channel_identity(),
         collection_id=_decode_callback_token(remove_tokens[0]),
         media_asset_id=_decode_callback_token(remove_tokens[2]),
         expected_version=_decode_callback_version(remove_tokens[1]),
@@ -729,9 +729,9 @@ def test_restore_status_uses_collection_membership_instead_of_owner_wide_media_l
 
 
 def test_uuid_callbacks_stay_within_telegram_limit() -> None:
-    base_status = TelegramInboxGateway(FakeFinalApiClient()).restore_status(owner=owner())
+    base_status = TelegramInboxGateway(FakeFinalApiClient()).restore_status(channel_identity=channel_identity())
     status = base_status.__class__(
-        owner=base_status.owner,
+        channel_identity=base_status.channel_identity,
         collection={
             "collection_id": "11111111-1111-1111-1111-111111111111",
             "version": 123456,
@@ -797,7 +797,7 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
 def test_main_card_hides_historical_result_without_focused_run() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="transcript candidate")
+    gateway.add_text(channel_identity=channel_identity(), text="transcript candidate")
 
     api.runs.extend(
         [
@@ -833,7 +833,7 @@ def test_main_card_hides_historical_result_without_focused_run() -> None:
         ]
     )
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(status)
     button_texts = [button.text for row in keyboard.inline_keyboard for button in row]
 
@@ -844,7 +844,7 @@ def test_main_card_hides_historical_result_without_focused_run() -> None:
 def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="new transcript candidate")
+    gateway.add_text(channel_identity=channel_identity(), text="new transcript candidate")
     api.runs.extend(
         [
             {"analysis_run_id": "run-old", "status": "succeeded", "version": 1},
@@ -861,7 +861,7 @@ def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
         }
     )
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     text = render_status_text(status)
     keyboard = build_status_keyboard(status, focused_run_id="run-current")
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
@@ -877,7 +877,7 @@ def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
 def test_main_card_separates_background_active_run_from_new_transcription_action() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="cancelable transcript candidate")
+    gateway.add_text(channel_identity=channel_identity(), text="cancelable transcript candidate")
     api.runs.extend(
         [
             {"analysis_run_id": "run-other", "status": "queued", "version": 1},
@@ -885,7 +885,7 @@ def test_main_card_separates_background_active_run_from_new_transcription_action
         ]
     )
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(status, focused_run_id="run-current")
     unfocused_keyboard = build_status_keyboard(status)
     callbacks_by_text = {
@@ -920,7 +920,7 @@ def test_gateway_cancel_analysis_run_verifies_version_and_active_status() -> Non
     api.runs.append({"analysis_run_id": "run-1", "status": "running", "version": 3})
 
     status = gateway.cancel_analysis_run(
-        owner=owner(),
+        channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=3,
         message="stop",
@@ -933,13 +933,13 @@ def test_gateway_cancel_analysis_run_verifies_version_and_active_status() -> Non
     assert api.runs[0]["status"] == "canceled"
 
     with pytest.raises(RuntimeError, match="slot_not_visible"):
-        gateway.cancel_analysis_run(owner=owner(), analysis_run_id="run-1", expected_version=4)
+        gateway.cancel_analysis_run(channel_identity=channel_identity(), analysis_run_id="run-1", expected_version=4)
 
 
 def test_main_card_result_is_scoped_to_focused_terminal_run() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="transcript candidate")
+    gateway.add_text(channel_identity=channel_identity(), text="transcript candidate")
     api.runs.extend(
         [
             {"analysis_run_id": "run-old", "status": "succeeded", "version": 1},
@@ -983,7 +983,7 @@ def test_main_card_result_is_scoped_to_focused_terminal_run() -> None:
         ]
     )
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(status, focused_run_id="run-current")
     callbacks_by_text = {
         button.text: button.callback_data
@@ -1006,7 +1006,7 @@ def test_main_card_result_is_scoped_to_focused_terminal_run() -> None:
 def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="ready for selection")
+    gateway.add_text(channel_identity=channel_identity(), text="ready for selection")
     api.runs.append(
         {
             "analysis_run_id": "run-1",
@@ -1036,7 +1036,7 @@ def test_selection_and_completed_run_actions_are_explicit_in_keyboard() -> None:
         }
     )
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     keyboard = build_status_keyboard(
         status,
         selection={"selection_snapshot_id": "selection-1", "items": status.collection["items"]},
@@ -1061,8 +1061,8 @@ def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
 
-    assert gateway.owner_for(chat_id=10, user_id=7) == {
-        **owner(),
+    assert gateway.channel_identity_for(chat_id=10, user_id=7) == {
+        **channel_identity(),
         "adapter_identity": {
             "telegram_chat_id": "10",
             "telegram_user_id": "7",
@@ -1070,10 +1070,10 @@ def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -
         },
     }
 
-    empty_text = gateway.add_text(owner=owner(), text="   ")
-    invalid_link = gateway.add_link(owner=owner(), url="https:///missing-host")
-    missing_content = gateway.add_file(owner=owner(), file_input=TelegramFileInput(kind="voice", file_id="voice-1"))
-    plain_text_records = gateway.add_message_inputs(owner=owner(), text="plain text only")
+    empty_text = gateway.add_text(channel_identity=channel_identity(), text="   ")
+    invalid_link = gateway.add_link(channel_identity=channel_identity(), url="https:///missing-host")
+    missing_content = gateway.add_file(channel_identity=channel_identity(), file_input=TelegramFileInput(kind="voice", file_id="voice-1"))
+    plain_text_records = gateway.add_message_inputs(channel_identity=channel_identity(), text="plain text only")
 
     assert empty_text.reason == "empty_text"
     assert invalid_link.reason == "invalid_url"
@@ -1082,7 +1082,7 @@ def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -
     assert api.add_requests[-1]["origin"] == {"origin_type": "text", "origin_ref": "plain text only"}
 
     caption_record = gateway.add_file(
-        owner=owner(),
+        channel_identity=channel_identity(),
         file_input=TelegramFileInput(
             kind="document",
             file_id="doc-1",
@@ -1095,37 +1095,37 @@ def test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks() -
     assert api.upload_requests[-1]["metadata"]["caption"] == "human caption"
 
     api.items.append({"media_asset_id": "", "display_name": "orphan", "kind": "text", "status": "ready", "metadata": {}})
-    cleared = gateway.clear_visible_items(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+    cleared = gateway.clear_visible_items(channel_identity=channel_identity(), collection_id="inbox-1", expected_version=api.collection["version"])
     assert all(item.get("media_asset_id") != "" for item in cleared.collection["items"])
 
     api.items.clear()
     api.collection["items"].clear()
-    empty_cleared = gateway.clear_visible_items(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+    empty_cleared = gateway.clear_visible_items(channel_identity=channel_identity(), collection_id="inbox-1", expected_version=api.collection["version"])
     assert empty_cleared.items == []
 
     with pytest.raises(RuntimeError, match="slot_missing_media_asset_id"):
         gateway.remove_collection_item(
-            owner=owner(),
+            channel_identity=channel_identity(),
             collection_id="inbox-1",
             media_asset_id="   ",
             expected_version=api.collection["version"],
         )
 
     with pytest.raises(RuntimeError, match="inbox_empty"):
-        gateway.create_selection_snapshot(owner=owner(), collection_id="inbox-1", expected_version=api.collection["version"])
+        gateway.create_selection_snapshot(channel_identity=channel_identity(), collection_id="inbox-1", expected_version=api.collection["version"])
 
     with pytest.raises(RuntimeError, match="slot_not_visible"):
-        gateway.start_analysis(owner=owner(), selection_snapshot_id="   ")
+        gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id="   ")
 
     with pytest.raises(RuntimeError, match="slot_not_visible"):
-        gateway._get_verified_inbox_collection(owner=owner(), collection_id="different", expected_version=api.collection["version"])
+        gateway._get_verified_inbox_collection(channel_identity=channel_identity(), collection_id="different", expected_version=api.collection["version"])
 
     with pytest.raises(RuntimeError, match="slot_not_visible"):
-        gateway._get_verified_inbox_collection(owner=owner(), collection_id="inbox-1", expected_version=999)
+        gateway._get_verified_inbox_collection(channel_identity=channel_identity(), collection_id="inbox-1", expected_version=999)
 
     api.runs.append({"analysis_run_id": "run-1", "version": 1})
     with pytest.raises(RuntimeError, match="slot_not_visible"):
-        gateway._get_verified_run(owner=owner(), analysis_run_id="run-1", expected_version=2)
+        gateway._get_verified_run(channel_identity=channel_identity(), analysis_run_id="run-1", expected_version=2)
 
 
 def test_restore_status_tolerates_missing_collection_and_renders_without_collection_count() -> None:
@@ -1166,7 +1166,7 @@ def test_restore_status_tolerates_missing_collection_and_renders_without_collect
     failing_api.items = [{"media_asset_id": "media-1", "display_name": "item", "kind": "text", "status": "ready", "metadata": {}}]
     gateway = TelegramInboxGateway(failing_api)
 
-    status = gateway.restore_status(owner=owner())
+    status = gateway.restore_status(channel_identity=channel_identity())
     text = render_status_text(status)
 
     assert status.collection is None
@@ -1190,7 +1190,7 @@ def test_restore_status_tolerates_flat_page_metadata_from_runtime_api() -> None:
                 "page_size": kwargs.get("page_size") or 5,
             }
 
-    status = TelegramInboxGateway(FlatPageApiClient(), page_size=5).restore_status(owner=owner())
+    status = TelegramInboxGateway(FlatPageApiClient(), page_size=5).restore_status(channel_identity=channel_identity())
 
     assert status.collection is None
     assert status.page["page"] == 1
@@ -1212,16 +1212,16 @@ def test_stale_callback_copy_is_safe_and_actionable() -> None:
 def test_long_running_run_is_restored_and_later_completion_is_visible_after_restart() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="long transcript")
+    gateway.add_text(channel_identity=channel_identity(), text="long transcript")
     _, run = create_selection_and_run(gateway)
 
     restarted_gateway = TelegramInboxGateway(api)
-    restored = restarted_gateway.restore_status(owner=owner())
+    restored = restarted_gateway.restore_status(channel_identity=channel_identity())
     assert restored.active_runs == [run]
 
     api.runs[0]["status"] = "succeeded"
-    completed = restarted_gateway.restore_status(owner=owner())
-    run_status = restarted_gateway.get_run_status(owner=owner(), analysis_run_id=run["analysis_run_id"])
+    completed = restarted_gateway.restore_status(channel_identity=channel_identity())
+    run_status = restarted_gateway.get_run_status(channel_identity=channel_identity(), analysis_run_id=run["analysis_run_id"])
 
     assert completed.active_runs == []
     assert run_status["status"] == "succeeded"
@@ -1230,10 +1230,10 @@ def test_long_running_run_is_restored_and_later_completion_is_visible_after_rest
 def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="long transcript")
+    gateway.add_text(channel_identity=channel_identity(), text="long transcript")
     _, run = create_selection_and_run(gateway)
 
-    queued_text = render_status_text(gateway.restore_status(owner=owner()))
+    queued_text = render_status_text(gateway.restore_status(channel_identity=channel_identity()))
 
     assert "Активная задача: в очереди" in queued_text
     assert "failed" not in queued_text
@@ -1261,7 +1261,7 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
     )
 
     restarted_gateway = TelegramInboxGateway(api)
-    completed = restarted_gateway.restore_status(owner=owner())
+    completed = restarted_gateway.restore_status(channel_identity=channel_identity())
     completed_text = render_status_text(completed)
     completed_keyboard = build_status_keyboard(completed, focused_run_id=run["analysis_run_id"])
     completed_callbacks = [button.callback_data for row in completed_keyboard.inline_keyboard for button in row]
@@ -1273,14 +1273,14 @@ def test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly() -> N
     assert "worker_note: Result stored for later delivery." not in completed_text
     assert any(callback.startswith("ib:ar:") for callback in completed_callbacks)
     assert any(callback.startswith("ib:dg:") for callback in completed_callbacks)
-    assert restarted_gateway.list_run_artifacts(owner=owner(), analysis_run_id=run["analysis_run_id"], expected_version=1)[0]["artifact_id"] == "artifact-1"
-    assert restarted_gateway.list_run_diagnostics(owner=owner(), analysis_run_id=run["analysis_run_id"], expected_version=1)[0]["diagnostic_id"] == "diagnostic-1"
+    assert restarted_gateway.list_run_artifacts(channel_identity=channel_identity(), analysis_run_id=run["analysis_run_id"], expected_version=1)[0]["artifact_id"] == "artifact-1"
+    assert restarted_gateway.list_run_diagnostics(channel_identity=channel_identity(), analysis_run_id=run["analysis_run_id"], expected_version=1)[0]["diagnostic_id"] == "diagnostic-1"
 
 
 def test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
-    gateway.add_text(owner=owner(), text="restore after reconnect")
+    gateway.add_text(channel_identity=channel_identity(), text="restore after reconnect")
     create_selection_and_run(gateway)
 
     app = TelegramInboxApp(

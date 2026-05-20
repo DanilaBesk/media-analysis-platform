@@ -38,7 +38,7 @@ from transcriber_workers_common.api import (
     CancelCheckResult,
     ClaimedAnalysisRunStep,
     MediaSourceSnapshot,
-    SealedSelectionInput,
+    SealedSelectionSnapshotInput,
     SelectionItemLabels,
     SelectionItemSnapshot,
 )
@@ -1964,7 +1964,7 @@ def _execution(
         analysis_run_step_id="exec-agent",
         analysis_run_id=analysis_run_id,
         run_type="custom",
-        selection_snapshot=SealedSelectionInput(
+        selection_snapshot=SealedSelectionSnapshotInput(
             selection_snapshot_id="selection-agent",
             items=tuple(items),
             option_snapshot={},

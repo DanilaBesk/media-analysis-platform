@@ -23,7 +23,7 @@
 #   TranscriptResult - Transcript result contract.
 #   TranscriptArtifacts - Transcript artifact path contract.
 #   ReportArtifacts - Report artifact path contract.
-#   ProcessedJob - Analysis-run result contract kept for worker compatibility.
+#   ProcessedJob - Analysis-run result contract kept for the worker runtime boundary.
 # END_MODULE_MAP
 
 from __future__ import annotations

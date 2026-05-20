@@ -1209,18 +1209,18 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
           } as TPayload,
         };
       }
-      if (request.path === withChannelQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error")) {
+      if (request.path === withChannelQuery("/v1/diagnostics?page_size=5&subject_type=channel_surface&severity=error")) {
         return {
           status: 200,
           data: {
             items: [
               {
-                diagnostic_id: "diagnostic-retention",
+                diagnostic_id: "diagnostic-channel-surface",
                 severity: "error",
-                code: "retention_hold_pending",
+                code: "adapter_conflict",
                 subject: {
-                  subject_type: "retention",
-                  subject_id: MEDIA_ID,
+                  subject_type: "channel_surface",
+                  subject_id: "surface-1",
                 },
               },
             ],
@@ -1247,7 +1247,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   const diagnosticsResult = await runtime.callTool("get_diagnostics", {
     channel_account_id: CHANNEL_ACCOUNT_ID,
     page_size: 5,
-    subject_type: "retention",
+    subject_type: "channel_surface",
     severity: "error",
   });
 
@@ -1282,12 +1282,12 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
   assert.deepEqual(diagnosticsResult.structuredContent, {
     items: [
       {
-        diagnostic_id: "diagnostic-retention",
+        diagnostic_id: "diagnostic-channel-surface",
         severity: "error",
-        code: "retention_hold_pending",
+        code: "adapter_conflict",
         subject: {
-          subject_type: "retention",
-          subject_id: MEDIA_ID,
+          subject_type: "channel_surface",
+          subject_id: "surface-1",
         },
       },
     ],
@@ -1306,7 +1306,7 @@ test("createMcpDomainRuntime preserves explicit retention-touching contract pari
       method: "POST",
     },
     {
-      path: withChannelQuery("/v1/diagnostics?page_size=5&subject_type=retention&severity=error"),
+      path: withChannelQuery("/v1/diagnostics?page_size=5&subject_type=channel_surface&severity=error"),
     },
   ]);
   // END_BLOCK_BLOCK_VERIFY_RETENTION_TOUCHING_PARITY

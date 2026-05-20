@@ -132,31 +132,6 @@
         }
       ]
     },
-    "reconcileQueueRequest": {
-      "type": "object",
-      "properties": {
-        "limit": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100,
-          "default": 100
-        }
-      },
-      "additionalProperties": false
-    },
-    "reconcileQueueResponse": {
-      "type": "object",
-      "required": [
-        "reconciled"
-      ],
-      "properties": {
-        "reconciled": {
-          "type": "integer",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
-    },
     "observabilitySnapshot": {
       "type": "object",
       "required": [

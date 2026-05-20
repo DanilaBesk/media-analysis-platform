@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 )
 
 type TargetService interface {
@@ -36,10 +38,14 @@ type TargetService interface {
 	ListAnalysisRunEvents(ctx context.Context, req TargetListAnalysisRunEventsRequest) (TargetAnalysisRunEventPage, error)
 	ListArtifacts(ctx context.Context, req TargetListArtifactsRequest) (TargetArtifactPage, error)
 	GetArtifact(ctx context.Context, req TargetGetArtifactRequest) (TargetArtifact, error)
+	RefreshArtifactLink(ctx context.Context, req TargetRefreshArtifactRequest) (TargetArtifact, error)
 	ListDiagnostics(ctx context.Context, req TargetListDiagnosticsRequest) (TargetDiagnosticPage, error)
+	GetObservabilitySnapshot(ctx context.Context) (TargetObservabilitySnapshot, error)
 	ListAnalysisRunStepQueue(ctx context.Context, req TargetAnalysisRunStepQueueRequest) (TargetAnalysisRunStepQueueResponse, error)
 	ClaimAnalysisRunStep(ctx context.Context, analysisRunID string, req TargetClaimAnalysisRunStepRequest) (TargetClaimAnalysisRunStepResponse, error)
 	CheckAnalysisRunStepCancel(ctx context.Context, analysisRunID string, req TargetCheckAnalysisRunStepCancelRequest) (TargetAnalysisRunStepCancelState, error)
+	ResolveAnalysisRunStepRequestAccess(ctx context.Context, analysisRunID string, req TargetRequestAccessRequest) (RequestAccessResponse, error)
+	ResolveArtifactDownloadAccess(ctx context.Context, artifactID string) (ArtifactDownloadAccessResponse, error)
 	RecordAnalysisRunStepProgress(ctx context.Context, analysisRunID string, req TargetRecordAnalysisRunStepProgressRequest) error
 	RecordAnalysisRunArtifacts(ctx context.Context, analysisRunID string, req TargetRecordAnalysisRunArtifactsRequest) error
 	RecordAnalysisRunDiagnostics(ctx context.Context, analysisRunID string, req TargetRecordAnalysisRunDiagnosticsRequest) error
@@ -352,6 +358,11 @@ type TargetGetArtifactRequest struct {
 	ArtifactID       string
 }
 
+type TargetRefreshArtifactRequest struct {
+	ChannelAccountID string
+	ArtifactID       string
+}
+
 type TargetArtifactPage struct {
 	Items    []TargetArtifact `json:"items"`
 	Page     int              `json:"page"`
@@ -460,6 +471,10 @@ type TargetAnalysisRunStepCancelState struct {
 	CancelRequestedAt *time.Time `json:"cancel_requested_at,omitempty"`
 }
 
+type TargetRequestAccessRequest struct {
+	AnalysisRunStepID string
+}
+
 type TargetRecordAnalysisRunStepProgressRequest struct {
 	AnalysisRunStepID string          `json:"analysis_run_step_id"`
 	ProgressStage     string          `json:"progress_stage"`
@@ -467,15 +482,36 @@ type TargetRecordAnalysisRunStepProgressRequest struct {
 	Payload           json.RawMessage `json:"payload,omitempty"`
 }
 
+type workerArtifactDescriptor struct {
+	ArtifactKind string `json:"artifact_kind"`
+	MIMEType     string `json:"mime_type"`
+	ObjectKey    string `json:"object_key"`
+	SizeBytes    int64  `json:"size_bytes"`
+	Filename     string `json:"filename"`
+	Format       string `json:"format,omitempty"`
+}
+
 type TargetRecordAnalysisRunArtifactsRequest struct {
 	AnalysisRunStepID string                     `json:"analysis_run_step_id"`
-	ExecutionID       string                     `json:"execution_id,omitempty"`
 	Artifacts         []workerArtifactDescriptor `json:"artifacts"`
+}
+
+type workerDiagnosticDescriptor struct {
+	DiagnosticID       string         `json:"diagnostic_id"`
+	SubjectType        string         `json:"subject_type"`
+	SubjectID          string         `json:"subject_id"`
+	Severity           string         `json:"severity"`
+	Code               string         `json:"code"`
+	Message            string         `json:"message"`
+	Context            map[string]any `json:"context,omitempty"`
+	SafeChannelContext map[string]any `json:"safe_channel_context,omitempty"`
+	CorrelationID      string         `json:"correlation_id,omitempty"`
+	RemediationHint    string         `json:"remediation_hint,omitempty"`
+	CreatedAt          time.Time      `json:"created_at,omitempty"`
 }
 
 type TargetRecordAnalysisRunDiagnosticsRequest struct {
 	AnalysisRunStepID string                       `json:"analysis_run_step_id"`
-	ExecutionID       string                       `json:"execution_id,omitempty"`
 	Diagnostics       []workerDiagnosticDescriptor `json:"diagnostics"`
 }
 
@@ -509,17 +545,21 @@ type TargetAnalysisRunStepInput struct {
 }
 
 type TargetArtifact struct {
-	ArtifactID       string                  `json:"artifact_id"`
-	ChannelAccountID string                  `json:"channel_account_id,omitempty"`
-	AnalysisRunID    string                  `json:"analysis_run_id"`
-	StoredObjectID   string                  `json:"stored_object_id,omitempty"`
-	Kind             string                  `json:"kind"`
-	Status           string                  `json:"status"`
-	ContentType      string                  `json:"content_type"`
-	Visibility       string                  `json:"visibility"`
-	Preview          json.RawMessage         `json:"preview,omitempty"`
-	Subjects         []TargetArtifactSubject `json:"subjects,omitempty"`
-	CreatedAt        time.Time               `json:"created_at"`
+	ArtifactID       string                      `json:"artifact_id"`
+	ChannelAccountID string                      `json:"channel_account_id,omitempty"`
+	AnalysisRunID    string                      `json:"analysis_run_id"`
+	StoredObjectID   string                      `json:"stored_object_id,omitempty"`
+	Kind             string                      `json:"kind"`
+	Status           string                      `json:"status"`
+	ContentType      string                      `json:"content_type"`
+	SizeBytes        int64                       `json:"size_bytes,omitempty"`
+	ObjectKey        string                      `json:"object_key,omitempty"`
+	Checksum         string                      `json:"checksum,omitempty"`
+	Visibility       string                      `json:"visibility"`
+	Preview          json.RawMessage             `json:"preview,omitempty"`
+	Download         *storage.DownloadDescriptor `json:"download,omitempty"`
+	Subjects         []TargetArtifactSubject     `json:"subjects,omitempty"`
+	CreatedAt        time.Time                   `json:"created_at"`
 }
 
 type TargetArtifactSubject struct {
@@ -884,6 +924,15 @@ func (s *Server) handleCreateTargetCollectionDecoded(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusCreated, map[string]any{"collection": collection})
 }
 
+func (s *Server) handleCreateTargetCollection(w http.ResponseWriter, r *http.Request) {
+	var body TargetCreateCollectionRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_collection", message: "collection request must be valid JSON", details: err.Error()})
+		return
+	}
+	s.handleCreateTargetCollectionDecoded(w, r, body)
+}
+
 func (s *Server) handleListTargetCollections(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Target == nil {
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
@@ -944,6 +993,15 @@ func (s *Server) handleUpdateTargetCollectionDecoded(w http.ResponseWriter, r *h
 	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
 }
 
+func (s *Server) handleUpdateTargetCollection(w http.ResponseWriter, r *http.Request) {
+	var body TargetUpdateCollectionRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_collection", message: "collection update must be valid JSON", details: err.Error()})
+		return
+	}
+	s.handleUpdateTargetCollectionDecoded(w, r, body)
+}
+
 func (s *Server) handleUpdateTargetCollectionItemsDecoded(w http.ResponseWriter, r *http.Request, body TargetUpdateCollectionItemsRequest) {
 	if s.deps.Target == nil {
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
@@ -961,6 +1019,15 @@ func (s *Server) handleUpdateTargetCollectionItemsDecoded(w http.ResponseWriter,
 	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
 }
 
+func (s *Server) handleUpdateTargetCollectionItems(w http.ResponseWriter, r *http.Request) {
+	var body TargetUpdateCollectionItemsRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_collection_items", message: "collection items request must be valid JSON", details: err.Error()})
+		return
+	}
+	s.handleUpdateTargetCollectionItemsDecoded(w, r, body)
+}
+
 func (s *Server) handleRemoveTargetCollectionItem(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Target == nil {
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
@@ -970,7 +1037,7 @@ func (s *Server) handleRemoveTargetCollectionItem(w http.ResponseWriter, r *http
 	collection, err := s.deps.Target.RemoveCollectionItem(r.Context(), TargetRemoveCollectionItemRequest{
 		ChannelAccountID: strings.TrimSpace(r.URL.Query().Get("channel_account_id")),
 		CollectionID:     r.PathValue("collection_id"),
-		MediaAssetID:     firstNonEmpty(r.PathValue("media_asset_id"), r.PathValue("media_item_id")),
+		MediaAssetID:     r.PathValue("media_asset_id"),
 		ExpectedVersion:  expected,
 	})
 	if err != nil {
@@ -1020,7 +1087,7 @@ func (s *Server) handleGetTargetSelectionSnapshot(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, map[string]any{"selection_snapshot": snapshot})
 }
 
-func (s *Server) handleCreateTargetAnalysisRunDecoded(w http.ResponseWriter, r *http.Request, body createAnalysisRunHTTP) {
+func (s *Server) handleCreateTargetAnalysisRunDecoded(w http.ResponseWriter, r *http.Request, body TargetCreateAnalysisRunRequest) {
 	if s.deps.Target == nil {
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
 		return
@@ -1043,6 +1110,15 @@ func (s *Server) handleCreateTargetAnalysisRunDecoded(w http.ResponseWriter, r *
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"analysis_run": run})
+}
+
+func (s *Server) handleCreateTargetAnalysisRun(w http.ResponseWriter, r *http.Request) {
+	var body TargetCreateAnalysisRunRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_analysis_run", message: "analysis run request must be valid JSON", details: err.Error()})
+		return
+	}
+	s.handleCreateTargetAnalysisRunDecoded(w, r, body)
 }
 
 func (s *Server) handleListTargetAnalysisRuns(w http.ResponseWriter, r *http.Request) {
@@ -1087,12 +1163,24 @@ func (s *Server) handleCancelTargetAnalysisRunDecoded(w http.ResponseWriter, r *
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
 		return
 	}
+	if body.ChannelAccountID == "" {
+		body.ChannelAccountID = strings.TrimSpace(r.URL.Query().Get("channel_account_id"))
+	}
 	run, err := s.deps.Target.CancelAnalysisRun(r.Context(), r.PathValue("analysis_run_id"), body)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"analysis_run": run})
+}
+
+func (s *Server) handleCancelTargetAnalysisRun(w http.ResponseWriter, r *http.Request) {
+	var body TargetCancelAnalysisRunRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_analysis_run_cancel", message: "analysis run cancel request must be valid JSON", details: err.Error()})
+		return
+	}
+	s.handleCancelTargetAnalysisRunDecoded(w, r, body)
 }
 
 func (s *Server) handleRetryTargetAnalysisRunDecoded(w http.ResponseWriter, r *http.Request, body TargetRetryAnalysisRunRequest) {
@@ -1103,12 +1191,24 @@ func (s *Server) handleRetryTargetAnalysisRunDecoded(w http.ResponseWriter, r *h
 	if body.IdempotencyKey == "" {
 		body.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
+	if body.ChannelAccountID == "" {
+		body.ChannelAccountID = strings.TrimSpace(r.URL.Query().Get("channel_account_id"))
+	}
 	run, err := s.deps.Target.RetryAnalysisRun(r.Context(), r.PathValue("analysis_run_id"), body)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"analysis_run": run})
+}
+
+func (s *Server) handleRetryTargetAnalysisRun(w http.ResponseWriter, r *http.Request) {
+	var body TargetRetryAnalysisRunRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_analysis_run_retry", message: "analysis run retry request must be valid JSON", details: err.Error()})
+		return
+	}
+	s.handleRetryTargetAnalysisRunDecoded(w, r, body)
 }
 
 func (s *Server) handleListTargetAnalysisRunEvents(w http.ResponseWriter, r *http.Request) {
@@ -1171,6 +1271,22 @@ func (s *Server) handleGetTargetArtifact(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"artifact": artifact})
 }
 
+func (s *Server) handleRefreshTargetArtifact(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	artifact, err := s.deps.Target.RefreshArtifactLink(r.Context(), TargetRefreshArtifactRequest{
+		ChannelAccountID: strings.TrimSpace(r.URL.Query().Get("channel_account_id")),
+		ArtifactID:       r.PathValue("artifact_id"),
+	})
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"artifact": artifact})
+}
+
 func (s *Server) handleListTargetDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Target == nil {
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
@@ -1195,6 +1311,41 @@ func (s *Server) handleListTargetDiagnostics(w http.ResponseWriter, r *http.Requ
 		page.Items = []TargetDiagnostic{}
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) handleGetTargetObservabilitySnapshot(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	snapshot, err := s.deps.Target.GetObservabilitySnapshot(r.Context())
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"observability": snapshot})
+}
+
+func (s *Server) handleListTargetAnalysisRunStepQueue(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	response, err := s.deps.Target.ListAnalysisRunStepQueue(r.Context(), TargetAnalysisRunStepQueueRequest{
+		Status:     strings.TrimSpace(r.URL.Query().Get("status")),
+		RunType:    strings.TrimSpace(r.URL.Query().Get("run_type")),
+		WorkerKind: strings.TrimSpace(r.URL.Query().Get("worker_kind")),
+		StepKind:   strings.TrimSpace(r.URL.Query().Get("step_kind")),
+		PageSize:   parsePositiveQueryInt(r.URL.Query().Get("page_size"), 20),
+	})
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	if response.Items == nil {
+		response.Items = []TargetAnalysisRunStepQueueItem{}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) handleClaimTargetAnalysisRunStep(w http.ResponseWriter, r *http.Request) {
@@ -1230,6 +1381,37 @@ func (s *Server) handleCheckTargetAnalysisRunStepCancel(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *Server) handleResolveTargetAnalysisRunStepRequestAccess(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	stepID := strings.TrimSpace(r.URL.Query().Get("analysis_run_step_id"))
+	if stepID == "" {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_request_access", message: "analysis_run_step_id is required"})
+		return
+	}
+	response, err := s.deps.Target.ResolveAnalysisRunStepRequestAccess(r.Context(), r.PathValue("analysis_run_id"), TargetRequestAccessRequest{AnalysisRunStepID: stepID})
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) handleResolveTargetArtifactDownloadAccess(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	response, err := s.deps.Target.ResolveArtifactDownloadAccess(r.Context(), r.PathValue("artifact_id"))
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) handleRecordTargetAnalysisRunStepProgress(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Target == nil {
 		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
@@ -1241,6 +1423,40 @@ func (s *Server) handleRecordTargetAnalysisRunStepProgress(w http.ResponseWriter
 		return
 	}
 	if err := s.deps.Target.RecordAnalysisRunStepProgress(r.Context(), r.PathValue("analysis_run_id"), body); err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+}
+
+func (s *Server) handleRecordTargetAnalysisRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	var body TargetRecordAnalysisRunArtifactsRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_analysis_run_artifacts", message: "analysis run artifacts must be valid JSON", details: err.Error()})
+		return
+	}
+	if err := s.deps.Target.RecordAnalysisRunArtifacts(r.Context(), r.PathValue("analysis_run_id"), body); err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"accepted": true})
+}
+
+func (s *Server) handleRecordTargetAnalysisRunDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	var body TargetRecordAnalysisRunDiagnosticsRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_analysis_run_diagnostics", message: "analysis run diagnostics must be valid JSON", details: err.Error()})
+		return
+	}
+	if err := s.deps.Target.RecordAnalysisRunDiagnostics(r.Context(), r.PathValue("analysis_run_id"), body); err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return
 	}

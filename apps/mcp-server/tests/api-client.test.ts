@@ -50,13 +50,13 @@ test("createMcpAdapterApiClient normalizes request targets and JSON payloads", a
   });
 
   const response = await client.request<{ ok: boolean }>({
-    path: "/v1/media-items",
+    path: "/v1/media-assets",
     method: "POST",
     body: { kind: "text" },
   });
 
   assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-items");
+  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-assets");
   assert.equal(calls[0]?.init?.method, "POST");
   assert.equal(calls[0]?.init?.headers instanceof Object, true);
   assert.equal(
@@ -84,7 +84,7 @@ test("createMcpAdapterApiClient preserves multipart bodies without forcing JSON 
         url: input instanceof URL ? input.toString() : String(input),
         init,
       });
-      return new Response(JSON.stringify({ media_item: { media_item_id: "media-1" } }), {
+      return new Response(JSON.stringify({ media_asset: { media_asset_id: "media-1" } }), {
         status: 201,
         headers: {
           "content-type": "application/json",
@@ -96,12 +96,12 @@ test("createMcpAdapterApiClient preserves multipart bodies without forcing JSON 
   body.append("file", new Blob(["audio-data"], { type: "audio/mpeg" }), "clip.mp3");
 
   await client.request({
-    path: "/v1/media-items",
+    path: "/v1/media-assets",
     method: "POST",
     body,
   });
 
-  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-items");
+  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-assets");
   assert.equal(calls[0]?.init?.body, body);
   assert.equal(
     Object.hasOwn((calls[0]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
@@ -122,7 +122,7 @@ test("createMcpAdapterApiClient preserves upstream error envelopes", async () =>
             message: "upstream rejected request",
             correlation_id: "corr-123",
             details: {
-              field: "media_item_id",
+              field: "media_asset_id",
             },
             diagnostics: [
               {
@@ -146,18 +146,18 @@ test("createMcpAdapterApiClient preserves upstream error envelopes", async () =>
   await assert.rejects(
     () =>
       client.request({
-        path: "/v1/media-items/00000000-0000-4000-8000-000000000001",
+        path: "/v1/media-assets/00000000-0000-4000-8000-000000000001",
       }),
     (error: unknown) => {
       assert.ok(error instanceof McpAdapterApiClientError);
       const apiError = error as McpAdapterApiClientError;
-      assert.equal(apiError.path, "/v1/media-items/00000000-0000-4000-8000-000000000001");
+      assert.equal(apiError.path, "/v1/media-assets/00000000-0000-4000-8000-000000000001");
       assert.equal(apiError.status, 409);
       assert.equal(apiError.code, "upstream_failure");
       assert.equal(apiError.message, "upstream rejected request");
       assert.equal((apiError as any).correlationId, "corr-123");
       assert.deepEqual((apiError as any).details, {
-        field: "media_item_id",
+        field: "media_asset_id",
       });
       assert.deepEqual((apiError as any).diagnostics, [
         {
@@ -313,12 +313,12 @@ test("createMcpAdapterApiClient falls back when the error payload is not an enve
   await assert.rejects(
     () =>
       client.request({
-        path: "/v1/media-items",
+        path: "/v1/media-assets",
       }),
     (error: unknown) => {
       assert.ok(error instanceof McpAdapterApiClientError);
       const apiError = error as McpAdapterApiClientError;
-      assert.equal(apiError.path, "/v1/media-items");
+      assert.equal(apiError.path, "/v1/media-assets");
       assert.equal(apiError.status, 502);
       assert.equal(apiError.code, undefined);
       assert.equal(apiError.message, "API request failed with status 502");
@@ -351,12 +351,12 @@ test("createMcpAdapterApiClient falls back when payload.error is not an object",
   await assert.rejects(
     () =>
       client.request({
-        path: "/v1/media-items/error-envelope",
+        path: "/v1/media-assets/error-envelope",
       }),
     (error: unknown) => {
       assert.ok(error instanceof McpAdapterApiClientError);
       const apiError = error as McpAdapterApiClientError;
-      assert.equal(apiError.path, "/v1/media-items/error-envelope");
+      assert.equal(apiError.path, "/v1/media-assets/error-envelope");
       assert.equal(apiError.status, 502);
       assert.equal(apiError.code, undefined);
       assert.equal(apiError.message, "API request failed with status 502");
@@ -421,12 +421,12 @@ test("createMcpAdapterApiClient preserves BodyInit variants and ignores malforme
   const binaryBody = new Uint8Array([1, 2, 3]);
 
   await client.request({
-    path: "v1/media-items",
+    path: "v1/media-assets",
     method: "POST",
     body: searchParams,
   });
   await client.request({
-    path: "/v1/media-items/binary",
+    path: "/v1/media-assets/binary",
     method: "PUT",
     body: binaryBody,
     headers: {
@@ -434,13 +434,13 @@ test("createMcpAdapterApiClient preserves BodyInit variants and ignores malforme
     },
   });
 
-  assert.equal(calls[0]?.url, "https://api.example.test/base/v1/media-items");
+  assert.equal(calls[0]?.url, "https://api.example.test/base/v1/media-assets");
   assert.equal(calls[0]?.init?.body, searchParams);
   assert.equal(
     Object.hasOwn((calls[0]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
     false,
   );
-  assert.equal(calls[1]?.url, "https://api.example.test/base/v1/media-items/binary");
+  assert.equal(calls[1]?.url, "https://api.example.test/base/v1/media-assets/binary");
   assert.equal(calls[1]?.init?.body, binaryBody);
   assert.equal(
     (calls[1]?.init?.headers as Record<string, string>)["content-type"],
@@ -450,7 +450,7 @@ test("createMcpAdapterApiClient preserves BodyInit variants and ignores malforme
   await assert.rejects(
     () =>
       client.request({
-        path: "/v1/media-items/error",
+        path: "/v1/media-assets/error",
       }),
     (error: unknown) => {
       assert.ok(error instanceof McpAdapterApiClientError);
@@ -495,34 +495,34 @@ test("createMcpAdapterApiClient preserves direct string blob and ArrayBuffer bod
   new Uint8Array(bufferBody).set([9, 8, 7, 6]);
 
   await client.request({
-    path: "/v1/media-items/raw-text",
+    path: "/v1/media-assets/raw-text",
     method: "POST",
     body: "raw body",
   });
   await client.request({
-    path: "/v1/media-items/blob",
+    path: "/v1/media-assets/blob",
     method: "PUT",
     body: blobBody,
   });
   await client.request({
-    path: "/v1/media-items/bytes",
+    path: "/v1/media-assets/bytes",
     method: "PATCH",
     body: bufferBody,
   });
 
-  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-items/raw-text");
+  assert.equal(calls[0]?.url, "https://api.example.test/root/v1/media-assets/raw-text");
   assert.equal(calls[0]?.init?.body, "raw body");
   assert.equal(
     Object.hasOwn((calls[0]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
     false,
   );
-  assert.equal(calls[1]?.url, "https://api.example.test/root/v1/media-items/blob");
+  assert.equal(calls[1]?.url, "https://api.example.test/root/v1/media-assets/blob");
   assert.equal(calls[1]?.init?.body, blobBody);
   assert.equal(
     Object.hasOwn((calls[1]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),
     false,
   );
-  assert.equal(calls[2]?.url, "https://api.example.test/root/v1/media-items/bytes");
+  assert.equal(calls[2]?.url, "https://api.example.test/root/v1/media-assets/bytes");
   assert.equal(calls[2]?.init?.body, bufferBody);
   assert.equal(
     Object.hasOwn((calls[2]?.init?.headers as Record<string, string>) ?? {}, "Content-Type"),

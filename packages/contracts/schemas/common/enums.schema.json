@@ -12,17 +12,6 @@
       "minLength": 1,
       "maxLength": 160
     },
-    "ownerType": {
-      "deprecated": true,
-      "type": "string",
-      "enum": [
-        "user",
-        "telegram",
-        "web",
-        "mcp",
-        "service"
-      ]
-    },
     "mediaKind": {
       "type": "string",
       "enum": [
@@ -35,25 +24,6 @@
         "voice",
         "video",
         "document"
-      ]
-    },
-    "sourceOriginType": {
-      "deprecated": true,
-      "type": "string",
-      "enum": [
-        "text",
-        "url",
-        "object"
-      ]
-    },
-    "mediaItemStatus": {
-      "deprecated": true,
-      "type": "string",
-      "enum": [
-        "validating",
-        "ready",
-        "quarantined",
-        "deleted"
       ]
     },
     "mediaAssetStatus": {
@@ -88,14 +58,6 @@
         "active",
         "archived",
         "deleted"
-      ]
-    },
-    "selectionStatus": {
-      "deprecated": true,
-      "type": "string",
-      "enum": [
-        "sealed",
-        "invalidated"
       ]
     },
     "selectionSnapshotStatus": {
@@ -218,12 +180,7 @@
         "diagnostic",
         "channel_account",
         "channel_surface",
-        "operation_request",
-        "media_item",
-        "source",
-        "selection",
-        "adapter",
-        "retention"
+        "operation_request"
       ]
     },
     "diagnosticCode": {
@@ -237,12 +194,7 @@
         "analysis_prerequisite_missing",
         "analysis_prerequisite_failed",
         "analysis_prerequisite_unavailable",
-        "media_item_invalid",
-        "owner_mismatch",
         "collection_version_conflict",
-        "selection_invalid",
-        "selection_not_sealed",
-        "source_unavailable",
         "worker_failed",
         "artifact_unavailable",
         "artifact_resolution_failed",
@@ -279,13 +231,6 @@
       "enum": [
         "transcription",
         "agent_runner"
-      ]
-    },
-    "taskType": {
-      "type": "string",
-      "enum": [
-        "selection.transcription",
-        "selection.analysis"
       ]
     },
     "workerOutcome": {

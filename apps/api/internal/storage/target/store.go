@@ -1032,6 +1032,33 @@ WHERE id=$1 AND channel_account_id=$2`, artifactID, channelAccountID).Scan(
 	return artifact, err
 }
 
+func (s *Store) GetArtifactByID(ctx context.Context, artifactID string) (ArtifactRecord, error) {
+	var artifact ArtifactRecord
+	err := s.db.QueryRowContext(ctx, `
+SELECT id, COALESCE(channel_account_id::text,''), analysis_run_id,
+       COALESCE(stored_object_id::text,''), kind, status, content_type,
+       COALESCE(checksum,''), size_bytes, visibility, preview,
+       created_at, expires_at, deleted_at
+FROM artifacts
+WHERE id=$1`, artifactID).Scan(
+		&artifact.ID,
+		&artifact.ChannelAccountID,
+		&artifact.AnalysisRunID,
+		&artifact.StoredObjectID,
+		&artifact.Kind,
+		&artifact.Status,
+		&artifact.ContentType,
+		&artifact.Checksum,
+		&artifact.SizeBytes,
+		&artifact.Visibility,
+		&artifact.PreviewJSON,
+		&artifact.CreatedAt,
+		&artifact.ExpiresAt,
+		&artifact.DeletedAt,
+	)
+	return artifact, err
+}
+
 func (s *Store) ListDiagnostics(ctx context.Context, query DiagnosticQuery, limit int) ([]DiagnosticRecord, error) {
 	if limit <= 0 {
 		limit = 20

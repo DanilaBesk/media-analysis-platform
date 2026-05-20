@@ -1193,8 +1193,11 @@ export function createDomainMcpTools(apiClient: McpAdapterApiClient): DomainMcpT
               "analysis_run",
               "analysis_run_step",
               "artifact",
-              "channel",
-              "retention",
+              "artifact_subject",
+              "diagnostic",
+              "channel_account",
+              "channel_surface",
+              "operation_request",
             ])
             .optional(),
           subject_id: z.uuid().optional(),

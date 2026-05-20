@@ -261,14 +261,14 @@ class TelegramApiClient:
     def get_internal_artifact_download_access(self, *, artifact_id: str) -> JsonObject:
         return self._request_json(f"/internal/v1/artifacts/{artifact_id}/download-access")
 
-    def resolve_channel_account(self, *, owner: JsonObject) -> JsonObject:
-        metadata: JsonObject = {"owner": owner}
-        if owner.get("adapter_identity"):
-            metadata["adapter_identity"] = owner["adapter_identity"]
+    def resolve_channel_account(self, *, channel_identity: JsonObject) -> JsonObject:
+        metadata: JsonObject = {"channel_identity": channel_identity}
+        if channel_identity.get("adapter_identity"):
+            metadata["adapter_identity"] = channel_identity["adapter_identity"]
         payload: JsonObject = {
             "channel": "telegram",
-            "external_account_ref": str(owner["owner_id"]),
-            "display_name": str(owner["owner_id"]),
+            "external_account_ref": str(channel_identity["external_account_ref"]),
+            "display_name": str(channel_identity["external_account_ref"]),
             "status": "active",
             "metadata": metadata,
         }

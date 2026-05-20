@@ -11,7 +11,7 @@ TelegramVisibility = Literal["private"]
 
 @dataclass(frozen=True, slots=True)
 class TelegramChatScope:
-    owner: JsonObject
+    channel_identity: JsonObject
     state_key: tuple[int, int | None]
     visibility: TelegramVisibility
 
@@ -29,9 +29,9 @@ class TelegramChatPolicy:
         if normalized_chat_type != "private" or message_thread_id is not None:
             raise TelegramUserError(TelegramUserErrorCode.GROUP_NOT_SUPPORTED, detail=normalized_chat_type)
         user_part = user_id if user_id is not None else 0
-        owner = {
-            "owner_type": "telegram",
-            "owner_id": f"chat:{chat_id}:user:{user_part}",
+        channel_identity = {
+            "channel": "telegram",
+            "external_account_ref": f"chat:{chat_id}:user:{user_part}",
             "adapter_identity": {
                 "telegram_chat_id": str(chat_id),
                 "telegram_user_id": str(user_part),
@@ -39,7 +39,7 @@ class TelegramChatPolicy:
             },
         }
         return TelegramChatScope(
-            owner=owner,
+            channel_identity=channel_identity,
             state_key=(chat_id, user_id),
             visibility="private",
         )

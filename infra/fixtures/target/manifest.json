@@ -166,7 +166,7 @@
       "cases": [
         {
           "case_id": "short_voice",
-          "owner_bead": "media-b8s.2.2",
+          "source_bead": "media-b8s.2.2",
           "stored_object_id": "00000000-0000-4000-8000-000000000302",
           "media_kind": "voice",
           "duration_seconds": 6.695,
@@ -176,7 +176,7 @@
         },
         {
           "case_id": "representative_long_voice",
-          "owner_bead": "media-b8s.2.7",
+          "source_bead": "media-b8s.2.7",
           "stored_object_id": "00000000-0000-4000-8000-000000000303",
           "media_kind": "voice",
           "duration_seconds": 960.006,
@@ -186,7 +186,7 @@
         },
         {
           "case_id": "corrupt_audio",
-          "owner_bead": "media-b8s.2.4",
+          "source_bead": "media-b8s.2.4",
           "stored_object_id": "00000000-0000-4000-8000-000000000304",
           "media_kind": "voice",
           "expected_backend": "CopperASR",
@@ -195,7 +195,7 @@
         },
         {
           "case_id": "cancellation_voice",
-          "owner_bead": "media-b8s.2.4",
+          "source_bead": "media-b8s.2.4",
           "stored_object_id": "00000000-0000-4000-8000-000000000303",
           "media_kind": "voice",
           "expected_backend": "CopperASR",
@@ -204,7 +204,7 @@
         },
         {
           "case_id": "artifact_download",
-          "owner_bead": "media-b8s.2.3",
+          "source_bead": "media-b8s.2.3",
           "stored_object_id": "00000000-0000-4000-8000-000000000702",
           "media_kind": "artifact",
           "expected_backend": "CopperASR",

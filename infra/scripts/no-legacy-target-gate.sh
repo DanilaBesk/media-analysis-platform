@@ -49,7 +49,8 @@ active_target_paths=(
   infra/scripts/runtime-final-e2e.py
 )
 
-non_telegram_target_paths=(
+owner_term_target_paths=(
+  apps/telegram-bot/src
   apps/web/src
   apps/mcp-server/src
   workers/common/src
@@ -59,6 +60,7 @@ non_telegram_target_paths=(
 )
 
 strict_target_paths=(
+  apps/telegram-bot/src
   apps/web/src
   apps/mcp-server/src
   workers/agent-runner/src
@@ -78,7 +80,7 @@ for snippet in "/v1/media-items" "/v1/selections" "analysis_run_tasks" "adapter_
 done
 
 for snippet in "owner_type" "owner_id"; do
-  reject_fixed "non-telegram target code" "${snippet}" "${non_telegram_target_paths[@]}"
+  reject_fixed "target code" "${snippet}" "${owner_term_target_paths[@]}"
 done
 
 for snippet in "media_item_id" "selection_id"; do
@@ -103,7 +105,7 @@ reject_regex \
   '\b(owner_type|owner_id|tenant_id|safe_adapter_context)\b' \
   apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql
 
-uv run pytest packages/contracts/tests/test_contract_surfaces.py::test_target_operations_do_not_reintroduce_compatibility_names -q
+uv run pytest packages/contracts/tests/test_contract_surfaces.py::test_contract_surface_has_no_legacy_vocabulary -q
 bash infra/scripts/no-legacy-asr-gate.sh
 
 printf '%s target no-legacy gate completed successfully\n' "${MARKER}"

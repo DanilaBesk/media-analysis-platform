@@ -14,7 +14,7 @@ const routerFuture = {
   v7_skipActionErrorRevalidation: true,
 } as const;
 const routerProviderFuture = { v7_startTransition: true } as const;
-const owner = "web-console";
+const channelAccountId = "web-console";
 
 function secondMediaAsset() {
   return mediaAsset({
@@ -231,7 +231,7 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
       items: analysisRun().artifacts,
       page: { page_size: 50, has_more: false },
     }),
-    getArtifact: vi.fn().mockImplementation(async (_owner, artifactId) => {
+    getArtifact: vi.fn().mockImplementation(async (_channelAccountId, artifactId) => {
       const found = analysisRun().artifacts.find((candidate) => candidate.artifact_id === artifactId) ?? analysisRun().artifacts[0];
       const embeddedDiagnostics =
         artifactId === "artifact-manifest"
@@ -247,8 +247,8 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
           : [];
       return {
         ...found,
-        owner,
-        visibility: "owner",
+        channel_account_id: channelAccountId,
+        visibility: "channel_deliverable",
         download: {
           available: true,
           provider: "minio_presigned_url",
@@ -261,8 +261,8 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
     }),
     refreshArtifact: vi.fn().mockResolvedValue({
       ...analysisRun().artifacts[0],
-      owner,
-      visibility: "owner",
+      channel_account_id: channelAccountId,
+      visibility: "channel_deliverable",
       download: {
         available: true,
         provider: "minio_presigned_url",
@@ -272,11 +272,11 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
       retention: { state: "active" },
       diagnostics: [],
     }),
-    listDiagnostics: vi.fn().mockImplementation(async (_owner, filter) => {
+    listDiagnostics: vi.fn().mockImplementation(async (_channelAccountId, filter) => {
       const diagnostics = [
         {
           diagnostic_id: "diagnostic-run",
-          owner,
+          channel_account_id: channelAccountId,
           subject: { subject_type: "analysis_run", subject_id: "run-1" },
           severity: "warning",
           code: "worker_failed",
@@ -285,7 +285,7 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
         },
         {
           diagnostic_id: "diagnostic-origin",
-          owner,
+          channel_account_id: channelAccountId,
           subject: { subject_type: "stored_object", subject_id: "origin-1" },
           severity: "warning",
           code: "origin_unavailable",
@@ -294,7 +294,7 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
         },
         {
           diagnostic_id: "diagnostic-artifact",
-          owner,
+          channel_account_id: channelAccountId,
           subject: { subject_type: "artifact", subject_id: "artifact-manifest" },
           severity: "info",
           code: "artifact_preview_ready",
@@ -302,12 +302,12 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
           created_at: "2026-05-10T00:00:00Z",
         },
         {
-          diagnostic_id: "diagnostic-retention",
-          owner,
-          subject: { subject_type: "retention", subject_id: "media-1" },
+          diagnostic_id: "diagnostic-channel-surface",
+          channel_account_id: channelAccountId,
+          subject: { subject_type: "channel_surface", subject_id: "surface-1" },
           severity: "error",
-          code: "retention_hold_pending",
-          message: "Retention hold prevents final cleanup",
+          code: "adapter_conflict",
+          message: "Channel surface conflict requires refresh",
           created_at: "2026-05-10T00:00:00Z",
         },
       ];
@@ -324,7 +324,6 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
         page: { page_size: 50, has_more: false },
       };
     }),
-    reconcileAnalysisRunQueue: vi.fn().mockResolvedValue({ reconciled: 2 }),
     getObservabilitySnapshot: vi.fn().mockResolvedValue({
       queue_tasks: 3,
       queue_lag_seconds: 42,
@@ -378,7 +377,7 @@ describe("createWebUiRoutes", () => {
 
     await waitFor(() => {
       expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           kind: "text",
           displayName: "Fresh note",
@@ -392,7 +391,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(await within(runtime.container).findByRole("button", { name: "Удалить Call note" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(owner, "media-1");
+      expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(channelAccountId, "media-1");
     });
     expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
   });
@@ -402,7 +401,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(await within(runtime.container).findByRole("button", { name: "Удалить Call note" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(owner, "media-1");
+      expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(channelAccountId, "media-1");
     });
     expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
     expect(within(runtime.container).getAllByText("Удалено").length).toBeGreaterThan(0);
@@ -417,7 +416,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Создать группу" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(owner, {
+      expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(channelAccountId, {
         name: "Important set",
         items: ["media-1"],
       });
@@ -449,7 +448,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
+      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(channelAccountId, "collection-1", {
         expectedVersion: 3,
         items: [
           { media_asset_id: "media-1", position: 0 },
@@ -467,7 +466,7 @@ describe("createWebUiRoutes", () => {
       page: { page_size: 50, has_more: false },
     }));
     runtime.apiClient.getCollection = vi.fn().mockImplementation(async () => mutableCollection);
-    runtime.apiClient.replaceCollectionItems = vi.fn().mockImplementation(async (_owner, _collectionId, draft) => {
+    runtime.apiClient.replaceCollectionItems = vi.fn().mockImplementation(async (_channelAccountId, _collectionId, draft) => {
       mutableCollection = collection({
         version: draft.expectedVersion + 1,
         items: [
@@ -499,7 +498,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
+      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(channelAccountId, "collection-1", {
         expectedVersion: 3,
         items: [
           { media_asset_id: "media-1", position: 0 },
@@ -529,13 +528,13 @@ describe("createWebUiRoutes", () => {
 
     await waitFor(() => {
       expect(runtime.apiClient.createSelectionSnapshot).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           items: [{ media_asset_id: "media-1", position: 0 }],
         }),
       );
       expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           runType: "summary",
           selectionSnapshotId: "snapshot-2",
@@ -730,7 +729,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Обновить ссылку" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.refreshArtifact).toHaveBeenCalledWith(owner, "artifact-1");
+      expect(runtime.apiClient.refreshArtifact).toHaveBeenCalledWith(channelAccountId, "artifact-1");
     });
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "Открыть результат" })).toHaveAttribute(
@@ -759,42 +758,35 @@ describe("createWebUiRoutes", () => {
     expect(screen.getByRole("link", { name: "К материалам" })).toHaveAttribute("href", "/");
   });
 
-  it("exposes final admin lifecycle operations and observability", async () => {
-    const runtime = renderRoute("/diagnostics");
+  it("exposes final admin observability", async () => {
+    renderRoute("/diagnostics");
 
     expect(await screen.findByText("42s")).toBeVisible();
-    fireEvent.change(screen.getByLabelText("Лимит"), { target: { value: "10" } });
-    fireEvent.click(screen.getByRole("button", { name: "Синхронизировать" }));
-
-    await waitFor(() => {
-      expect(runtime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(10);
-    });
-    expect(await screen.findByText("Синхронизировано: 2")).toBeVisible();
   });
 
-  it("filters retention diagnostics through the existing admin contract", async () => {
+  it("filters channel surface diagnostics through the admin contract", async () => {
     const runtime = renderRoute("/diagnostics");
 
-    fireEvent.change(await screen.findByLabelText("Объект"), { target: { value: "retention" } });
+    fireEvent.change(await screen.findByLabelText("Объект"), { target: { value: "channel_surface" } });
     fireEvent.change(screen.getByLabelText("Уровень"), { target: { value: "error" } });
 
     await waitFor(() => {
-      expect(runtime.apiClient.listDiagnostics).toHaveBeenLastCalledWith(owner, {
-        subjectType: "retention",
+      expect(runtime.apiClient.listDiagnostics).toHaveBeenLastCalledWith(channelAccountId, {
+        subjectType: "channel_surface",
         severity: "error",
         pageSize: 50,
       });
     });
-    expect(await screen.findByText("Удаление ожидает разрешения")).toBeVisible();
+    expect(await screen.findByText("Channel surface conflict requires refresh")).toBeVisible();
   });
 
-  it("renders collection, selection, and channel diagnostic fallback labels", async () => {
+  it("renders collection, selection snapshot, and channel diagnostic fallback labels", async () => {
     renderRoute("/diagnostics", {
       listDiagnostics: vi.fn().mockResolvedValue({
         items: [
           {
             diagnostic_id: "diagnostic-collection",
-            owner,
+            channel_account_id: channelAccountId,
             subject: { subject_type: "collection", subject_id: "collection-1" },
             severity: "warning",
             code: "origin_warning",
@@ -802,17 +794,8 @@ describe("createWebUiRoutes", () => {
             created_at: "2026-05-10T00:00:00Z",
           },
           {
-            diagnostic_id: "diagnostic-selection",
-            owner,
-            subject: { subject_type: "selection", subject_id: "snapshot-1" },
-            severity: "warning",
-            code: "origin_warning",
-            message: "Selection warning kept visible",
-            created_at: "2026-05-10T00:00:00Z",
-          },
-          {
             diagnostic_id: "diagnostic-selection-snapshot",
-            owner,
+            channel_account_id: channelAccountId,
             subject: { subject_type: "selection_snapshot", subject_id: "snapshot-1" },
             severity: "warning",
             code: "origin_warning",
@@ -821,7 +804,7 @@ describe("createWebUiRoutes", () => {
           },
           {
             diagnostic_id: "diagnostic-media-asset",
-            owner,
+            channel_account_id: channelAccountId,
             subject: { subject_type: "media_asset", subject_id: "media-1" },
             severity: "warning",
             code: "origin_warning",
@@ -829,38 +812,37 @@ describe("createWebUiRoutes", () => {
             created_at: "2026-05-10T00:00:00Z",
           },
           {
-            diagnostic_id: "diagnostic-channel",
-            owner,
-            subject: { subject_type: "channel", subject_id: "telegram-main" },
+            diagnostic_id: "diagnostic-channel-account",
+            channel_account_id: channelAccountId,
+            subject: { subject_type: "channel_account", subject_id: "telegram-main" },
             severity: "info",
-            code: "adapter_notice_without_label",
-            message: "Adapter reported an unknown notice",
+            code: "adapter_conflict",
+            message: "Channel account conflict stayed visible",
             created_at: "2026-05-10T00:00:00Z",
           },
           {
-            diagnostic_id: "diagnostic-adapter",
-            owner,
-            subject: { subject_type: "adapter", subject_id: "telegram-main" },
+            diagnostic_id: "diagnostic-channel-surface",
+            channel_account_id: channelAccountId,
+            subject: { subject_type: "channel_surface", subject_id: "telegram-surface-main" },
             severity: "info",
-            code: "adapter_notice_without_label",
-            message: "Adapter fallback label stayed visible",
+            code: "adapter_conflict",
+            message: "Channel surface fallback label stayed visible",
             created_at: "2026-05-10T00:00:00Z",
           },
           {
-            diagnostic_id: "diagnostic-legacy",
-            owner,
-            subject_type: "artifact",
-            subject_id: "artifact-legacy",
+            diagnostic_id: "diagnostic-artifact-target",
+            channel_account_id: channelAccountId,
+            subject: { subject_type: "artifact", subject_id: "artifact-target" },
             severity: "info",
             code: "artifact_preview_ready",
-            message: "Legacy diagnostic subject stayed visible",
+            message: "Artifact diagnostic subject stayed visible",
             created_at: "2026-05-10T00:00:00Z",
           },
           {
             diagnostic_id: "diagnostic-missing-subject",
-            owner,
+            channel_account_id: channelAccountId,
             severity: "info",
-            code: "retention_hold_pending",
+            code: "retention_denied",
             message: "Missing subject falls back to run",
             created_at: "2026-05-10T00:00:00Z",
           },
@@ -870,12 +852,11 @@ describe("createWebUiRoutes", () => {
     });
 
     expect(await screen.findByText("Collection warning kept visible")).toBeVisible();
-    expect(await screen.findByText("Selection warning kept visible")).toBeVisible();
     expect(await screen.findByText("Selection snapshot warning kept visible")).toBeVisible();
     expect(await screen.findByText("Media asset warning kept visible")).toBeVisible();
-    expect(await screen.findByText("Adapter reported an unknown notice")).toBeVisible();
-    expect(await screen.findByText("Adapter fallback label stayed visible")).toBeVisible();
-    expect(await screen.findByText("Legacy diagnostic subject stayed visible")).toBeVisible();
+    expect(await screen.findByText("Channel account conflict stayed visible")).toBeVisible();
+    expect(await screen.findByText("Channel surface fallback label stayed visible")).toBeVisible();
+    expect(await screen.findByText("Artifact diagnostic subject stayed visible")).toBeVisible();
     expect(await screen.findByText("Missing subject falls back to run")).toBeVisible();
     expect(screen.getAllByText("группа").length).toBeGreaterThan(0);
     expect(screen.getAllByText("подборка").length).toBeGreaterThan(0);
@@ -899,7 +880,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
       expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           kind: "url",
           displayName: "https://example.test/origin",
@@ -921,7 +902,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
       expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           kind: "audio",
           displayName: "sample.wav",
@@ -946,7 +927,7 @@ describe("createWebUiRoutes", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "В архив" }));
     await waitFor(() => {
-      expect(runtime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-1", {
+      expect(runtime.apiClient.updateCollection).toHaveBeenCalledWith(channelAccountId, "collection-1", {
         expectedVersion: 3,
         status: "archived",
       });
@@ -954,13 +935,13 @@ describe("createWebUiRoutes", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Убрать" }));
     await waitFor(() => {
-      expect(runtime.apiClient.removeCollectionItem).toHaveBeenCalledWith(owner, "collection-1", "media-1", 3);
+      expect(runtime.apiClient.removeCollectionItem).toHaveBeenCalledWith(channelAccountId, "collection-1", "media-1", 3);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Создать" }));
     await waitFor(() => {
       expect(runtime.apiClient.createCollection).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           name: "Группа 2",
           items: [],
@@ -977,7 +958,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Запустить: 1" }));
     await waitFor(() => {
       expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           params: undefined,
           runType: "transcription",
@@ -1018,7 +999,7 @@ describe("createWebUiRoutes", () => {
 
     fireEvent.click(within(detailRuntime.container).getByRole("button", { name: "Повторить" }));
     await waitFor(() => {
-      expect(detailRuntime.apiClient.retryAnalysisRun).toHaveBeenCalledWith(owner, "run-1");
+      expect(detailRuntime.apiClient.retryAnalysisRun).toHaveBeenCalledWith(channelAccountId, "run-1");
     });
     expect(await within(detailRuntime.container).findByText(/Повторный запуск добавлен в очередь/)).toBeVisible();
   });
@@ -1124,11 +1105,8 @@ describe("createWebUiRoutes", () => {
     const diagnosticsRuntime = renderRoute("/diagnostics", {
       listDiagnostics: vi.fn().mockRejectedValue("boom"),
       getObservabilitySnapshot: vi.fn().mockRejectedValue("boom"),
-      reconcileAnalysisRunQueue: vi.fn().mockRejectedValue("boom"),
     });
     expect(await within(diagnosticsRuntime.container).findByText("Не удалось загрузить проверки.")).toBeVisible();
-    fireEvent.click(within(diagnosticsRuntime.container).getByRole("button", { name: "Синхронизировать" }));
-    expect(await within(diagnosticsRuntime.container).findByText("Не удалось синхронизировать очередь.")).toBeVisible();
     diagnosticsRuntime.unmount();
 
     renderRoute("/inbox/media-1", {
@@ -1330,7 +1308,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить выбранное" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(owner, "collection-1", {
+      expect(runtime.apiClient.replaceCollectionItems).toHaveBeenCalledWith(channelAccountId, "collection-1", {
         expectedVersion: 3,
         items: [
           { media_asset_id: "media-1", position: 0 },
@@ -1348,7 +1326,7 @@ describe("createWebUiRoutes", () => {
     await waitFor(() => {
       expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
         1,
-        owner,
+        channelAccountId,
         expect.objectContaining({ kind: "video", displayName: "clip.mp4" }),
       );
     });
@@ -1363,7 +1341,7 @@ describe("createWebUiRoutes", () => {
     await waitFor(() => {
       expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
         2,
-        owner,
+        channelAccountId,
         expect.objectContaining({ kind: "image", displayName: "cover.png" }),
       );
     });
@@ -1379,7 +1357,7 @@ describe("createWebUiRoutes", () => {
     await waitFor(() => {
       expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
         3,
-        owner,
+        channelAccountId,
         expect.objectContaining({ kind: "file", displayName: "blob.bin" }),
       );
     });
@@ -1453,9 +1431,8 @@ describe("createWebUiRoutes", () => {
         items: [
           {
             diagnostic_id: "origin-diagnostic",
-            owner,
-            subject_type: "stored_object",
-            subject_id: "origin-1",
+            channel_account_id: channelAccountId,
+            subject: { subject_type: "stored_object", subject_id: "origin-1" },
             severity: "warning",
             code: "origin_warning",
             message: "Origin payload kept readable.",
@@ -1676,7 +1653,7 @@ describe("createWebUiRoutes", () => {
     fireEvent.change(screen.getByLabelText("Первый материал"), { target: { value: "media-2" } });
     fireEvent.click(screen.getByRole("button", { name: "Создать" }));
     await waitFor(() => {
-      expect(collectionsRuntime.apiClient.createCollection).toHaveBeenCalledWith(owner, {
+      expect(collectionsRuntime.apiClient.createCollection).toHaveBeenCalledWith(channelAccountId, {
         name: "Curated set",
         items: ["media-2"],
       });
@@ -1723,14 +1700,9 @@ describe("createWebUiRoutes", () => {
     artifactRuntime.unmount();
 
     const diagnosticsRuntime = renderRoute("/diagnostics");
-    fireEvent.change(await screen.findByLabelText("Лимит"), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
     await waitFor(() => {
       expect(diagnosticsRuntime.apiClient.listDiagnostics).toHaveBeenCalledTimes(2);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Синхронизировать" }));
-    await waitFor(() => {
-      expect(diagnosticsRuntime.apiClient.reconcileAnalysisRunQueue).toHaveBeenCalledWith(1);
     });
     diagnosticsRuntime.unmount();
 
@@ -1777,7 +1749,7 @@ describe("createWebUiRoutes", () => {
     const archivedRename = await screen.findByLabelText("Переименовать Archived set");
     fireEvent.blur(archivedRename, { target: { value: "Reactivated set" } });
     await waitFor(() => {
-      expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-archived", {
+      expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(channelAccountId, "collection-archived", {
         expectedVersion: 3,
         name: "Reactivated set",
       });
@@ -1788,7 +1760,7 @@ describe("createWebUiRoutes", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Вернуть" }));
     await waitFor(() => {
-      expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(owner, "collection-archived", {
+      expect(archivedRuntime.apiClient.updateCollection).toHaveBeenCalledWith(channelAccountId, "collection-archived", {
         expectedVersion: 3,
         status: "active",
       });
@@ -1807,7 +1779,7 @@ describe("createWebUiRoutes", () => {
 
     fireEvent.click(within(runtime.container).getByRole("button", { name: "Остановить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.cancelAnalysisRun).toHaveBeenCalledWith(owner, "run-1");
+      expect(runtime.apiClient.cancelAnalysisRun).toHaveBeenCalledWith(channelAccountId, "run-1");
     });
     expect(await within(runtime.container).findByText("Остановка запрошена")).toBeVisible();
     expect(within(runtime.container).getByText("Остановка")).toBeVisible();
@@ -1871,7 +1843,7 @@ describe("createWebUiRoutes", () => {
 
     await waitFor(() => {
       expect(runtime.apiClient.createSelectionSnapshot).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           sourceCollectionId: "collection-1",
           optionSnapshot: { basis: "collection" },
@@ -1880,7 +1852,7 @@ describe("createWebUiRoutes", () => {
     });
     await waitFor(() => {
       expect(runtime.apiClient.createAnalysisRun).toHaveBeenCalledWith(
-        owner,
+        channelAccountId,
         expect.objectContaining({
           selectionSnapshotId: "snapshot-2",
           params: undefined,
@@ -2176,8 +2148,8 @@ describe("createWebUiRoutes", () => {
     const artifactRefreshRuntime = renderRoute("/artifacts/artifact-1", {
       getArtifact: vi.fn().mockResolvedValue({
         ...analysisRun().artifacts[0],
-        owner,
-        visibility: "owner",
+        channel_account_id: channelAccountId,
+        visibility: "channel_deliverable",
         diagnostics: undefined,
       }),
       refreshArtifact: vi.fn().mockRejectedValue(new Error("Artifact refresh exploded")),
@@ -2211,14 +2183,6 @@ describe("createWebUiRoutes", () => {
 
     expect(await within(diagnosticsLoaderRuntime.container).findByText("Diagnostics loader exploded")).toBeVisible();
     diagnosticsLoaderRuntime.unmount();
-
-    const diagnosticsRuntime = renderRoute("/diagnostics", {
-      reconcileAnalysisRunQueue: vi.fn().mockRejectedValue(new Error("Queue reconcile exploded")),
-    });
-
-    fireEvent.click(await within(diagnosticsRuntime.container).findByRole("button", { name: "Синхронизировать" }));
-    expect(await within(diagnosticsRuntime.container).findByText("Queue reconcile exploded")).toBeVisible();
-    diagnosticsRuntime.unmount();
 
     const mediaLoaderRuntime = renderRoute("/inbox/media-1", {
       getMediaAsset: vi.fn().mockRejectedValue(new Error("Media detail exploded")),

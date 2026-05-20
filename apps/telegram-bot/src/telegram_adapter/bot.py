@@ -166,11 +166,11 @@ class TelegramInboxApp:
     async def _handle_any_message(self, message: Message) -> None:
         if not await self._ensure_message_allowed(message):
             return
-        owner = self._owner_from_message(message)
+        channel_identity = self._channel_identity_from_message(message)
         try:
             files = await self._download_message_files(message)
             records = self.gateway.add_message_inputs(
-                owner=owner,
+                channel_identity=channel_identity,
                 text=_message_text(message),
                 files=files,
                 message_id=message.message_id,
@@ -205,14 +205,14 @@ class TelegramInboxApp:
         if callback.message is None:
             await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
             return
-        owner = self._owner_from_callback(callback)
+        channel_identity = self._channel_identity_from_callback(callback)
         data = callback.data or ""
         key = self._state_key_from_callback(callback)
         page_state = self.page_states.get(key)
         try:
             action, tokens = _parse_callback_payload(data)
             if action == "rf":
-                status = self.gateway.restore_status(owner=owner)
+                status = self.gateway.restore_status(channel_identity=channel_identity)
                 selection = page_state.selection if page_state else None
                 screen = page_state.screen if page_state else "main"
                 focused_run_id = page_state.focused_run_id if page_state else None
@@ -229,7 +229,7 @@ class TelegramInboxApp:
                 await callback.answer("Состояние обновлено")
                 return
             if action == "mt":
-                status = self.gateway.restore_status(owner=owner)
+                status = self.gateway.restore_status(channel_identity=channel_identity)
                 self._set_page_state(
                     key,
                     status,
@@ -243,7 +243,7 @@ class TelegramInboxApp:
                 await callback.answer("Открыт список материалов")
                 return
             if action == "mn":
-                status = self.gateway.restore_status(owner=owner)
+                status = self.gateway.restore_status(channel_identity=channel_identity)
                 self._set_page_state(
                     key,
                     status,
@@ -264,7 +264,7 @@ class TelegramInboxApp:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
                 cursor = page_state.next_cursor
-                status = self.gateway.restore_status(owner=owner, cursor=cursor)
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
                 self._set_page_state(
                     key,
                     status,
@@ -285,7 +285,7 @@ class TelegramInboxApp:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
                 cursor = page_state.previous_cursors[-1]
-                status = self.gateway.restore_status(owner=owner, cursor=cursor)
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
                 self._set_page_state(
                     key,
                     status,
@@ -303,7 +303,7 @@ class TelegramInboxApp:
                 expected_version = _decode_callback_version(tokens[1])
                 media_asset_id = _decode_callback_token(tokens[2])
                 status = self.gateway.remove_collection_item(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     collection_id=collection_id,
                     media_asset_id=media_asset_id,
                     expected_version=expected_version,
@@ -326,7 +326,7 @@ class TelegramInboxApp:
                 expected_version = _decode_callback_version(tokens[1])
                 current_cursor = _decode_optional_callback_token(tokens[2])
                 status = self.gateway.clear_visible_items(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     collection_id=collection_id,
                     expected_version=expected_version,
                     cursor=current_cursor,
@@ -335,7 +335,7 @@ class TelegramInboxApp:
                 if not status.items and current_cursor is not None and previous_cursors:
                     current_cursor = previous_cursors[-1]
                     previous_cursors = previous_cursors[:-1]
-                    status = self.gateway.restore_status(owner=owner, cursor=current_cursor)
+                    status = self.gateway.restore_status(channel_identity=channel_identity, cursor=current_cursor)
                 self._set_page_state(
                     key,
                     status,
@@ -352,7 +352,7 @@ class TelegramInboxApp:
                 collection_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
                 status = self.gateway.remove_latest_collection_item(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     collection_id=collection_id,
                     expected_version=expected_version,
                     cursor=page_state.current_cursor if page_state else None,
@@ -373,7 +373,7 @@ class TelegramInboxApp:
                 collection_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
                 status, prefix, answer_text, run_id, terminal_status = await self._start_analysis_from_collection(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     collection_id=collection_id,
                     expected_version=expected_version,
                 )
@@ -382,7 +382,7 @@ class TelegramInboxApp:
                     run_version = _analysis_run_version(status, run_id)
                     if run_version is not None:
                         delivery = await self._auto_deliver_and_maybe_clear_collection(
-                            owner=owner,
+                            channel_identity=channel_identity,
                             analysis_run_id=run_id,
                             expected_version=run_version,
                             chat_id=callback.message.chat.id,
@@ -403,7 +403,7 @@ class TelegramInboxApp:
                 task_surface = None
                 if run_id:
                     task_surface = self._persist_analysis_task_surface(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
                         state=self.page_states.get(key, _PageState()),
                         chat_id=callback.message.chat.id,
@@ -412,7 +412,7 @@ class TelegramInboxApp:
                 if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
-                        owner=owner,
+                        channel_identity=channel_identity,
                         analysis_run_id=run_id,
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
@@ -425,15 +425,15 @@ class TelegramInboxApp:
                     collection_id = _decode_callback_token(tokens[0])
                     expected_version = _decode_callback_version(tokens[1])
                     status, prefix, answer_text, run_id, terminal_status = await self._start_analysis_from_collection(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         collection_id=collection_id,
                         expected_version=expected_version,
                     )
                 else:
                     selection_snapshot_id = _decode_callback_token(tokens[0])
-                    run = self.gateway.start_analysis(owner=owner, selection_snapshot_id=selection_snapshot_id)
+                    run = self.gateway.start_analysis(channel_identity=channel_identity, selection_snapshot_id=selection_snapshot_id)
                     status, prefix, answer_text, run_id, terminal_status = await self._resolve_run_start_status(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         run=run,
                     )
                 delivered = False
@@ -441,7 +441,7 @@ class TelegramInboxApp:
                     run_version = _analysis_run_version(status, run_id)
                     if run_version is not None:
                         delivery = await self._auto_deliver_and_maybe_clear_collection(
-                            owner=owner,
+                            channel_identity=channel_identity,
                             analysis_run_id=run_id,
                             expected_version=run_version,
                             chat_id=callback.message.chat.id,
@@ -462,7 +462,7 @@ class TelegramInboxApp:
                 task_surface = None
                 if run_id:
                     task_surface = self._persist_analysis_task_surface(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
                         state=self.page_states.get(key, _PageState()),
                         chat_id=callback.message.chat.id,
@@ -471,7 +471,7 @@ class TelegramInboxApp:
                 if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
-                        owner=owner,
+                        channel_identity=channel_identity,
                         analysis_run_id=run_id,
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
@@ -486,16 +486,16 @@ class TelegramInboxApp:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
                 result_notice, show_alert = await self._deliver_run_result(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     analysis_run_id=analysis_run_id,
                     expected_version=expected_version,
                     message=callback.message,
                 )
                 cursor = page_state.current_cursor if page_state else None
-                status = self.gateway.restore_status(owner=owner, cursor=cursor)
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
                 if not show_alert and status.collection is not None:
                     status = self.gateway.clear_collection(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         collection_id=str(status.collection["collection_id"]),
                         expected_version=int(status.collection["version"]),
                         cursor=cursor,
@@ -522,12 +522,12 @@ class TelegramInboxApp:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
                 if not page_state.focused_run_id:
-                    current_status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor)
+                    current_status = self.gateway.restore_status(channel_identity=channel_identity, cursor=page_state.current_cursor)
                     if _active_run_for_focus(current_status, analysis_run_id) is None:
                         await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                         return
                 status = self.gateway.cancel_analysis_run(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     analysis_run_id=analysis_run_id,
                     expected_version=expected_version,
                     message="Canceled from Telegram inline button",
@@ -552,11 +552,11 @@ class TelegramInboxApp:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
                 diagnostics = self.gateway.list_run_diagnostics(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     analysis_run_id=analysis_run_id,
                     expected_version=expected_version,
                 )
-                status = self.gateway.restore_status(owner=owner, cursor=page_state.current_cursor if page_state else None)
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=page_state.current_cursor if page_state else None)
                 self._set_page_state(
                     key,
                     status,
@@ -591,9 +591,9 @@ class TelegramInboxApp:
         prefer_edit: bool = True,
         post_ingest_records: list[IngressRecord] | None = None,
     ) -> bool:
-        owner = self._owner_from_message(message)
+        channel_identity = self._channel_identity_from_message(message)
         try:
-            status = self.gateway.restore_status(owner=owner, rejected=rejected)
+            status = self.gateway.restore_status(channel_identity=channel_identity, rejected=rejected)
         except Exception as exc:
             normalized = _normalize_message_error(exc)
             _log_handler_exception("status_refresh", exc, normalized=normalized, message=message)
@@ -622,7 +622,7 @@ class TelegramInboxApp:
             screen="main",
             focused_run_id=None,
         )
-        current_surface = self._find_current_materials_surface_or_none(owner=owner, scope="status_surface_lookup")
+        current_surface = self._find_current_materials_surface_or_none(channel_identity=channel_identity, scope="status_surface_lookup")
         previous_message_id = self.status_message_ids.get(key) or _surface_message_id(current_surface)
         if prefer_edit and previous_message_id is not None:
             try:
@@ -634,7 +634,7 @@ class TelegramInboxApp:
                 )
                 self.status_message_ids[key] = previous_message_id
                 self._try_persist_current_materials_surface(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     status=status,
                     state=state,
                     chat_id=message.chat.id,
@@ -646,7 +646,7 @@ class TelegramInboxApp:
                 if "message is not modified" in str(error).lower():
                     self.status_message_ids[key] = previous_message_id
                     self._try_persist_current_materials_surface(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         status=status,
                         state=state,
                         chat_id=message.chat.id,
@@ -674,7 +674,7 @@ class TelegramInboxApp:
         sent = await message.answer(text, reply_markup=markup)
         self.status_message_ids[key] = sent.message_id
         self._try_persist_current_materials_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             status=status,
             state=state,
             chat_id=message.chat.id,
@@ -686,7 +686,7 @@ class TelegramInboxApp:
     async def _deliver_run_result(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         expected_version: int,
         message: Message | None = None,
@@ -697,7 +697,7 @@ class TelegramInboxApp:
         if message is None and chat_id is None:
             return ("Готовый транскрипт пока недоступен.", True)
         artifacts = self.gateway.list_run_artifacts(
-            owner=owner,
+            channel_identity=channel_identity,
             analysis_run_id=analysis_run_id,
             expected_version=expected_version,
         )
@@ -705,7 +705,7 @@ class TelegramInboxApp:
         if selected is None:
             return ("Готовый транскрипт пока недоступен.", True)
         existing_surface = self.gateway.find_result_artifact_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             artifact_id=str(selected["artifact_id"]),
         )
         if existing_surface is not None:
@@ -751,7 +751,7 @@ class TelegramInboxApp:
                 raise _TelegramSurfaceDeliveryFailure(classification.classification) from error
             return ("Готовый транскрипт пока недоступен.", True)
         self._persist_result_artifact_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             artifact=artifact,
             chat_id=target_chat_id,
             message_id=sent.message_id,
@@ -769,30 +769,30 @@ class TelegramInboxApp:
     async def _start_analysis_from_collection(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
     ) -> tuple[InboxStatus, str, str, str | None, str | None]:
         selection = self.gateway.create_selection_snapshot(
-            owner=owner,
+            channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
-        run = self.gateway.start_analysis(owner=owner, selection_snapshot_id=str(selection["selection_snapshot_id"]))
-        return await self._resolve_run_start_status(owner=owner, run=run)
+        run = self.gateway.start_analysis(channel_identity=channel_identity, selection_snapshot_id=str(selection["selection_snapshot_id"]))
+        return await self._resolve_run_start_status(channel_identity=channel_identity, run=run)
 
     async def _resolve_run_start_status(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         run: JsonObject,
     ) -> tuple[InboxStatus, str, str, str | None, str | None]:
         run_id = str(run.get("analysis_run_id") or "")
         for attempt in range(self.run_status_poll_attempts):
-            latest = self.gateway.get_run_status(owner=owner, analysis_run_id=run_id)
+            latest = self.gateway.get_run_status(channel_identity=channel_identity, analysis_run_id=run_id)
             status_name = str(latest.get("status") or "")
             if status_name in TERMINAL_RUN_STATUSES:
-                status = self.gateway.restore_status(owner=owner)
+                status = self.gateway.restore_status(channel_identity=channel_identity)
                 return (
                     status,
                     f"Транскрибация: {_run_status_text(status_name)}\n\n",
@@ -802,7 +802,7 @@ class TelegramInboxApp:
                 )
             if attempt + 1 < self.run_status_poll_attempts:
                 await self._sleep(self.run_status_poll_delay_seconds)
-        status = self.gateway.restore_status(owner=owner)
+        status = self.gateway.restore_status(channel_identity=channel_identity)
         return (
             status,
             "Транскрибация запущена.\n"
@@ -815,7 +815,7 @@ class TelegramInboxApp:
     async def _auto_deliver_and_maybe_clear_collection(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         expected_version: int,
         chat_id: int,
@@ -824,9 +824,9 @@ class TelegramInboxApp:
         surface: JsonObject | None = None,
         raise_on_surface_failure: bool = False,
     ) -> _AutoDeliveryResult:
-        status = self.gateway.restore_status(owner=owner, cursor=cursor)
+        status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
         result_notice, show_alert = await self._deliver_run_result(
-            owner=owner,
+            channel_identity=channel_identity,
             analysis_run_id=analysis_run_id,
             expected_version=expected_version,
             message=message,
@@ -839,7 +839,7 @@ class TelegramInboxApp:
             return _AutoDeliveryResult(status=status, delivered=delivered)
         return _AutoDeliveryResult(
             status=self.gateway.clear_collection(
-                owner=owner,
+                channel_identity=channel_identity,
                 collection_id=str(status.collection["collection_id"]),
                 expected_version=int(status.collection["version"]),
                 cursor=cursor,
@@ -851,7 +851,7 @@ class TelegramInboxApp:
         self,
         *,
         key: tuple[int, int | None],
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         chat_id: int,
         message_id: int,
@@ -863,7 +863,7 @@ class TelegramInboxApp:
         self.run_watch_tasks[key] = asyncio.create_task(
             self._track_run_status_until_terminal(
                 key=key,
-                owner=owner,
+                channel_identity=channel_identity,
                 analysis_run_id=analysis_run_id,
                 chat_id=chat_id,
                 message_id=message_id,
@@ -880,7 +880,7 @@ class TelegramInboxApp:
         self,
         *,
         key: tuple[int, int | None],
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         chat_id: int,
         message_id: int,
@@ -889,7 +889,7 @@ class TelegramInboxApp:
         try:
             for _ in range(self.run_status_follow_attempts):
                 await self._sleep(self.run_status_follow_delay_seconds)
-                latest = self.gateway.get_run_status(owner=owner, analysis_run_id=analysis_run_id)
+                latest = self.gateway.get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
                 page_state = self.page_states.get(key, _PageState())
                 current_cursor = page_state.current_cursor if page_state.screen == "materials" else None
                 previous_cursors = page_state.previous_cursors if page_state.screen == "materials" else []
@@ -897,7 +897,7 @@ class TelegramInboxApp:
                 delivered = False
                 if latest_status in _AUTO_DELIVER_RUN_STATUSES:
                     delivery = await self._auto_deliver_and_maybe_clear_collection(
-                        owner=owner,
+                        channel_identity=channel_identity,
                         analysis_run_id=analysis_run_id,
                         expected_version=int(latest.get("version") or 0),
                         chat_id=chat_id,
@@ -908,7 +908,7 @@ class TelegramInboxApp:
                     status = delivery.status
                     delivered = delivery.delivered
                 else:
-                    status = self.gateway.restore_status(owner=owner, cursor=current_cursor)
+                    status = self.gateway.restore_status(channel_identity=channel_identity, cursor=current_cursor)
                 focused_run_id = page_state.focused_run_id or analysis_run_id
                 if delivered:
                     focused_run_id = None
@@ -929,7 +929,7 @@ class TelegramInboxApp:
                     state=updated_state,
                 )
                 surface = self._persist_analysis_task_surface(
-                    owner=owner,
+                    channel_identity=channel_identity,
                     analysis_run=latest,
                     state=updated_state,
                     chat_id=chat_id,
@@ -959,7 +959,7 @@ class TelegramInboxApp:
             return
         key = self._state_key_from_callback(callback)
         state = self.page_states.get(key, _PageState())
-        owner = self._owner_from_callback(callback)
+        channel_identity = self._channel_identity_from_callback(callback)
         try:
             await callback.message.edit_text(
                 prefix + render_status_text(status, selection=state.selection, screen=state.screen),
@@ -977,7 +977,7 @@ class TelegramInboxApp:
                 raise
         self.status_message_ids[key] = callback.message.message_id
         self._try_persist_current_materials_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             status=status,
             state=state,
             chat_id=callback.message.chat.id,
@@ -1015,8 +1015,8 @@ class TelegramInboxApp:
         for account in self.gateway.list_channel_accounts():
             if account.get("channel") != "telegram" or account.get("status") != "active":
                 continue
-            owner = _owner_from_channel_account(account)
-            if owner is None:
+            channel_identity = _channel_identity_from_channel_account(account)
+            if channel_identity is None:
                 continue
             surfaces = self.gateway.list_active_channel_surfaces(
                 channel_account_id=str(account["channel_account_id"]),
@@ -1025,7 +1025,7 @@ class TelegramInboxApp:
             for surface in surfaces:
                 if surface.get("surface_type") == CURRENT_MATERIALS_PANEL:
                     try:
-                        await self._recover_current_materials_surface(owner=owner, surface=surface)
+                        await self._recover_current_materials_surface(channel_identity=channel_identity, surface=surface)
                     except TelegramAPIError as error:
                         self._handle_telegram_surface_error(
                             surface=surface,
@@ -1035,17 +1035,17 @@ class TelegramInboxApp:
                         )
             for surface in surfaces:
                 if surface.get("surface_type") == ANALYSIS_TASK_SURFACE:
-                    self._recover_analysis_task_surface(owner=owner, surface=surface)
+                    self._recover_analysis_task_surface(channel_identity=channel_identity, surface=surface)
 
-    async def _recover_current_materials_surface(self, *, owner: JsonObject, surface: JsonObject) -> None:
+    async def _recover_current_materials_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
         address = _surface_address(surface)
         if address is None:
             return
         chat_id, message_id = address
         display_state = _surface_display_state(surface)
         state = _page_state_from_display_state(display_state)
-        status = self.gateway.restore_status(owner=owner, cursor=state.current_cursor if state.screen == "materials" else None)
-        key = _state_key_from_owner(owner)
+        status = self.gateway.restore_status(channel_identity=channel_identity, cursor=state.current_cursor if state.screen == "materials" else None)
+        key = _state_key_from_channel_identity(channel_identity)
         if key is None:
             return
         self._set_page_state(
@@ -1067,7 +1067,7 @@ class TelegramInboxApp:
                 state=recovered_state,
             )
             self._persist_current_materials_surface(
-                owner=owner,
+                channel_identity=channel_identity,
                 status=status,
                 state=recovered_state,
                 chat_id=chat_id,
@@ -1113,7 +1113,7 @@ class TelegramInboxApp:
                 return
             self.status_message_ids[key] = sent.message_id
             self._persist_current_materials_surface(
-                owner=owner,
+                channel_identity=channel_identity,
                 status=status,
                 state=recovered_state,
                 chat_id=chat_id,
@@ -1121,19 +1121,19 @@ class TelegramInboxApp:
                 surface=None,
             )
 
-    def _recover_analysis_task_surface(self, *, owner: JsonObject, surface: JsonObject) -> None:
+    def _recover_analysis_task_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
         run_id = _surface_subject_id(surface, subject_type="analysis_run", role="primary")
         address = _surface_address(surface)
-        key = _state_key_from_owner(owner)
+        key = _state_key_from_channel_identity(channel_identity)
         if not run_id or address is None or key is None:
             return
-        latest = self.gateway.get_run_status(owner=owner, analysis_run_id=run_id)
+        latest = self.gateway.get_run_status(channel_identity=channel_identity, analysis_run_id=run_id)
         if str(latest.get("status") or "") not in ACTIVE_RUN_STATUSES:
             return
         chat_id, message_id = address
         display_state = _surface_display_state(surface)
         state = _page_state_from_display_state(display_state, focused_run_id=run_id)
-        status = self.gateway.restore_status(owner=owner, cursor=state.current_cursor if state.screen == "materials" else None)
+        status = self.gateway.restore_status(channel_identity=channel_identity, cursor=state.current_cursor if state.screen == "materials" else None)
         self._set_page_state(
             key,
             status,
@@ -1146,7 +1146,7 @@ class TelegramInboxApp:
         self.status_message_ids[key] = message_id
         self._schedule_run_status_tracking(
             key=key,
-            owner=owner,
+            channel_identity=channel_identity,
             analysis_run_id=run_id,
             chat_id=chat_id,
             message_id=message_id,
@@ -1156,7 +1156,7 @@ class TelegramInboxApp:
     def _persist_current_materials_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         status: InboxStatus,
         state: _PageState,
         chat_id: int,
@@ -1165,7 +1165,7 @@ class TelegramInboxApp:
     ) -> JsonObject:
         display_state = _status_surface_display_state(status, state)
         address = _telegram_surface_address(chat_id=chat_id, message_id=message_id)
-        existing = surface if surface is not None else self.gateway.find_current_materials_surface(owner=owner)
+        existing = surface if surface is not None else self.gateway.find_current_materials_surface(channel_identity=channel_identity)
         if existing is not None and _surface_address_matches(existing, chat_id=chat_id, message_id=message_id):
             try:
                 return self.gateway.replace_channel_surface_display_state(
@@ -1177,15 +1177,15 @@ class TelegramInboxApp:
                 if error.status not in {404, 409}:
                     raise
         return self.gateway.upsert_current_materials_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             address=address,
             display_state=display_state,
             collection=status.collection,
         )
 
-    def _find_current_materials_surface_or_none(self, *, owner: JsonObject, scope: str) -> JsonObject | None:
+    def _find_current_materials_surface_or_none(self, *, channel_identity: JsonObject, scope: str) -> JsonObject | None:
         try:
-            return self.gateway.find_current_materials_surface(owner=owner)
+            return self.gateway.find_current_materials_surface(channel_identity=channel_identity)
         except TelegramApiClientError as error:
             _LOGGER.warning(
                 "%s scope=%s channel_surface_lookup_failed api_status=%s api_code=%s",
@@ -1199,7 +1199,7 @@ class TelegramInboxApp:
     def _try_persist_current_materials_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         status: InboxStatus,
         state: _PageState,
         chat_id: int,
@@ -1208,7 +1208,7 @@ class TelegramInboxApp:
     ) -> JsonObject | None:
         try:
             return self._persist_current_materials_surface(
-                owner=owner,
+                channel_identity=channel_identity,
                 status=status,
                 state=state,
                 chat_id=chat_id,
@@ -1316,7 +1316,7 @@ class TelegramInboxApp:
     def _persist_analysis_task_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run: JsonObject,
         state: _PageState,
         chat_id: int,
@@ -1324,7 +1324,7 @@ class TelegramInboxApp:
     ) -> JsonObject:
         display_state = _run_surface_display_state(analysis_run, state)
         return self.gateway.upsert_analysis_task_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             analysis_run=analysis_run,
             address=_telegram_surface_address(chat_id=chat_id, message_id=message_id),
             display_state=display_state,
@@ -1333,7 +1333,7 @@ class TelegramInboxApp:
     def _persist_result_artifact_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         artifact: JsonObject,
         chat_id: int | None,
         message_id: int,
@@ -1342,7 +1342,7 @@ class TelegramInboxApp:
         if chat_id is None:
             raise RuntimeError("telegram_result_chat_missing")
         return self.gateway.upsert_result_artifact_surface(
-            owner=owner,
+            channel_identity=channel_identity,
             artifact=artifact,
             address=_telegram_surface_address(chat_id=chat_id, message_id=message_id),
             display_state={
@@ -1376,11 +1376,11 @@ class TelegramInboxApp:
             focused_run_id=focused_run_id,
         )
 
-    def _owner_from_message(self, message: Message) -> JsonObject:
-        return self._scope_from_message(message).owner
+    def _channel_identity_from_message(self, message: Message) -> JsonObject:
+        return self._scope_from_message(message).channel_identity
 
-    def _owner_from_callback(self, callback: CallbackQuery) -> JsonObject:
-        return self._scope_from_callback(callback).owner
+    def _channel_identity_from_callback(self, callback: CallbackQuery) -> JsonObject:
+        return self._scope_from_callback(callback).channel_identity
 
     def _scope_from_message(self, message: Message) -> TelegramChatScope:
         return self.gateway.scope_for(
@@ -2060,26 +2060,26 @@ def _page_state_from_display_state(display_state: JsonObject, *, focused_run_id:
     )
 
 
-def _owner_from_channel_account(account: JsonObject) -> JsonObject | None:
+def _channel_identity_from_channel_account(account: JsonObject) -> JsonObject | None:
     metadata = account.get("metadata")
     adapter_identity: JsonObject | None = None
     if isinstance(metadata, dict):
-        owner = metadata.get("owner")
-        if isinstance(owner, dict) and owner.get("owner_type") and owner.get("owner_id"):
-            return owner
+        channel_identity = metadata.get("channel_identity")
+        if isinstance(channel_identity, dict) and channel_identity.get("channel") and channel_identity.get("external_account_ref"):
+            return channel_identity
         if isinstance(metadata.get("adapter_identity"), dict):
             adapter_identity = metadata["adapter_identity"]
-    owner_id = str(account.get("external_account_ref") or "").strip()
-    if not owner_id:
+    external_account_ref = str(account.get("external_account_ref") or "").strip()
+    if not external_account_ref:
         return None
-    owner = {"owner_type": "telegram", "owner_id": owner_id}
+    channel_identity = {"channel": "telegram", "external_account_ref": external_account_ref}
     if adapter_identity:
-        owner["adapter_identity"] = adapter_identity
-    return owner
+        channel_identity["adapter_identity"] = adapter_identity
+    return channel_identity
 
 
-def _state_key_from_owner(owner: JsonObject) -> tuple[int, int | None] | None:
-    identity = owner.get("adapter_identity")
+def _state_key_from_channel_identity(channel_identity: JsonObject) -> tuple[int, int | None] | None:
+    identity = channel_identity.get("adapter_identity")
     if not isinstance(identity, dict):
         return None
     chat_id = _parse_int(identity.get("telegram_chat_id"))

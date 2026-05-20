@@ -3,7 +3,7 @@
   "info": {
     "title": "Media Analysis Platform API",
     "version": "2.0.0",
-    "description": "Single-user channel-aware target contract for API-owned media assets, collections, immutable selection snapshots, analysis runs, artifacts, diagnostics, channel accounts, channel surfaces, idempotency, and explicit deprecated v1 compatibility."
+    "description": "Single-user channel-aware target contract for API-owned media assets, collections, immutable selection snapshots, analysis runs, artifacts, diagnostics, channel accounts, channel surfaces, and idempotency."
   },
   "paths": {
     "/v1/media-assets": {
@@ -697,208 +697,6 @@
         }
       }
     },
-    "/v1/media-items": {
-      "post": {
-        "operationId": "addMediaItem",
-        "summary": "Deprecated compatibility route that creates one owner-scoped media item without starting analysis.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "../schemas/http/media-item.schema.json#/$defs/addMediaItemRequest"
-              }
-            },
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "../schemas/http/media-item.schema.json#/$defs/addMediaItemMultipartRequest"
-              },
-              "encoding": {
-                "metadata": {
-                  "contentType": "application/json"
-                },
-                "file": {
-                  "contentType": "application/octet-stream"
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Deprecated compatibility response for input persisted as a media item and visible through the owner inbox.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/media-item.schema.json#/$defs/mediaItemResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          },
-          "409": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          }
-        },
-        "deprecated": true,
-        "x-compatibility": {
-          "target": "mediaAsset",
-          "policy": "deprecated_transition_only",
-          "replacement": "/v1/media-assets"
-        }
-      },
-      "get": {
-        "operationId": "listMediaItems",
-        "summary": "Deprecated compatibility route that lists owner-scoped media items with filters, diagnostics summary, and pagination.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
-          },
-          {
-            "$ref": "#/components/parameters/PageCursor"
-          },
-          {
-            "$ref": "#/components/parameters/PageSize"
-          },
-          {
-            "name": "kind",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "$ref": "../schemas/common/enums.schema.json#/$defs/mediaKind"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "$ref": "../schemas/common/enums.schema.json#/$defs/mediaItemStatus"
-            }
-          },
-          {
-            "name": "query",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Owner media items ordered by creation time descending.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/media-item.schema.json#/$defs/mediaItemListResponse"
-                }
-              }
-            }
-          }
-        },
-        "deprecated": true,
-        "x-compatibility": {
-          "target": "mediaAsset",
-          "policy": "deprecated_transition_only",
-          "replacement": "/v1/media-assets"
-        }
-      }
-    },
-    "/v1/media-items/{media_item_id}": {
-      "get": {
-        "operationId": "getMediaItem",
-        "summary": "Read one media item and safe source metadata for the caller.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
-          },
-          {
-            "$ref": "#/components/parameters/MediaItemId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Media item detail.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/media-item.schema.json#/$defs/mediaItemResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          }
-        },
-        "deprecated": true,
-        "x-compatibility": {
-          "target": "mediaAsset",
-          "policy": "deprecated_transition_only",
-          "replacement": "/v1/media-assets"
-        }
-      },
-      "delete": {
-        "operationId": "removeMediaItem",
-        "summary": "Soft-delete a media item and hide it from default collection membership reads.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
-          },
-          {
-            "$ref": "#/components/parameters/MediaItemId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Updated media item with retention metadata.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/media-item.schema.json#/$defs/mediaItemResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          }
-        },
-        "deprecated": true,
-        "x-compatibility": {
-          "target": "mediaAsset",
-          "policy": "deprecated_transition_only",
-          "replacement": "/v1/media-assets"
-        }
-      }
-    },
     "/v1/collections/inbox": {
       "get": {
         "operationId": "getInboxCollection",
@@ -1131,89 +929,6 @@
           "409": {
             "$ref": "#/components/responses/ErrorEnvelope"
           }
-        }
-      }
-    },
-    "/v1/selections": {
-      "post": {
-        "operationId": "createSelection",
-        "summary": "Create and seal an immutable selection snapshot from explicit media item references.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/IdempotencyKey"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "../schemas/http/selection.schema.json#/$defs/createSelectionRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "Sealed selection snapshot.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/selection.schema.json#/$defs/selectionResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          }
-        },
-        "deprecated": true,
-        "x-compatibility": {
-          "target": "selectionSnapshot",
-          "policy": "deprecated_transition_only",
-          "replacement": "/v1/selection-snapshots"
-        }
-      }
-    },
-    "/v1/selections/{selection_id}": {
-      "get": {
-        "operationId": "getSelection",
-        "summary": "Read an immutable selection snapshot.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/OwnerType"
-          },
-          {
-            "$ref": "#/components/parameters/OwnerId"
-          },
-          {
-            "$ref": "#/components/parameters/TenantId"
-          },
-          {
-            "$ref": "#/components/parameters/SelectionId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Selection snapshot.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/selection.schema.json#/$defs/selectionResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          }
-        },
-        "deprecated": true,
-        "x-compatibility": {
-          "target": "selectionSnapshot",
-          "policy": "deprecated_transition_only",
-          "replacement": "/v1/selection-snapshots"
         }
       }
     },
@@ -1632,37 +1347,6 @@
         }
       }
     },
-    "/v1/admin/reconcile-queue": {
-      "post": {
-        "operationId": "reconcileAnalysisRunQueue",
-        "summary": "Manually reconcile persisted analysis-run tasks that were not enqueued.",
-        "requestBody": {
-          "required": false,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "../schemas/http/diagnostic.schema.json#/$defs/reconcileQueueRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Queue reconcile completed or attempted with bounded recovery count.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/diagnostic.schema.json#/$defs/reconcileQueueResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "$ref": "#/components/responses/ErrorEnvelope"
-          }
-        }
-      }
-    },
     "/v1/admin/observability": {
       "get": {
         "operationId": "getObservabilitySnapshot",
@@ -1758,39 +1442,6 @@
         }
       }
     },
-    "/internal/v1/analysis-runs/{analysis_run_id}/executions/claim": {
-      "post": {
-        "operationId": "claimAnalysisExecution",
-        "summary": "Internal worker claim for sealed selection execution.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/AnalysisRunId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Claimed execution with sealed selection items.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/claimResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/internal/v1/analysis-runs/{analysis_run_id}/request-access": {
       "get": {
         "operationId": "resolveAnalysisRunRequestAccess",
@@ -1822,37 +1473,6 @@
         }
       }
     },
-    "/internal/v1/analysis-runs/{analysis_run_id}/executions/cancel-check": {
-      "get": {
-        "operationId": "checkAnalysisExecutionCancelState",
-        "summary": "Internal cooperative cancellation state for a claimed analysis-run execution.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/AnalysisRunId"
-          },
-          {
-            "name": "execution_id",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Cancel state for the claimed analysis-run execution.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/internal/worker-control.schema.json#/$defs/cancelCheckResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/internal/v1/artifacts/{artifact_id}/download-access": {
       "get": {
         "operationId": "resolveInternalArtifactDownloadAccess",
@@ -1872,32 +1492,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/internal/v1/analysis-runs/{analysis_run_id}/executions/progress": {
-      "post": {
-        "operationId": "recordAnalysisExecutionProgress",
-        "summary": "Internal worker progress update for an analysis run.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/AnalysisRunId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/legacyExecutionProgressRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "description": "Progress accepted."
           }
         }
       }
@@ -1953,39 +1547,6 @@
           }
         }
       }
-    },
-    "/internal/v1/analysis-runs/{analysis_run_id}/executions/finalize": {
-      "post": {
-        "operationId": "finalizeAnalysisExecution",
-        "summary": "Internal worker finalization for a claimed execution.",
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/AnalysisRunId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "../schemas/internal/worker-control.schema.json#/$defs/legacyExecutionFinalizeRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Run snapshot after internal finalization.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "../schemas/http/analysis-run.schema.json#/$defs/analysisRun"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -1998,53 +1559,8 @@
           "$ref": "../schemas/common/enums.schema.json#/$defs/idempotencyKey"
         }
       },
-      "OwnerType": {
-        "name": "owner_type",
-        "in": "query",
-        "required": true,
-        "schema": {
-          "$ref": "../schemas/common/enums.schema.json#/$defs/ownerType"
-        }
-      },
-      "OwnerId": {
-        "name": "owner_id",
-        "in": "query",
-        "required": true,
-        "schema": {
-          "type": "string",
-          "minLength": 1
-        }
-      },
-      "TenantId": {
-        "name": "tenant_id",
-        "in": "query",
-        "required": false,
-        "schema": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "minLength": 1
-        }
-      },
-      "MediaItemId": {
-        "name": "media_item_id",
-        "in": "path",
-        "required": true,
-        "schema": {
-          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
-        }
-      },
       "CollectionId": {
         "name": "collection_id",
-        "in": "path",
-        "required": true,
-        "schema": {
-          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
-        }
-      },
-      "SelectionId": {
-        "name": "selection_id",
         "in": "path",
         "required": true,
         "schema": {
@@ -2145,14 +1661,8 @@
       }
     },
     "schemas": {
-      "MediaItem": {
-        "$ref": "../schemas/http/media-item.schema.json#/$defs/mediaItem"
-      },
       "Collection": {
         "$ref": "../schemas/http/collection.schema.json#/$defs/collection"
-      },
-      "Selection": {
-        "$ref": "../schemas/http/selection.schema.json#/$defs/selection"
       },
       "AnalysisRun": {
         "$ref": "../schemas/http/analysis-run.schema.json#/$defs/analysisRun"

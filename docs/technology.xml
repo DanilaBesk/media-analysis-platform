@@ -1,14 +1,14 @@
 <TechnologyStack VERSION="1.0.0">
   <Runtime>Docker Compose local deployment v2</Runtime>
   <Language>Go plus Python plus TypeScript</Language>
-  <Framework>Go HTTP API, PostgreSQL, MinIO, Redis/asynq, Python workers, CopperASR runtime submodule, React Web UI, Telegram adapter, MCP adapter</Framework>
+  <Framework>Go HTTP API, PostgreSQL, MinIO, Python workers, CopperASR runtime submodule, React Web UI, Telegram adapter, MCP adapter</Framework>
 
   <ArchitectureShape>
     <goal>Make the API the durable product authority for media accumulation, curation, execution, artifacts, diagnostics, channel recovery, idempotency, and retention.</goal>
     <canonical-chain>media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; analysis_run_step/artifacts -&gt; artifact_subject lineage</canonical-chain>
     <control-plane>Go API owns target public contracts, channel_account scope, lifecycle transitions, validation, operation_requests, retention policy, diagnostics, artifact metadata, and channel_surface recovery state.</control-plane>
     <execution-plane>Python workers consume sealed selection_snapshot material and declared analysis_run_step_inputs through internal execution contracts.</execution-plane>
-    <queue-plane>Redis/asynq remains an execution transport only; queued work does not define user-facing product concepts.</queue-plane>
+    <queue-plane>PostgreSQL analysis_run_steps are the worker queue and execution control plane; queued work does not define user-facing product concepts.</queue-plane>
     <object-plane>MinIO stores stored_object bodies for media assets, previews, generated artifacts, private execution evidence, and diagnostic bundles behind API-issued access decisions.</object-plane>
     <adapters>Telegram, Web, and MCP are thin clients over the same API-owned media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, channel_account, and channel_surface state.</adapters>
   </ArchitectureShape>
@@ -21,7 +21,7 @@
     <component id="apps-web" path="apps/web" role="React management UI for inbox, collections, selections, runs, artifacts, and diagnostics" />
     <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Telegram capture, rendering, and recovery adapter over API-owned state" />
     <component id="apps-mcp-server" path="apps/mcp-server" role="Thin MCP tool adapter over API-owned state" />
-    <component id="packages-contracts" path="packages/contracts" role="OpenAPI and JSON schema source for target vocabulary plus explicit deprecated compatibility contracts" />
+    <component id="packages-contracts" path="packages/contracts" role="OpenAPI and JSON schema source for target vocabulary" />
     <component id="infra-compose" path="infra/docker-compose.yml" role="Local runtime topology" />
   </TargetComponents>
 
@@ -164,12 +164,6 @@
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/diagnostics">Record diagnostics.</endpoint>
   </InternalApiSurface>
 
-  <CompatibilitySurface>
-    <deprecated path="/v1/media-items">Maps media_item/source/owner fields to media_asset/origin/stored_object/channel_account during transition only.</deprecated>
-    <deprecated path="/v1/selections">Maps selection_id and media_item_id fields to selection_snapshot_id and media_asset_id during transition only.</deprecated>
-    <deprecated name="analysis_run_task">Maps only to internal analysis_run_step migration concepts and must not appear in target public contracts.</deprecated>
-  </CompatibilitySurface>
-
   <LifecycleAndRetention>
     <status-source>Lifecycle statuses are defined in docs/requirements.xml and mirrored in packages/contracts schemas.</status-source>
     <retention-rule>Soft-deleted media_assets and collection membership are hidden from default reads but retained until policy permits hard deletion.</retention-rule>
@@ -180,7 +174,7 @@
 
   <AsrRuntime>
     <source-submodule path="external/copper-asr" remote="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" branch="main" pinned-commit="7aec7bee3a7500a16ce0b3de66c9cad9ed354754" />
-    <contract>media-analysis-platform owns queues, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, and channel surfaces. CopperASR owns ASR model lifecycle, inference, sanitized ASR errors, /health, and /transcribe.</contract>
+    <contract>media-analysis-platform owns analysis_run_steps, media_assets, selection_snapshots, analysis_runs, progress, cancellation, artifacts, diagnostics, and channel surfaces. CopperASR owns ASR model lifecycle, inference, sanitized ASR errors, /health, and /transcribe.</contract>
     <worker-boundary path="workers/common/src/transcriber_workers_common/copper_asr.py" launcher="workers/transcription/src/transcriber_worker_transcription_main.py" env-prefix="COPPER_ASR_" />
     <artifact-contract>TranscriptResult carries provider_metadata so run_manifest can identify CopperASR provider, model, duration, and sanitized runtime metadata while visible transcript artifacts remain plain text, markdown, and DOCX.</artifact-contract>
     <target-topology>Dedicated internal CopperASR HTTP runtime service consumed by workers/transcription through COPPER_ASR_BASE_URL.</target-topology>
@@ -198,7 +192,7 @@
   </AdapterContracts>
 
   <EvidenceContracts>
-    <contract-evidence>Schema tests must prove target DTOs and route names exist, deprecated compatibility is isolated, and stale public product vocabulary does not appear in target operations.</contract-evidence>
+    <contract-evidence>Schema tests must prove target DTOs and route names exist, removed aliases are absent, and stale public product vocabulary does not appear in target operations.</contract-evidence>
     <storage-evidence>Storage tests must cover target migration fragments, absence of legacy target tables, channel_account isolation, immutable selection snapshots, operation_request idempotency, step input linkage, lifecycle transitions, retention, diagnostics, channel_surface supersede rules, and artifact_subject lineage.</storage-evidence>
     <api-evidence>API tests must cover ingestion, inbox membership, collection mutation, selection_snapshot sealing, analysis_run creation, prerequisite planning, event polling, cancellation, worker artifact stored_object registration, artifact access, and diagnostics queries.</api-evidence>
     <worker-evidence>Worker tests must cover step_kind queue polling, analysis_run_step claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, API-safe diagnostic identifiers, partial diagnostics, and cancellation.</worker-evidence>

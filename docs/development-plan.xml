@@ -15,12 +15,12 @@
     <decision>Channels are durable integration identities and presentation surfaces, not product owners. API tables store channel_accounts and channel_surfaces so Telegram, Web, and MCP can recover UI state after restarts without owning business state.</decision>
     <decision>The target storage model uses channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, and channel_surface_events.</decision>
     <decision>The current local database is disposable for this rebuild. Do not preserve rows, backfill current records, or prove no data loss for current local data unless a future production-data requirement is explicitly approved.</decision>
-    <decision>Existing current implementation names may survive only inside explicit compatibility or migration stages. Target contracts and new code should use the target names.</decision>
+    <decision>Removed implementation names survive only as historical deletion evidence or negative regression checks. Target contracts, code, and active docs use target names only.</decision>
   </TargetArchitectureReset>
 
   <TargetRebuildStages>
     <stage order="0" name="Architecture Freeze">Make docs, Beads, and GRACE agree on the target model.</stage>
-    <stage order="1" name="Contract And Type Rename">Introduce target DTO names and compatibility policy before runtime changes.</stage>
+    <stage order="1" name="Contract And Type Finalization">Expose only target DTO names before runtime changes.</stage>
     <stage order="2" name="Storage Reset And Rebuild">Delete/recreate or rebuild target tables from an empty local database; provide deterministic seed/fixture setup instead of preserving current rows.</stage>
     <stage order="3" name="API Orchestration">Make API the only owner of product state, channel surfaces, idempotency, diagnostics, and retention.</stage>
     <stage order="4" name="Telegram Migration">Move Telegram to channel_accounts, channel_surfaces, target callbacks, and restart recovery.</stage>
@@ -131,7 +131,6 @@
     <step id="media-49h-2">Define API routes for adding media, listing media, managing collections, sealing selections, starting runs, polling events, canceling runs, resolving artifacts, and reading diagnostics.</step>
     <step id="media-49h-3">Add schema assertions that public OpenAPI no longer exposes old execution-request or grouped-submission product names.</step>
     <step id="media-49h-4">Freeze channel-account access scope, pagination, idempotency, optimistic version, validation error, and retention envelopes.</step>
-    <step id="media-49h-5">Document /v1/media-items, /v1/selections, source, owner, and analysis_run_tasks as deprecated compatibility names only while migration clients still need them.</step>
   </PublicContractPlan>
 
   <StoragePlan>
@@ -146,7 +145,7 @@
   <ApiOrchestrationPlan>
     <step id="media-7f3.9.3-1">Wire TargetRuntimeService into cmd/api through NewRuntimeDependenciesWithTarget over apps/api/internal/storage/target.Store.</step>
     <step id="media-7f3.9.3-2">Expose target HTTP paths for channel_accounts, media_assets/upload, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, analysis_run_step lifecycle, and channel_surfaces.</step>
-    <step id="media-7f3.9.3-3">Keep legacy owner/media_item/selection/execution routes as compatibility-only surfaces while target routes return only target vocabulary.</step>
+    <step id="media-7f3.9.3-3">Delete old route aliases and expose only target routes and target vocabulary.</step>
     <step id="api-1">Build ingestion service that normalizes adapter input into stored_object and media_asset records, then adds accepted items to inbox.</step>
     <step id="api-2">Build collection service for inbox reads, collection mutation, ordering, archive, delete, and version conflict handling.</step>
     <step id="api-3">Build selection_snapshot service that validates channel-account access, freezes item snapshots, freezes options, and emits diagnostics.</step>
@@ -188,7 +187,7 @@
     </Telegram>
     <Web bead="media-7f3.9.7">
       <step>Build simple human-facing views for materials, groups, current selection, progress, results, downloads, errors, and retention actions over the public API.</step>
-      <step>Call target API routes for media_assets, selection_snapshots, analysis_runs, artifacts, and diagnostics through channel_account_id while preserving legacy adapter method names only as temporary component-facing compatibility inside the Web client.</step>
+      <step>Call target API routes for media_assets, selection_snapshots, analysis_runs, artifacts, and diagnostics through channel_account_id with target method names in the Web client.</step>
       <step>Do not expose execution-only submission screens as the primary product surface.</step>
       <step>Do not use internal API names, opaque ids, channel surface terms, step names, or diagnostic internals as normal UI copy outside explicit admin/debug views.</step>
     </Web>
@@ -200,7 +199,7 @@
 
   <EvidencePlan>
     <gate id="target-architecture">Docs prove from-scratch architecture coverage for tables, operations, schemas, types, all apps, and verification.</gate>
-    <gate id="contracts">Schema and OpenAPI tests prove target vocabulary and isolate deprecated compatibility names.</gate>
+    <gate id="contracts">Schema and OpenAPI tests prove target vocabulary and absence of deleted aliases.</gate>
     <gate id="storage">Storage tests prove channel-account scope, collection versioning, immutable selection snapshots, step input linkage, artifact subjects, run lifecycle, artifacts, retention, and diagnostics.</gate>
     <gate id="api">API tests prove complete media_asset to artifact flow, prerequisite planning, artifact lineage, and rejected input diagnostics.</gate>
     <gate id="workers">Worker tests prove sealed snapshot and declared step-input consumption, agent-runner transcript/text-corpus input behavior, and analysis_run artifact reporting.</gate>
@@ -213,7 +212,7 @@
   <DeletedArchitecturePolicy>
     <rule>Old immediate-execution public endpoints, grouped submission records, public source grouping names, and user-visible mode toggles are deleted target architecture.</rule>
     <rule>Do not add dual-path wording that tells clients to use either the old product model or the new product model.</rule>
-    <rule>If internal database tables, queue rows, or HTTP compatibility routes retain names from earlier implementations during migration, they must be documented only as deprecated compatibility or internal execution details and must not appear in new target requirements, normal Web copy, Telegram copy, or worker DTO names.</rule>
+    <rule>Internal database tables, queue rows, and HTTP routes must use target names in active code and must not expose removed product vocabulary in target requirements, normal Web copy, Telegram copy, or worker DTO names.</rule>
   </DeletedArchitecturePolicy>
 
   <BottomUpSequencing>
@@ -274,7 +273,7 @@
   </CurrentClosureState>
 
   <DefinitionOfDone>
-    <item>Public contracts expose only the target product model, with deprecated compatibility names isolated and tested.</item>
+    <item>Public contracts expose only the target product model, with deleted aliases absent and tested.</item>
     <item>Channel-account/single-user access scope is enforced for every entity and artifact access path.</item>
     <item>Selection snapshots are immutable and verified against later collection mutation.</item>
     <item>analysis_run lifecycle, events, cancellation, partial success, failure, and expiry are verified.</item>

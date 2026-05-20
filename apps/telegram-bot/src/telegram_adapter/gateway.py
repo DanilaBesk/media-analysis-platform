@@ -56,7 +56,7 @@ class IngressRecord:
 
 @dataclass(frozen=True, slots=True)
 class InboxStatus:
-    owner: JsonObject
+    channel_identity: JsonObject
     collection: JsonObject | None
     items: list[JsonObject]
     page: JsonObject
@@ -94,7 +94,7 @@ class TelegramInboxGateway:
             message_thread_id=message_thread_id,
         )
 
-    def owner_for(
+    def channel_identity_for(
         self,
         *,
         chat_id: int,
@@ -107,13 +107,13 @@ class TelegramInboxGateway:
             user_id=user_id,
             chat_type=chat_type,
             message_thread_id=message_thread_id,
-        ).owner
+        ).channel_identity
 
-    def add_text(self, *, owner: JsonObject, text: str, message_id: int | None = None) -> IngressRecord:
+    def add_text(self, *, channel_identity: JsonObject, text: str, message_id: int | None = None) -> IngressRecord:
         clean = text.strip()
         if not clean:
             return IngressRecord(status="rejected", label="Text message", reason="empty_text")
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         item = self.api_client.create_media_asset(
             channel_account_id=channel_account_id,
             kind="text",
@@ -123,14 +123,14 @@ class TelegramInboxGateway:
         )
         return IngressRecord(status="accepted", label=item.get("display_name", "Text"), media_asset=item)
 
-    def add_link(self, *, owner: JsonObject, url: str, message_id: int | None = None) -> IngressRecord:
+    def add_link(self, *, channel_identity: JsonObject, url: str, message_id: int | None = None) -> IngressRecord:
         clean = url.strip().rstrip(".,)")
         parsed = urlparse(clean)
         if parsed.scheme not in SUPPORTED_URL_SCHEMES:
             return IngressRecord(status="rejected", label=clean or "Link", reason="unsupported_url_scheme")
         if not parsed.netloc:
             return IngressRecord(status="rejected", label=clean or "Link", reason="invalid_url")
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         item = self.api_client.create_media_asset(
             channel_account_id=channel_account_id,
             kind="url",
@@ -140,7 +140,7 @@ class TelegramInboxGateway:
         )
         return IngressRecord(status="accepted", label=item.get("display_name", clean), media_asset=item)
 
-    def add_file(self, *, owner: JsonObject, file_input: TelegramFileInput) -> IngressRecord:
+    def add_file(self, *, channel_identity: JsonObject, file_input: TelegramFileInput) -> IngressRecord:
         if not file_input.file_id.strip():
             return IngressRecord(status="rejected", label=file_input.file_name or file_input.kind, reason="missing_file_id")
         if file_input.content is None:
@@ -150,7 +150,7 @@ class TelegramInboxGateway:
                 reason="missing_file_content",
             )
         display_name = file_input.file_name or _kind_label(file_input.kind)
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         item = self.api_client.upload_media_asset(
             channel_account_id=channel_account_id,
             kind=file_input.kind,
@@ -170,7 +170,7 @@ class TelegramInboxGateway:
     def add_message_inputs(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         text: str | None = None,
         files: list[TelegramFileInput] | None = None,
         message_id: int | None = None,
@@ -179,14 +179,14 @@ class TelegramInboxGateway:
         if text:
             links = list(extract_links(text))
             if links:
-                records.extend(self.add_link(owner=owner, url=link, message_id=message_id) for link in links)
+                records.extend(self.add_link(channel_identity=channel_identity, url=link, message_id=message_id) for link in links)
                 remaining_text = URL_RE.sub("", text).strip()
                 if remaining_text:
-                    records.append(self.add_text(owner=owner, text=remaining_text, message_id=message_id))
+                    records.append(self.add_text(channel_identity=channel_identity, text=remaining_text, message_id=message_id))
             else:
-                records.append(self.add_text(owner=owner, text=text, message_id=message_id))
+                records.append(self.add_text(channel_identity=channel_identity, text=text, message_id=message_id))
         for file_input in files or []:
-            records.append(self.add_file(owner=owner, file_input=file_input))
+            records.append(self.add_file(channel_identity=channel_identity, file_input=file_input))
         if not records:
             records.append(IngressRecord(status="rejected", label="Telegram message", reason="unsupported_message"))
         return records
@@ -194,12 +194,12 @@ class TelegramInboxGateway:
     def restore_status(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         cursor: str | None = None,
         rejected: list[IngressRecord] | None = None,
     ) -> InboxStatus:
         collection: JsonObject | None
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         try:
             collection = self.api_client.get_inbox_collection(channel_account_id=channel_account_id)
         except Exception:
@@ -256,7 +256,7 @@ class TelegramInboxGateway:
                 ).get("items", [])
             )
         return InboxStatus(
-            owner=owner,
+            channel_identity=channel_identity,
             collection=collection,
             items=items,
             page=page_meta,
@@ -270,46 +270,46 @@ class TelegramInboxGateway:
     def remove_collection_item(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         media_asset_id: str,
         expected_version: int,
         cursor: str | None = None,
     ) -> InboxStatus:
         collection = self._get_verified_inbox_collection(
-            owner=owner,
+            channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
         if not media_asset_id.strip():
             raise RuntimeError("slot_missing_media_asset_id")
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         self.api_client.remove_collection_item(
             channel_account_id=channel_account_id,
             collection_id=collection["collection_id"],
             media_asset_id=media_asset_id,
             expected_version=int(collection["version"]),
         )
-        return self.restore_status(owner=owner, cursor=cursor)
+        return self.restore_status(channel_identity=channel_identity, cursor=cursor)
 
     def clear_visible_items(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
         cursor: str | None = None,
     ) -> InboxStatus:
         collection = self._get_verified_inbox_collection(
-            owner=owner,
+            channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
-        status = self.restore_status(owner=owner, cursor=cursor)
+        status = self.restore_status(channel_identity=channel_identity, cursor=cursor)
         if not status.items:
             return status
         return self._clear_collection_items(
-            owner=owner,
+            channel_identity=channel_identity,
             collection=collection,
             media_asset_ids=[str(item.get("media_asset_id") or "") for item in status.items],
             cursor=cursor,
@@ -318,18 +318,18 @@ class TelegramInboxGateway:
     def clear_collection(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
         cursor: str | None = None,
     ) -> InboxStatus:
         collection = self._get_verified_inbox_collection(
-            owner=owner,
+            channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
         return self._clear_collection_items(
-            owner=owner,
+            channel_identity=channel_identity,
             collection=collection,
             media_asset_ids=[str(item.get("media_asset_id") or "") for item in collection.get("items", [])],
             cursor=cursor,
@@ -338,13 +338,13 @@ class TelegramInboxGateway:
     def remove_latest_collection_item(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
         cursor: str | None = None,
     ) -> InboxStatus:
         collection = self._get_verified_inbox_collection(
-            owner=owner,
+            channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
@@ -359,24 +359,24 @@ class TelegramInboxGateway:
         )
         if latest_item is None:
             raise RuntimeError("inbox_empty")
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         self.api_client.remove_collection_item(
             channel_account_id=channel_account_id,
             collection_id=collection["collection_id"],
             media_asset_id=str(latest_item["media_asset_id"]),
             expected_version=int(collection["version"]),
         )
-        return self.restore_status(owner=owner, cursor=cursor)
+        return self.restore_status(channel_identity=channel_identity, cursor=cursor)
 
     def create_selection_snapshot(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
     ) -> JsonObject:
         collection = self._get_verified_inbox_collection(
-            owner=owner,
+            channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
@@ -387,7 +387,7 @@ class TelegramInboxGateway:
         ]
         if not item_ids:
             raise RuntimeError("inbox_empty")
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         return self.api_client.create_selection_snapshot(
             channel_account_id=channel_account_id,
             source_collection_id=collection["collection_id"],
@@ -402,13 +402,13 @@ class TelegramInboxGateway:
     def start_analysis(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         selection_snapshot_id: str,
         run_type: str = "transcription",
     ) -> JsonObject:
         if not selection_snapshot_id.strip():
             raise RuntimeError("slot_not_visible")
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         return self.api_client.create_analysis_run(
             channel_account_id=channel_account_id,
             selection_snapshot_id=selection_snapshot_id,
@@ -416,49 +416,49 @@ class TelegramInboxGateway:
             delivery={"strategy": "polling"},
         )
 
-    def get_run_status(self, *, owner: JsonObject, analysis_run_id: str) -> JsonObject:
+    def get_run_status(self, *, channel_identity: JsonObject, analysis_run_id: str) -> JsonObject:
         return self.api_client.get_analysis_run(
-            channel_account_id=self._channel_account_id(owner),
+            channel_account_id=self._channel_account_id(channel_identity),
             analysis_run_id=analysis_run_id,
         )
 
     def cancel_analysis_run(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         expected_version: int,
         message: str = "Canceled from Telegram",
     ) -> InboxStatus:
-        run = self._get_verified_run(owner=owner, analysis_run_id=analysis_run_id, expected_version=expected_version)
+        run = self._get_verified_run(channel_identity=channel_identity, analysis_run_id=analysis_run_id, expected_version=expected_version)
         if str(run.get("status") or "") not in CANCELABLE_RUN_STATUSES:
             raise RuntimeError("slot_not_visible")
         self.api_client.cancel_analysis_run(
-            channel_account_id=self._channel_account_id(owner),
+            channel_account_id=self._channel_account_id(channel_identity),
             analysis_run_id=analysis_run_id,
             message=message,
         )
-        return self.restore_status(owner=owner)
+        return self.restore_status(channel_identity=channel_identity)
 
     def list_run_artifacts(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         expected_version: int,
         page_size: int = 10,
     ) -> list[JsonObject]:
-        self._get_verified_run(owner=owner, analysis_run_id=analysis_run_id, expected_version=expected_version)
+        self._get_verified_run(channel_identity=channel_identity, analysis_run_id=analysis_run_id, expected_version=expected_version)
         return list(
             self.api_client.list_artifacts(
-                channel_account_id=self._channel_account_id(owner),
+                channel_account_id=self._channel_account_id(channel_identity),
                 analysis_run_id=analysis_run_id,
                 page_size=page_size,
             ).get("items", [])
         )
 
-    def resolve_channel_account(self, *, owner: JsonObject) -> JsonObject:
-        return self.api_client.resolve_channel_account(owner=owner)
+    def resolve_channel_account(self, *, channel_identity: JsonObject) -> JsonObject:
+        return self.api_client.resolve_channel_account(channel_identity=channel_identity)
 
     def list_channel_accounts(self, *, page_size: int = 100) -> list[JsonObject]:
         return list(self.api_client.list_channel_accounts(page_size=page_size).get("items", []))
@@ -472,8 +472,8 @@ class TelegramInboxGateway:
             ).get("items", [])
         )
 
-    def find_current_materials_surface(self, *, owner: JsonObject) -> JsonObject | None:
-        account = self.resolve_channel_account(owner=owner)
+    def find_current_materials_surface(self, *, channel_identity: JsonObject) -> JsonObject | None:
+        account = self.resolve_channel_account(channel_identity=channel_identity)
         return next(
             (
                 surface
@@ -482,7 +482,7 @@ class TelegramInboxGateway:
                     page_size=20,
                 )
                 if surface.get("surface_type") == CURRENT_MATERIALS_PANEL
-                and surface.get("surface_key") == _current_materials_surface_key(owner)
+                and surface.get("surface_key") == _current_materials_surface_key(channel_identity)
             ),
             None,
         )
@@ -490,35 +490,35 @@ class TelegramInboxGateway:
     def upsert_current_materials_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         address: JsonObject,
         display_state: JsonObject,
         collection: JsonObject | None = None,
     ) -> JsonObject:
-        account = self.resolve_channel_account(owner=owner)
+        account = self.resolve_channel_account(channel_identity=channel_identity)
         subjects = []
         if collection and collection.get("collection_id"):
             subjects.append(_surface_subject("collection", str(collection["collection_id"]), "primary"))
         return self.api_client.upsert_channel_surface(
             channel_account_id=str(account["channel_account_id"]),
             surface_type=CURRENT_MATERIALS_PANEL,
-            surface_key=_current_materials_surface_key(owner),
+            surface_key=_current_materials_surface_key(channel_identity),
             address=address,
             address_fingerprint=_telegram_address_fingerprint(address),
             display_state=display_state,
             subjects=subjects,
-            idempotency_key=f"telegram:surface:current:{owner['owner_id']}",
+            idempotency_key=f"telegram:surface:current:{channel_identity['external_account_ref']}",
         )
 
     def upsert_analysis_task_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run: JsonObject,
         address: JsonObject,
         display_state: JsonObject,
     ) -> JsonObject:
-        account = self.resolve_channel_account(owner=owner)
+        account = self.resolve_channel_account(channel_identity=channel_identity)
         analysis_run_id = str(analysis_run["analysis_run_id"])
         return self.api_client.upsert_channel_surface(
             channel_account_id=str(account["channel_account_id"]),
@@ -534,12 +534,12 @@ class TelegramInboxGateway:
     def upsert_result_artifact_surface(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         artifact: JsonObject,
         address: JsonObject,
         display_state: JsonObject,
     ) -> JsonObject:
-        account = self.resolve_channel_account(owner=owner)
+        account = self.resolve_channel_account(channel_identity=channel_identity)
         artifact_id = str(artifact["artifact_id"])
         subjects = [_surface_subject("artifact", artifact_id, "primary")]
         if artifact.get("analysis_run_id"):
@@ -555,13 +555,13 @@ class TelegramInboxGateway:
             idempotency_key=f"telegram:surface:artifact:{artifact_id}",
         )
 
-    def result_artifact_surface_exists(self, *, owner: JsonObject, artifact_id: str) -> bool:
-        return self.find_result_artifact_surface(owner=owner, artifact_id=artifact_id) is not None
+    def result_artifact_surface_exists(self, *, channel_identity: JsonObject, artifact_id: str) -> bool:
+        return self.find_result_artifact_surface(channel_identity=channel_identity, artifact_id=artifact_id) is not None
 
-    def find_result_artifact_surface(self, *, owner: JsonObject, artifact_id: str) -> JsonObject | None:
+    def find_result_artifact_surface(self, *, channel_identity: JsonObject, artifact_id: str) -> JsonObject | None:
         if not artifact_id.strip():
             return None
-        account = self.resolve_channel_account(owner=owner)
+        account = self.resolve_channel_account(channel_identity=channel_identity)
         page = self.api_client.list_channel_surfaces(
             channel_account_id=str(account["channel_account_id"]),
             subject_type="artifact",
@@ -603,15 +603,15 @@ class TelegramInboxGateway:
     def list_run_diagnostics(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         expected_version: int,
         page_size: int = 10,
     ) -> list[JsonObject]:
-        self._get_verified_run(owner=owner, analysis_run_id=analysis_run_id, expected_version=expected_version)
+        self._get_verified_run(channel_identity=channel_identity, analysis_run_id=analysis_run_id, expected_version=expected_version)
         return list(
             self.api_client.list_diagnostics(
-                channel_account_id=self._channel_account_id(owner),
+                channel_account_id=self._channel_account_id(channel_identity),
                 subject_type="analysis_run",
                 subject_id=analysis_run_id,
                 page_size=page_size,
@@ -621,11 +621,11 @@ class TelegramInboxGateway:
     def _get_verified_inbox_collection(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
     ) -> JsonObject:
-        collection = self.api_client.get_inbox_collection(channel_account_id=self._channel_account_id(owner))
+        collection = self.api_client.get_inbox_collection(channel_account_id=self._channel_account_id(channel_identity))
         if str(collection.get("collection_id") or "") != collection_id:
             raise RuntimeError("slot_not_visible")
         if int(collection.get("version") or 0) != expected_version:
@@ -635,12 +635,12 @@ class TelegramInboxGateway:
     def _get_verified_run(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         analysis_run_id: str,
         expected_version: int,
     ) -> JsonObject:
         run = self.api_client.get_analysis_run(
-            channel_account_id=self._channel_account_id(owner),
+            channel_account_id=self._channel_account_id(channel_identity),
             analysis_run_id=analysis_run_id,
         )
         if int(run.get("version") or 0) != expected_version:
@@ -735,13 +735,13 @@ class TelegramInboxGateway:
     def _clear_collection_items(
         self,
         *,
-        owner: JsonObject,
+        channel_identity: JsonObject,
         collection: JsonObject,
         media_asset_ids: list[str],
         cursor: str | None,
     ) -> InboxStatus:
         version = int(collection["version"])
-        channel_account_id = self._channel_account_id(owner)
+        channel_account_id = self._channel_account_id(channel_identity)
         seen: set[str] = set()
         for media_asset_id in media_asset_ids:
             clean_id = media_asset_id.strip()
@@ -755,10 +755,10 @@ class TelegramInboxGateway:
                 expected_version=version,
             )
             version = int(collection["version"])
-        return self.restore_status(owner=owner, cursor=cursor)
+        return self.restore_status(channel_identity=channel_identity, cursor=cursor)
 
-    def _channel_account_id(self, owner: JsonObject) -> str:
-        account = self.resolve_channel_account(owner=owner)
+    def _channel_account_id(self, channel_identity: JsonObject) -> str:
+        account = self.resolve_channel_account(channel_identity=channel_identity)
         return str(account["channel_account_id"])
 
 
@@ -851,8 +851,8 @@ def _page_meta_from_response(response: JsonObject, *, default_page_size: int) ->
     return meta
 
 
-def _current_materials_surface_key(owner: JsonObject) -> str:
-    return f"current:{owner['owner_id']}"
+def _current_materials_surface_key(channel_identity: JsonObject) -> str:
+    return f"current:{channel_identity['external_account_ref']}"
 
 
 def _analysis_task_surface_key(analysis_run_id: str) -> str:

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,39 +14,30 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hibiken/asynq"
-
 	"github.com/danila/media-analysis-platform/apps/api/internal/api"
-	"github.com/danila/media-analysis-platform/apps/api/internal/queue"
 	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 	targetstore "github.com/danila/media-analysis-platform/apps/api/internal/storage/target"
 	"github.com/danila/media-analysis-platform/apps/api/internal/ws"
 )
 
 const (
-	defaultBindAddr               = "0.0.0.0:8080"
-	defaultMaxUploadBytes         = 1 << 30
-	defaultRetentionSweepInterval = time.Hour
-	defaultQueueReconcileInterval = 30 * time.Second
-	defaultQueueReconcileLimit    = 100
-	defaultReadHeaderTimeout      = 5 * time.Second
-	defaultReadTimeout            = 15 * time.Minute
-	defaultWriteTimeout           = 2 * time.Minute
-	defaultIdleTimeout            = 2 * time.Minute
-	defaultMaxHeaderBytes         = 1 << 20
+	defaultBindAddr          = "0.0.0.0:8080"
+	defaultMaxUploadBytes    = 1 << 30
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultReadTimeout       = 15 * time.Minute
+	defaultWriteTimeout      = 2 * time.Minute
+	defaultIdleTimeout       = 2 * time.Minute
+	defaultMaxHeaderBytes    = 1 << 20
 )
 
 type runtimeConfig struct {
 	postgresDSN         string
-	redisURL            string
 	minioEndpoint       string
 	minioPublicEndpoint string
 	minioAccessKey      string
 	minioSecretKey      string
 	bindAddr            string
 	maxUploadBytes      int64
-	webhookDelivery     bool
-	webhookInterval     time.Duration
 }
 
 func main() {
@@ -74,10 +64,6 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	stateStore, err := storage.NewSQLStateStore(db)
-	if err != nil {
-		return err
-	}
 	minioClient, err := storage.NewMinioClient(cfg.minioEndpoint, cfg.minioAccessKey, cfg.minioSecretKey)
 	if err != nil {
 		return err
@@ -93,49 +79,15 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	repository, err := storage.NewRepository(stateStore, objectStore)
-	if err != nil {
-		return err
-	}
 	targetStateStore, err := targetstore.NewStore(db)
 	if err != nil {
 		return err
 	}
 
-	redisOpt, err := parseRedisClientOpt(cfg.redisURL)
-	if err != nil {
-		return err
-	}
-	asynqClient := queue.NewAsynqClientAdapter(redisOpt)
-	defer asynqClient.Close()
-
-	publisher, err := queue.NewPublisher(asynqClient)
-	if err != nil {
-		return err
-	}
 	websocketHub := ws.NewHub()
-	var webhookDispatcher ws.Dispatcher
-	if cfg.webhookDelivery {
-		dispatcher, err := ws.NewHTTPWebhookDispatcher(repository, ws.WithWebhookLogger(logger))
-		if err != nil {
-			return err
-		}
-		webhookDispatcher = dispatcher
-		go dispatcher.Run(ctx, cfg.webhookInterval, 20)
-	}
-	eventsService, err := ws.NewService(repository, websocketHub, webhookDispatcher)
+	deps, err := api.NewRuntimeDependenciesWithTargetObjectStore(targetStateStore, objectStore, websocketHub)
 	if err != nil {
 		return err
-	}
-	deps, err := api.NewRuntimeDependenciesWithTargetObjectStore(repository, targetStateStore, objectStore, publisher, eventsService, websocketHub)
-	if err != nil {
-		return err
-	}
-	runLifecycleSweep(ctx, logger, repository)
-	go runLifecycleSweeper(ctx, logger, repository, defaultRetentionSweepInterval)
-	if reconciler, ok := deps.Public.(analysisRunQueueReconciler); ok {
-		runQueueReconcile(ctx, logger, reconciler)
-		go runQueueReconciler(ctx, logger, reconciler, defaultQueueReconcileInterval)
 	}
 
 	server := api.NewServer(
@@ -163,74 +115,15 @@ func run(ctx context.Context) error {
 	return nil
 }
 
-type analysisRunQueueReconciler interface {
-	ReconcileAnalysisRunQueue(ctx context.Context, limit int) (int, error)
-}
-
-func runLifecycleSweeper(ctx context.Context, logger *log.Logger, repository *storage.Repository, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			runLifecycleSweep(ctx, logger, repository)
-		}
-	}
-}
-
-func runLifecycleSweep(ctx context.Context, logger *log.Logger, repository *storage.Repository) {
-	retention, err := repository.ApplyRetentionPolicies(ctx)
-	if err != nil {
-		logger.Printf("retention sweep failed: %v", err)
-		return
-	}
-	orphanCleanup, err := repository.CleanOrphanObjects(ctx)
-	if err != nil {
-		logger.Printf("orphan object cleanup failed: %v", err)
-		return
-	}
-	if retention != (storage.RetentionSweepResult{}) || orphanCleanup.Detected > 0 {
-		logger.Printf("lifecycle sweep retention=%+v orphan_cleanup=%+v", retention, orphanCleanup)
-	}
-}
-
-func runQueueReconciler(ctx context.Context, logger *log.Logger, reconciler analysisRunQueueReconciler, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			runQueueReconcile(ctx, logger, reconciler)
-		}
-	}
-}
-
-func runQueueReconcile(ctx context.Context, logger *log.Logger, reconciler analysisRunQueueReconciler) {
-	recovered, err := reconciler.ReconcileAnalysisRunQueue(ctx, defaultQueueReconcileLimit)
-	if err != nil {
-		logger.Printf("analysis run queue reconcile failed: %v", err)
-		return
-	}
-	if recovered > 0 {
-		logger.Printf("analysis run queue reconcile recovered=%d", recovered)
-	}
-}
-
 func loadRuntimeConfig() (runtimeConfig, error) {
 	cfg := runtimeConfig{
 		postgresDSN:         strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
-		redisURL:            strings.TrimSpace(os.Getenv("REDIS_URL")),
 		minioEndpoint:       strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")),
 		minioPublicEndpoint: strings.TrimSpace(os.Getenv("MINIO_PUBLIC_ENDPOINT")),
 		minioAccessKey:      strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")),
 		minioSecretKey:      strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")),
 		bindAddr:            strings.TrimSpace(os.Getenv("API_BIND_ADDR")),
 		maxUploadBytes:      defaultMaxUploadBytes,
-		webhookInterval:     time.Second,
 	}
 	if cfg.bindAddr == "" {
 		cfg.bindAddr = defaultBindAddr
@@ -243,7 +136,6 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		value string
 	}{
 		{name: "POSTGRES_DSN", value: cfg.postgresDSN},
-		{name: "REDIS_URL", value: cfg.redisURL},
 		{name: "MINIO_ENDPOINT", value: cfg.minioEndpoint},
 		{name: "MINIO_ACCESS_KEY", value: cfg.minioAccessKey},
 		{name: "MINIO_SECRET_KEY", value: cfg.minioSecretKey},
@@ -259,20 +151,6 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 			return runtimeConfig{}, fmt.Errorf("MAX_UPLOAD_SIZE_BYTES must be a positive integer")
 		}
 		cfg.maxUploadBytes = parsed
-	}
-	if raw := strings.TrimSpace(os.Getenv("WEBHOOK_DELIVERY_ENABLED")); raw != "" {
-		enabled, err := strconv.ParseBool(raw)
-		if err != nil {
-			return runtimeConfig{}, fmt.Errorf("WEBHOOK_DELIVERY_ENABLED must be boolean")
-		}
-		cfg.webhookDelivery = enabled
-	}
-	if raw := strings.TrimSpace(os.Getenv("WEBHOOK_DELIVERY_INTERVAL_SECONDS")); raw != "" {
-		parsed, err := strconv.ParseFloat(raw, 64)
-		if err != nil || parsed <= 0 {
-			return runtimeConfig{}, fmt.Errorf("WEBHOOK_DELIVERY_INTERVAL_SECONDS must be positive")
-		}
-		cfg.webhookInterval = time.Duration(parsed * float64(time.Second))
 	}
 	return cfg, nil
 }
@@ -296,20 +174,11 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 	}
 	if len(migrations) > 0 {
 		baseline := migrations[0].Name
-		hasLegacySchema, err := schemaRelationExists(ctx, db, "public.media_items")
-		if err != nil {
-			return err
-		}
 		hasTargetSchema, err := schemaRelationExists(ctx, db, "public.channel_accounts")
 		if err != nil {
 			return err
 		}
-		if hasLegacySchema {
-			if _, err := db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE name=$1`, baseline); err != nil {
-				return fmt.Errorf("clear stale legacy migration baseline: %w", err)
-			}
-			delete(applied, baseline)
-		} else if hasTargetSchema {
+		if hasTargetSchema {
 			if _, ok := applied[baseline]; !ok {
 				if err := recordAppliedMigration(ctx, db, baseline); err != nil {
 					return err
@@ -446,37 +315,4 @@ ON CONFLICT (name) DO NOTHING
 	}
 	tx = nil
 	return nil
-}
-
-func parseRedisClientOpt(raw string) (asynq.RedisClientOpt, error) {
-	parsed, err := neturl.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return asynq.RedisClientOpt{}, fmt.Errorf("parse REDIS_URL: %w", err)
-	}
-	if parsed.Scheme != "redis" {
-		return asynq.RedisClientOpt{}, fmt.Errorf("REDIS_URL must use redis://")
-	}
-	host := strings.TrimSpace(parsed.Hostname())
-	if host == "" {
-		return asynq.RedisClientOpt{}, fmt.Errorf("REDIS_URL host is required")
-	}
-	port := parsed.Port()
-	if port == "" {
-		port = "6379"
-	}
-	dbNumber := 0
-	if path := strings.Trim(parsed.Path, "/"); path != "" {
-		parsedDB, err := strconv.Atoi(path)
-		if err != nil || parsedDB < 0 {
-			return asynq.RedisClientOpt{}, fmt.Errorf("REDIS_URL path must be a non-negative DB number")
-		}
-		dbNumber = parsedDB
-	}
-	password, _ := parsed.User.Password()
-	return asynq.RedisClientOpt{
-		Addr:     fmt.Sprintf("%s:%s", host, port),
-		Username: parsed.User.Username(),
-		Password: password,
-		DB:       dbNumber,
-	}, nil
 }

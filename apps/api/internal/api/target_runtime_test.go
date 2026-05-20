@@ -637,7 +637,7 @@ func TestTargetRuntimeServiceRecordsWorkerWrites(t *testing.T) {
 			Code:               "transcript_missing",
 			Message:            "Transcript is missing",
 			Context:            map[string]any{"source": "worker"},
-			SafeAdapterContext: map[string]any{"chat_id": "chat-1"},
+			SafeChannelContext: map[string]any{"chat_id": "chat-1"},
 			CorrelationID:      "corr-1",
 			RemediationHint:    "retry",
 		}},
@@ -1236,7 +1236,7 @@ func TestTargetRuntimeServiceMapsAndPropagatesTargetStoreFailures(t *testing.T) 
 				_, err := s.UpdateChannelAccount(context.Background(), TargetUpdateChannelAccountRequest{})
 				return err
 			},
-			wantErr: storage.ErrMediaItemNotFound,
+			wantErr: storage.ErrMediaAssetNotFound,
 		},
 		{
 			name:  "update account propagates generic failure",
@@ -1272,7 +1272,7 @@ func TestTargetRuntimeServiceMapsAndPropagatesTargetStoreFailures(t *testing.T) 
 				_, err := s.GetMediaAsset(context.Background(), TargetGetMediaAssetRequest{})
 				return err
 			},
-			wantErr: storage.ErrMediaItemNotFound,
+			wantErr: storage.ErrMediaAssetNotFound,
 		},
 		{
 			name:  "get inbox maps missing row",
@@ -1326,7 +1326,7 @@ func TestTargetRuntimeServiceMapsAndPropagatesTargetStoreFailures(t *testing.T) 
 				_, err := s.GetSelectionSnapshot(context.Background(), TargetGetSelectionSnapshotRequest{})
 				return err
 			},
-			wantErr: storage.ErrSelectionNotFound,
+			wantErr: storage.ErrSelectionSnapshotNotFound,
 		},
 		{
 			name:  "create run propagates snapshot item failure",
@@ -2374,6 +2374,25 @@ func (s *fakeTargetRuntimeStore) GetArtifact(_ context.Context, channelAccountID
 		ContentType:      "text/plain",
 		Visibility:       "channel_deliverable",
 		PreviewJSON:      []byte(`{"available":true}`),
+		CreatedAt:        time.Date(2026, 5, 18, 13, 0, 0, 0, time.UTC),
+	}, nil
+}
+
+func (s *fakeTargetRuntimeStore) GetArtifactByID(_ context.Context, artifactID string) (targetstore.ArtifactRecord, error) {
+	if err := s.fail("GetArtifactByID"); err != nil {
+		return targetstore.ArtifactRecord{}, err
+	}
+	return targetstore.ArtifactRecord{
+		ID:               artifactID,
+		ChannelAccountID: "channel-account-1",
+		AnalysisRunID:    "run-1",
+		StoredObjectID:   "stored-object-1",
+		Kind:             "transcript",
+		Status:           "available",
+		ContentType:      "text/plain",
+		SizeBytes:        42,
+		Visibility:       "channel_deliverable",
+		PreviewJSON:      []byte(`{"available":true,"filename":"transcript.txt","worker_artifact_kind":"transcript_plain"}`),
 		CreatedAt:        time.Date(2026, 5, 18, 13, 0, 0, 0, time.UTC),
 	}, nil
 }

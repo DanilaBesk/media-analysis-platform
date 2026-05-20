@@ -35,9 +35,9 @@ class FakeHttpResponse:
         return self.payload
 
 
-OWNER = {
-    "owner_type": "telegram",
-    "owner_id": "chat:10:user:7",
+CHANNEL_IDENTITY = {
+    "channel": "telegram",
+    "external_account_ref": "chat:10:user:7",
     "adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"},
 }
 
@@ -221,7 +221,7 @@ def test_cancel_analysis_run_posts_channel_account_and_message() -> None:
     assert run == {"analysis_run_id": "run-1", "status": "canceled"}
 
 
-def test_get_internal_artifact_download_access_uses_internal_endpoint_without_owner_query() -> None:
+def test_get_internal_artifact_download_access_uses_internal_endpoint_without_channel_account_query() -> None:
     captured = {}
 
     def fake_urlopen(request):
@@ -263,7 +263,7 @@ def test_channel_account_and_surface_internal_methods_use_target_contracts() -> 
         return FakeHttpResponse(json.dumps({"items": [{"channel_surface_id": "surface-1"}]}).encode("utf-8"))
 
     client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
-    account = client.resolve_channel_account(owner=OWNER)
+    account = client.resolve_channel_account(channel_identity=CHANNEL_IDENTITY)
     accounts = client.list_channel_accounts(page_size=50)
     surface = client.upsert_channel_surface(
         channel_account_id="channel-account-1",
@@ -301,8 +301,8 @@ def test_channel_account_and_surface_internal_methods_use_target_contracts() -> 
     assert event["channel_surface_event_id"] == "event-1"
     assert requests[0].full_url == "http://api:8080/internal/v1/channel-accounts"
     assert resolve_payload["channel"] == "telegram"
-    assert resolve_payload["external_account_ref"] == OWNER["owner_id"]
-    assert resolve_payload["metadata"]["owner"] == OWNER
+    assert resolve_payload["external_account_ref"] == CHANNEL_IDENTITY["external_account_ref"]
+    assert resolve_payload["metadata"]["channel_identity"] == CHANNEL_IDENTITY
     assert requests[1].full_url == "http://api:8080/internal/v1/channel-accounts?page_size=50"
     assert requests[2].full_url == "http://api:8080/internal/v1/channel-surfaces"
     assert surface_payload["surface_type"] == "analysis_task_surface"
@@ -450,7 +450,7 @@ def test_runtime_rejection_reasons_map_to_unsupported_input_copy() -> None:
 def test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surface() -> None:
     captured_urls: list[str] = []
     captured_requests = []
-    owner_with_tenant = {**OWNER, "tenant_id": "tenant-1"}
+    owner_with_tenant = {**CHANNEL_IDENTITY, "partition_ref": "tenant-1"}
 
     def fake_urlopen(request):
         captured_requests.append(request)

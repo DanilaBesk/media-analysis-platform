@@ -20,10 +20,6 @@ var (
 	newMinioSDK     = minio.New
 )
 
-type SQLStateStore struct {
-	db *sql.DB
-}
-
 type minioObjectClient interface {
 	PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error)
 	PresignedGetObject(ctx context.Context, bucketName, objectName string, expires time.Duration, reqParams url.Values) (*url.URL, error)
@@ -34,13 +30,6 @@ type minioObjectClient interface {
 type MinioObjectStore struct {
 	client        minioObjectClient
 	presignClient minioObjectClient
-}
-
-func NewSQLStateStore(db *sql.DB) (*SQLStateStore, error) {
-	if db == nil {
-		return nil, fmt.Errorf("%w: db is required", ErrContractViolation)
-	}
-	return &SQLStateStore{db: db}, nil
 }
 
 func OpenPostgresDB(ctx context.Context, dsn string) (*sql.DB, error) {
@@ -120,23 +109,4 @@ func (s *MinioObjectStore) DeleteObject(ctx context.Context, bucket, objectKey s
 	return s.client.RemoveObject(ctx, bucket, objectKey, minio.RemoveObjectOptions{})
 }
 
-func withTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback()
-		}
-	}()
-	if err = fn(tx); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-var _ MediaStateStore = (*SQLStateStore)(nil)
 var _ ObjectStore = (*MinioObjectStore)(nil)
-var _ ObjectDeleter = (*MinioObjectStore)(nil)
-var _ internalObjectPresigner = (*MinioObjectStore)(nil)

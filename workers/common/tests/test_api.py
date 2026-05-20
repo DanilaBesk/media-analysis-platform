@@ -546,7 +546,7 @@ def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
     assert execution.params == {"harness_name": "fixture"}
 
 
-def test_claim_analysis_run_rejects_empty_selection_items() -> None:
+def test_claim_analysis_run_rejects_empty_selection_snapshot_items() -> None:
     with pytest.raises(ValueError, match="selection"):
         ClaimedAnalysisRunStep(
             analysis_run_step_id=STEP_ID,
@@ -630,7 +630,7 @@ def test_selection_item_helpers_cover_defaults_and_metadata_fallbacks() -> None:
     assert api_module._metadata_source_label(no_filename_item) is None
 
 
-def test_media_source_snapshot_payload_and_legacy_aliases_cover_compatibility_paths() -> None:
+def test_media_source_snapshot_payload_and_optional_sizes_cover_target_paths() -> None:
     source_snapshot = api_module.MediaSourceSnapshot.from_payload(
         {
             "source_id": OBJECT_ID,
@@ -676,14 +676,14 @@ def test_media_source_snapshot_payload_and_legacy_aliases_cover_compatibility_pa
     descriptor = SelectionItemMaterialization.from_selection_item(item)
 
     assert source_snapshot.size_bytes is None
-    assert item.selection_item_id == "selection-snapshot-item-7"
-    assert item.media_item_id == ASSET_ID
-    assert descriptor.selection_item_id == "selection-snapshot-item-7"
-    assert descriptor.media_item_id == ASSET_ID
+    assert item.selection_snapshot_item_id == "selection-snapshot-item-7"
+    assert item.media_asset_id == ASSET_ID
+    assert descriptor.selection_snapshot_item_id == "selection-snapshot-item-7"
+    assert descriptor.media_asset_id == ASSET_ID
     assert descriptor.source_id == OBJECT_ID
-    assert selection.selection_id == SNAPSHOT_ID
-    assert claim.execution_id == STEP_ID
-    assert claim.selection is selection
+    assert selection.selection_snapshot_id == SNAPSHOT_ID
+    assert claim.analysis_run_step_id == STEP_ID
+    assert claim.selection_snapshot is selection
 
     target_item_without_sizes = _selection_item()
     target_item_without_sizes["origin_snapshot"].pop("size_bytes")
@@ -779,38 +779,3 @@ def test_selection_item_labels_and_materialization_helpers_trim_source_labels() 
         object_key="media/run-1/source.wav",
         deterministic_filename=str(Path("item-0009-source.wav")),
     ).is_object_backed is True
-
-
-def test_claim_analysis_run_compatibility_wrapper_maps_task_types() -> None:
-    config = InternalApiConfig(base_url="http://internal.local")
-    transport = StubTransport(
-        responses={
-            (
-                "POST",
-                f"http://internal.local/internal/v1/analysis-runs/{RUN_ID}/steps/claim",
-            ): _claim_response()
-        }
-    )
-    client = AnalysisRunControlClient(config, transport=transport)
-
-    transcription = client.claim_analysis_run(
-        RUN_ID,
-        worker_kind="transcription",
-        task_type="selection.transcription",
-    )
-    report = client.claim_analysis_run(
-        RUN_ID,
-        worker_kind="agent_runner",
-        task_type="report.analysis",
-    )
-
-    assert transcription.analysis_run_step_id == STEP_ID
-    assert report.analysis_run_step_id == STEP_ID
-    assert transport.calls[0]["payload"] == {
-        "worker_kind": "transcription",
-        "step_kind": "selection.transcription",
-    }
-    assert transport.calls[1]["payload"] == {
-        "worker_kind": "agent_runner",
-        "step_kind": "report.analysis",
-    }

@@ -137,13 +137,11 @@ def _resolve_telegram_account(*, suffix: str) -> TelegramAccount:
             "display_name": f"CopperASR Telegram E2E {suffix}",
             "metadata": {
                 "copper_asr_telegram_e2e": True,
-                "owner": {
-                    "owner_type": "telegram",
-                    "owner_id": external_ref,
-                    "adapter_identity": {
-                        "telegram_chat_id": str(chat_id),
-                        "telegram_user_id": str(user_id),
-                    },
+                "channel_identity": {
+                    "channel": "telegram",
+                    "external_account_ref": external_ref,
+                    "telegram_chat_id": str(chat_id),
+                    "telegram_user_id": str(user_id),
                 },
             },
         },

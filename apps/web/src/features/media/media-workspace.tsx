@@ -80,13 +80,9 @@ function parseRunManifest(artifacts: ArtifactSummary[]): RunManifestPayload | nu
 }
 
 function diagnosticSubject(diagnostic: Diagnostic): DiagnosticSubject {
-  const maybeLegacy = diagnostic as Diagnostic & {
-    subject_type?: string;
-    subject_id?: string;
-  };
   return diagnostic.subject ?? {
-    subject_type: maybeLegacy.subject_type ?? "analysis_run",
-    subject_id: maybeLegacy.subject_id ?? "",
+    subject_type: "analysis_run",
+    subject_id: "",
   };
 }
 
@@ -264,17 +260,14 @@ function diagnosticSubjectLabel(subjectType: string): string {
     case "collection":
       return "группа";
     case "selection_snapshot":
-    case "selection":
       return "подборка";
     case "analysis_run":
       return "запуск";
     case "artifact":
       return "результат";
-    case "adapter":
-    case "channel":
+    case "channel_account":
+    case "channel_surface":
       return "канал";
-    case "retention":
-      return "хранение";
     default:
       return subjectType.replace(/_/g, " ");
   }
@@ -288,8 +281,8 @@ function diagnosticCodeLabel(code: string): string {
       return "Материал недоступен";
     case "artifact_preview_ready":
       return "Предпросмотр готов";
-    case "retention_hold_pending":
-      return "Удаление ожидает разрешения";
+    case "retention_denied":
+      return "Удаление отклонено";
     case "origin_warning":
       return "Предупреждение по материалу";
     default:
@@ -1909,9 +1902,6 @@ export function DiagnosticsRouteShell(): JSX.Element {
   const [subjectType, setSubjectType] = useState("");
   const [severity, setSeverity] = useState("");
   const [error, setError] = useState("");
-  const [message, setMessage] = useMessage();
-  const [reconcileLimit, setReconcileLimit] = useState(100);
-  const [reconcilePending, setReconcilePending] = useState(false);
 
   const refresh = useCallback(async () => {
     setError("");
@@ -1934,21 +1924,6 @@ export function DiagnosticsRouteShell(): JSX.Element {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const reconcileQueue = async () => {
-    setError("");
-    setMessage("");
-    setReconcilePending(true);
-    try {
-      const response = await apiClient.reconcileAnalysisRunQueue(reconcileLimit);
-      setMessage(`Синхронизировано: ${response.reconciled}`);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось синхронизировать очередь.");
-    } finally {
-      setReconcilePending(false);
-    }
-  };
 
   return (
     <div className="page-grid">
@@ -1973,8 +1948,8 @@ export function DiagnosticsRouteShell(): JSX.Element {
               <option value="selection_snapshot">Подборка</option>
               <option value="analysis_run">Запуск</option>
               <option value="artifact">Результат</option>
-              <option value="channel">Канал</option>
-              <option value="retention">Хранение</option>
+              <option value="channel_account">Канал</option>
+              <option value="channel_surface">Поверхность</option>
             </select>
           </label>
           <label>
@@ -1988,7 +1963,6 @@ export function DiagnosticsRouteShell(): JSX.Element {
           </label>
         </div>
         {error ? <p className="error-text">{error}</p> : null}
-        {message ? <p className="success-text">{message}</p> : null}
         <DiagnosticList diagnostics={diagnostics} />
       </section>
       <aside className="side-stack">
@@ -2020,24 +1994,6 @@ export function DiagnosticsRouteShell(): JSX.Element {
           ) : (
             <p className="muted-text">Снимок состояния не загружен.</p>
           )}
-        </section>
-        <section className="surface">
-          <SectionHeader eyebrow="Обслуживание" title="Синхронизация очереди" />
-          <div className="form-grid">
-            <label>
-              Лимит
-              <input
-                min={1}
-                max={100}
-                onChange={(event) => setReconcileLimit(Number(event.target.value) || 1)}
-                type="number"
-                value={reconcileLimit}
-              />
-            </label>
-            <button disabled={reconcilePending} onClick={() => void reconcileQueue()} type="button">
-              {reconcilePending ? "Синхронизируем..." : "Синхронизировать"}
-            </button>
-          </div>
         </section>
       </aside>
     </div>

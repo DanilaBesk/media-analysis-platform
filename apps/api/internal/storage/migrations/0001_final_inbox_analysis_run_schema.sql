@@ -1,30 +1,17 @@
 -- +goose Up
--- Local target reset: this database is disposable during the single-user,
--- channel-aware rebuild. The reset removes both legacy and target tables before
--- recreating the target contract.
-DROP TABLE IF EXISTS channel_surface_events;
-DROP TABLE IF EXISTS channel_surface_subjects;
-DROP TABLE IF EXISTS channel_surfaces;
-DROP TABLE IF EXISTS diagnostics;
-DROP TABLE IF EXISTS artifact_subjects;
-DROP TABLE IF EXISTS analysis_run_step_inputs;
-DROP TABLE IF EXISTS artifacts;
-DROP TABLE IF EXISTS analysis_run_events;
-DROP TABLE IF EXISTS analysis_run_steps;
-DROP TABLE IF EXISTS analysis_run_tasks;
-DROP TABLE IF EXISTS analysis_runs;
-DROP TABLE IF EXISTS selection_snapshot_items;
-DROP TABLE IF EXISTS selection_snapshots;
-DROP TABLE IF EXISTS collection_items;
-DROP TABLE IF EXISTS selection_items;
-DROP TABLE IF EXISTS selections;
-DROP TABLE IF EXISTS collections;
-DROP TABLE IF EXISTS media_assets;
-DROP TABLE IF EXISTS media_items;
-DROP TABLE IF EXISTS stored_objects;
-DROP TABLE IF EXISTS operation_requests;
-DROP TABLE IF EXISTS channel_accounts;
-DROP TABLE IF EXISTS sources;
+DO $$
+DECLARE
+    existing_table record;
+BEGIN
+    FOR existing_table IN
+        SELECT tablename
+        FROM pg_tables
+        WHERE schemaname = 'public'
+          AND tablename <> 'schema_migrations'
+    LOOP
+        EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', existing_table.tablename);
+    END LOOP;
+END $$;
 
 DROP FUNCTION IF EXISTS prevent_selection_snapshots_mutation();
 

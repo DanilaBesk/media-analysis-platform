@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ type TargetStateStore interface {
 	ListAnalysisRunStepQueue(ctx context.Context, status, runType, workerKind, stepKind string, limit int) ([]targetstore.AnalysisRunStepQueueRecord, error)
 	ListArtifacts(ctx context.Context, channelAccountID, analysisRunID string, limit int) ([]targetstore.ArtifactRecord, error)
 	GetArtifact(ctx context.Context, channelAccountID, artifactID string) (targetstore.ArtifactRecord, error)
+	GetArtifactByID(ctx context.Context, artifactID string) (targetstore.ArtifactRecord, error)
 	ListDiagnostics(ctx context.Context, query targetstore.DiagnosticQuery, limit int) ([]targetstore.DiagnosticRecord, error)
 	RequestAnalysisRunCancel(ctx context.Context, channelAccountID, analysisRunID string, event targetstore.AnalysisRunEventRecord, requestedAt time.Time) (targetstore.AnalysisRunRecord, error)
 	ListAnalysisRunEvents(ctx context.Context, channelAccountID, analysisRunID string, limit int) ([]targetstore.AnalysisRunEventRecord, error)
@@ -62,10 +64,16 @@ type TargetStateStore interface {
 }
 
 type TargetRuntimeService struct {
-	store   TargetStateStore
-	objects storage.ObjectStore
-	now     func() time.Time
-	nextID  func() string
+	store                       TargetStateStore
+	objects                     storage.ObjectStore
+	artifactPublicDownloadTTL   time.Duration
+	artifactInternalDownloadTTL time.Duration
+	now                         func() time.Time
+	nextID                      func() string
+}
+
+type internalObjectPresigner interface {
+	PresignInternalGetObject(ctx context.Context, bucket, objectKey string, expiry time.Duration) (string, time.Time, error)
 }
 
 type TargetRuntimeOption func(*TargetRuntimeService)
@@ -94,9 +102,11 @@ func WithTargetObjectStore(objects storage.ObjectStore) TargetRuntimeOption {
 
 func NewTargetRuntimeService(store TargetStateStore, opts ...TargetRuntimeOption) *TargetRuntimeService {
 	service := &TargetRuntimeService{
-		store:  store,
-		now:    func() time.Time { return time.Now().UTC() },
-		nextID: uuid.NewString,
+		store:                       store,
+		artifactPublicDownloadTTL:   15 * time.Minute,
+		artifactInternalDownloadTTL: 15 * time.Minute,
+		now:                         func() time.Time { return time.Now().UTC() },
+		nextID:                      uuid.NewString,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -162,7 +172,7 @@ func (s *TargetRuntimeService) UpdateChannelAccount(ctx context.Context, req Tar
 	}
 	record, err := s.store.UpdateChannelAccount(ctx, params)
 	if errors.Is(err, sql.ErrNoRows) {
-		return TargetChannelAccount{}, storage.ErrMediaItemNotFound
+		return TargetChannelAccount{}, storage.ErrMediaAssetNotFound
 	}
 	if err != nil {
 		return TargetChannelAccount{}, err
@@ -342,7 +352,7 @@ func (s *TargetRuntimeService) GetMediaAsset(ctx context.Context, req TargetGetM
 	}
 	record, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, req.MediaAssetID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return TargetMediaAsset{}, storage.ErrMediaItemNotFound
+		return TargetMediaAsset{}, storage.ErrMediaAssetNotFound
 	}
 	if err != nil {
 		return TargetMediaAsset{}, err
@@ -584,7 +594,7 @@ func (s *TargetRuntimeService) GetSelectionSnapshot(ctx context.Context, req Tar
 	}
 	snapshot, items, err := s.store.GetSelectionSnapshot(ctx, req.ChannelAccountID, req.SelectionSnapshotID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return TargetSelectionSnapshot{}, storage.ErrSelectionNotFound
+		return TargetSelectionSnapshot{}, storage.ErrSelectionSnapshotNotFound
 	}
 	if err != nil {
 		return TargetSelectionSnapshot{}, err
@@ -870,6 +880,127 @@ func (s *TargetRuntimeService) GetArtifact(ctx context.Context, req TargetGetArt
 	return targetArtifactFromRecord(record), nil
 }
 
+func (s *TargetRuntimeService) RefreshArtifactLink(ctx context.Context, req TargetRefreshArtifactRequest) (TargetArtifact, error) {
+	if s.store == nil {
+		return TargetArtifact{}, fmt.Errorf("target storage is required")
+	}
+	if s.objects == nil {
+		return TargetArtifact{}, fmt.Errorf("%w: target artifact object store is required", storage.ErrContractViolation)
+	}
+	record, err := s.store.GetArtifact(ctx, req.ChannelAccountID, req.ArtifactID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetArtifact{}, storage.ErrArtifactNotFound
+	}
+	if err != nil {
+		return TargetArtifact{}, err
+	}
+	object, err := s.store.GetStoredObject(ctx, record.StoredObjectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetArtifact{}, storage.ErrArtifactResolutionFailed
+	}
+	if err != nil {
+		return TargetArtifact{}, err
+	}
+	download, err := s.presignArtifactDownload(ctx, object, s.artifactPublicDownloadTTL, false)
+	if err != nil {
+		return TargetArtifact{}, err
+	}
+	artifact := targetArtifactFromRecordWithObject(record, object)
+	artifact.Download = &download
+	return artifact, nil
+}
+
+func (s *TargetRuntimeService) ResolveAnalysisRunStepRequestAccess(ctx context.Context, analysisRunID string, req TargetRequestAccessRequest) (RequestAccessResponse, error) {
+	if s.store == nil {
+		return RequestAccessResponse{}, fmt.Errorf("target storage is required")
+	}
+	if err := s.ensureAnalysisRunStep(ctx, analysisRunID, req.AnalysisRunStepID); err != nil {
+		return RequestAccessResponse{}, err
+	}
+	run, err := s.store.GetAnalysisRunByID(ctx, analysisRunID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RequestAccessResponse{}, storage.ErrAnalysisRunNotFound
+	}
+	if err != nil {
+		return RequestAccessResponse{}, err
+	}
+	params := jsonObject(run.ParamsJSON)
+	access, ok := params["request_access"].(map[string]any)
+	if !ok {
+		return RequestAccessResponse{}, fmt.Errorf("%w: request_access is not available for analysis_run", storage.ErrContractViolation)
+	}
+	response := RequestAccessResponse{
+		Provider:            accessString(access, "provider"),
+		URL:                 accessString(access, "url"),
+		ExpiresAt:           accessString(access, "expires_at"),
+		RequestRef:          accessString(access, "request_ref"),
+		RequestDigestSHA256: accessString(access, "request_digest_sha256"),
+		RequestBytes:        accessInt64(access, "request_bytes"),
+	}
+	if response.Provider == "" || response.URL == "" || response.ExpiresAt == "" || response.RequestRef == "" || response.RequestDigestSHA256 == "" || response.RequestBytes < 1 {
+		return RequestAccessResponse{}, fmt.Errorf("%w: request_access is incomplete", storage.ErrContractViolation)
+	}
+	return response, nil
+}
+
+func (s *TargetRuntimeService) ResolveArtifactDownloadAccess(ctx context.Context, artifactID string) (ArtifactDownloadAccessResponse, error) {
+	if s.store == nil {
+		return ArtifactDownloadAccessResponse{}, fmt.Errorf("target storage is required")
+	}
+	record, err := s.store.GetArtifactByID(ctx, artifactID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ArtifactDownloadAccessResponse{}, storage.ErrArtifactNotFound
+	}
+	if err != nil {
+		return ArtifactDownloadAccessResponse{}, err
+	}
+	object, err := s.store.GetStoredObject(ctx, record.StoredObjectID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ArtifactDownloadAccessResponse{}, storage.ErrArtifactResolutionFailed
+	}
+	if err != nil {
+		return ArtifactDownloadAccessResponse{}, err
+	}
+	download, err := s.presignArtifactDownload(ctx, object, s.artifactInternalDownloadTTL, true)
+	if err != nil {
+		return ArtifactDownloadAccessResponse{}, err
+	}
+	return ArtifactDownloadAccessResponse{
+		ArtifactID:    record.ID,
+		AnalysisRunID: record.AnalysisRunID,
+		ArtifactKind:  targetWorkerArtifactKind(record),
+		Filename:      targetArtifactFilename(record, object),
+		MIMEType:      record.ContentType,
+		SizeBytes:     record.SizeBytes,
+		CreatedAt:     record.CreatedAt,
+		Download:      download,
+	}, nil
+}
+
+func (s *TargetRuntimeService) GetObservabilitySnapshot(ctx context.Context) (TargetObservabilitySnapshot, error) {
+	if s.store == nil {
+		return TargetObservabilitySnapshot{}, fmt.Errorf("target storage is required")
+	}
+	items, err := s.store.ListAnalysisRunStepQueue(ctx, "queued", "", "", "", 100)
+	if err != nil {
+		return TargetObservabilitySnapshot{}, err
+	}
+	now := s.now()
+	var lagSeconds int64
+	for _, item := range items {
+		lag := int64(now.Sub(item.CreatedAt).Seconds())
+		if lag > lagSeconds {
+			lagSeconds = lag
+		}
+	}
+	return TargetObservabilitySnapshot{
+		QueueTasks:                 len(items),
+		QueueLagSeconds:            lagSeconds,
+		ObservabilityWindowSeconds: int64((15 * time.Minute).Seconds()),
+		GeneratedAt:                now,
+	}, nil
+}
+
 func (s *TargetRuntimeService) ListDiagnostics(ctx context.Context, req TargetListDiagnosticsRequest) (TargetDiagnosticPage, error) {
 	if s.store == nil {
 		return TargetDiagnosticPage{}, fmt.Errorf("target storage is required")
@@ -1143,7 +1274,7 @@ func (s *TargetRuntimeService) RecordAnalysisRunDiagnostics(ctx context.Context,
 			Code:               strings.TrimSpace(descriptor.Code),
 			Message:            strings.TrimSpace(descriptor.Message),
 			ContextJSON:        contextJSON,
-			SafeChannelContext: jsonObjectBytes(descriptor.SafeAdapterContext),
+			SafeChannelContext: jsonObjectBytes(descriptor.SafeChannelContext),
 			CorrelationID:      strings.TrimSpace(descriptor.CorrelationID),
 			RemediationHint:    strings.TrimSpace(descriptor.RemediationHint),
 			CreatedAt:          createdAt,
@@ -1346,6 +1477,36 @@ func (s *TargetRuntimeService) ListChannelSurfaceEvents(ctx context.Context, req
 	return TargetChannelSurfaceEventPage{Items: items, Page: 1, PageSize: limit}, nil
 }
 
+func (s *TargetRuntimeService) presignArtifactDownload(ctx context.Context, object targetstore.StoredObjectRecord, ttl time.Duration, internal bool) (storage.DownloadDescriptor, error) {
+	objectKey := strings.TrimSpace(object.ObjectKey)
+	bucket := strings.TrimSpace(object.Bucket)
+	if bucket == "" {
+		bucket = storage.ArtifactsBucket
+	}
+	if objectKey == "" {
+		return storage.DownloadDescriptor{}, fmt.Errorf("%w: artifact object key is empty", storage.ErrArtifactResolutionFailed)
+	}
+	if s.objects == nil {
+		return storage.DownloadDescriptor{}, fmt.Errorf("%w: target artifact object store is required", storage.ErrContractViolation)
+	}
+	if internal {
+		presigner, ok := s.objects.(internalObjectPresigner)
+		if !ok {
+			return storage.DownloadDescriptor{}, fmt.Errorf("%w: internal artifact presigner is not configured", storage.ErrContractViolation)
+		}
+		url, expiresAt, err := presigner.PresignInternalGetObject(ctx, bucket, objectKey, ttl)
+		if err != nil {
+			return storage.DownloadDescriptor{}, fmt.Errorf("%w: presign internal artifact: %v", storage.ErrArtifactResolutionFailed, err)
+		}
+		return storage.DownloadDescriptor{Provider: "minio", URL: url, ExpiresAt: expiresAt}, nil
+	}
+	url, expiresAt, err := s.objects.PresignGetObject(ctx, bucket, objectKey, ttl)
+	if err != nil {
+		return storage.DownloadDescriptor{}, fmt.Errorf("%w: presign artifact: %v", storage.ErrArtifactResolutionFailed, err)
+	}
+	return storage.DownloadDescriptor{Provider: "minio", URL: url, ExpiresAt: expiresAt}, nil
+}
+
 func stableTargetID(seed string) string {
 	sum := sha1.Sum([]byte(seed))
 	sum[6] = (sum[6] & 0x0f) | 0x50
@@ -1379,6 +1540,66 @@ func jsonOrDefaultRaw(raw json.RawMessage, fallback string) []byte {
 		return []byte(fallback)
 	}
 	return raw
+}
+
+func jsonObject(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	var object map[string]any
+	if err := json.Unmarshal(raw, &object); err != nil {
+		return map[string]any{}
+	}
+	return object
+}
+
+func jsonObjectBytes(value map[string]any) []byte {
+	if value == nil {
+		return []byte(`{}`)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return data
+}
+
+func mergeRuntimeContext(data []byte, fields map[string]any) []byte {
+	merged := map[string]any{}
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &merged)
+	}
+	for key, value := range fields {
+		if _, exists := merged[key]; !exists {
+			merged[key] = value
+		}
+	}
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return encoded
+}
+
+func accessString(access map[string]any, key string) string {
+	value, ok := access[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func accessInt64(access map[string]any, key string) int64 {
+	switch value := access[key].(type) {
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case float64:
+		return int64(value)
+	default:
+		return 0
+	}
 }
 
 func withDefaultString(value, fallback string) string {
@@ -1592,10 +1813,46 @@ func targetArtifactFromRecord(record targetstore.ArtifactRecord) TargetArtifact 
 		Kind:             record.Kind,
 		Status:           record.Status,
 		ContentType:      record.ContentType,
+		SizeBytes:        record.SizeBytes,
+		Checksum:         record.Checksum,
 		Visibility:       record.Visibility,
 		Preview:          record.PreviewJSON,
 		CreatedAt:        record.CreatedAt,
 	}
+}
+
+func targetArtifactFromRecordWithObject(record targetstore.ArtifactRecord, object targetstore.StoredObjectRecord) TargetArtifact {
+	artifact := targetArtifactFromRecord(record)
+	artifact.ObjectKey = object.ObjectKey
+	if artifact.ContentType == "" {
+		artifact.ContentType = object.ContentType
+	}
+	if artifact.SizeBytes == 0 {
+		artifact.SizeBytes = object.SizeBytes
+	}
+	if artifact.Checksum == "" {
+		artifact.Checksum = object.Checksum
+	}
+	return artifact
+}
+
+func targetWorkerArtifactKind(artifact targetstore.ArtifactRecord) string {
+	preview := jsonObject(artifact.PreviewJSON)
+	if workerKind := accessString(preview, "worker_artifact_kind"); workerKind != "" {
+		return workerKind
+	}
+	return strings.TrimSpace(artifact.Kind)
+}
+
+func targetArtifactFilename(artifact targetstore.ArtifactRecord, object targetstore.StoredObjectRecord) string {
+	preview := jsonObject(artifact.PreviewJSON)
+	if filename := accessString(preview, "filename"); filename != "" {
+		return filename
+	}
+	if base := path.Base(strings.TrimSpace(object.ObjectKey)); base != "." && base != "/" && base != "" {
+		return base
+	}
+	return artifact.ID
 }
 
 func targetDiagnosticFromRecord(record targetstore.DiagnosticRecord) TargetDiagnostic {
@@ -1688,6 +1945,29 @@ func targetOutcomeStatus(outcome string) (string, string, error) {
 		return "canceled", "canceled", nil
 	default:
 		return "", "", fmt.Errorf("%w: invalid worker outcome", storage.ErrContractViolation)
+	}
+}
+
+func workerDescriptorPublicArtifactKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "transcript_plain", "transcript_segmented_markdown", "transcript_docx":
+		return "transcript"
+	case "summary_markdown":
+		return "summary"
+	case "report_markdown", "report_docx":
+		return "report"
+	case "deep_research_markdown":
+		return "deep_research"
+	case "agent_result_json":
+		return "structured_data"
+	case "execution_log":
+		return "execution_log"
+	case "run_manifest":
+		return "run_manifest"
+	case "run_diagnostics":
+		return "run_diagnostics"
+	default:
+		return ""
 	}
 }
 

@@ -47,8 +47,11 @@ export type DiagnosticSubjectType =
   | "analysis_run"
   | "analysis_run_step"
   | "artifact"
-  | "channel"
-  | "retention";
+  | "artifact_subject"
+  | "diagnostic"
+  | "channel_account"
+  | "channel_surface"
+  | "operation_request";
 
 export interface PageMetadata {
   page_size: number;
@@ -117,8 +120,6 @@ export interface Diagnostic extends DiagnosticSummary {
     subject_type: DiagnosticSubjectType;
     subject_id: string;
   };
-  subject_type?: DiagnosticSubjectType;
-  subject_id?: string;
   context?: Record<string, unknown>;
   safe_channel_context?: Record<string, unknown>;
   remediation_hint?: string | null;
@@ -265,10 +266,6 @@ export interface RunEvent {
   payload: RunProgressPayload | Record<string, unknown>;
   artifact?: ArtifactSummary;
   diagnostic?: DiagnosticSummary;
-}
-
-export interface ReconcileQueueResponse {
-  reconciled: number;
 }
 
 export interface ObservabilitySnapshot {
