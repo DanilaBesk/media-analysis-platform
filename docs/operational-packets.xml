@@ -288,8 +288,8 @@ Closure evidence for media-b8s.2.9: python3 infra/scripts/copper-asr-failure-e2e
     </write-scope>
     <contract-excerpt><![CDATA[
 The benchmark harness consumes representative_long_voice and records backend/model, input duration, wall time, CPU/memory samples, concurrency settings, compose resource limits, warm/cold model state, result delivery latency, threshold status, and blocker linkage when thresholds fail.
-The current evidence proves provider=copperasr, model=Copperside/CoppersideASR, 960.006s input, 200.28s run wall time, 4.793x realtime speed, transcript document delivery, duplicate-result guard, inbox clearing, and CopperASR response processing telemetry.
-The local consumer profile is COPPER_ASR_LOCAL_CPUS=4.0 plus COPPER_ASR_ONNX_NUM_THREADS=2, COPPER_ASR_TORCH_NUM_THREADS=2, COPPER_ASR_TORCH_INTEROP_THREADS=1, COPPER_ASR_FFMPEG_THREADS=1. The CPU threshold now passes inside copper-asr: max_cpu_percent=409.15, avg_cpu_percent=305.774, while worker-transcription and api stay near idle.
+The current evidence proves provider=copperasr, model=Copperside/CoppersideASR, 960.006s input, 165.319s run wall time, 5.807x realtime speed, transcript document delivery, duplicate-result guard, inbox clearing, and CopperASR response processing telemetry.
+The local consumer profile is COPPER_ASR_LOCAL_CPUS=4.0 plus COPPER_ASR_ONNX_NUM_THREADS=2, COPPER_ASR_TORCH_NUM_THREADS=2, COPPER_ASR_TORCH_INTEROP_THREADS=1, COPPER_ASR_FFMPEG_THREADS=1. The CPU threshold now passes inside copper-asr: max_cpu_percent=413.73, avg_cpu_percent=297.925, while worker-transcription and api stay near idle.
 media-b8s.2.10 closed through a consumer compose CPU quota without editing the external CopperASR source submodule and without changing the max CPU benchmark semantics.
     ]]></contract-excerpt>
     <verification>

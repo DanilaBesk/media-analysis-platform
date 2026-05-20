@@ -92,9 +92,9 @@ Final ASR logs had no old `whisper`, `faster-whisper`, `ctranslate`,
   `run_manifest` provider metadata.
 - Failure E2E: corrupt and retry runs finalized as `failed` with
   `asr_invalid_audio`; cancellation finalized as `canceled` with zero artifacts.
-- Long voice benchmark: `960.006` second input, `run_wall_seconds=200.28`,
-  `speedup_vs_realtime=4.793`, `max_cpu_percent=409.15 <= 450.0`,
-  `max_memory_mib=1781.76 <= 4096.0`, `thresholds.passed=true`.
+- Long voice benchmark: `960.006` second input, `run_wall_seconds=165.319`,
+  `speedup_vs_realtime=5.807`, `max_cpu_percent=413.73 <= 450.0`,
+  `max_memory_mib=1921.024 <= 4096.0`, `thresholds.passed=true`.
 
 ## Bugs Closed During Final QA
 

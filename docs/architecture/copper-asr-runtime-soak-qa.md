@@ -56,14 +56,14 @@ Latest benchmark artifact:
 `docs/benchmarks/copper-asr-long-voice-benchmark-latest.json`.
 
 - Input duration: `960.006` seconds.
-- `run_wall_seconds=200.28`.
-- `speedup_vs_realtime=4.793`.
+- `run_wall_seconds=165.319`.
+- `speedup_vs_realtime=5.807`.
 - `thresholds.passed=true`.
-- CopperASR `max_cpu_percent=409.15 <= 450.0`.
-- CopperASR `max_memory_mib=1781.76 <= 4096.0`.
+- CopperASR `max_cpu_percent=413.73 <= 450.0`.
+- CopperASR `max_memory_mib=1921.024 <= 4096.0`.
 - Runtime VAD/ASR metadata is present:
-  `vad_segment_count=56`, `chunk_count=56`, `vad_s=120.219`,
-  `asr_inference_s=76.999`.
+  `vad_segment_count=56`, `chunk_count=56`, `vad_s=98.804`,
+  `asr_inference_s=57.919`.
 
 ## Runtime Bugs Closed During QA
 
