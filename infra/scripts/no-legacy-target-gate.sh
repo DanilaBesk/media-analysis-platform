@@ -105,7 +105,7 @@ reject_regex \
   '\b(owner_type|owner_id|tenant_id|safe_adapter_context)\b' \
   apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql
 
-uv run pytest packages/contracts/tests/test_contract_surfaces.py::test_contract_surface_has_no_legacy_vocabulary -q
+uv run pytest packages/contracts/tests/test_contract_surfaces.py -q
 bash infra/scripts/no-legacy-asr-gate.sh
 
 printf '%s target no-legacy gate completed successfully\n' "${MARKER}"

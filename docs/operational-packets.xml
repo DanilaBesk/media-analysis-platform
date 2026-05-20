@@ -71,6 +71,7 @@
     <completed-closure-gate bead="media-b8s.3">Pre-MR QA is complete after no-legacy, contracts/security/ops, runtime soak, and final readiness packets.</completed-closure-gate>
     <completed-closure-gate bead="media-b8s">root migration is complete after implementation, full E2E coverage, QA, final readiness, and live compose proof.</completed-closure-gate>
     <completed-packet bead="media-pyj">telegram-transcription-result-auto-document-delivery</completed-packet>
+    <completed-packet bead="media-h2a.1">stale-legacy-instruction-and-compatibility-schema-guard</completed-packet>
   </CurrentState>
   <ExecutionPacketTemplate>
     <ExecutionPacket>

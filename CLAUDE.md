@@ -59,12 +59,11 @@ uv run pytest
 
 ## Architecture Overview
 
-- `apps/api` contains the Go control plane for jobs, source/source_set lineage, artifacts, retry/cancel/progress, and child operations.
-- `src/media_analysis_platform/bot.py` contains the legacy Telegram adapter runtime, handlers, callbacks, and media-group flow.
+- `apps/api` contains the Go control plane for channel_accounts, media_assets, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, and channel_surfaces.
 - `apps/telegram-bot/src/telegram_adapter` contains the compose-owned Telegram adapter boundary over the API.
 - `workers/transcription/src/transcriber_worker_transcription.py` owns transcription worker execution, local source materialization, and transcript artifact persistence.
 - `workers/common/src/transcriber_workers_common/copper_asr.py` handles the CopperASR HTTP client boundary, URL audio materialization, response normalization, and provider diagnostics.
-- `workers/agent-runner/src/transcriber_worker_agent_runner.py` executes report/deep-research `agent_run` jobs through the configured provider or fixture harness.
+- `workers/agent-runner/src/transcriber_worker_agent_runner.py` executes report/deep-research `agent_run` analysis steps through the configured provider or fixture harness.
 - `workers/common/src/transcriber_workers_common/documents.py` renders transcript/report outputs.
 
 ## Conventions & Patterns

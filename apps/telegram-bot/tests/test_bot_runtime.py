@@ -1262,7 +1262,7 @@ async def test_existing_result_surface_prevents_duplicate_delivery_after_restart
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
         }
     )
     account = api.resolve_channel_account(channel_identity=channel_identity())
@@ -1308,7 +1308,7 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
         }
     )
     api.internal_artifact_download_access["artifact-1"] = {
@@ -1381,7 +1381,7 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
         }
     )
     api.internal_artifact_download_access["artifact-1"] = {
@@ -1452,7 +1452,7 @@ async def test_deliver_run_result_requires_destination_and_download_url() -> Non
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
         }
     )
     api.internal_artifact_download_access["artifact-no-url"] = {
@@ -1749,7 +1749,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
             "download": {"url": "https://download.test/transcript.txt"},
         }
     )
@@ -1835,7 +1835,7 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain; charset=utf-8",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
             "download": {"url": "https://download.test/transcript.txt"},
         }
     )
@@ -2056,7 +2056,7 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
                 "kind": "transcript",
                 "status": "available",
                 "content_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "object_key": "artifacts/run-1/transcript/docx/transcript.docx",
+                "object_key": "run-1/transcript/docx/transcript.docx",
                 "download": {"url": "https://download.test/transcript.docx"},
             },
             {
@@ -2065,7 +2065,7 @@ async def test_result_callback_sends_transcript_document_when_plain_text_is_too_
                 "kind": "transcript",
                 "status": "available",
                 "content_type": "text/plain; charset=utf-8",
-                "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+                "object_key": "run-1/transcript/plain/transcript.txt",
                 "download": {"url": "https://download.test/transcript.txt"},
             },
         ]
@@ -2286,7 +2286,7 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
             "download": {"url": "https://download.test/transcript.txt"},
         }
     )
@@ -2362,7 +2362,7 @@ async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_un
             "kind": "transcript",
             "status": "available",
             "content_type": "text/plain",
-            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+            "object_key": "run-1/transcript/plain/transcript.txt",
             "download": {"url": "https://download.test/transcript.txt"},
         }
     )

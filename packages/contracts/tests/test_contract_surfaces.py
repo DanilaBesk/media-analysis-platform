@@ -193,3 +193,8 @@ def test_contract_surface_has_no_legacy_vocabulary() -> None:
     )
     for token in forbidden:
         assert token not in surface_text
+
+
+def test_no_compatibility_schema_surface_is_present() -> None:
+    compatibility_root = SCHEMA_ROOT / "compatibility"
+    assert not compatibility_root.exists()

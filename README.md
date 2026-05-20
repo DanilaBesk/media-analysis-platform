@@ -223,4 +223,4 @@ Observability endpoint semantics:
 Artifact object-key semantics:
 
 - New worker-generated artifact `object_key` values are artifact-bucket-relative, for example `<analysis_run_id>/agent/result/result.json`.
-- Legacy rows that still store `artifacts/...` keys remain readable for compatibility.
+- The active target runtime must not write bucket-prefixed artifact keys such as `artifacts/...`; artifact bucket selection is owned by the API/object-store boundary.

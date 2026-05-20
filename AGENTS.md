@@ -45,7 +45,6 @@
 ## Code Map
 
 - `apps/api` - Go API control plane
-- `src/media_analysis_platform/bot.py` - legacy Telegram adapter runtime and handlers
 - `apps/telegram-bot/src/telegram_adapter` - compose-owned Telegram adapter over the API
 - `workers/transcription/src/transcriber_worker_transcription.py` - transcription worker runtime and local source materialization
 - `workers/agent-runner/src/transcriber_worker_agent_runner.py` - report/deep-research agent_run worker runtime
