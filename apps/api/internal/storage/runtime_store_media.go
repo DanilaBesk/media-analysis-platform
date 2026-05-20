@@ -454,6 +454,9 @@ WHERE a.id=$1 AND a.owner_type=$2 AND a.owner_id=$3 AND COALESCE(a.tenant_id,'')
 }
 
 func (s *SQLStateStore) GetArtifactByID(ctx context.Context, artifactID string) (ArtifactRecord, error) {
+	if s.columnExists(ctx, "artifacts", "channel_account_id", false) {
+		return s.getTargetArtifactByID(ctx, artifactID)
+	}
 	row := s.db.QueryRowContext(ctx, artifactSelectSQL()+`
 WHERE a.id=$1
   AND a.status <> 'deleted'`, artifactID)
@@ -518,6 +521,29 @@ func isLegacyRuntimeSchemaMismatch(err error) bool {
 	}
 	message := err.Error()
 	return strings.Contains(message, "SQLSTATE 42703") || strings.Contains(message, "SQLSTATE 42P01")
+}
+
+func (s *SQLStateStore) relationExists(ctx context.Context, relationName string) bool {
+	var relation sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT to_regclass($1)`, "public."+strings.TrimSpace(relationName)).Scan(&relation); err != nil {
+		return true
+	}
+	return relation.Valid && strings.TrimSpace(relation.String) != ""
+}
+
+func (s *SQLStateStore) columnExists(ctx context.Context, tableName, columnName string, defaultOnError bool) bool {
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM information_schema.columns
+  WHERE table_schema='public'
+    AND table_name=$1
+    AND column_name=$2
+)`, strings.TrimSpace(tableName), strings.TrimSpace(columnName)).Scan(&exists); err != nil {
+		return defaultOnError
+	}
+	return exists
 }
 
 func (s *SQLStateStore) ListDiagnostics(ctx context.Context, owner OwnerScope, query DiagnosticQuery) ([]DiagnosticRecord, error) {
@@ -911,6 +937,9 @@ func (s *SQLStateStore) ListPendingEnqueueTasks(ctx context.Context, limit int) 
 	if limit <= 0 {
 		limit = 100
 	}
+	if !s.relationExists(ctx, "analysis_run_tasks") {
+		return []AnalysisRunTaskRecord{}, nil
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT t.id, t.analysis_run_id, t.worker_kind, t.task_type, t.status, t.attempt_no, COALESCE(t.lease_owner,''), t.claimed_at, t.heartbeat_at, t.finalized_at, t.created_at
 FROM analysis_run_tasks t
@@ -932,6 +961,9 @@ LIMIT $1`, limit)
 func (s *SQLStateStore) ListAnalysisRunQueue(ctx context.Context, status, runType, taskType string, limit int) ([]AnalysisRunQueueRecord, error) {
 	if limit <= 0 {
 		limit = 100
+	}
+	if !s.relationExists(ctx, "analysis_run_tasks") {
+		return []AnalysisRunQueueRecord{}, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT t.analysis_run_id, ar.run_type, t.worker_kind, t.task_type, t.status, ar.version, t.attempt_no, t.created_at
@@ -978,6 +1010,9 @@ func (s *SQLStateStore) ListOperationalDiagnostics(ctx context.Context, codes []
 		}
 	}
 	if len(normalized) == 0 {
+		return []DiagnosticRecord{}, nil
+	}
+	if !s.columnExists(ctx, "diagnostics", "owner_type", true) {
 		return []DiagnosticRecord{}, nil
 	}
 	placeholders := make([]string, 0, len(normalized))

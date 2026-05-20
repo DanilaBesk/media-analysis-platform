@@ -3451,16 +3451,15 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 		t.Parallel()
 
 		missingLegacyRelation := errors.New(`ERROR: relation "media_items" does not exist (SQLSTATE 42P01)`)
-		missingLegacyColumn := errors.New(`ERROR: column "owner_type" does not exist (SQLSTATE 42703)`)
 		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, &scriptedRuntimeStoreConfig{
 			execResponses: []scriptedExecResponse{
 				{match: "UPDATE media_items mi", err: missingLegacyRelation},
 			},
 			queryResponses: []scriptedQueryResponse{
 				{match: "SELECT 'source', s.id::text", err: missingLegacyRelation},
-				{match: "FROM analysis_run_tasks t\nJOIN analysis_runs ar", err: missingLegacyRelation},
-				{match: "FROM analysis_run_tasks t\nJOIN analysis_runs ar", err: missingLegacyRelation},
-				{match: "FROM diagnostics", err: missingLegacyColumn},
+				{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{nil}}},
+				{match: "SELECT to_regclass($1)", columns: []string{"to_regclass"}, rows: [][]driver.Value{{nil}}},
+				{match: "information_schema.columns", columns: []string{"exists"}, rows: [][]driver.Value{{false}}},
 			},
 		}))
 		if err != nil {
@@ -3487,6 +3486,132 @@ func TestRuntimeStoreRetentionAndOrphanErrorBranches(t *testing.T) {
 		if err != nil || len(diagnostics) != 0 {
 			t.Fatalf("ListOperationalDiagnostics(target reset) = %#v err=%v, want empty nil", diagnostics, err)
 		}
+	})
+
+	t.Run("target reset relation probes avoid legacy queue SQL", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT to_regclass($1)",
+					columns: []string{"to_regclass"},
+					rows:    [][]driver.Value{{nil}},
+				},
+				{
+					match:   "SELECT to_regclass($1)",
+					columns: []string{"to_regclass"},
+					rows:    [][]driver.Value{{nil}},
+				},
+			},
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		pending, err := store.ListPendingEnqueueTasks(context.Background(), 10)
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("ListPendingEnqueueTasks(target reset probe) = %#v err=%v, want empty nil", pending, err)
+		}
+		queue, err := store.ListAnalysisRunQueue(context.Background(), "", "", "", 10)
+		if err != nil || len(queue) != 0 {
+			t.Fatalf("ListAnalysisRunQueue(target reset probe) = %#v err=%v, want empty nil", queue, err)
+		}
+		config.assertExhausted(t)
+	})
+
+	t.Run("target reset diagnostics column probe avoids legacy diagnostics SQL", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{{
+				match:   "information_schema.columns",
+				columns: []string{"exists"},
+				rows:    [][]driver.Value{{false}},
+			}},
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		diagnostics, err := store.ListOperationalDiagnostics(context.Background(), []string{"artifact_resolution_failed"})
+		if err != nil || len(diagnostics) != 0 {
+			t.Fatalf("ListOperationalDiagnostics(target reset probe) = %#v err=%v, want empty nil", diagnostics, err)
+		}
+		config.assertExhausted(t)
+	})
+
+	t.Run("legacy queue schema mismatch after positive probe is still a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		missingLegacyRelation := errors.New(`ERROR: relation "analysis_run_tasks" does not exist (SQLSTATE 42P01)`)
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "SELECT to_regclass($1)",
+					columns: []string{"to_regclass"},
+					rows:    [][]driver.Value{{"analysis_run_tasks"}},
+				},
+				{
+					match: "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+					err:   missingLegacyRelation,
+				},
+				{
+					match:   "SELECT to_regclass($1)",
+					columns: []string{"to_regclass"},
+					rows:    [][]driver.Value{{"analysis_run_tasks"}},
+				},
+				{
+					match: "FROM analysis_run_tasks t\nJOIN analysis_runs ar",
+					err:   missingLegacyRelation,
+				},
+			},
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		pending, err := store.ListPendingEnqueueTasks(context.Background(), 10)
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("ListPendingEnqueueTasks(schema mismatch) = %#v err=%v, want empty nil", pending, err)
+		}
+		queue, err := store.ListAnalysisRunQueue(context.Background(), "", "", "", 10)
+		if err != nil || len(queue) != 0 {
+			t.Fatalf("ListAnalysisRunQueue(schema mismatch) = %#v err=%v, want empty nil", queue, err)
+		}
+		config.assertExhausted(t)
+	})
+
+	t.Run("legacy diagnostics schema mismatch after positive probe is still a no-op", func(t *testing.T) {
+		t.Parallel()
+
+		missingLegacyColumn := errors.New(`ERROR: column "owner_type" does not exist (SQLSTATE 42703)`)
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "information_schema.columns",
+					columns: []string{"exists"},
+					rows:    [][]driver.Value{{true}},
+				},
+				{
+					match: "FROM diagnostics\nWHERE code IN",
+					err:   missingLegacyColumn,
+				},
+			},
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore() error = %v", err)
+		}
+
+		diagnostics, err := store.ListOperationalDiagnostics(context.Background(), []string{"artifact_resolution_failed"})
+		if err != nil || len(diagnostics) != 0 {
+			t.Fatalf("ListOperationalDiagnostics(schema mismatch) = %#v err=%v, want empty nil", diagnostics, err)
+		}
+		config.assertExhausted(t)
 	})
 
 	t.Run("apply retention policies propagates later step errors", func(t *testing.T) {
@@ -3914,6 +4039,72 @@ func TestRuntimeStoreArtifactAndOpsDiagnosticErrorBranches(t *testing.T) {
 			artifact.ObjectKey != "run-target/report/markdown/report.md" {
 			t.Fatalf("target fallback artifact = %#v", artifact)
 		}
+	})
+
+	t.Run("get artifact by id target schema probe avoids legacy artifact SQL", func(t *testing.T) {
+		t.Parallel()
+
+		config := &scriptedRuntimeStoreConfig{
+			queryResponses: []scriptedQueryResponse{
+				{
+					match:   "information_schema.columns",
+					columns: []string{"exists"},
+					rows:    [][]driver.Value{{true}},
+				},
+				{
+					match: "LEFT JOIN stored_objects so ON so.id = a.stored_object_id",
+					columns: []string{
+						"id",
+						"channel_account_id",
+						"analysis_run_id",
+						"kind",
+						"status",
+						"object_key",
+						"content_type",
+						"checksum",
+						"size_bytes",
+						"visibility",
+						"preview",
+						"retention_state",
+						"created_at",
+						"expires_at",
+						"deleted_at",
+					},
+					rows: [][]driver.Value{{
+						"artifact-target",
+						"channel-account-1",
+						"run-target",
+						"report",
+						ArtifactStatusAvailable,
+						"run-target/report/markdown/report.md",
+						"text/markdown; charset=utf-8",
+						"sha256:target",
+						int64(42),
+						"channel_deliverable",
+						[]byte(`{"filename":"report.md","worker_artifact_kind":"report_markdown"}`),
+						RetentionStateActive,
+						now,
+						expiresAt,
+						nil,
+					}},
+				},
+			},
+		}
+		store, err := NewSQLStateStore(openScriptedRuntimeStoreDB(t, config))
+		if err != nil {
+			t.Fatalf("NewSQLStateStore(target artifact fast path) error = %v", err)
+		}
+
+		artifact, err := store.GetArtifactByID(context.Background(), "artifact-target")
+		if err != nil {
+			t.Fatalf("GetArtifactByID(target fast path) error = %v", err)
+		}
+		if artifact.Owner.OwnerType != "channel_account" ||
+			artifact.Owner.OwnerID != "channel-account-1" ||
+			artifact.ObjectKey != "run-target/report/markdown/report.md" {
+			t.Fatalf("target fast path artifact = %#v", artifact)
+		}
+		config.assertExhausted(t)
 	})
 
 	t.Run("get artifact by id target fallback maps no rows", func(t *testing.T) {
@@ -4789,10 +4980,10 @@ func (c *scriptedRuntimeStoreConfig) nextQuery(query string) (scriptedQueryRespo
 		return scriptedQueryResponse{}, fmt.Errorf("unexpected query: %s", compactSQL(query))
 	}
 	response := c.queryResponses[0]
-	c.queryResponses = c.queryResponses[1:]
 	if !strings.Contains(query, response.match) {
 		return scriptedQueryResponse{}, fmt.Errorf("unexpected query: got %q want substring %q", compactSQL(query), response.match)
 	}
+	c.queryResponses = c.queryResponses[1:]
 	return response, nil
 }
 
