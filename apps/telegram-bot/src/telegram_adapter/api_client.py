@@ -223,6 +223,21 @@ class TelegramApiClient:
         )
         return self._extract(payload, "analysis_run")
 
+    def list_analysis_run_events(
+        self,
+        *,
+        channel_account_id: str,
+        analysis_run_id: str,
+        cursor: str | None = None,
+        page_size: int | None = None,
+    ) -> JsonObject:
+        params = _channel_account_query(channel_account_id)
+        if cursor:
+            params["cursor"] = cursor
+        if page_size:
+            params["page_size"] = str(page_size)
+        return self._request_json(f"/v1/analysis-runs/{analysis_run_id}/events?{urlencode(params)}")
+
     def cancel_analysis_run(
         self,
         *,

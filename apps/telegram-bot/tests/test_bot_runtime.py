@@ -103,6 +103,7 @@ class FakeFinalApiClient:
         self.surface_events: list[dict[str, Any]] = []
         self.replace_surface_requests: list[dict[str, Any]] = []
         self.supersede_surface_requests: list[dict[str, Any]] = []
+        self.run_events: dict[str, list[dict[str, Any]]] = {}
 
     def create_media_asset(self, **kwargs) -> dict[str, Any]:
         media_asset = {
@@ -188,6 +189,13 @@ class FakeFinalApiClient:
     def get_analysis_run(self, **kwargs) -> dict[str, Any]:
         analysis_run_id = kwargs["analysis_run_id"]
         return next(run for run in self.runs if run["analysis_run_id"] == analysis_run_id)
+
+    def list_analysis_run_events(self, **kwargs) -> dict[str, Any]:
+        analysis_run_id = kwargs["analysis_run_id"]
+        return {
+            "items": list(self.run_events.get(analysis_run_id, [])),
+            "page": {"page_size": kwargs.get("page_size") or 10, "has_more": False},
+        }
 
     def cancel_analysis_run(self, **kwargs) -> dict[str, Any]:
         analysis_run_id = kwargs["analysis_run_id"]
@@ -506,6 +514,24 @@ def test_load_settings_reads_explicit_env_mapping() -> None:
 
     assert settings.telegram_bot_token == "secret-token"
     assert settings.allowed_user_ids == (1, 2, 3)
+
+
+def test_message_files_preserves_telegram_voice_duration_for_status_summary() -> None:
+    message = FakeMessage(
+        voice=SimpleNamespace(
+            file_id="voice-file",
+            file_unique_id="voice-unique",
+            mime_type="audio/ogg",
+            file_size=3_639_024,
+            duration=966,
+        )
+    )
+
+    files = list(_message_files(message))
+
+    assert len(files) == 1
+    assert files[0].kind == "voice"
+    assert files[0].duration_seconds == 966
 
 
 def test_load_settings_loads_dotenv_from_base_dir_when_env_is_implicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2882,6 +2908,91 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
         _encode_callback_version(-1)
     with pytest.raises(TelegramUserError):
         _decode_callback_token("xinvalid")
+
+
+def test_render_status_text_shows_active_run_progress_without_provider_terms() -> None:
+    status = InboxStatus(
+        channel_identity=channel_identity(),
+        collection={"collection_id": "inbox-1", "version": 2},
+        items=[
+            {
+                "media_asset_id": "media-voice",
+                "kind": "voice",
+                "display_name": "telegram-voice.ogg",
+                "metadata": {"duration_seconds": 966},
+            }
+        ],
+        page={},
+        active_runs=[
+            {
+                "analysis_run_id": "run-active",
+                "status": "running",
+                "version": 2,
+                "created_at": "2026-05-20T10:00:00Z",
+                "started_at": "2026-05-20T10:00:30Z",
+                "latest_event": {
+                    "event_type": "analysis_run_step.progress",
+                    "created_at": "2026-05-20T10:01:00Z",
+                    "payload": {
+                        "progress_stage": "transcribing",
+                        "progress_message": "Running transcription pipeline",
+                        "payload": {"vad_s": 2.92, "asr_inference_s": 53.29},
+                    },
+                },
+            }
+        ],
+        recent_runs=[],
+        artifacts_by_run={},
+        diagnostics_by_run={},
+        rejected=[],
+    )
+
+    text = render_status_text(status)
+
+    assert "telegram-voice.ogg · 16:06" in text
+    assert "Активная задача: в работе" in text
+    assert "Этап: транскрибируем аудио" in text
+    assert "Прошло:" in text
+    assert "transcribing" not in text
+    assert "Running transcription pipeline" not in text
+    assert "vad" not in text.lower()
+    assert "asr" not in text.lower()
+
+
+def test_gateway_enriches_active_runs_with_latest_progress_event() -> None:
+    api, gateway, _ = make_app()
+    api.runs.append(
+        {
+            "analysis_run_id": "run-active",
+            "selection_snapshot_id": "selection-1",
+            "run_type": "transcription",
+            "status": "running",
+            "version": 2,
+        }
+    )
+    api.run_events["run-active"] = [
+        {
+            "analysis_run_event_id": "event-created",
+            "analysis_run_id": "run-active",
+            "event_type": "analysis_run.created",
+            "status": "queued",
+            "payload": {},
+            "created_at": "2026-05-20T10:00:00Z",
+        },
+        {
+            "analysis_run_event_id": "event-progress",
+            "analysis_run_id": "run-active",
+            "event_type": "analysis_run_step.progress",
+            "status": "running",
+            "payload": {"progress_stage": "materializing_sources"},
+            "created_at": "2026-05-20T10:00:03Z",
+        },
+    ]
+
+    status = status_for(gateway)
+
+    assert status.active_runs[0]["latest_event"]["analysis_run_event_id"] == "event-progress"
+    assert status.recent_runs[0]["latest_event"]["payload"]["progress_stage"] == "materializing_sources"
 
 
 def test_download_artifact_bytes_reads_content_and_rejects_empty(monkeypatch: pytest.MonkeyPatch) -> None:

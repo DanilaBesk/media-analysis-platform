@@ -79,6 +79,7 @@
         <item>Inline actions manage API-owned inbox or collection items, create selections, start analysis_run records, view diagnostics, and fetch artifacts.</item>
         <item>Focused queued or running analysis_run cards expose cancellation through a run id and version checked callback, unfocused cards can cancel the latest visible active run, and background active runs do not block starting a new current selection.</item>
         <item>Inbox visible items, remove actions, and clear-visible actions follow collection membership rather than the broad media inventory.</item>
+        <item>Active transcription cards show material duration, user-facing stage, and elapsed time from analysis_run lifecycle/events while normal copy hides provider-specific VAD/ASR/internal progress fields.</item>
         <item>Status text and inline action labels are Russian-first and make refresh, collection actions, cancellation, diagnostics, and transcription launch controls self-explanatory; successful transcription results auto-deliver as Telegram document messages rather than requiring a Result button.</item>
         <item>Callbacks use API ids and versions and cannot mutate another channel-account state.</item>
         <item>No user-facing execution mode is required to accumulate multiple items.</item>

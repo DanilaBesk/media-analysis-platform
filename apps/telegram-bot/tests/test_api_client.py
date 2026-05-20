@@ -199,6 +199,37 @@ def test_get_analysis_run_uses_channel_account_query_and_extracts_wrapped_object
     assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?channel_account_id=channel-account-1"
 
 
+def test_list_analysis_run_events_uses_channel_account_query_and_page_size() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["url"] = request.full_url
+        return FakeHttpResponse(
+            json.dumps(
+                {
+                    "items": [
+                        {
+                            "analysis_run_event_id": "event-1",
+                            "analysis_run_id": "run-1",
+                            "event_type": "analysis_run_step.progress",
+                            "payload": {"progress_stage": "transcribing"},
+                        }
+                    ],
+                    "page": {"page_size": 5, "has_more": False},
+                }
+            ).encode("utf-8")
+        )
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    events = client.list_analysis_run_events(channel_account_id="channel-account-1", analysis_run_id="run-1", page_size=5)
+
+    assert events["items"][0]["payload"]["progress_stage"] == "transcribing"
+    assert captured["url"] == (
+        "http://api:8080/v1/analysis-runs/run-1/events"
+        "?channel_account_id=channel-account-1&page_size=5"
+    )
+
+
 def test_cancel_analysis_run_posts_channel_account_and_message() -> None:
     captured = {}
 

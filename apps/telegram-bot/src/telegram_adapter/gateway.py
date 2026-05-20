@@ -41,6 +41,7 @@ class TelegramFileInput:
     content_type: str | None = None
     content: bytes | None = None
     size_bytes: int | None = None
+    duration_seconds: int | None = None
     caption: str | None = None
     media_group_id: str | None = None
     message_id: int | None = None
@@ -163,6 +164,7 @@ class TelegramInboxGateway:
                 media_group_id=file_input.media_group_id,
                 file_unique_id=file_input.file_unique_id,
                 caption=file_input.caption,
+                duration_seconds=file_input.duration_seconds,
             ),
         )
         return IngressRecord(status="accepted", label=item.get("display_name", display_name), media_asset=item)
@@ -231,6 +233,16 @@ class TelegramInboxGateway:
             for run in recent_runs
             if run.get("status") in ACTIVE_RUN_STATUSES
         ]
+        active_runs = self._active_runs_with_latest_events(channel_account_id, active_runs)
+        active_runs_by_id = {
+            str(run["analysis_run_id"]): run
+            for run in active_runs
+            if run.get("analysis_run_id")
+        }
+        recent_runs = [
+            active_runs_by_id.get(str(run.get("analysis_run_id") or ""), run)
+            for run in recent_runs
+        ]
         terminal_runs = [
             run
             for run in recent_runs
@@ -266,6 +278,31 @@ class TelegramInboxGateway:
             diagnostics_by_run=diagnostics_by_run,
             rejected=list(rejected or []),
         )
+
+    def _active_runs_with_latest_events(self, channel_account_id: str, active_runs: list[JsonObject]) -> list[JsonObject]:
+        enriched: list[JsonObject] = []
+        for run in active_runs:
+            run_id = str(run.get("analysis_run_id") or "")
+            if not run_id:
+                enriched.append(run)
+                continue
+            try:
+                events_page = self.api_client.list_analysis_run_events(
+                    channel_account_id=channel_account_id,
+                    analysis_run_id=run_id,
+                    page_size=10,
+                )
+            except Exception:
+                enriched.append(run)
+                continue
+            events = [event for event in events_page.get("items", []) if isinstance(event, dict)]
+            if not events:
+                enriched.append(run)
+                continue
+            enriched_run = dict(run)
+            enriched_run["latest_event"] = events[-1]
+            enriched.append(enriched_run)
+        return enriched
 
     def remove_collection_item(
         self,
@@ -814,6 +851,7 @@ def _telegram_metadata(
     media_group_id: str | None = None,
     file_unique_id: str | None = None,
     caption: str | None = None,
+    duration_seconds: int | None = None,
 ) -> JsonObject:
     metadata: JsonObject = {"adapter": "telegram"}
     if message_id is not None:
@@ -824,6 +862,8 @@ def _telegram_metadata(
         metadata["file_unique_id"] = file_unique_id
     if caption:
         metadata["caption"] = caption
+    if duration_seconds is not None and duration_seconds >= 0:
+        metadata["duration_seconds"] = duration_seconds
     return metadata
 
 

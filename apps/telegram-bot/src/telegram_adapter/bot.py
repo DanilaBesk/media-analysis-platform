@@ -16,6 +16,7 @@ import base64
 import logging
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Any
@@ -1479,7 +1480,93 @@ def render_status_text(
             lines.append(
                 f"Активные задачи: {active_runs_count}; последняя: {_run_status_text(str(active_run.get('status') or 'unknown'))}"
             )
+        lines.extend(_active_run_progress_lines(active_run))
     return "\n".join(lines)
+
+
+def _active_run_progress_lines(run: JsonObject) -> list[str]:
+    lines: list[str] = []
+    stage_text = _active_run_stage_text(run)
+    if stage_text:
+        lines.append(f"Этап: {stage_text}")
+    elapsed_text = _active_run_elapsed_text(run)
+    if elapsed_text:
+        lines.append(f"Прошло: {elapsed_text}")
+    return lines
+
+
+def _active_run_stage_text(run: JsonObject) -> str:
+    stage = _active_run_progress_stage(run)
+    if stage == "queued":
+        return "ожидает очереди"
+    if stage == "materializing_sources":
+        return "готовим материалы"
+    if stage == "transcribing":
+        return "транскрибируем аудио"
+    if stage == "persisting_artifacts":
+        return "сохраняем результат"
+    if stage == "running_agent_harness":
+        return "готовим отчет"
+    if stage == "cancel_requested":
+        return "отменяем"
+    status = str(run.get("status") or "")
+    if status == "queued":
+        return "ожидает очереди"
+    if status == "cancel_requested":
+        return "отменяем"
+    if status == "running":
+        return "в работе"
+    return ""
+
+
+def _active_run_progress_stage(run: JsonObject) -> str:
+    latest_event = run.get("latest_event")
+    if isinstance(latest_event, dict):
+        payload = latest_event.get("payload")
+        if isinstance(payload, dict):
+            stage = str(payload.get("progress_stage") or "").strip()
+            if stage:
+                return stage
+    return str(run.get("status") or "").strip()
+
+
+def _active_run_elapsed_text(run: JsonObject) -> str:
+    started_at = _parse_run_datetime(run.get("started_at")) or _parse_run_datetime(run.get("created_at"))
+    if started_at is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    elapsed_seconds = int((now - started_at).total_seconds())
+    if elapsed_seconds < 0:
+        return ""
+    return _format_elapsed_seconds(elapsed_seconds)
+
+
+def _parse_run_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_elapsed_seconds(total_seconds: int) -> str:
+    seconds = max(total_seconds, 0)
+    if seconds < 60:
+        return f"{seconds} сек"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes} мин {seconds:02d} сек"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} ч {minutes:02d} мин"
 
 
 def build_status_keyboard(
@@ -1807,6 +1894,7 @@ def _message_files(message: Message) -> Iterable[TelegramFileInput]:
             file_name=message.video.file_name,
             content_type=message.video.mime_type,
             size_bytes=message.video.file_size,
+            duration_seconds=_telegram_media_duration_seconds(message.video),
             caption=message.caption,
             media_group_id=message.media_group_id,
             message_id=message.message_id,
@@ -1831,6 +1919,7 @@ def _message_files(message: Message) -> Iterable[TelegramFileInput]:
             file_name=message.audio.file_name,
             content_type=message.audio.mime_type,
             size_bytes=message.audio.file_size,
+            duration_seconds=_telegram_media_duration_seconds(message.audio),
             caption=message.caption,
             media_group_id=message.media_group_id,
             message_id=message.message_id,
@@ -1842,10 +1931,22 @@ def _message_files(message: Message) -> Iterable[TelegramFileInput]:
             file_unique_id=message.voice.file_unique_id,
             content_type=message.voice.mime_type,
             size_bytes=message.voice.file_size,
+            duration_seconds=_telegram_media_duration_seconds(message.voice),
             caption=message.caption,
             media_group_id=message.media_group_id,
             message_id=message.message_id,
         )
+
+
+def _telegram_media_duration_seconds(media: Any) -> int | None:
+    value = getattr(media, "duration", None)
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float):
+        return int(value) if value >= 0 else None
+    return None
 
 
 def _item_label(item: JsonObject) -> str:
