@@ -52,12 +52,12 @@ def test_build_runner_delegates_to_run_transcription(monkeypatch, tmp_path: Path
         api_client=api_client,
         object_store=object_store,
         transcriber=transcriber,
-    )("job-1")
+    )("run-1")
 
     assert result == "ok"
     assert calls == [
         {
-            "analysis_run_id": "job-1",
+            "analysis_run_id": "run-1",
             "workspace_root": tmp_path / "runtime",
             "api_client": api_client,
             "source_store": object_store,

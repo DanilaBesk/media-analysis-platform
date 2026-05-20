@@ -166,11 +166,11 @@ def test_shared_api_client_validation_rejects_invalid_inputs() -> None:
     with pytest.raises(ValueError, match="invalid worker_kind"):
         client.claim_analysis_run_step("run-1", worker_kind="unknown", step_kind="selection.transcription")
     with pytest.raises(ValueError, match="progress_stage"):
-        client.publish_progress("job-1", analysis_run_step_id="exec-1", progress_stage="   ")
+        client.publish_progress("run-1", analysis_run_step_id="exec-1", progress_stage="   ")
     with pytest.raises(ValueError, match="artifacts must not be empty"):
-        client.register_artifacts("job-1", analysis_run_step_id="exec-1", artifacts=[])
+        client.register_artifacts("run-1", analysis_run_step_id="exec-1", artifacts=[])
     with pytest.raises(ValueError, match="invalid worker outcome"):
-        client.finalize_analysis_run("job-1", analysis_run_step_id="exec-1", outcome="unknown")
+        client.finalize_analysis_run("run-1", analysis_run_step_id="exec-1", outcome="unknown")
 
 
 def test_claim_analysis_run_passes_through_internal_api_unavailable() -> None:
@@ -217,4 +217,4 @@ def test_check_cancel_rejects_invalid_status() -> None:
     )
 
     with pytest.raises(ValueError, match="invalid cancel-check status"):
-        client.check_cancel("job-1", analysis_run_step_id="exec-1")
+        client.check_cancel("run-1", analysis_run_step_id="exec-1")

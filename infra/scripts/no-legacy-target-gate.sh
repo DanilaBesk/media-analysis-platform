@@ -88,6 +88,13 @@ for snippet in "media_item_id" "selection_id"; do
 done
 
 reject_regex \
+  "worker test fixtures" \
+  '\bjob-[A-Za-z0-9_-]*\b|\brun_job\b' \
+  workers/common/tests \
+  workers/agent-runner/tests \
+  workers/transcription/tests
+
+reject_regex \
   "target storage implementation" \
   '\b(media_items|selection_items|analysis_run_tasks|owner_type|owner_id|tenant_id|safe_adapter_context)\b' \
   apps/api/internal/storage/target/fixtures.go \

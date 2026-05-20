@@ -72,11 +72,11 @@ def test_fetch_file_uses_source_bucket_and_writes_destination(tmp_path: Path) ->
     store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
 
     destination = tmp_path / "inputs" / "source.mp3"
-    store.fetch_file(object_key="sources/job/source.mp3", destination=destination)
+    store.fetch_file(object_key="sources/run/source.mp3", destination=destination)
 
     assert destination.read_bytes() == b"source-bytes"
     assert transport.calls[0]["method"] == "GET"
-    assert transport.calls[0]["url"] == "http://minio:9000/sources/sources/job/source.mp3"
+    assert transport.calls[0]["url"] == "http://minio:9000/sources/sources/run/source.mp3"
     headers = transport.calls[0]["headers"]
     assert headers["X-Amz-Date"] == "20260423T120000Z"
     assert headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=access/20260423/us-east-1/s3/aws4_request")
@@ -87,11 +87,11 @@ def test_fetch_file_uses_artifact_bucket_for_claimed_artifact_inputs(tmp_path: P
     store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
 
     destination = tmp_path / "inputs" / "transcript.md"
-    store.fetch_file(object_key="job/transcript/segmented/transcript.md", destination=destination)
+    store.fetch_file(object_key="run/transcript/segmented/transcript.md", destination=destination)
 
     assert destination.read_bytes() == b"artifact-bytes"
     assert transport.calls[0]["method"] == "GET"
-    assert transport.calls[0]["url"] == "http://minio:9000/artifacts/job/transcript/segmented/transcript.md"
+    assert transport.calls[0]["url"] == "http://minio:9000/artifacts/run/transcript/segmented/transcript.md"
 
 
 def test_put_bytes_uses_artifact_bucket_and_content_headers() -> None:
@@ -99,14 +99,14 @@ def test_put_bytes_uses_artifact_bucket_and_content_headers() -> None:
     store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
 
     store.put_bytes(
-        object_key="job/transcript/plain/transcript.txt",
+        object_key="run/transcript/plain/transcript.txt",
         content=b"transcript",
         mime_type="text/plain",
     )
 
     call = transport.calls[0]
     assert call["method"] == "PUT"
-    assert call["url"] == "http://minio:9000/artifacts/job/transcript/plain/transcript.txt"
+    assert call["url"] == "http://minio:9000/artifacts/run/transcript/plain/transcript.txt"
     assert call["body"] == b"transcript"
     assert call["headers"]["Content-Type"] == "text/plain"
     assert call["headers"]["X-Amz-Content-Sha256"] == "54e6289e14c7b0e7ad9acc2dfc4c1e3d027d0eef7f5c4c3fe7c292761d0e06a6"

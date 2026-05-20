@@ -50,17 +50,17 @@ class InMemoryObjectStore:
 
 def test_build_artifact_object_key_uses_canonical_layout() -> None:
     assert (
-        build_artifact_object_key("job-1", "transcript_segmented_markdown", "transcript.md")
-        == "job-1/transcript/segmented/transcript.md"
+        build_artifact_object_key("run-1", "transcript_segmented_markdown", "transcript.md")
+        == "run-1/transcript/segmented/transcript.md"
     )
-    assert build_artifact_object_key("job-1", "execution_log", "execution.log") == "job-1/logs/execution.log"
+    assert build_artifact_object_key("run-1", "execution_log", "execution.log") == "run-1/logs/execution.log"
     assert (
-        build_artifact_object_key("job-1", "agent_result_json", "result.json")
-        == "job-1/agent/result/result.json"
+        build_artifact_object_key("run-1", "agent_result_json", "result.json")
+        == "run-1/agent/result/result.json"
     )
     assert (
-        build_artifact_object_key("job-1", "summary_markdown", "summary.md")
-        == "job-1/summary/markdown/summary.md"
+        build_artifact_object_key("run-1", "summary_markdown", "summary.md")
+        == "run-1/summary/markdown/summary.md"
     )
     assert (
         build_artifact_object_key("run-1", "run_manifest", "run-manifest.json")
@@ -82,7 +82,7 @@ def test_build_artifact_object_key_sanitizes_path_segments() -> None:
 
 def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
     object_store = InMemoryObjectStore()
-    writer = ArtifactWriter(analysis_run_id="job-2", object_store=object_store)
+    writer = ArtifactWriter(analysis_run_id="run-2", object_store=object_store)
 
     descriptor = writer.write_text_artifact(
         "report_markdown",
@@ -97,12 +97,12 @@ def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
         "format": "markdown",
         "filename": "report.md",
         "mime_type": "text/markdown; charset=utf-8",
-        "object_key": "job-2/report/markdown/report.md",
+        "object_key": "run-2/report/markdown/report.md",
         "size_bytes": len("# Report\n".encode("utf-8")),
     }
     assert object_store.calls == [
         {
-            "object_key": "job-2/report/markdown/report.md",
+            "object_key": "run-2/report/markdown/report.md",
             "content": b"# Report\n",
             "mime_type": "text/markdown; charset=utf-8",
         }
@@ -111,7 +111,7 @@ def test_write_text_artifact_returns_contract_shaped_descriptor() -> None:
 
 def test_write_agent_result_json_uses_agent_result_path() -> None:
     object_store = InMemoryObjectStore()
-    writer = ArtifactWriter(analysis_run_id="job-agent", object_store=object_store)
+    writer = ArtifactWriter(analysis_run_id="run-agent", object_store=object_store)
 
     descriptor = writer.write_text_artifact(
         "agent_result_json",
@@ -126,12 +126,12 @@ def test_write_agent_result_json_uses_agent_result_path() -> None:
         "format": "json",
         "filename": "result.json",
         "mime_type": "application/json; charset=utf-8",
-        "object_key": "job-agent/agent/result/result.json",
+        "object_key": "run-agent/agent/result/result.json",
         "size_bytes": len(b'{"status":"ok"}'),
     }
     assert object_store.calls == [
         {
-            "object_key": "job-agent/agent/result/result.json",
+            "object_key": "run-agent/agent/result/result.json",
             "content": b'{"status":"ok"}',
             "mime_type": "application/json; charset=utf-8",
         }
@@ -140,7 +140,7 @@ def test_write_agent_result_json_uses_agent_result_path() -> None:
 
 def test_write_file_artifact_uses_existing_file_bytes(tmp_path: Path) -> None:
     object_store = InMemoryObjectStore()
-    writer = ArtifactWriter(analysis_run_id="job-3", object_store=object_store)
+    writer = ArtifactWriter(analysis_run_id="run-3", object_store=object_store)
     docx_path = tmp_path / "transcript.docx"
     docx_path.write_bytes(b"docx-bytes")
 
@@ -150,7 +150,7 @@ def test_write_file_artifact_uses_existing_file_bytes(tmp_path: Path) -> None:
         mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
-    assert descriptor.object_key == "job-3/transcript/docx/transcript.docx"
+    assert descriptor.object_key == "run-3/transcript/docx/transcript.docx"
     assert descriptor.size_bytes == len(b"docx-bytes")
     assert object_store.calls[0]["content"] == b"docx-bytes"
 
@@ -161,6 +161,6 @@ def test_descriptor_rejects_invalid_artifact_kind() -> None:
             artifact_kind="unknown",
             filename="artifact.txt",
             mime_type="text/plain",
-            object_key="artifacts/job-1/unknown/artifact.txt",
+            object_key="run-1/unknown/artifact.txt",
             size_bytes=1,
         )

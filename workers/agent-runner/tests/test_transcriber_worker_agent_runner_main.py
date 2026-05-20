@@ -46,10 +46,10 @@ def test_build_runner_delegates_to_run_agent_harness(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(launcher, "runAgentHarness", fake_run_agent_harness)
 
-    result = launcher.build_runner(config, api_client=api_client, object_store=object_store)("job-1")
+    result = launcher.build_runner(config, api_client=api_client, object_store=object_store)("run-1")
 
     assert result == "ok"
-    assert calls[0]["analysis_run_id"] == "job-1"
+    assert calls[0]["analysis_run_id"] == "run-1"
     assert calls[0]["workspace_root"] == tmp_path / "runtime"
     assert calls[0]["api_client"] is api_client
     assert calls[0]["artifact_store"] is object_store
@@ -68,10 +68,10 @@ def test_main_wires_agent_runner_runtime_identity(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(launcher, "WorkerObjectStore", FakeObjectStore)
     monkeypatch.setattr(launcher.WorkerObjectStoreConfig, "from_env", staticmethod(lambda env: {"env": dict(env)}))
 
-    def fake_loop(config, run_job, *, api_client=None, sleeper=None):
+    def fake_loop(config, run_analysis_run, *, api_client=None, sleeper=None):
         captured["config"] = config
         captured["api_client"] = api_client
-        captured["runner_result"] = run_job("job-main")
+        captured["runner_result"] = run_analysis_run("run-main")
 
     monkeypatch.setattr(launcher, "run_worker_loop", fake_loop)
     monkeypatch.setattr(launcher, "AnalysisRunControlClient", lambda api_config: {"api_config": api_config})
@@ -91,7 +91,7 @@ def test_main_wires_agent_runner_runtime_identity(monkeypatch, tmp_path: Path) -
     assert config.worker_kind == "agent_runner"
     assert config.step_kind == "report.analysis"
     assert config.run_type == "report"
-    assert captured["runner_result"]["analysis_run_id"] == "job-main"
+    assert captured["runner_result"]["analysis_run_id"] == "run-main"
     assert captured["runner_result"]["harness_registry"].__class__.__name__ == "DefaultAgentHarnessRegistry"
     assert captured["runner_result"]["lease_client"].__class__.__name__ == "LocalAgentHarnessLeaseClient"
 

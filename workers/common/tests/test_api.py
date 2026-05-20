@@ -338,25 +338,25 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         artifact_kind="transcript_plain",
         filename="transcript.txt",
         mime_type="text/plain; charset=utf-8",
-        object_key="job-1/transcript/plain/transcript.txt",
+        object_key="run-1/transcript/plain/transcript.txt",
         size_bytes=42,
         format="plain_text",
     )
 
     client.publish_progress(
-        "job-1",
+        "run-1",
         analysis_run_step_id="exec-1",
         progress_stage="transcribing",
         progress_message="running asr",
     )
-    client.register_artifacts("job-1", analysis_run_step_id="exec-1", artifacts=[artifact])
+    client.register_artifacts("run-1", analysis_run_step_id="exec-1", artifacts=[artifact])
     client.register_diagnostics(
-        "job-1",
+        "run-1",
         analysis_run_step_id="exec-1",
         diagnostics=[{"code": "warn_partial_source", "severity": "warning"}],
     )
     client.finalize_analysis_run(
-        "job-1",
+        "run-1",
         analysis_run_step_id="exec-1",
         outcome="succeeded",
         progress_stage="completed",
@@ -368,7 +368,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
     assert client.transport.calls == [
         {
             "method": "POST",
-            "url": "http://internal.local/internal/v1/analysis-runs/job-1/steps/progress",
+            "url": "http://internal.local/internal/v1/analysis-runs/run-1/steps/progress",
             "payload": {
                 "analysis_run_step_id": "exec-1",
                 "progress_stage": "transcribing",
@@ -377,7 +377,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         },
         {
             "method": "POST",
-            "url": "http://internal.local/internal/v1/analysis-runs/job-1/artifacts",
+            "url": "http://internal.local/internal/v1/analysis-runs/run-1/artifacts",
             "payload": {
                 "analysis_run_step_id": "exec-1",
                 "artifacts": [
@@ -386,7 +386,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
                         "format": "plain_text",
                         "filename": "transcript.txt",
                         "mime_type": "text/plain; charset=utf-8",
-                        "object_key": "job-1/transcript/plain/transcript.txt",
+                        "object_key": "run-1/transcript/plain/transcript.txt",
                         "size_bytes": 42,
                     }
                 ],
@@ -394,7 +394,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         },
         {
             "method": "POST",
-            "url": "http://internal.local/internal/v1/analysis-runs/job-1/diagnostics",
+            "url": "http://internal.local/internal/v1/analysis-runs/run-1/diagnostics",
             "payload": {
                 "analysis_run_step_id": "exec-1",
                 "diagnostics": [{"code": "warn_partial_source", "severity": "warning"}],
@@ -402,7 +402,7 @@ def test_progress_finalize_and_artifact_calls_preserve_contract_shapes() -> None
         },
         {
             "method": "POST",
-            "url": "http://internal.local/internal/v1/analysis-runs/job-1/steps/finalize",
+            "url": "http://internal.local/internal/v1/analysis-runs/run-1/steps/finalize",
             "payload": {
                 "analysis_run_step_id": "exec-1",
                 "outcome": "succeeded",
@@ -418,7 +418,7 @@ def test_check_cancel_uses_query_contract() -> None:
         responses={
             (
                 "GET",
-                "http://internal.local/internal/v1/analysis-runs/job-2/steps/cancel-check?analysis_run_step_id=exec-2",
+                "http://internal.local/internal/v1/analysis-runs/run-2/steps/cancel-check?analysis_run_step_id=exec-2",
             ): {
                 "cancel_requested": True,
                 "status": "cancel_requested",
@@ -428,7 +428,7 @@ def test_check_cancel_uses_query_contract() -> None:
     )
     client = AnalysisRunControlClient(config, transport=transport)
 
-    result = client.check_cancel("job-2", analysis_run_step_id="exec-2")
+    result = client.check_cancel("run-2", analysis_run_step_id="exec-2")
 
     assert result.cancel_requested is True
     assert result.status == "cancel_requested"
@@ -441,7 +441,7 @@ def test_resolve_agent_run_request_access_uses_query_contract() -> None:
         responses={
             (
                 "GET",
-                "http://internal.local/internal/v1/analysis-runs/job-agent/request-access?analysis_run_step_id=exec-agent",
+                "http://internal.local/internal/v1/analysis-runs/run-agent/request-access?analysis_run_step_id=exec-agent",
             ): {
                 "provider": "minio_presigned_url",
                 "url": "https://minio.local/private/request.json",
@@ -454,7 +454,7 @@ def test_resolve_agent_run_request_access_uses_query_contract() -> None:
     )
     client = AnalysisRunControlClient(config, transport=transport)
 
-    result = client.resolve_agent_run_request_access("job-agent", analysis_run_step_id="exec-agent")
+    result = client.resolve_agent_run_request_access("run-agent", analysis_run_step_id="exec-agent")
 
     assert result.provider == "minio_presigned_url"
     assert result.request_ref == "agentreq_digest"
@@ -470,7 +470,7 @@ def test_resolve_artifact_uses_internal_download_access_contract() -> None:
                 "http://internal.local/internal/v1/artifacts/artifact-1/download-access",
             ): {
                 "artifact_id": "artifact-1",
-                "analysis_run_id": "job-1",
+                "analysis_run_id": "run-1",
                 "artifact_kind": "transcript_plain",
                 "filename": "transcript.txt",
                 "mime_type": "text/plain",
@@ -500,7 +500,7 @@ def test_internal_api_failures_emit_required_marker(caplog: pytest.LogCaptureFix
     )
 
     with pytest.raises(InternalApiUnavailableError, match="connection refused"):
-        client.claim_analysis_run_step("job-3", worker_kind="transcription", step_kind="selection.transcription")
+        client.claim_analysis_run_step("run-3", worker_kind="transcription", step_kind="selection.transcription")
 
     assert "[WorkerCommon][callInternalApi][BLOCK_CALL_INTERNAL_CONTROL_PLANE]" in caplog.text
 
@@ -512,14 +512,14 @@ def test_claim_analysis_run_rejects_malformed_response() -> None:
             responses={
                 (
                     "POST",
-                    "http://internal.local/internal/v1/analysis-runs/job-4/steps/claim",
+                    "http://internal.local/internal/v1/analysis-runs/run-4/steps/claim",
                 ): {**_claim_response(), "selection_snapshot": {"selection_snapshot_id": SNAPSHOT_ID, "items": [], "option_snapshot": {}, "sealed_at": "2026-05-10T12:00:00Z"}}
             }
         ),
     )
 
     with pytest.raises(ValueError, match="selection"):
-        client.claim_analysis_run_step("job-4", worker_kind="transcription", step_kind="selection.transcription")
+        client.claim_analysis_run_step("run-4", worker_kind="transcription", step_kind="selection.transcription")
 
 
 def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
@@ -529,9 +529,9 @@ def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
             responses={
                 (
                     "POST",
-                    "http://internal.local/internal/v1/analysis-runs/job-agent/steps/claim",
+                    "http://internal.local/internal/v1/analysis-runs/run-agent/steps/claim",
                 ): _claim_response(
-                    analysis_run_id="job-agent",
+                    analysis_run_id="run-agent",
                     run_type="custom",
                     params={"harness_name": "fixture"},
                 )
@@ -539,7 +539,7 @@ def test_claim_analysis_run_allows_agent_run_without_ordered_inputs() -> None:
         ),
     )
 
-    execution = client.claim_analysis_run_step("job-agent", worker_kind="agent_runner", step_kind="report.analysis")
+    execution = client.claim_analysis_run_step("run-agent", worker_kind="agent_runner", step_kind="report.analysis")
 
     assert execution.run_type == "custom"
     assert execution.selection_snapshot.items[0].media_asset_id == ASSET_ID

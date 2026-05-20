@@ -307,13 +307,13 @@ def test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes(tmp_
         "run_manifest",
         "run_diagnostics",
     ]
-    assert artifact_store.calls[0]["object_key"] == "job-agent/agent/result/result.json"
+    assert artifact_store.calls[0]["object_key"] == "run-agent/agent/result/result.json"
     assert json.loads(artifact_store.calls[0]["content"]) == {
         "echo": "abc123",
         "harness_name": "fixture",
         "status": "ok",
     }
-    assert artifact_store.calls[1]["object_key"] == "job-agent/logs/execution.log"
+    assert artifact_store.calls[1]["object_key"] == "run-agent/logs/execution.log"
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert manifest["analysis_run_id"] == execution.analysis_run_id
     assert manifest["summary"] == {"included_count": 1, "skipped_count": 0, "failed_count": 0}
@@ -486,8 +486,8 @@ def test_run_agent_harness_partial_success_policy_retains_artifacts_for_successf
 def test_local_fixture_registry_supports_test_fixture_and_redacts_prompt_metadata(tmp_path: Path) -> None:
     registry = LocalAgentHarnessRegistry()
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "test_fixture", "prompt": "raw secret prompt", "temperature": 0},
     )
 
@@ -510,8 +510,8 @@ def test_claude_code_harness_rejects_cancellation_and_missing_request_access(tmp
         runner=FakeClaudeCodeRunner(),
     )
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "claude-code"},
     )
 
@@ -524,8 +524,8 @@ def test_claude_code_harness_rejects_cancellation_and_missing_request_access(tmp
 
 def test_claude_code_harness_wraps_runner_failures(tmp_path: Path) -> None:
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "claude-code"},
         request_access={"request": {"prompt": "raw secret prompt"}},
     )
@@ -676,7 +676,7 @@ def test_run_agent_harness_claude_code_runs_container_local_with_private_request
     assert result_payload["request_ref"] == "agentreq_digest"
     assert api_client.calls[1] == (
         "resolve_agent_run_request_access",
-        {"analysis_run_id": "job-agent", "analysis_run_step_id": "exec-agent"},
+        {"analysis_run_id": "run-agent", "analysis_run_step_id": "exec-agent"},
     )
     assert api_client.calls[-1][1]["outcome"] == "succeeded"
 
@@ -715,7 +715,7 @@ def test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_o
                 json.dumps(
                     {
                         "artifact_id": artifact_id,
-                        "analysis_run_id": "parent-job",
+                        "analysis_run_id": "parent-run",
                         "artifact_kind": "transcript_segmented_markdown",
                         "filename": "transcript.md",
                         "mime_type": "text/markdown; charset=utf-8",
@@ -824,7 +824,7 @@ def test_run_agent_harness_claude_code_materializes_declared_step_artifacts(
                 json.dumps(
                     {
                         "artifact_id": artifact_id,
-                        "analysis_run_id": "parent-job",
+                        "analysis_run_id": "parent-run",
                         "artifact_kind": "transcript_segmented_markdown",
                         "filename": "transcript.md",
                         "mime_type": "text/markdown; charset=utf-8",
@@ -976,7 +976,7 @@ def test_run_agent_harness_accepts_generic_operation_envelope_with_declared_summ
 
     assert api_client.calls[1] == (
         "resolve_agent_run_request_access",
-        {"analysis_run_id": "job-agent", "analysis_run_step_id": "exec-agent"},
+        {"analysis_run_id": "run-agent", "analysis_run_step_id": "exec-agent"},
     )
     register_call = next(call for call in api_client.calls if call[0] == "register_artifacts")
     assert [artifact.artifact_kind for artifact in register_call[1]["artifacts"]] == [
@@ -1013,7 +1013,7 @@ def test_run_agent_harness_request_access_policy_can_require_access_by_operation
 
     assert api_client.calls[1] == (
         "resolve_agent_run_request_access",
-        {"analysis_run_id": "job-agent", "analysis_run_step_id": "exec-agent"},
+        {"analysis_run_id": "run-agent", "analysis_run_step_id": "exec-agent"},
     )
     assert registry.requests[0][1].request_access == {
         "provider": "minio_presigned_url",
@@ -1133,7 +1133,7 @@ def test_run_agent_harness_claude_code_deep_research_materializes_transcript_and
         return json.dumps(
             {
                 "artifact_id": artifact_id,
-                "analysis_run_id": "source-job",
+                "analysis_run_id": "source-run",
                 "artifact_kind": artifact_kind,
                 "filename": filename,
                 "mime_type": "text/markdown; charset=utf-8",
@@ -1464,8 +1464,8 @@ def test_run_agent_harness_cancels_before_artifact_upload(tmp_path: Path) -> Non
 
 def test_default_registry_routes_local_fixture_and_requires_claude_settings(tmp_path: Path) -> None:
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "fixture"},
     )
     registry = DefaultAgentHarnessRegistry()
@@ -1480,8 +1480,8 @@ def test_default_registry_routes_local_fixture_and_requires_claude_settings(tmp_
 def test_local_fixture_registry_rejects_canceled_request(tmp_path: Path) -> None:
     registry = LocalAgentHarnessRegistry()
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "fixture"},
     )
 
@@ -1492,8 +1492,8 @@ def test_local_fixture_registry_rejects_canceled_request(tmp_path: Path) -> None
 def test_local_fixture_registry_rejects_unsupported_harness_name(tmp_path: Path) -> None:
     registry = LocalAgentHarnessRegistry()
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "fixture"},
     )
 
@@ -1761,7 +1761,7 @@ def test_agent_runner_workspace_dir_rejects_defensive_token_escape(
     monkeypatch.setattr(agent_runner, "_safe_workspace_token", lambda value: "../outside")
 
     with pytest.raises(ValueError, match="outside workspace_root"):
-        agent_runner._workspace_dir_for_analysis_run(tmp_path, "job-escape")
+        agent_runner._workspace_dir_for_analysis_run(tmp_path, "run-escape")
 
 
 def test_agent_runner_prompt_context_requires_some_prompt_material(tmp_path: Path) -> None:
@@ -1802,8 +1802,8 @@ def test_agent_runner_helper_branches_cover_constructor_policy_and_lease_edges(t
 
     lease_client = LocalAgentHarnessLeaseClient({"fixture": 2})
     request = AgentHarnessRequest(
-        analysis_run_id="job-agent",
-        workspace_dir=tmp_path / "job-agent",
+        analysis_run_id="run-agent",
+        workspace_dir=tmp_path / "run-agent",
         params={"harness_name": "fixture"},
     )
     first_lease = lease_client.acquire("fixture", request)
@@ -1932,7 +1932,7 @@ def _execution(
     *,
     item_count: int = 1,
     step_inputs: tuple[AnalysisRunStepInput, ...] = (),
-    analysis_run_id: str = "job-agent",
+    analysis_run_id: str = "run-agent",
 ) -> ClaimedAnalysisRunStep:
     items = []
     for position in range(item_count):

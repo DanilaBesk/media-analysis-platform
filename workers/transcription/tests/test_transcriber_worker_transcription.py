@@ -163,7 +163,7 @@ class RecordingApiClient:
         path = self.artifact_downloads[artifact_id]
         return ArtifactResolutionResult(
             artifact_id=artifact_id,
-            analysis_run_id="child-job",
+            analysis_run_id="child-run",
             artifact_kind="transcript_plain",
             filename=path.name,
             mime_type="text/plain; charset=utf-8",
@@ -869,7 +869,7 @@ def test_process_local_transcription_reuses_extracted_local_pipeline(tmp_path: P
         local_path=source_path,
     )
     transcriber = RecordingTranscriber()
-    workspace_dir = tmp_path / "job-1"
+    workspace_dir = tmp_path / "run-1"
 
     materialized_source, transcript_result, artifacts = process_local_transcription(
         source,
@@ -885,7 +885,7 @@ def test_process_local_transcription_reuses_extracted_local_pipeline(tmp_path: P
 
 
 def test_materialize_local_source_keeps_workspace_file_in_place(tmp_path: Path) -> None:
-    workspace_dir = tmp_path / "job-1"
+    workspace_dir = tmp_path / "run-1"
     workspace_dir.mkdir(parents=True, exist_ok=True)
     existing = workspace_dir / "source.ogg"
     existing.write_bytes(b"audio")
@@ -920,7 +920,7 @@ def test_materialize_local_source_returns_source_without_local_path(tmp_path: Pa
         local_path=None,
     )
 
-    assert materialize_local_source(source, tmp_path / "job-3") is source
+    assert materialize_local_source(source, tmp_path / "run-3") is source
 
 
 def test_run_transcription_classifies_source_materialization_failures(tmp_path: Path) -> None:
@@ -1380,12 +1380,12 @@ def test_workspace_dir_for_analysis_run_rejects_defensive_token_escape(
     monkeypatch.setattr(worker_module, "_safe_workspace_token", lambda value: "../outside")
 
     with pytest.raises(ValueError, match="outside workspace_root"):
-        worker_module._workspace_dir_for_analysis_run(tmp_path, "job-escape")
+        worker_module._workspace_dir_for_analysis_run(tmp_path, "run-escape")
 
 
 def _build_execution(
     *ordered_inputs: OrderedWorkerInput,
-    analysis_run_id: str = "job-1",
+    analysis_run_id: str = "run-1",
     root_analysis_run_id: str = "root-1",
     params: dict[str, object] | None = None,
 ) -> ClaimedAnalysisRunStep:
