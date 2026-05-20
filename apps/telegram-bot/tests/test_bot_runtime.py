@@ -11,7 +11,13 @@ from typing import Any
 import warnings
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNetworkError, TelegramUnauthorizedError
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramForbiddenError,
+    TelegramNetworkError,
+    TelegramUnauthorizedError,
+)
 
 from telegram_adapter import __main__ as telegram_main
 from telegram_adapter.api_client import TelegramApiClientError
@@ -25,6 +31,7 @@ from telegram_adapter.bot import (
     _artifact_label,
     _classify_telegram_surface_error,
     _classify_polling_log_message,
+    _callback_payload,
     _chat_type,
     _decode_callback_token,
     _decode_callback_version,
@@ -64,6 +71,7 @@ from telegram_adapter.bot import (
     _transcript_artifact_rank,
     _visible_item_lines,
     build_status_keyboard,
+    render_status_text,
 )
 from telegram_adapter.config import TelegramAdapterSettings, load_settings
 from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode, rejected_reason_text
@@ -755,6 +763,25 @@ async def test_send_or_edit_status_prefers_edit_then_falls_back_to_new_message()
 
 
 @pytest.mark.asyncio
+async def test_send_or_edit_status_treats_not_modified_as_success() -> None:
+    not_modified = telegram_bad_request(
+        "editMessageText",
+        "Bad Request: message is not modified: specified new message content and reply markup are exactly the same",
+    )
+    bot = FakeBot(edit_error=not_modified)
+    _, gateway, app = make_app(bot=bot)
+    gateway.add_text(owner=owner(), text="same status")
+    message = FakeMessage()
+    app.status_message_ids[(10, 7)] = 5001
+
+    sent = await app._send_or_edit_status(message)
+
+    assert sent is True
+    assert app.status_message_ids[(10, 7)] == 5001
+    assert message.answers == []
+
+
+@pytest.mark.asyncio
 async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message() -> None:
     edit_bot = FakeBot()
     _, gateway, app = make_app(bot=edit_bot)
@@ -843,6 +870,35 @@ async def test_status_surface_supersedes_uneditable_message_and_creates_replacem
     assert app.status_message_ids[(10, 7)] == 9001
     assert active_surfaces[-1]["surface_type"] == "current_materials_panel"
     assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9001}
+
+
+@pytest.mark.asyncio
+async def test_status_surface_supersedes_current_surface_after_generic_edit_failure() -> None:
+    api, gateway, app = make_app(bot=FakeBot(edit_error=RuntimeError("edit transport failed")))
+    gateway.add_text(owner=owner(), text="surface fallback")
+    account = api.resolve_channel_account(owner=owner())
+    api.channel_surfaces.append(
+        {
+            "channel_surface_id": "surface-old",
+            "channel_account_id": account["channel_account_id"],
+            "channel": "telegram",
+            "surface_type": "current_materials_panel",
+            "surface_key": "current:chat:10:user:7",
+            "address": {"chat_id": 10, "message_id": 5002},
+            "address_fingerprint": "telegram:10:5002",
+            "display_state": {"screen": "main"},
+            "lifecycle_status": "active",
+            "version": 1,
+            "subjects": [],
+        }
+    )
+
+    sent = await app._send_or_edit_status(FakeMessage())
+
+    assert sent is True
+    assert api.supersede_surface_requests[-1]["channel_surface_id"] == "surface-old"
+    assert api.supersede_surface_requests[-1]["reason"] == "message_not_editable"
+    assert app.status_message_ids[(10, 7)] == 9001
 
 
 @pytest.mark.asyncio
@@ -941,6 +997,224 @@ async def test_restart_recovery_supersedes_unreachable_surface_and_starts_pollin
     assert bot.edit_calls[-1]["chat_id"] == 20
     assert bot.edit_calls[-1]["message_id"] == 6001
     assert "BLOCK_HANDLE_TELEGRAM_SURFACE_FAILURE" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_recover_current_materials_surface_replaces_missing_message() -> None:
+    edit_error = telegram_bad_request("editMessageText", "Bad Request: message to edit not found")
+    bot = FakeBot(edit_error=edit_error)
+    api, gateway, app = make_app(bot=bot)
+    gateway.add_text(owner=owner(), text="recover replacement")
+    account = api.resolve_channel_account(owner=owner())
+    surface = api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="current_materials_panel",
+        surface_key="current:chat:10:user:7",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
+    )
+
+    await app._recover_current_materials_surface(owner=owner(), surface=surface)
+
+    assert api.supersede_surface_requests[-1]["reason"] == "telegram_message_unavailable"
+    assert bot.send_message_calls[-1]["chat_id"] == 10
+    assert app.status_message_ids[(10, 7)] == 9003
+    active_surfaces = [item for item in api.channel_surfaces if item["lifecycle_status"] == "active"]
+    assert active_surfaces[-1]["address"] == {"chat_id": 10, "message_id": 9003}
+
+
+@pytest.mark.asyncio
+async def test_recover_current_materials_surface_clears_status_when_replacement_send_fails() -> None:
+    edit_error = telegram_bad_request("editMessageText", "Bad Request: message to edit not found")
+    send_error = telegram_bad_request("sendMessage", "Bad Request: chat not found")
+    bot = FakeBot(edit_error=edit_error, send_message_errors={10: send_error})
+    api, gateway, app = make_app(bot=bot)
+    gateway.add_text(owner=owner(), text="recover replacement failure")
+    account = api.resolve_channel_account(owner=owner())
+    surface = api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="current_materials_panel",
+        surface_key="current:chat:10:user:7",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
+    )
+
+    await app._recover_current_materials_surface(owner=owner(), surface=surface)
+
+    assert api.supersede_surface_requests[-1]["reason"] == "telegram_message_unavailable"
+    assert app.status_message_ids == {}
+    assert bot.send_message_calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_active_surfaces_skips_invalid_accounts_and_handles_recover_errors() -> None:
+    api, gateway, app = make_app(bot=FakeBot())
+    gateway.add_text(owner=owner(), text="recover error")
+    good_account = api.resolve_channel_account(owner=owner())
+    api.channel_accounts.extend(
+        [
+            {
+                "channel_account_id": "skip-channel",
+                "channel": "email",
+                "external_account_ref": "chat:20:user:8",
+                "display_name": "email",
+                "status": "active",
+                "metadata": {"adapter_identity": {"telegram_chat_id": "20", "telegram_user_id": "8"}},
+            },
+            {
+                "channel_account_id": "skip-status",
+                "channel": "telegram",
+                "external_account_ref": "chat:21:user:8",
+                "display_name": "inactive",
+                "status": "disabled",
+                "metadata": {"adapter_identity": {"telegram_chat_id": "21", "telegram_user_id": "8"}},
+            },
+            {
+                "channel_account_id": "skip-owner",
+                "channel": "telegram",
+                "external_account_ref": " ",
+                "display_name": "missing owner",
+                "status": "active",
+                "metadata": {},
+            },
+        ]
+    )
+    surface = api.upsert_channel_surface(
+        channel_account_id=good_account["channel_account_id"],
+        surface_type="current_materials_panel",
+        surface_key="current:chat:10:user:7",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "collection", "subject_id": "inbox-1", "subject_role": "primary"}],
+    )
+
+    async def fail_recover_current_surface(**kwargs: Any) -> None:
+        raise telegram_bad_request("editMessageText", "Bad Request: chat not found")
+
+    app._recover_current_materials_surface = fail_recover_current_surface  # type: ignore[method-assign]
+
+    await app._recover_active_channel_surfaces()
+
+    assert api.supersede_surface_requests[-1]["channel_surface_id"] == surface["channel_surface_id"]
+    assert api.supersede_surface_requests[-1]["reason"] == "telegram_address_unreachable"
+
+
+@pytest.mark.asyncio
+async def test_recover_current_materials_surface_ignores_missing_address_and_owner_key() -> None:
+    _, _, app = make_app(bot=FakeBot())
+
+    await app._recover_current_materials_surface(owner=owner(), surface={"address": {}, "display_state": {"screen": "main"}})
+    await app._recover_current_materials_surface(
+        owner={"owner_type": "telegram", "owner_id": "chat:10:user:7"},
+        surface={"address": {"chat_id": 10, "message_id": 5001}, "display_state": {"screen": "main"}},
+    )
+
+    assert app.status_message_ids == {}
+    assert app.bot.edit_calls == []
+
+
+def test_recover_analysis_task_surface_ignores_missing_inputs_and_terminal_runs() -> None:
+    api, _, app = make_app(bot=FakeBot())
+    app._recover_analysis_task_surface(
+        owner=owner(),
+        surface={"address": {"chat_id": 10, "message_id": 5001}, "subjects": []},
+    )
+    api.runs.append(
+        {
+            "analysis_run_id": "run-done",
+            "selection_snapshot_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    app._recover_analysis_task_surface(
+        owner=owner(),
+        surface={
+            "address": {"chat_id": 10, "message_id": 5001},
+            "display_state": {"screen": "main"},
+            "subjects": [{"subject_type": "analysis_run", "subject_id": "run-done", "subject_role": "primary"}],
+        },
+    )
+
+    assert app.run_watch_tasks == {}
+
+
+def test_surface_persistence_helpers_cover_conflict_supersede_failure_and_missing_chat() -> None:
+    api, gateway, app = make_app(bot=FakeBot())
+    gateway.add_text(owner=owner(), text="persist conflict")
+    status = status_for(gateway)
+    state = _PageState(screen="main")
+    surface = {
+        "channel_surface_id": "surface-old",
+        "address": {"chat_id": 10, "message_id": 5001},
+        "version": 2,
+    }
+
+    def fail_replace(**kwargs: Any) -> dict[str, Any]:
+        raise TelegramApiClientError("/internal/v1/channel-surfaces/surface-old", 409, "conflict", code="version_conflict")
+
+    gateway.replace_channel_surface_display_state = fail_replace  # type: ignore[method-assign]
+
+    persisted = app._persist_current_materials_surface(
+        owner=owner(),
+        status=status,
+        state=state,
+        chat_id=10,
+        message_id=5001,
+        surface=surface,
+    )
+
+    assert persisted["surface_type"] == "current_materials_panel"
+    assert persisted["address"] == {"chat_id": 10, "message_id": 5001}
+
+    def fail_replace_with_backend_error(**kwargs: Any) -> dict[str, Any]:
+        raise TelegramApiClientError("/internal/v1/channel-surfaces/surface-old", 500, "backend", code="backend_error")
+
+    gateway.replace_channel_surface_display_state = fail_replace_with_backend_error  # type: ignore[method-assign]
+
+    with pytest.raises(TelegramApiClientError):
+        app._persist_current_materials_surface(
+            owner=owner(),
+            status=status,
+            state=state,
+            chat_id=10,
+            message_id=5001,
+            surface=surface,
+        )
+
+    def fail_supersede(**kwargs: Any) -> dict[str, Any]:
+        raise TelegramApiClientError("/internal/v1/channel-surfaces/surface-old/events", 500, "boom", code="backend_error")
+
+    gateway.supersede_channel_surface = fail_supersede  # type: ignore[method-assign]
+
+    assert app._try_supersede_channel_surface(surface=surface, reason="test") is None
+
+    with pytest.raises(RuntimeError, match="telegram_result_chat_missing"):
+        app._persist_result_artifact_surface(
+            owner=owner(),
+            artifact={"artifact_id": "artifact-1"},
+            chat_id=None,
+            message_id=9001,
+            delivery_mode="document",
+        )
+
+
+def test_telegram_surface_error_handler_reraises_fatal_errors() -> None:
+    _, _, app = make_app(bot=FakeBot())
+
+    with pytest.raises(TelegramUnauthorizedError):
+        app._handle_telegram_surface_error(
+            surface=None,
+            error=TelegramUnauthorizedError(method=SimpleNamespace(__api_method__="sendMessage"), message="unauthorized"),
+            operation="send",
+            scope="fatal_surface",
+        )
 
 
 @pytest.mark.asyncio
@@ -1123,6 +1397,59 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
 
 
 @pytest.mark.asyncio
+async def test_deliver_run_result_requires_destination_and_download_url() -> None:
+    api, _, app = make_app(bot=FakeBot())
+
+    notice, show_alert = await app._deliver_run_result(
+        owner=owner(),
+        analysis_run_id="run-1",
+        expected_version=1,
+    )
+
+    assert notice == "Готовый транскрипт пока недоступен."
+    assert show_alert is True
+    assert api.internal_artifact_download_access_requests == []
+
+    api.runs.append(
+        {
+            "analysis_run_id": "run-1",
+            "selection_snapshot_id": "selection-1",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 1,
+        }
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-no-url",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "artifacts/run-1/transcript/plain/transcript.txt",
+        }
+    )
+    api.internal_artifact_download_access["artifact-no-url"] = {
+        "artifact_id": "artifact-no-url",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {},
+    }
+
+    missing_url_notice, missing_url_show_alert = await app._deliver_run_result(
+        owner=owner(),
+        analysis_run_id="run-1",
+        expected_version=1,
+        chat_id=10,
+    )
+
+    assert missing_url_notice == "Готовый транскрипт пока недоступен."
+    assert missing_url_show_alert is True
+    assert api.internal_artifact_download_access_requests == ["artifact-no-url"]
+    assert app.bot.send_document_calls == []
+
+
+@pytest.mark.asyncio
 async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_active() -> None:
     api, gateway, app = make_app()
     gateway.add_text(owner=owner(), text="queued run")
@@ -1149,6 +1476,31 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
     assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
     assert track_run_id == run["analysis_run_id"]
     assert terminal_status is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_run_start_status_returns_terminal_status_after_initial_poll() -> None:
+    api, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="terminal run")
+    status = gateway.restore_status(owner=owner())
+    selection = gateway.create_selection_snapshot(
+        owner=owner(),
+        collection_id=status.collection["collection_id"],
+        expected_version=int(status.collection["version"]),
+    )
+    run = gateway.start_analysis(owner=owner(), selection_snapshot_id=selection["selection_snapshot_id"])
+    api.runs[0]["status"] = "succeeded"
+
+    status, prefix, answer_text, track_run_id, terminal_status = await app._resolve_run_start_status(
+        owner=owner(),
+        run=run,
+    )
+
+    assert answer_text == "Транскрибация: успешно"
+    assert prefix == "Транскрибация: успешно\n\n"
+    assert status.recent_runs[0]["analysis_run_id"] == run["analysis_run_id"]
+    assert track_run_id == run["analysis_run_id"]
+    assert terminal_status == "succeeded"
 
 
 @pytest.mark.asyncio
@@ -1252,6 +1604,57 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     assert back_callback.answers[-1]["text"] == "Открыта главная карточка"
     assert app.page_states[(10, 7)].screen == "main"
     assert base_message.edits[-1]["text"].startswith("Транскрибация\nМатериалов: 1")
+
+
+@pytest.mark.asyncio
+async def test_callback_materials_previous_page_and_clear_visible_rollback() -> None:
+    api, gateway, app = make_app(page_size=1)
+    gateway.add_text(owner=owner(), text="one")
+    gateway.add_text(owner=owner(), text="two")
+    base_message = FakeMessage()
+
+    page_one_status = status_for(gateway)
+    app._set_page_state((10, 7), page_one_status, current_cursor=None, previous_cursors=[], selection=None, screen="materials")
+    next_callback = FakeCallback(data="ib:pn", message=base_message)
+    await app._handle_status_callback(next_callback)
+
+    assert next_callback.answers[-1]["text"] == "Открыта следующая страница"
+    assert app.page_states[(10, 7)].current_cursor == "media-1"
+    assert app.page_states[(10, 7)].previous_cursors == [None]
+
+    previous_callback = FakeCallback(data="ib:pp", message=base_message)
+    await app._handle_status_callback(previous_callback)
+
+    assert previous_callback.answers[-1]["text"] == "Открыта предыдущая страница"
+    assert app.page_states[(10, 7)].current_cursor is None
+    assert app.page_states[(10, 7)].previous_cursors == []
+    assert base_message.edits[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
+
+    page_two_status = status_for(gateway, cursor="media-1")
+    clear_keyboard = build_status_keyboard(page_two_status, can_go_back=True, current_cursor="media-1", screen="materials")
+    clear_callback_data = next(
+        button.callback_data
+        for row in clear_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:cl:")
+    )
+    app._set_page_state(
+        (10, 7),
+        page_two_status,
+        current_cursor="media-1",
+        previous_cursors=[None],
+        selection=None,
+        screen="materials",
+    )
+
+    clear_callback = FakeCallback(data=clear_callback_data, message=base_message)
+    await app._handle_status_callback(clear_callback)
+
+    assert clear_callback.answers[-1]["text"] == "Видимые материалы убраны"
+    assert api.remove_requests[-1]["media_asset_id"] == "media-2"
+    assert app.page_states[(10, 7)].current_cursor is None
+    assert app.page_states[(10, 7)].previous_cursors == []
+    assert base_message.edits[-1]["text"].startswith("Материалы\nМатериалов: 1\n1. Текст: «one»")
 
 
 @pytest.mark.asyncio
@@ -1734,6 +2137,89 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
 
 
 @pytest.mark.asyncio
+async def test_legacy_collection_and_selection_callbacks_start_terminal_runs() -> None:
+    api, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="ready to finish")
+    status = status_for(gateway)
+    base_message = FakeMessage()
+    original_start_analysis = gateway.start_analysis
+
+    def terminal_start_analysis(**kwargs: Any) -> dict[str, Any]:
+        run = original_start_analysis(**kwargs)
+        api.runs[-1]["status"] = "succeeded"
+        return run
+
+    gateway.start_analysis = terminal_start_analysis  # type: ignore[method-assign]
+    collection_id = str(status.collection["collection_id"])
+    collection_version = int(status.collection["version"])
+    app._set_page_state((10, 7), status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+
+    collection_callback = FakeCallback(
+        data=_callback_payload(
+            "sl",
+            _encode_callback_token(collection_id),
+            _encode_callback_version(collection_version),
+        ),
+        message=base_message,
+    )
+    await app._handle_status_callback(collection_callback)
+
+    assert collection_callback.answers[-1]["text"] == "Транскрибация: успешно"
+    assert api.runs[-1]["selection_snapshot_id"] == "selection-1"
+    assert app.run_watch_tasks == {}
+
+    selection = gateway.create_selection_snapshot(
+        owner=owner(),
+        collection_id=collection_id,
+        expected_version=collection_version,
+    )
+    selection_callback = FakeCallback(
+        data=_callback_payload("rn", _encode_callback_token(str(selection["selection_snapshot_id"]))),
+        message=base_message,
+    )
+    app._set_page_state((10, 7), status_for(gateway), current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    await app._handle_status_callback(selection_callback)
+
+    assert selection_callback.answers[-1]["text"] == "Транскрибация: успешно"
+    assert api.runs[-1]["selection_snapshot_id"] == selection["selection_snapshot_id"]
+    assert app.run_watch_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_legacy_collection_callback_schedules_tracking_for_active_run() -> None:
+    _, gateway, app = make_app()
+    gateway.add_text(owner=owner(), text="watch legacy run")
+    status = status_for(gateway)
+    base_message = FakeMessage()
+    tick = asyncio.Event()
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 1
+    app.run_status_follow_delay_seconds = 0
+    app._set_page_state((10, 7), status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+
+    callback = FakeCallback(
+        data=_callback_payload(
+            "sl",
+            _encode_callback_token(str(status.collection["collection_id"])),
+            _encode_callback_version(int(status.collection["version"])),
+        ),
+        message=base_message,
+    )
+    await app._handle_status_callback(callback)
+
+    assert callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert (10, 7) in app.run_watch_tasks
+    app._cancel_run_status_tracking((10, 7))
+    tick.set()
+    await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
 async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button_after_success() -> None:
     api, gateway, app = make_app(page_size=1, bot=FakeBot())
     gateway.add_text(owner=owner(), text="one")
@@ -1934,6 +2420,68 @@ async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_watcher_replaces_existing_task_and_logs_unexpected_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, gateway, app = make_app(bot=FakeBot())
+    tick = asyncio.Event()
+    key = (10, 7)
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app.run_status_follow_attempts = 1
+    app.run_status_follow_delay_seconds = 0
+    app._schedule_run_status_tracking(
+        key=key,
+        owner=owner(),
+        analysis_run_id="run-old",
+        chat_id=10,
+        message_id=5001,
+    )
+    first_task = app.run_watch_tasks[key]
+
+    app._schedule_run_status_tracking(
+        key=key,
+        owner=owner(),
+        analysis_run_id="run-new",
+        chat_id=10,
+        message_id=5001,
+    )
+
+    await asyncio.sleep(0)
+    assert first_task.cancelled()
+    app._cancel_run_status_tracking(key)
+    tick.set()
+    await asyncio.sleep(0)
+
+    async def no_sleep(_seconds: float) -> None:
+        return None
+
+    def fail_get_run_status(**kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("run polling exploded")
+
+    app._sleep = no_sleep  # type: ignore[assignment]
+    gateway.get_run_status = fail_get_run_status  # type: ignore[method-assign]
+    with caplog.at_level(logging.WARNING):
+        task = asyncio.create_task(
+            app._track_run_status_until_terminal(
+                key=key,
+                owner=owner(),
+                analysis_run_id="run-new",
+                chat_id=10,
+                message_id=5001,
+            )
+        )
+        app.run_watch_tasks[key] = task
+        await task
+
+    assert key not in app.run_watch_tasks
+    assert "run status tracking failed for run-new" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_callback_error_paths_cover_stale_unknown_and_normalized_failures() -> None:
     _, gateway, app = make_app()
     gateway.add_text(owner=owner(), text="one")
@@ -1969,6 +2517,36 @@ async def test_callback_error_paths_cover_stale_unknown_and_normalized_failures(
     no_previous_callback = FakeCallback(data="ib:pp", message=message)
     await app._handle_status_callback(no_previous_callback)
     assert no_previous_callback.answers[-1]["show_alert"] is True
+
+    stale_result_callback = FakeCallback(
+        data=_callback_payload("ar", _encode_callback_token("run-missing"), _encode_callback_version(1)),
+        message=message,
+    )
+    await app._handle_status_callback(stale_result_callback)
+    assert stale_result_callback.answers[-1]["show_alert"] is True
+
+    app.page_states.pop((10, 7), None)
+    stale_cancel_without_state = FakeCallback(
+        data=_callback_payload("cn", _encode_callback_token("run-missing"), _encode_callback_version(1)),
+        message=message,
+    )
+    await app._handle_status_callback(stale_cancel_without_state)
+    assert stale_cancel_without_state.answers[-1]["show_alert"] is True
+
+    app._set_page_state((10, 7), status_for(gateway), current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    stale_cancel_without_active_run = FakeCallback(
+        data=_callback_payload("cn", _encode_callback_token("run-missing"), _encode_callback_version(1)),
+        message=message,
+    )
+    await app._handle_status_callback(stale_cancel_without_active_run)
+    assert stale_cancel_without_active_run.answers[-1]["show_alert"] is True
+
+    stale_diagnostics_callback = FakeCallback(
+        data=_callback_payload("dg", _encode_callback_token("run-missing"), _encode_callback_version(1)),
+        message=message,
+    )
+    await app._handle_status_callback(stale_diagnostics_callback)
+    assert stale_diagnostics_callback.answers[-1]["show_alert"] is True
 
     blocked_callback = FakeCallback(data="ib:rf", message=message)
 
@@ -2011,6 +2589,38 @@ async def test_handlers_return_early_and_error_helpers_cover_remaining_branches(
     scope_callback = FakeCallback(data="ib:rf", message=FakeMessage())
     assert await scope_app._ensure_callback_allowed(scope_callback) is False
     assert "только в личном чате" in scope_callback.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_edit_callback_status_reraises_real_bad_request() -> None:
+    _, gateway, app = make_app()
+    message = FakeMessage()
+
+    async def raise_bad_request(text: str, **kwargs: Any) -> None:
+        raise telegram_bad_request("editMessageText", "Bad Request: invalid reply markup")
+
+    message.edit_text = raise_bad_request  # type: ignore[method-assign]
+
+    with pytest.raises(TelegramBadRequest):
+        await app._edit_callback_status(FakeCallback(data="ib:rf", message=message), status_for(gateway))
+
+
+@pytest.mark.asyncio
+async def test_post_ingest_refresh_failure_mentions_plural_saved_items_and_rejections() -> None:
+    _, _, app = make_app()
+    message = FakeMessage()
+
+    await app._answer_post_ingest_refresh_failure(
+        message,
+        [
+            IngressRecord(status="accepted", label="one"),
+            IngressRecord(status="accepted", label="two"),
+            IngressRecord(status="rejected", label="bad", reason="unsupported_message"),
+        ],
+    )
+
+    assert "Материалы сохранены в inbox на сервере: 2." in message.answers[-1]["text"]
+    assert "Отклонено: bad" in message.answers[-1]["text"]
 
 
 def test_helper_functions_cover_remaining_callback_token_and_error_branches() -> None:
@@ -2094,6 +2704,7 @@ def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
     assert restored_state.focused_run_id == "run-active"
     assert _surface_subject_id(surface, subject_type="analysis_run", role="primary") == "run-active"
     assert _surface_subject_id({"subjects": "bad"}, subject_type="analysis_run", role="primary") is None
+    assert _surface_subject_id({"subjects": [{"subject_type": "artifact"}]}, subject_type="analysis_run", role="primary") is None
 
     owner_from_metadata = _owner_from_channel_account({"metadata": {"owner": owner()}})
     owner_from_external_ref = _owner_from_channel_account(
@@ -2140,6 +2751,23 @@ def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
     assert _kind_text("text") == "текст"
     assert _media_status_text("ready") == "готов"
     assert _display_name_text("Telegram voice") == "Голосовое из Telegram"
+    assert "· готовится" in _artifact_label({"artifact_id": "artifact-pending", "kind": "transcript", "status": "pending"})
+    assert "Активные задачи: 2" in render_status_text(
+        InboxStatus(
+            owner=owner(),
+            collection={"collection_id": "inbox-1", "version": 2, "items": []},
+            items=[],
+            page={},
+            active_runs=[
+                {"analysis_run_id": "run-1", "status": "queued"},
+                {"analysis_run_id": "run-2", "status": "running"},
+            ],
+            recent_runs=[],
+            artifacts_by_run={},
+            diagnostics_by_run={},
+            rejected=[],
+        )
+    )
 
     artifacts = [
         {"artifact_id": "skip-kind", "kind": "report", "status": "available", "content_type": "text/plain"},
@@ -2178,6 +2806,9 @@ def test_bot_display_surface_and_artifact_helpers_cover_edge_branches() -> None:
     ).classification == "transient_telegram_delivery_error"
     assert _classify_telegram_surface_error(
         TelegramUnauthorizedError(method=SimpleNamespace(__api_method__="sendMessage"), message="unauthorized")
+    ).fatal is True
+    assert _classify_telegram_surface_error(
+        TelegramAPIError(method=SimpleNamespace(__api_method__="sendMessage"), message="unknown")
     ).fatal is True
 
 
@@ -2251,3 +2882,29 @@ def test_helper_functions_cover_callback_error_normalization_and_message_shapes(
         _encode_callback_version(-1)
     with pytest.raises(TelegramUserError):
         _decode_callback_token("xinvalid")
+
+
+def test_download_artifact_bytes_reads_content_and_rejects_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, app = make_app()
+
+    class FakeResponse:
+        def __init__(self, content: bytes) -> None:
+            self.content = content
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return self.content
+
+    monkeypatch.setattr("telegram_adapter.bot.urlopen", lambda _url, timeout: FakeResponse(b"artifact bytes"))
+
+    assert app._download_artifact_bytes("http://download.test/transcript.txt") == b"artifact bytes"
+
+    monkeypatch.setattr("telegram_adapter.bot.urlopen", lambda _url, timeout: FakeResponse(b""))
+
+    with pytest.raises(RuntimeError, match="artifact_download_failed"):
+        app._download_artifact_bytes("http://download.test/empty.txt")
