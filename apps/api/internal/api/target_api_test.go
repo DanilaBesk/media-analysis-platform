@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -576,6 +577,11 @@ func TestTargetApiCoversInvalidJSONAndUploadEdges(t *testing.T) {
 	assertErrorCode(t, missingFile, http.StatusBadRequest, "invalid_media_asset")
 	assertNoLegacyTargetVocabulary(t, missingFile.Body.String())
 
+	missingMetadata := httptest.NewRecorder()
+	mux.ServeHTTP(missingMetadata, rawMultipartTargetUploadRequest(t, "/v1/media-assets/upload", "", "voice.ogg", "voice-bytes", "audio/ogg", true))
+	assertErrorCode(t, missingMetadata, http.StatusBadRequest, "invalid_media_asset")
+	assertNoLegacyTargetVocabulary(t, missingMetadata.Body.String())
+
 	blankFilename := httptest.NewRecorder()
 	mux.ServeHTTP(blankFilename, rawMultipartTargetUploadRequest(t, "/v1/media-assets/upload", `{"channel_account_id":"channel-account-1","kind":"voice"}`, " ", "voice-bytes", "", true))
 	assertTargetStatus(t, blankFilename, http.StatusCreated)
@@ -595,6 +601,74 @@ func TestTargetApiCoversInvalidJSONAndUploadEdges(t *testing.T) {
 	}, "notes.txt", "hello"))
 	assertErrorCode(t, uploadError, http.StatusNotFound, "not_found")
 	assertNoLegacyTargetVocabulary(t, uploadError.Body.String())
+}
+
+func TestTargetApiUploadMapsUnreadableUploadBodies(t *testing.T) {
+	t.Parallel()
+
+	req := multipartTargetUploadRequest(t, "/v1/media-assets/upload", map[string]any{
+		"channel_account_id": "channel-account-1",
+		"kind":               "voice",
+		"display_name":       "voice.ogg",
+	}, "voice.ogg", "voice-bytes")
+	rec := httptest.NewRecorder()
+	server := &Server{
+		deps: Dependencies{Target: &fakeTargetService{now: time.Date(2026, 5, 18, 13, 0, 0, 0, time.UTC)}},
+		readUploadBody: func(io.Reader) ([]byte, error) {
+			return nil, io.ErrUnexpectedEOF
+		},
+		maxRequestBytes: defaultMaxRequestBody,
+	}
+
+	server.handleUploadTargetMediaAsset(rec, req)
+
+	assertErrorCode(t, rec, http.StatusBadRequest, "invalid_media_asset")
+	assertNoLegacyTargetVocabulary(t, rec.Body.String())
+}
+
+func TestTargetApiNormalizesNilItemsToEmptyArrays(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 13, 5, 0, 0, time.UTC)
+	target := &fakeTargetService{now: now, nilItems: true}
+	mux := newFinalMux(Dependencies{Target: target})
+
+	cases := []struct {
+		name       string
+		req        *http.Request
+		wantStatus int
+	}{
+		{name: "list channel accounts", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-accounts", nil), wantStatus: http.StatusOK},
+		{name: "list media assets", req: httptest.NewRequest(http.MethodGet, "/v1/media-assets?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "get inbox", req: httptest.NewRequest(http.MethodGet, "/v1/collections/inbox?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "create collection", req: jsonRequest(http.MethodPost, "/v1/collections", map[string]any{"channel_account_id": "channel-account-1", "name": "Research"}), wantStatus: http.StatusCreated},
+		{name: "list collections", req: httptest.NewRequest(http.MethodGet, "/v1/collections?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "get collection", req: httptest.NewRequest(http.MethodGet, "/v1/collections/collection-1?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "update collection", req: jsonRequest(http.MethodPatch, "/v1/collections/collection-1", map[string]any{"channel_account_id": "channel-account-1", "expected_version": 1, "name": "Research"}), wantStatus: http.StatusOK},
+		{name: "update collection items", req: jsonRequest(http.MethodPost, "/v1/collections/collection-1/items", map[string]any{"channel_account_id": "channel-account-1", "expected_version": 1, "items": []map[string]any{{"media_asset_id": "media-asset-1", "position": 0}}}), wantStatus: http.StatusOK},
+		{name: "remove collection item", req: httptest.NewRequest(http.MethodDelete, "/v1/collections/collection-1/items/media-asset-1?channel_account_id=channel-account-1&expected_version=1", nil), wantStatus: http.StatusOK},
+		{name: "list analysis runs", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "list analysis run events", req: httptest.NewRequest(http.MethodGet, "/v1/analysis-runs/run-1/events?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "list artifacts", req: httptest.NewRequest(http.MethodGet, "/v1/artifacts?channel_account_id=channel-account-1&analysis_run_id=run-1", nil), wantStatus: http.StatusOK},
+		{name: "list diagnostics", req: httptest.NewRequest(http.MethodGet, "/v1/diagnostics?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "list step queue", req: httptest.NewRequest(http.MethodGet, "/internal/v1/analysis-runs/queue", nil), wantStatus: http.StatusOK},
+		{name: "list surfaces", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "list active surfaces", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/active?channel_account_id=channel-account-1", nil), wantStatus: http.StatusOK},
+		{name: "list surface events", req: httptest.NewRequest(http.MethodGet, "/internal/v1/channel-surfaces/surface-1/events", nil), wantStatus: http.StatusOK},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, tc.req)
+			assertTargetStatus(t, rec, tc.wantStatus)
+			body := rec.Body.String()
+			if !strings.Contains(body, `"items":[]`) {
+				t.Fatalf("%s response must normalize nil items to []: %s", tc.name, body)
+			}
+			assertNoLegacyTargetVocabulary(t, body)
+		})
+	}
 }
 
 func TestTargetApiReturnsDependencyUnavailableWhenTargetMissing(t *testing.T) {
@@ -880,6 +954,7 @@ type fakeTargetService struct {
 	err                 error
 	updateCollectionErr error
 	listStepQueueErr    error
+	nilItems            bool
 
 	channelAccountReq        TargetChannelAccountRequest
 	listChannelAccountsReq   TargetListChannelAccountsRequest
@@ -942,16 +1017,20 @@ func (f *fakeTargetService) ListChannelAccounts(_ context.Context, req TargetLis
 	if f.err != nil {
 		return TargetChannelAccountPage{}, f.err
 	}
+	items := []TargetChannelAccount{{
+		ChannelAccountID:   "channel-account-1",
+		Channel:            "telegram",
+		ExternalAccountRef: "chat-1",
+		DisplayName:        "Danila",
+		Status:             "active",
+		CreatedAt:          f.now,
+		UpdatedAt:          f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetChannelAccountPage{
-		Items: []TargetChannelAccount{{
-			ChannelAccountID:   "channel-account-1",
-			Channel:            "telegram",
-			ExternalAccountRef: "chat-1",
-			DisplayName:        "Danila",
-			Status:             "active",
-			CreatedAt:          f.now,
-			UpdatedAt:          f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -996,7 +1075,11 @@ func (f *fakeTargetService) ListMediaAssets(_ context.Context, req TargetListMed
 	if f.err != nil {
 		return TargetMediaAssetPage{}, f.err
 	}
-	return TargetMediaAssetPage{Items: []TargetMediaAsset{}, Page: 1, PageSize: req.PageSize}, nil
+	items := []TargetMediaAsset{}
+	if f.nilItems {
+		items = nil
+	}
+	return TargetMediaAssetPage{Items: items, Page: 1, PageSize: req.PageSize}, nil
 }
 
 func (f *fakeTargetService) GetMediaAsset(_ context.Context, req TargetGetMediaAssetRequest) (TargetMediaAsset, error) {
@@ -1039,7 +1122,11 @@ func (f *fakeTargetService) GetInboxCollection(_ context.Context, req TargetGetI
 	if f.err != nil {
 		return TargetCollection{}, f.err
 	}
-	return fakeTargetCollection("inbox-1", req.ChannelAccountID, "inbox", "Inbox", f.now), nil
+	collection := fakeTargetCollection("inbox-1", req.ChannelAccountID, "inbox", "Inbox", f.now)
+	if f.nilItems {
+		collection.Items = nil
+	}
+	return collection, nil
 }
 
 func (f *fakeTargetService) CreateCollection(_ context.Context, req TargetCreateCollectionRequest) (TargetCollection, error) {
@@ -1047,7 +1134,11 @@ func (f *fakeTargetService) CreateCollection(_ context.Context, req TargetCreate
 	if f.err != nil {
 		return TargetCollection{}, f.err
 	}
-	return fakeTargetCollection("collection-1", req.ChannelAccountID, "user", req.Name, f.now), nil
+	collection := fakeTargetCollection("collection-1", req.ChannelAccountID, "user", req.Name, f.now)
+	if f.nilItems {
+		collection.Items = nil
+	}
+	return collection, nil
 }
 
 func (f *fakeTargetService) ListCollections(_ context.Context, req TargetListCollectionsRequest) (TargetCollectionPage, error) {
@@ -1055,8 +1146,12 @@ func (f *fakeTargetService) ListCollections(_ context.Context, req TargetListCol
 	if f.err != nil {
 		return TargetCollectionPage{}, f.err
 	}
+	items := []TargetCollection{fakeTargetCollection("collection-1", req.ChannelAccountID, "user", "Research", f.now)}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetCollectionPage{
-		Items:    []TargetCollection{fakeTargetCollection("collection-1", req.ChannelAccountID, "user", "Research", f.now)},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1067,7 +1162,11 @@ func (f *fakeTargetService) GetCollection(_ context.Context, req TargetGetCollec
 	if f.err != nil {
 		return TargetCollection{}, f.err
 	}
-	return fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now), nil
+	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now)
+	if f.nilItems {
+		collection.Items = nil
+	}
+	return collection, nil
 }
 
 func (f *fakeTargetService) UpdateCollection(_ context.Context, req TargetUpdateCollectionRequest) (TargetCollection, error) {
@@ -1080,6 +1179,9 @@ func (f *fakeTargetService) UpdateCollection(_ context.Context, req TargetUpdate
 	}
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", req.Name, f.now)
 	collection.Version = req.ExpectedVersion + 1
+	if f.nilItems {
+		collection.Items = nil
+	}
 	return collection, nil
 }
 
@@ -1090,6 +1192,9 @@ func (f *fakeTargetService) UpdateCollectionItems(_ context.Context, req TargetU
 	}
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now)
 	collection.Version = req.ExpectedVersion + 1
+	if f.nilItems {
+		collection.Items = nil
+	}
 	return collection, nil
 }
 
@@ -1101,6 +1206,9 @@ func (f *fakeTargetService) RemoveCollectionItem(_ context.Context, req TargetRe
 	collection := fakeTargetCollection(req.CollectionID, req.ChannelAccountID, "user", "Research", f.now)
 	collection.Version = req.ExpectedVersion + 1
 	collection.Items = []TargetCollectionItem{}
+	if f.nilItems {
+		collection.Items = nil
+	}
 	return collection, nil
 }
 
@@ -1197,17 +1305,21 @@ func (f *fakeTargetService) ListAnalysisRuns(_ context.Context, req TargetListAn
 	if f.err != nil {
 		return TargetAnalysisRunPage{}, f.err
 	}
+	items := []TargetAnalysisRun{{
+		AnalysisRunID:       "run-1",
+		ChannelAccountID:    req.ChannelAccountID,
+		SelectionSnapshotID: "snapshot-1",
+		RunType:             "transcription",
+		Status:              "queued",
+		Version:             1,
+		EvidenceGateState:   "not_required",
+		CreatedAt:           f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetAnalysisRunPage{
-		Items: []TargetAnalysisRun{{
-			AnalysisRunID:       "run-1",
-			ChannelAccountID:    req.ChannelAccountID,
-			SelectionSnapshotID: "snapshot-1",
-			RunType:             "transcription",
-			Status:              "queued",
-			Version:             1,
-			EvidenceGateState:   "not_required",
-			CreatedAt:           f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1270,15 +1382,19 @@ func (f *fakeTargetService) ListAnalysisRunEvents(_ context.Context, req TargetL
 	if f.err != nil {
 		return TargetAnalysisRunEventPage{}, f.err
 	}
+	items := []TargetAnalysisRunEvent{{
+		AnalysisRunEventID: "event-1",
+		AnalysisRunID:      req.AnalysisRunID,
+		EventType:          "analysis_run.created",
+		Version:            1,
+		Status:             "queued",
+		CreatedAt:          f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetAnalysisRunEventPage{
-		Items: []TargetAnalysisRunEvent{{
-			AnalysisRunEventID: "event-1",
-			AnalysisRunID:      req.AnalysisRunID,
-			EventType:          "analysis_run.created",
-			Version:            1,
-			Status:             "queued",
-			CreatedAt:          f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1289,17 +1405,21 @@ func (f *fakeTargetService) ListArtifacts(_ context.Context, req TargetListArtif
 	if f.err != nil {
 		return TargetArtifactPage{}, f.err
 	}
+	items := []TargetArtifact{{
+		ArtifactID:       "artifact-1",
+		ChannelAccountID: req.ChannelAccountID,
+		AnalysisRunID:    req.AnalysisRunID,
+		Kind:             "transcript",
+		Status:           "available",
+		ContentType:      "text/plain",
+		Visibility:       "channel_deliverable",
+		CreatedAt:        f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetArtifactPage{
-		Items: []TargetArtifact{{
-			ArtifactID:       "artifact-1",
-			ChannelAccountID: req.ChannelAccountID,
-			AnalysisRunID:    req.AnalysisRunID,
-			Kind:             "transcript",
-			Status:           "available",
-			ContentType:      "text/plain",
-			Visibility:       "channel_deliverable",
-			CreatedAt:        f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1327,17 +1447,21 @@ func (f *fakeTargetService) ListDiagnostics(_ context.Context, req TargetListDia
 	if f.err != nil {
 		return TargetDiagnosticPage{}, f.err
 	}
+	items := []TargetDiagnostic{{
+		DiagnosticID:     "diagnostic-1",
+		ChannelAccountID: req.ChannelAccountID,
+		SubjectType:      req.SubjectType,
+		SubjectID:        req.SubjectID,
+		Severity:         "warning",
+		Code:             "analysis_prerequisite_missing",
+		Message:          "Transcript is missing",
+		CreatedAt:        f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetDiagnosticPage{
-		Items: []TargetDiagnostic{{
-			DiagnosticID:     "diagnostic-1",
-			ChannelAccountID: req.ChannelAccountID,
-			SubjectType:      req.SubjectType,
-			SubjectID:        req.SubjectID,
-			Severity:         "warning",
-			Code:             "analysis_prerequisite_missing",
-			Message:          "Transcript is missing",
-			CreatedAt:        f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1351,18 +1475,22 @@ func (f *fakeTargetService) ListAnalysisRunStepQueue(_ context.Context, req Targ
 	if f.err != nil {
 		return TargetAnalysisRunStepQueueResponse{}, f.err
 	}
+	items := []TargetAnalysisRunStepQueueItem{{
+		AnalysisRunID:     "run-1",
+		RunType:           "transcription",
+		WorkerKind:        "transcription",
+		StepKind:          "selection.transcription",
+		Status:            "queued",
+		Version:           1,
+		AttemptNo:         1,
+		AnalysisRunStepID: "step-1",
+		CreatedAt:         f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetAnalysisRunStepQueueResponse{
-		Items: []TargetAnalysisRunStepQueueItem{{
-			AnalysisRunID:     "run-1",
-			RunType:           "transcription",
-			WorkerKind:        "transcription",
-			StepKind:          "selection.transcription",
-			Status:            "queued",
-			Version:           1,
-			AttemptNo:         1,
-			AnalysisRunStepID: "step-1",
-			CreatedAt:         f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1491,21 +1619,25 @@ func (f *fakeTargetService) ListChannelSurfaces(_ context.Context, req TargetLis
 	if f.err != nil {
 		return TargetChannelSurfacePage{}, f.err
 	}
+	items := []TargetChannelSurface{{
+		ChannelSurfaceID:   "surface-1",
+		ChannelAccountID:   req.ChannelAccountID,
+		Channel:            "telegram",
+		SurfaceType:        "message",
+		SurfaceKey:         "run:run-1",
+		LifecycleStatus:    "active",
+		Version:            1,
+		Subjects:           []TargetChannelSurfaceSubject{{SubjectType: "analysis_run", SubjectID: "run-1", SubjectRole: "primary"}},
+		CreatedAt:          f.now,
+		UpdatedAt:          f.now,
+		LastRenderedAt:     &f.now,
+		AddressFingerprint: "telegram:chat-1:42",
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetChannelSurfacePage{
-		Items: []TargetChannelSurface{{
-			ChannelSurfaceID:   "surface-1",
-			ChannelAccountID:   req.ChannelAccountID,
-			Channel:            "telegram",
-			SurfaceType:        "message",
-			SurfaceKey:         "run:run-1",
-			LifecycleStatus:    "active",
-			Version:            1,
-			Subjects:           []TargetChannelSurfaceSubject{{SubjectType: "analysis_run", SubjectID: "run-1", SubjectRole: "primary"}},
-			CreatedAt:          f.now,
-			UpdatedAt:          f.now,
-			LastRenderedAt:     &f.now,
-			AddressFingerprint: "telegram:chat-1:42",
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
@@ -1551,15 +1683,19 @@ func (f *fakeTargetService) ListChannelSurfaceEvents(_ context.Context, req Targ
 	if f.err != nil {
 		return TargetChannelSurfaceEventPage{}, f.err
 	}
+	items := []TargetChannelSurfaceEvent{{
+		ChannelSurfaceEventID: "surface-event-1",
+		ChannelSurfaceID:      req.SurfaceID,
+		EventType:             "channel_surface.superseded",
+		Reason:                "message_not_editable",
+		ActorType:             "telegram_adapter",
+		CreatedAt:             f.now,
+	}}
+	if f.nilItems {
+		items = nil
+	}
 	return TargetChannelSurfaceEventPage{
-		Items: []TargetChannelSurfaceEvent{{
-			ChannelSurfaceEventID: "surface-event-1",
-			ChannelSurfaceID:      req.SurfaceID,
-			EventType:             "channel_surface.superseded",
-			Reason:                "message_not_editable",
-			ActorType:             "telegram_adapter",
-			CreatedAt:             f.now,
-		}},
+		Items:    items,
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil

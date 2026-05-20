@@ -194,13 +194,21 @@ func readMultipartUploadBody(reader io.Reader) ([]byte, error) {
 }
 
 func (s *Server) readMultipartUploadBody(w http.ResponseWriter, reader io.Reader) ([]byte, bool) {
+	return s.readMultipartUploadBodyWithCode(w, reader, "invalid_media_item")
+}
+
+func (s *Server) readTargetMultipartUploadBody(w http.ResponseWriter, reader io.Reader) ([]byte, bool) {
+	return s.readMultipartUploadBodyWithCode(w, reader, "invalid_media_asset")
+}
+
+func (s *Server) readMultipartUploadBodyWithCode(w http.ResponseWriter, reader io.Reader, code string) ([]byte, bool) {
 	readBody := readMultipartUploadBody
 	if s.readUploadBody != nil {
 		readBody = s.readUploadBody
 	}
 	body, err := readBody(reader)
 	if err != nil {
-		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_item", message: "multipart upload body could not be read", details: err.Error()})
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: code, message: "multipart upload body could not be read", details: err.Error()})
 		return nil, false
 	}
 	return body, true

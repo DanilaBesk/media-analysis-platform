@@ -743,7 +743,7 @@ func (s *Server) handleUploadTargetMediaAsset(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer file.Close()
-	body, ok := s.readMultipartUploadBody(w, file)
+	body, ok := s.readTargetMultipartUploadBody(w, file)
 	if !ok {
 		return
 	}

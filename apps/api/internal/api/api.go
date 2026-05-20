@@ -418,6 +418,9 @@ func (s *Server) handleListAnalysisRunQueue(w http.ResponseWriter, r *http.Reque
 			s.writeAPIError(w, mapFinalStorageError(err))
 			return
 		}
+		if response.Items == nil {
+			response.Items = []TargetAnalysisRunStepQueueItem{}
+		}
 		writeJSON(w, http.StatusOK, response)
 		return
 	}

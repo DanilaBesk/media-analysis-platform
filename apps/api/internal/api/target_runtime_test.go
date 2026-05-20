@@ -812,6 +812,131 @@ func TestTargetRuntimeServicePersistsUploadBodyToSourceObjectStore(t *testing.T)
 	}
 }
 
+func TestTargetRuntimeServiceUploadBodyDefaultsContentTypeAndChecksum(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 14, 5, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{}
+	objects := &fakeTargetObjectStore{}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs("media-asset-1", "collection-item-1")),
+		WithTargetObjectStore(objects),
+	)
+
+	_, err := service.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+		ChannelAccountID: "channel-account-1",
+		Origin: TargetMediaAssetOrigin{
+			OriginType:     "upload",
+			OriginRef:      "sources/uploads/stored-object-1/raw.bin",
+			StoredObjectID: "stored-object-1",
+			UploadBody:     []byte("raw-bytes"),
+		},
+		Kind:        "document",
+		DisplayName: "raw.bin",
+	})
+	if err != nil {
+		t.Fatalf("CreateMediaAsset(upload defaults) error = %v", err)
+	}
+	if len(objects.puts) != 1 {
+		t.Fatalf("object store puts = %d, want 1", len(objects.puts))
+	}
+	if objects.puts[0].contentType != "application/octet-stream" {
+		t.Fatalf("default content type = %q, want application/octet-stream", objects.puts[0].contentType)
+	}
+	if store.mediaAssetParams.StoredObject.SizeBytes != int64(len("raw-bytes")) {
+		t.Fatalf("stored object size = %d, want uploaded body size", store.mediaAssetParams.StoredObject.SizeBytes)
+	}
+	if store.mediaAssetParams.StoredObject.Checksum != targetUploadChecksum([]byte("raw-bytes")) {
+		t.Fatalf("stored checksum = %q, want uploaded body checksum", store.mediaAssetParams.StoredObject.Checksum)
+	}
+}
+
+func TestTargetRuntimeServiceRejectsInvalidUploadBodies(t *testing.T) {
+	t.Parallel()
+
+	putErr := errors.New("put failed")
+	baseOrigin := TargetMediaAssetOrigin{
+		OriginType:     "upload",
+		OriginRef:      "sources/uploads/stored-object-1/raw.bin",
+		StoredObjectID: "stored-object-1",
+		UploadBody:     []byte("raw-bytes"),
+	}
+	testCases := []struct {
+		name    string
+		objects *fakeTargetObjectStore
+		mutate  func(*TargetMediaAssetOrigin)
+		wantErr error
+	}{
+		{
+			name:    "missing object store",
+			objects: nil,
+			wantErr: storage.ErrContractViolation,
+		},
+		{
+			name:    "missing object ref and stored object id",
+			objects: &fakeTargetObjectStore{},
+			mutate: func(origin *TargetMediaAssetOrigin) {
+				origin.OriginRef = ""
+				origin.ObjectRef = ""
+				origin.StoredObjectID = ""
+			},
+			wantErr: storage.ErrContractViolation,
+		},
+		{
+			name:    "size mismatch",
+			objects: &fakeTargetObjectStore{},
+			mutate: func(origin *TargetMediaAssetOrigin) {
+				origin.SizeBytes = 99
+			},
+			wantErr: storage.ErrContractViolation,
+		},
+		{
+			name:    "checksum mismatch",
+			objects: &fakeTargetObjectStore{},
+			mutate: func(origin *TargetMediaAssetOrigin) {
+				origin.Checksum = "sha256:not-the-upload-body"
+			},
+			wantErr: storage.ErrContractViolation,
+		},
+		{
+			name:    "object store failure",
+			objects: &fakeTargetObjectStore{err: putErr},
+			wantErr: storage.ErrStorageUnavailable,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			origin := baseOrigin
+			if tc.mutate != nil {
+				tc.mutate(&origin)
+			}
+			store := &fakeTargetRuntimeStore{}
+			opts := []TargetRuntimeOption{WithTargetIDGenerator(sequenceTargetIDs("media-asset-1"))}
+			if tc.objects != nil {
+				opts = append(opts, WithTargetObjectStore(tc.objects))
+			}
+			service := NewTargetRuntimeService(store, opts...)
+
+			_, err := service.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+				ChannelAccountID: "channel-account-1",
+				Origin:           origin,
+				Kind:             "document",
+				DisplayName:      "raw.bin",
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("CreateMediaAsset(%s) error = %v, want %v", tc.name, err, tc.wantErr)
+			}
+			if store.mediaAssetCreateCalls != 0 {
+				t.Fatalf("CreateMediaAssetWithInbox calls = %d, want 0 for invalid upload", store.mediaAssetCreateCalls)
+			}
+		})
+	}
+}
+
 func TestTargetRuntimeServicePlansSpeechPrerequisiteForReportRuns(t *testing.T) {
 	t.Parallel()
 
@@ -861,6 +986,56 @@ func TestTargetRuntimeServicePlansSpeechPrerequisiteForReportRuns(t *testing.T) 
 		t.Fatalf("planned step inputs = %#v", store.analysisRunGraph.StepInputs)
 	}
 	if len(run.Steps) != 2 || run.Steps[1].Status != "pending" {
+		t.Fatalf("run response steps = %#v", run.Steps)
+	}
+}
+
+func TestTargetRuntimeServicePlansDeepResearchDirectlyForTextInputs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 14, 10, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		snapshotItems: []targetstore.SelectionSnapshotItemRecord{{
+			ID:                  "snapshot-item-document",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            0,
+			MediaAssetID:        "media-asset-document",
+			Kind:                "document",
+			DisplayName:         "notes.txt",
+			StatusAtSelection:   "available",
+		}},
+	}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"run-deep-1",
+			"step-analysis-1",
+			"step-input-document-1",
+			"event-deep-1",
+		)),
+	)
+
+	run, err := service.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{
+		ChannelAccountID:    "channel-account-1",
+		SelectionSnapshotID: "snapshot-1",
+		RunType:             "deep_research",
+	})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun(deep_research) error = %v", err)
+	}
+	if len(store.analysisRunGraph.Steps) != 1 {
+		t.Fatalf("planned steps = %#v, want direct analysis step", store.analysisRunGraph.Steps)
+	}
+	step := store.analysisRunGraph.Steps[0]
+	if step.WorkerKind != "agent_runner" || step.StepKind != "deep_research.analysis" || step.Status != "queued" {
+		t.Fatalf("analysis step = %#v, want queued deep research analysis", step)
+	}
+	if len(store.analysisRunGraph.StepInputs) != 1 ||
+		store.analysisRunGraph.StepInputs[0].AnalysisRunStepID != "step-analysis-1" ||
+		store.analysisRunGraph.StepInputs[0].SelectionSnapshotItemID != "snapshot-item-document" {
+		t.Fatalf("planned inputs = %#v", store.analysisRunGraph.StepInputs)
+	}
+	if len(run.Steps) != 1 || run.Steps[0].Status != "queued" {
 		t.Fatalf("run response steps = %#v", run.Steps)
 	}
 }
@@ -925,6 +1100,651 @@ func TestTargetRuntimeServiceRejectsWorkerWritesForUnknownStep(t *testing.T) {
 	}
 	if store.progressCalls != 0 || store.artifactCalls != 0 || store.diagnosticCalls != 0 || store.finalizeCalls != 0 {
 		t.Fatalf("worker write reached store after unknown step: progress=%d artifacts=%d diagnostics=%d finalize=%d", store.progressCalls, store.artifactCalls, store.diagnosticCalls, store.finalizeCalls)
+	}
+}
+
+func TestTargetRuntimeServiceRejectsInvalidWorkerWriteInputs(t *testing.T) {
+	t.Parallel()
+
+	service := NewTargetRuntimeService(&fakeTargetRuntimeStore{})
+	ctx := context.Background()
+
+	if err := service.RecordAnalysisRunStepProgress(ctx, "run-1", TargetRecordAnalysisRunStepProgressRequest{
+		AnalysisRunStepID: "",
+		ProgressStage:     "running",
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunStepProgress(missing step) error = %v, want ErrContractViolation", err)
+	}
+	if err := service.RecordAnalysisRunArtifacts(ctx, "run-1", TargetRecordAnalysisRunArtifactsRequest{
+		AnalysisRunStepID: "step-1",
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunArtifacts(empty artifacts) error = %v, want ErrContractViolation", err)
+	}
+	if err := service.RecordAnalysisRunArtifacts(ctx, "run-1", TargetRecordAnalysisRunArtifactsRequest{
+		AnalysisRunStepID: "step-1",
+		Artifacts: []workerArtifactDescriptor{{
+			ArtifactKind: "unsupported_worker_artifact",
+			ObjectKey:    "run-1/unsupported.bin",
+		}},
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunArtifacts(unsupported kind) error = %v, want ErrContractViolation", err)
+	}
+	if err := service.RecordAnalysisRunArtifacts(ctx, "run-1", TargetRecordAnalysisRunArtifactsRequest{
+		AnalysisRunStepID: "step-1",
+		Artifacts: []workerArtifactDescriptor{{
+			ArtifactKind: "summary_markdown",
+			ObjectKey:    " ",
+		}},
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunArtifacts(blank object key) error = %v, want ErrContractViolation", err)
+	}
+	if err := service.RecordAnalysisRunDiagnostics(ctx, "run-1", TargetRecordAnalysisRunDiagnosticsRequest{
+		AnalysisRunStepID: "step-1",
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("RecordAnalysisRunDiagnostics(empty diagnostics) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := service.FinalizeAnalysisRunStep(ctx, "run-1", TargetFinalizeAnalysisRunStepRequest{
+		Outcome: "succeeded",
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("FinalizeAnalysisRunStep(missing step) error = %v, want ErrContractViolation", err)
+	}
+	if _, err := service.FinalizeAnalysisRunStep(ctx, "run-1", TargetFinalizeAnalysisRunStepRequest{
+		AnalysisRunStepID: "step-1",
+		Outcome:           "unexpected",
+	}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("FinalizeAnalysisRunStep(invalid outcome) error = %v, want ErrContractViolation", err)
+	}
+}
+
+func TestTargetRuntimeServiceMapsAndPropagatesTargetStoreFailures(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 15, 45, 0, 0, time.UTC)
+	boom := errors.New("target store failed")
+	newService := func(store *fakeTargetRuntimeStore) *TargetRuntimeService {
+		return NewTargetRuntimeService(store,
+			WithTargetClock(func() time.Time { return now }),
+			WithTargetIDGenerator(sequenceTargetIDs(
+				"operation-1",
+				"media-asset-1",
+				"collection-item-1",
+				"collection-1",
+				"collection-item-2",
+				"snapshot-1",
+				"snapshot-item-1",
+				"run-1",
+				"step-1",
+				"step-input-1",
+				"event-1",
+				"artifact-1",
+				"stored-object-1",
+				"subject-run-1",
+				"subject-step-1",
+				"surface-1",
+				"surface-event-1",
+			)),
+		)
+	}
+	artifactReq := TargetRecordAnalysisRunArtifactsRequest{
+		AnalysisRunStepID: "step-1",
+		Artifacts: []workerArtifactDescriptor{{
+			ArtifactKind: "summary_markdown",
+			MIMEType:     "text/markdown",
+			ObjectKey:    "run-1/summary.md",
+			Filename:     "summary.md",
+		}},
+	}
+	diagnosticsReq := TargetRecordAnalysisRunDiagnosticsRequest{
+		AnalysisRunStepID: "step-1",
+		Diagnostics: []workerDiagnosticDescriptor{{
+			DiagnosticID: "diagnostic-1",
+			SubjectType:  "analysis_run",
+			SubjectID:    "run-1",
+			Severity:     "warning",
+			Code:         "worker_warning",
+			Message:      "worker warning",
+		}},
+	}
+	testCases := []struct {
+		name    string
+		store   *fakeTargetRuntimeStore
+		run     func(*TargetRuntimeService) error
+		wantErr error
+	}{
+		{
+			name:  "resolve account propagates upsert failure",
+			store: &fakeTargetRuntimeStore{failMethod: "UpsertChannelAccount", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ResolveChannelAccount(context.Background(), TargetChannelAccountRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "list accounts propagates list failure",
+			store: &fakeTargetRuntimeStore{failMethod: "ListChannelAccounts", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ListChannelAccounts(context.Background(), TargetListChannelAccountsRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "update account maps missing row",
+			store: &fakeTargetRuntimeStore{failMethod: "UpdateChannelAccount", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.UpdateChannelAccount(context.Background(), TargetUpdateChannelAccountRequest{})
+				return err
+			},
+			wantErr: storage.ErrMediaItemNotFound,
+		},
+		{
+			name:  "update account propagates generic failure",
+			store: &fakeTargetRuntimeStore{failMethod: "UpdateChannelAccount", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.UpdateChannelAccount(context.Background(), TargetUpdateChannelAccountRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "create media asset propagates operation failure",
+			store: &fakeTargetRuntimeStore{failMethod: "RecordOperationRequest", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{IdempotencyKey: "stable"})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "create media asset propagates create failure",
+			store: &fakeTargetRuntimeStore{failMethod: "CreateMediaAssetWithInbox", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "get media maps missing row",
+			store: &fakeTargetRuntimeStore{failMethod: "GetMediaAsset", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.GetMediaAsset(context.Background(), TargetGetMediaAssetRequest{})
+				return err
+			},
+			wantErr: storage.ErrMediaItemNotFound,
+		},
+		{
+			name:  "get inbox maps missing row",
+			store: &fakeTargetRuntimeStore{failMethod: "GetInboxCollection", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.GetInboxCollection(context.Background(), TargetGetInboxCollectionRequest{})
+				return err
+			},
+			wantErr: storage.ErrCollectionNotFound,
+		},
+		{
+			name:  "update collection maps version conflict",
+			store: &fakeTargetRuntimeStore{failMethod: "UpdateCollection", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.UpdateCollection(context.Background(), TargetUpdateCollectionRequest{})
+				return err
+			},
+			wantErr: storage.ErrCollectionVersionConflict,
+		},
+		{
+			name:  "remove collection item maps version conflict",
+			store: &fakeTargetRuntimeStore{failMethod: "RemoveCollectionItem", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.RemoveCollectionItem(context.Background(), TargetRemoveCollectionItemRequest{})
+				return err
+			},
+			wantErr: storage.ErrCollectionVersionConflict,
+		},
+		{
+			name:  "selection snapshot propagates asset lookup failure",
+			store: &fakeTargetRuntimeStore{failMethod: "GetMediaAsset", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CreateSelectionSnapshot(context.Background(), TargetCreateSelectionSnapshotRequest{Items: []TargetSelectionSnapshotItemRequest{{MediaAssetID: "media-asset-1"}}})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "selection snapshot propagates stored object failure",
+			store: &fakeTargetRuntimeStore{failMethod: "GetStoredObject", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CreateSelectionSnapshot(context.Background(), TargetCreateSelectionSnapshotRequest{Items: []TargetSelectionSnapshotItemRequest{{MediaAssetID: "media-asset-with-object"}}})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "selection snapshot maps missing row",
+			store: &fakeTargetRuntimeStore{failMethod: "GetSelectionSnapshot", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.GetSelectionSnapshot(context.Background(), TargetGetSelectionSnapshotRequest{})
+				return err
+			},
+			wantErr: storage.ErrSelectionNotFound,
+		},
+		{
+			name:  "create run propagates snapshot item failure",
+			store: &fakeTargetRuntimeStore{failMethod: "ListSelectionSnapshotItems", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{SelectionSnapshotID: "snapshot-1"})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "create run propagates graph failure",
+			store: &fakeTargetRuntimeStore{failMethod: "CreateAnalysisRunGraph", failErr: boom, snapshotItems: []targetstore.SelectionSnapshotItemRecord{{ID: "snapshot-item-1"}}},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{SelectionSnapshotID: "snapshot-1"})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "retry run maps missing source run",
+			store: &fakeTargetRuntimeStore{failMethod: "GetAnalysisRun", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.RetryAnalysisRun(context.Background(), "run-1", TargetRetryAnalysisRunRequest{})
+				return err
+			},
+			wantErr: storage.ErrAnalysisRunNotFound,
+		},
+		{
+			name:  "claim step maps unclaimed result",
+			store: &fakeTargetRuntimeStore{claimUnclaimed: true},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ClaimAnalysisRunStep(context.Background(), "run-1", TargetClaimAnalysisRunStepRequest{})
+				return err
+			},
+			wantErr: storage.ErrAnalysisRunNotFound,
+		},
+		{
+			name:  "claim step propagates run lookup failure",
+			store: &fakeTargetRuntimeStore{failMethod: "GetAnalysisRunByID", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ClaimAnalysisRunStep(context.Background(), "run-1", TargetClaimAnalysisRunStepRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "check cancel maps missing step",
+			store: &fakeTargetRuntimeStore{failMethod: "CheckAnalysisRunStepCancel", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.CheckAnalysisRunStepCancel(context.Background(), "run-1", TargetCheckAnalysisRunStepCancelRequest{})
+				return err
+			},
+			wantErr: storage.ErrAnalysisRunNotFound,
+		},
+		{
+			name:  "record progress propagates store failure",
+			store: &fakeTargetRuntimeStore{failMethod: "RecordAnalysisRunStepProgress", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				return s.RecordAnalysisRunStepProgress(context.Background(), "run-1", TargetRecordAnalysisRunStepProgressRequest{AnalysisRunStepID: "step-1", ProgressStage: "running"})
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "record artifacts propagates run lookup failure",
+			store: &fakeTargetRuntimeStore{failMethod: "GetAnalysisRunByID", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				return s.RecordAnalysisRunArtifacts(context.Background(), "run-1", artifactReq)
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "record artifacts propagates record failure",
+			store: &fakeTargetRuntimeStore{failMethod: "RecordArtifacts", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				return s.RecordAnalysisRunArtifacts(context.Background(), "run-1", artifactReq)
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "record diagnostics propagates run lookup failure",
+			store: &fakeTargetRuntimeStore{failMethod: "GetAnalysisRunByID", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				return s.RecordAnalysisRunDiagnostics(context.Background(), "run-1", diagnosticsReq)
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "record diagnostics propagates record failure",
+			store: &fakeTargetRuntimeStore{failMethod: "RecordDiagnostics", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				return s.RecordAnalysisRunDiagnostics(context.Background(), "run-1", diagnosticsReq)
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "finalize maps missing run",
+			store: &fakeTargetRuntimeStore{failMethod: "FinalizeAnalysisRunStep", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.FinalizeAnalysisRunStep(context.Background(), "run-1", TargetFinalizeAnalysisRunStepRequest{AnalysisRunStepID: "step-1", Outcome: "succeeded"})
+				return err
+			},
+			wantErr: storage.ErrAnalysisRunNotFound,
+		},
+		{
+			name:  "upsert surface propagates subject lookup failure",
+			store: &fakeTargetRuntimeStore{failMethod: "ListChannelSurfaceSubjects", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.UpsertChannelSurface(context.Background(), TargetUpsertChannelSurfaceRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "replace surface maps version conflict",
+			store: &fakeTargetRuntimeStore{failMethod: "ReplaceChannelSurfaceDisplayState", failErr: sql.ErrNoRows},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ReplaceChannelSurfaceDisplayState(context.Background(), TargetReplaceChannelSurfaceDisplayStateRequest{})
+				return err
+			},
+			wantErr: storage.ErrCollectionVersionConflict,
+		},
+		{
+			name:  "replace surface propagates subject lookup failure",
+			store: &fakeTargetRuntimeStore{failMethod: "ListChannelSurfaceSubjects", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ReplaceChannelSurfaceDisplayState(context.Background(), TargetReplaceChannelSurfaceDisplayStateRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "supersede surface propagates store failure",
+			store: &fakeTargetRuntimeStore{failMethod: "SupersedeChannelSurface", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.SupersedeChannelSurface(context.Background(), TargetSupersedeChannelSurfaceRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+		{
+			name:  "list surface events propagates list failure",
+			store: &fakeTargetRuntimeStore{failMethod: "ListChannelSurfaceEvents", failErr: boom},
+			run: func(s *TargetRuntimeService) error {
+				_, err := s.ListChannelSurfaceEvents(context.Background(), TargetListChannelSurfaceEventsRequest{})
+				return err
+			},
+			wantErr: boom,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tc.run(newService(tc.store)); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("%s error = %v, want %v", tc.name, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestTargetRuntimeServicePropagatesAdditionalTargetStoreFailures(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 16, 15, 0, 0, time.UTC)
+	boom := errors.New("target store failed")
+	newService := func(store *fakeTargetRuntimeStore) *TargetRuntimeService {
+		return NewTargetRuntimeService(store,
+			WithTargetClock(func() time.Time { return now }),
+			WithTargetIDGenerator(sequenceTargetIDs(
+				"operation-1",
+				"media-asset-1",
+				"collection-item-1",
+				"collection-1",
+				"collection-item-2",
+				"snapshot-1",
+				"snapshot-item-1",
+				"run-1",
+				"step-1",
+				"step-input-1",
+				"event-1",
+				"artifact-1",
+				"stored-object-1",
+				"subject-run-1",
+				"subject-step-1",
+				"surface-1",
+				"surface-event-1",
+			)),
+		)
+	}
+	testCases := []struct {
+		name    string
+		store   *fakeTargetRuntimeStore
+		run     func(*TargetRuntimeService) error
+		wantErr error
+	}{
+		{name: "list media assets propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListMediaAssets", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListMediaAssets(context.Background(), TargetListMediaAssetsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "get media propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetMediaAsset", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetMediaAsset(context.Background(), TargetGetMediaAssetRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "delete media propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "DeleteMediaAsset", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.DeleteMediaAsset(context.Background(), TargetDeleteMediaAssetRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "get inbox propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetInboxCollection", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetInboxCollection(context.Background(), TargetGetInboxCollectionRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "create collection propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "CreateCollection", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.CreateCollection(context.Background(), TargetCreateCollectionRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list collections propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListCollections", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListCollections(context.Background(), TargetListCollectionsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "get collection maps missing row", store: &fakeTargetRuntimeStore{failMethod: "GetCollection", failErr: sql.ErrNoRows}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetCollection(context.Background(), TargetGetCollectionRequest{})
+			return err
+		}, wantErr: storage.ErrCollectionNotFound},
+		{name: "get collection propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetCollection", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetCollection(context.Background(), TargetGetCollectionRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "update collection propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "UpdateCollection", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.UpdateCollection(context.Background(), TargetUpdateCollectionRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "update collection items maps version conflict", store: &fakeTargetRuntimeStore{failMethod: "UpdateCollectionItems", failErr: sql.ErrNoRows}, run: func(s *TargetRuntimeService) error {
+			_, err := s.UpdateCollectionItems(context.Background(), TargetUpdateCollectionItemsRequest{})
+			return err
+		}, wantErr: storage.ErrCollectionVersionConflict},
+		{name: "update collection items propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "UpdateCollectionItems", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.UpdateCollectionItems(context.Background(), TargetUpdateCollectionItemsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "remove collection item propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "RemoveCollectionItem", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.RemoveCollectionItem(context.Background(), TargetRemoveCollectionItemRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "create selection propagates create failure", store: &fakeTargetRuntimeStore{failMethod: "CreateSelectionSnapshot", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.CreateSelectionSnapshot(context.Background(), TargetCreateSelectionSnapshotRequest{Items: []TargetSelectionSnapshotItemRequest{{MediaAssetID: "media-asset-1"}}})
+			return err
+		}, wantErr: boom},
+		{name: "get selection propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetSelectionSnapshot", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetSelectionSnapshot(context.Background(), TargetGetSelectionSnapshotRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list analysis runs propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListAnalysisRuns", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListAnalysisRuns(context.Background(), TargetListAnalysisRunsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "get analysis run propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetAnalysisRun", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetAnalysisRun(context.Background(), TargetGetAnalysisRunRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "cancel analysis run propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "RequestAnalysisRunCancel", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.CancelAnalysisRun(context.Background(), "run-1", TargetCancelAnalysisRunRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "retry run propagates generic source failure", store: &fakeTargetRuntimeStore{failMethod: "GetAnalysisRun", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.RetryAnalysisRun(context.Background(), "run-1", TargetRetryAnalysisRunRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list analysis run events propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListAnalysisRunEvents", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListAnalysisRunEvents(context.Background(), TargetListAnalysisRunEventsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list artifacts propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListArtifacts", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListArtifacts(context.Background(), TargetListArtifactsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "get artifact maps missing row", store: &fakeTargetRuntimeStore{failMethod: "GetArtifact", failErr: sql.ErrNoRows}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetArtifact(context.Background(), TargetGetArtifactRequest{})
+			return err
+		}, wantErr: storage.ErrArtifactNotFound},
+		{name: "get artifact propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetArtifact", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.GetArtifact(context.Background(), TargetGetArtifactRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list diagnostics propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListDiagnostics", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListDiagnostics(context.Background(), TargetListDiagnosticsRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list step queue propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ListAnalysisRunStepQueue", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListAnalysisRunStepQueue(context.Background(), TargetAnalysisRunStepQueueRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "claim step propagates claim failure", store: &fakeTargetRuntimeStore{failMethod: "ClaimAnalysisRunStep", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ClaimAnalysisRunStep(context.Background(), "run-1", TargetClaimAnalysisRunStepRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "claim step propagates snapshot failure", store: &fakeTargetRuntimeStore{failMethod: "GetSelectionSnapshot", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ClaimAnalysisRunStep(context.Background(), "run-1", TargetClaimAnalysisRunStepRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "check cancel propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "CheckAnalysisRunStepCancel", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.CheckAnalysisRunStepCancel(context.Background(), "run-1", TargetCheckAnalysisRunStepCancelRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "finalize propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "FinalizeAnalysisRunStep", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.FinalizeAnalysisRunStep(context.Background(), "run-1", TargetFinalizeAnalysisRunStepRequest{AnalysisRunStepID: "step-1", Outcome: "succeeded"})
+			return err
+		}, wantErr: boom},
+		{name: "upsert surface propagates upsert failure", store: &fakeTargetRuntimeStore{failMethod: "UpsertChannelSurface", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.UpsertChannelSurface(context.Background(), TargetUpsertChannelSurfaceRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list surfaces propagates list failure", store: &fakeTargetRuntimeStore{failMethod: "ListChannelSurfaces", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListChannelSurfaces(context.Background(), TargetListChannelSurfacesRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "list surfaces propagates subject failure", store: &fakeTargetRuntimeStore{failMethod: "ListChannelSurfaceSubjects", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ListChannelSurfaces(context.Background(), TargetListChannelSurfacesRequest{})
+			return err
+		}, wantErr: boom},
+		{name: "replace surface propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "ReplaceChannelSurfaceDisplayState", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ReplaceChannelSurfaceDisplayState(context.Background(), TargetReplaceChannelSurfaceDisplayStateRequest{})
+			return err
+		}, wantErr: boom},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := tc.run(newService(tc.store)); !errors.Is(err, tc.wantErr) {
+				t.Fatalf("%s error = %v, want %v", tc.name, err, tc.wantErr)
+			}
+		})
+	}
+
+	t.Run("reuses orphaned idempotent operation target id when stored asset is missing", func(t *testing.T) {
+		t.Parallel()
+
+		store := &fakeTargetRuntimeStore{
+			operationsByKey: map[string]targetstore.OperationRequestRecord{
+				"channel-account-1\x00media_asset.create\x00stable-key": {
+					TargetType: "media_asset",
+					TargetID:   "orphaned-media-asset-id",
+				},
+			},
+			failMethod: "GetMediaAsset",
+			failErr:    sql.ErrNoRows,
+		}
+		asset, err := newService(store).CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+			ChannelAccountID: "channel-account-1",
+			IdempotencyKey:   "stable-key",
+		})
+		if err != nil {
+			t.Fatalf("CreateMediaAsset(orphaned operation) error = %v", err)
+		}
+		if asset.MediaAssetID != "orphaned-media-asset-id" {
+			t.Fatalf("media asset id = %q, want orphaned-media-asset-id", asset.MediaAssetID)
+		}
+	})
+
+	t.Run("propagates idempotent operation replay lookup failures", func(t *testing.T) {
+		t.Parallel()
+
+		store := &fakeTargetRuntimeStore{
+			operationsByKey: map[string]targetstore.OperationRequestRecord{
+				"channel-account-1\x00media_asset.create\x00stable-key": {
+					TargetType: "media_asset",
+					TargetID:   "existing-media-asset-id",
+				},
+			},
+			failMethod: "GetMediaAsset",
+			failErr:    boom,
+		}
+		_, err := newService(store).CreateMediaAsset(context.Background(), TargetCreateMediaAssetRequest{
+			ChannelAccountID: "channel-account-1",
+			IdempotencyKey:   "stable-key",
+		})
+		if !errors.Is(err, boom) {
+			t.Fatalf("CreateMediaAsset(replay lookup failure) error = %v, want %v", err, boom)
+		}
+	})
+
+	t.Run("ensure step rejects blank step ids before store access", func(t *testing.T) {
+		t.Parallel()
+
+		err := newService(&fakeTargetRuntimeStore{}).ensureAnalysisRunStep(context.Background(), "run-1", " ")
+		if !errors.Is(err, storage.ErrContractViolation) {
+			t.Fatalf("ensureAnalysisRunStep(blank) error = %v, want ErrContractViolation", err)
+		}
+	})
+}
+
+func TestTargetRuntimeServiceDefaultClockAndIDGeneratorAreUsable(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeTargetRuntimeStore{}
+	service := NewTargetRuntimeService(store)
+
+	account, err := service.ResolveChannelAccount(context.Background(), TargetChannelAccountRequest{
+		Channel:            "telegram",
+		ExternalAccountRef: "chat-1",
+		DisplayName:        "Danila",
+	})
+	if err != nil {
+		t.Fatalf("ResolveChannelAccount(default service) error = %v", err)
+	}
+	if account.ChannelAccountID == "" || account.CreatedAt.IsZero() || account.UpdatedAt.IsZero() || account.LastSeenAt == nil {
+		t.Fatalf("default service account = %#v", account)
+	}
+}
+
+func TestMustJSONFallsBackForUnmarshalableValues(t *testing.T) {
+	t.Parallel()
+
+	if got := string(mustJSON(func() {})); got != "{}" {
+		t.Fatalf("mustJSON(unmarshalable) = %s, want {}", got)
 	}
 }
 
@@ -1117,9 +1937,25 @@ type fakeTargetRuntimeStore struct {
 	surface                targetstore.ChannelSurfaceRecord
 	surfaceSubjects        []targetstore.ChannelSurfaceSubjectRecord
 	supersede              targetstore.SupersedeChannelSurfaceParams
+	failMethod             string
+	failErr                error
+	claimUnclaimed         bool
+}
+
+func (s *fakeTargetRuntimeStore) fail(method string) error {
+	if s.failMethod != method {
+		return nil
+	}
+	if s.failErr != nil {
+		return s.failErr
+	}
+	return errors.New("forced target store failure")
 }
 
 func (s *fakeTargetRuntimeStore) UpsertChannelAccount(_ context.Context, record targetstore.ChannelAccountRecord) (targetstore.ChannelAccountRecord, error) {
+	if err := s.fail("UpsertChannelAccount"); err != nil {
+		return targetstore.ChannelAccountRecord{}, err
+	}
 	if s.channelAccount.ID != "" &&
 		s.channelAccount.Channel == record.Channel &&
 		s.channelAccount.ExternalAccountRef == record.ExternalAccountRef {
@@ -1136,10 +1972,16 @@ func (s *fakeTargetRuntimeStore) UpsertChannelAccount(_ context.Context, record 
 }
 
 func (s *fakeTargetRuntimeStore) ListChannelAccounts(_ context.Context, _ int) ([]targetstore.ChannelAccountRecord, error) {
+	if err := s.fail("ListChannelAccounts"); err != nil {
+		return nil, err
+	}
 	return []targetstore.ChannelAccountRecord{s.channelAccount}, nil
 }
 
 func (s *fakeTargetRuntimeStore) UpdateChannelAccount(_ context.Context, params targetstore.UpdateChannelAccountParams) (targetstore.ChannelAccountRecord, error) {
+	if err := s.fail("UpdateChannelAccount"); err != nil {
+		return targetstore.ChannelAccountRecord{}, err
+	}
 	s.channelAccount.ID = params.ID
 	s.channelAccount.DisplayName = params.DisplayName
 	s.channelAccount.Status = params.Status
@@ -1148,6 +1990,9 @@ func (s *fakeTargetRuntimeStore) UpdateChannelAccount(_ context.Context, params 
 }
 
 func (s *fakeTargetRuntimeStore) RecordOperationRequest(_ context.Context, record targetstore.OperationRequestRecord) (targetstore.OperationRequestRecord, error) {
+	if err := s.fail("RecordOperationRequest"); err != nil {
+		return targetstore.OperationRequestRecord{}, err
+	}
 	if s.operationsByKey != nil {
 		key := record.ChannelAccountID + "\x00" + record.OperationType + "\x00" + record.IdempotencyKey
 		if existing, ok := s.operationsByKey[key]; ok {
@@ -1161,12 +2006,18 @@ func (s *fakeTargetRuntimeStore) RecordOperationRequest(_ context.Context, recor
 }
 
 func (s *fakeTargetRuntimeStore) CreateMediaAssetWithInbox(_ context.Context, params targetstore.CreateMediaAssetWithInboxParams) error {
+	if err := s.fail("CreateMediaAssetWithInbox"); err != nil {
+		return err
+	}
 	s.mediaAssetCreateCalls++
 	s.mediaAssetParams = params
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) ListMediaAssets(_ context.Context, channelAccountID string, limit int) ([]targetstore.MediaAssetRecord, error) {
+	if err := s.fail("ListMediaAssets"); err != nil {
+		return nil, err
+	}
 	return []targetstore.MediaAssetRecord{{
 		ID:               "media-asset-1",
 		ChannelAccountID: channelAccountID,
@@ -1182,9 +2033,17 @@ func (s *fakeTargetRuntimeStore) ListMediaAssets(_ context.Context, channelAccou
 }
 
 func (s *fakeTargetRuntimeStore) GetMediaAsset(_ context.Context, channelAccountID, mediaAssetID string) (targetstore.MediaAssetRecord, error) {
+	if err := s.fail("GetMediaAsset"); err != nil {
+		return targetstore.MediaAssetRecord{}, err
+	}
+	storedObjectID := ""
+	if mediaAssetID == "media-asset-with-object" {
+		storedObjectID = "stored-object-1"
+	}
 	return targetstore.MediaAssetRecord{
 		ID:               mediaAssetID,
 		ChannelAccountID: channelAccountID,
+		StoredObjectID:   storedObjectID,
 		OriginType:       "telegram_file",
 		OriginRef:        "file-id",
 		Kind:             "voice",
@@ -1197,6 +2056,9 @@ func (s *fakeTargetRuntimeStore) GetMediaAsset(_ context.Context, channelAccount
 }
 
 func (s *fakeTargetRuntimeStore) GetStoredObject(_ context.Context, storedObjectID string) (targetstore.StoredObjectRecord, error) {
+	if err := s.fail("GetStoredObject"); err != nil {
+		return targetstore.StoredObjectRecord{}, err
+	}
 	return targetstore.StoredObjectRecord{
 		ID:             storedObjectID,
 		Bucket:         "sources",
@@ -1210,6 +2072,9 @@ func (s *fakeTargetRuntimeStore) GetStoredObject(_ context.Context, storedObject
 }
 
 func (s *fakeTargetRuntimeStore) DeleteMediaAsset(_ context.Context, channelAccountID, mediaAssetID string, deletedAt time.Time) (targetstore.MediaAssetRecord, error) {
+	if err := s.fail("DeleteMediaAsset"); err != nil {
+		return targetstore.MediaAssetRecord{}, err
+	}
 	return targetstore.MediaAssetRecord{
 		ID:               mediaAssetID,
 		ChannelAccountID: channelAccountID,
@@ -1226,6 +2091,9 @@ func (s *fakeTargetRuntimeStore) DeleteMediaAsset(_ context.Context, channelAcco
 }
 
 func (s *fakeTargetRuntimeStore) GetInboxCollection(_ context.Context, channelAccountID string) (targetstore.CollectionRecord, []targetstore.CollectionItemRecord, error) {
+	if err := s.fail("GetInboxCollection"); err != nil {
+		return targetstore.CollectionRecord{}, nil, err
+	}
 	return targetstore.CollectionRecord{
 		ID:               "inbox-1",
 		ChannelAccountID: channelAccountID,
@@ -1239,10 +2107,16 @@ func (s *fakeTargetRuntimeStore) GetInboxCollection(_ context.Context, channelAc
 }
 
 func (s *fakeTargetRuntimeStore) CreateCollection(_ context.Context, collection targetstore.CollectionRecord, items []targetstore.CollectionItemRecord) error {
+	if err := s.fail("CreateCollection"); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) ListCollections(_ context.Context, channelAccountID string, _ int) ([]targetstore.CollectionRecord, error) {
+	if err := s.fail("ListCollections"); err != nil {
+		return nil, err
+	}
 	return []targetstore.CollectionRecord{{
 		ID:               "collection-1",
 		ChannelAccountID: channelAccountID,
@@ -1256,6 +2130,9 @@ func (s *fakeTargetRuntimeStore) ListCollections(_ context.Context, channelAccou
 }
 
 func (s *fakeTargetRuntimeStore) GetCollection(_ context.Context, channelAccountID, collectionID string) (targetstore.CollectionRecord, []targetstore.CollectionItemRecord, error) {
+	if err := s.fail("GetCollection"); err != nil {
+		return targetstore.CollectionRecord{}, nil, err
+	}
 	return targetstore.CollectionRecord{
 		ID:               collectionID,
 		ChannelAccountID: channelAccountID,
@@ -1269,6 +2146,9 @@ func (s *fakeTargetRuntimeStore) GetCollection(_ context.Context, channelAccount
 }
 
 func (s *fakeTargetRuntimeStore) UpdateCollection(_ context.Context, params targetstore.UpdateCollectionParams) (targetstore.CollectionRecord, []targetstore.CollectionItemRecord, error) {
+	if err := s.fail("UpdateCollection"); err != nil {
+		return targetstore.CollectionRecord{}, nil, err
+	}
 	return targetstore.CollectionRecord{
 		ID:               params.CollectionID,
 		ChannelAccountID: params.ChannelAccountID,
@@ -1282,6 +2162,9 @@ func (s *fakeTargetRuntimeStore) UpdateCollection(_ context.Context, params targ
 }
 
 func (s *fakeTargetRuntimeStore) UpdateCollectionItems(_ context.Context, params targetstore.UpdateCollectionItemsParams) (targetstore.CollectionRecord, []targetstore.CollectionItemRecord, error) {
+	if err := s.fail("UpdateCollectionItems"); err != nil {
+		return targetstore.CollectionRecord{}, nil, err
+	}
 	return targetstore.CollectionRecord{
 		ID:               params.CollectionID,
 		ChannelAccountID: params.ChannelAccountID,
@@ -1295,6 +2178,9 @@ func (s *fakeTargetRuntimeStore) UpdateCollectionItems(_ context.Context, params
 }
 
 func (s *fakeTargetRuntimeStore) RemoveCollectionItem(_ context.Context, params targetstore.RemoveCollectionItemParams) (targetstore.CollectionRecord, []targetstore.CollectionItemRecord, error) {
+	if err := s.fail("RemoveCollectionItem"); err != nil {
+		return targetstore.CollectionRecord{}, nil, err
+	}
 	return targetstore.CollectionRecord{
 		ID:               params.CollectionID,
 		ChannelAccountID: params.ChannelAccountID,
@@ -1308,12 +2194,18 @@ func (s *fakeTargetRuntimeStore) RemoveCollectionItem(_ context.Context, params 
 }
 
 func (s *fakeTargetRuntimeStore) CreateSelectionSnapshot(_ context.Context, snapshot targetstore.SelectionSnapshotRecord, items []targetstore.SelectionSnapshotItemRecord) error {
+	if err := s.fail("CreateSelectionSnapshot"); err != nil {
+		return err
+	}
 	s.selectionSnapshot = snapshot
 	s.selectionSnapshotItems = append([]targetstore.SelectionSnapshotItemRecord(nil), items...)
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) GetSelectionSnapshot(_ context.Context, channelAccountID, selectionSnapshotID string) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, error) {
+	if err := s.fail("GetSelectionSnapshot"); err != nil {
+		return targetstore.SelectionSnapshotRecord{}, nil, err
+	}
 	return targetstore.SelectionSnapshotRecord{
 		ID:                 selectionSnapshotID,
 		ChannelAccountID:   channelAccountID,
@@ -1327,6 +2219,9 @@ func (s *fakeTargetRuntimeStore) GetSelectionSnapshot(_ context.Context, channel
 }
 
 func (s *fakeTargetRuntimeStore) ListSelectionSnapshotItems(_ context.Context, selectionSnapshotID string) ([]targetstore.SelectionSnapshotItemRecord, error) {
+	if err := s.fail("ListSelectionSnapshotItems"); err != nil {
+		return nil, err
+	}
 	if selectionSnapshotID != "snapshot-1" {
 		return nil, nil
 	}
@@ -1334,11 +2229,17 @@ func (s *fakeTargetRuntimeStore) ListSelectionSnapshotItems(_ context.Context, s
 }
 
 func (s *fakeTargetRuntimeStore) CreateAnalysisRunGraph(_ context.Context, graph targetstore.AnalysisRunGraph) error {
+	if err := s.fail("CreateAnalysisRunGraph"); err != nil {
+		return err
+	}
 	s.analysisRunGraph = graph
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) ListAnalysisRuns(_ context.Context, channelAccountID string, limit int) ([]targetstore.AnalysisRunRecord, error) {
+	if err := s.fail("ListAnalysisRuns"); err != nil {
+		return nil, err
+	}
 	return []targetstore.AnalysisRunRecord{{
 		ID:                "run-1",
 		ChannelAccountID:  channelAccountID,
@@ -1354,6 +2255,9 @@ func (s *fakeTargetRuntimeStore) ListAnalysisRuns(_ context.Context, channelAcco
 }
 
 func (s *fakeTargetRuntimeStore) GetAnalysisRun(_ context.Context, channelAccountID, analysisRunID string) (targetstore.AnalysisRunRecord, error) {
+	if err := s.fail("GetAnalysisRun"); err != nil {
+		return targetstore.AnalysisRunRecord{}, err
+	}
 	if s.getAnalysisRunErr != nil {
 		return targetstore.AnalysisRunRecord{}, s.getAnalysisRunErr
 	}
@@ -1372,6 +2276,9 @@ func (s *fakeTargetRuntimeStore) GetAnalysisRun(_ context.Context, channelAccoun
 }
 
 func (s *fakeTargetRuntimeStore) GetAnalysisRunByID(_ context.Context, analysisRunID string) (targetstore.AnalysisRunRecord, error) {
+	if err := s.fail("GetAnalysisRunByID"); err != nil {
+		return targetstore.AnalysisRunRecord{}, err
+	}
 	return targetstore.AnalysisRunRecord{
 		ID:                analysisRunID,
 		ChannelAccountID:  "channel-account-1",
@@ -1387,6 +2294,9 @@ func (s *fakeTargetRuntimeStore) GetAnalysisRunByID(_ context.Context, analysisR
 }
 
 func (s *fakeTargetRuntimeStore) ListAnalysisRunStepQueue(_ context.Context, status, runType, workerKind, stepKind string, limit int) ([]targetstore.AnalysisRunStepQueueRecord, error) {
+	if err := s.fail("ListAnalysisRunStepQueue"); err != nil {
+		return nil, err
+	}
 	return []targetstore.AnalysisRunStepQueueRecord{{
 		AnalysisRunID:     "run-1",
 		RunType:           firstNonEmpty(runType, "transcription"),
@@ -1401,6 +2311,9 @@ func (s *fakeTargetRuntimeStore) ListAnalysisRunStepQueue(_ context.Context, sta
 }
 
 func (s *fakeTargetRuntimeStore) RequestAnalysisRunCancel(_ context.Context, channelAccountID, analysisRunID string, _ targetstore.AnalysisRunEventRecord, requestedAt time.Time) (targetstore.AnalysisRunRecord, error) {
+	if err := s.fail("RequestAnalysisRunCancel"); err != nil {
+		return targetstore.AnalysisRunRecord{}, err
+	}
 	return targetstore.AnalysisRunRecord{
 		ID:                analysisRunID,
 		ChannelAccountID:  channelAccountID,
@@ -1417,6 +2330,9 @@ func (s *fakeTargetRuntimeStore) RequestAnalysisRunCancel(_ context.Context, cha
 }
 
 func (s *fakeTargetRuntimeStore) ListAnalysisRunEvents(_ context.Context, _ string, analysisRunID string, _ int) ([]targetstore.AnalysisRunEventRecord, error) {
+	if err := s.fail("ListAnalysisRunEvents"); err != nil {
+		return nil, err
+	}
 	return []targetstore.AnalysisRunEventRecord{{
 		ID:            "event-1",
 		AnalysisRunID: analysisRunID,
@@ -1429,6 +2345,9 @@ func (s *fakeTargetRuntimeStore) ListAnalysisRunEvents(_ context.Context, _ stri
 }
 
 func (s *fakeTargetRuntimeStore) ListArtifacts(_ context.Context, channelAccountID, analysisRunID string, limit int) ([]targetstore.ArtifactRecord, error) {
+	if err := s.fail("ListArtifacts"); err != nil {
+		return nil, err
+	}
 	return []targetstore.ArtifactRecord{{
 		ID:               "artifact-1",
 		ChannelAccountID: channelAccountID,
@@ -1443,6 +2362,9 @@ func (s *fakeTargetRuntimeStore) ListArtifacts(_ context.Context, channelAccount
 }
 
 func (s *fakeTargetRuntimeStore) GetArtifact(_ context.Context, channelAccountID, artifactID string) (targetstore.ArtifactRecord, error) {
+	if err := s.fail("GetArtifact"); err != nil {
+		return targetstore.ArtifactRecord{}, err
+	}
 	return targetstore.ArtifactRecord{
 		ID:               artifactID,
 		ChannelAccountID: channelAccountID,
@@ -1457,6 +2379,9 @@ func (s *fakeTargetRuntimeStore) GetArtifact(_ context.Context, channelAccountID
 }
 
 func (s *fakeTargetRuntimeStore) ListDiagnostics(_ context.Context, query targetstore.DiagnosticQuery, limit int) ([]targetstore.DiagnosticRecord, error) {
+	if err := s.fail("ListDiagnostics"); err != nil {
+		return nil, err
+	}
 	return []targetstore.DiagnosticRecord{{
 		ID:                 "diagnostic-1",
 		ChannelAccountID:   query.ChannelAccountID,
@@ -1472,6 +2397,12 @@ func (s *fakeTargetRuntimeStore) ListDiagnostics(_ context.Context, query target
 }
 
 func (s *fakeTargetRuntimeStore) ClaimAnalysisRunStep(_ context.Context, analysisRunID, workerKind, stepKind, leaseOwner string, claimedAt time.Time) (targetstore.AnalysisRunStepRecord, []targetstore.AnalysisRunStepInputRecord, bool, error) {
+	if err := s.fail("ClaimAnalysisRunStep"); err != nil {
+		return targetstore.AnalysisRunStepRecord{}, nil, false, err
+	}
+	if s.claimUnclaimed {
+		return targetstore.AnalysisRunStepRecord{}, nil, false, nil
+	}
 	return targetstore.AnalysisRunStepRecord{
 			ID:            "step-1",
 			AnalysisRunID: analysisRunID,
@@ -1493,6 +2424,9 @@ func (s *fakeTargetRuntimeStore) ClaimAnalysisRunStep(_ context.Context, analysi
 }
 
 func (s *fakeTargetRuntimeStore) CheckAnalysisRunStepCancel(_ context.Context, analysisRunID, analysisRunStepID string) (targetstore.AnalysisRunRecord, targetstore.AnalysisRunStepRecord, error) {
+	if err := s.fail("CheckAnalysisRunStepCancel"); err != nil {
+		return targetstore.AnalysisRunRecord{}, targetstore.AnalysisRunStepRecord{}, err
+	}
 	if s.checkStepErr != nil {
 		return targetstore.AnalysisRunRecord{}, targetstore.AnalysisRunStepRecord{}, s.checkStepErr
 	}
@@ -1520,12 +2454,18 @@ func (s *fakeTargetRuntimeStore) CheckAnalysisRunStepCancel(_ context.Context, a
 }
 
 func (s *fakeTargetRuntimeStore) RecordAnalysisRunStepProgress(_ context.Context, params targetstore.RecordAnalysisRunProgressParams) error {
+	if err := s.fail("RecordAnalysisRunStepProgress"); err != nil {
+		return err
+	}
 	s.progressCalls++
 	s.progress = params
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) RecordArtifacts(_ context.Context, storedObjects []targetstore.StoredObjectRecord, artifacts []targetstore.ArtifactRecord, subjects []targetstore.ArtifactSubjectRecord) error {
+	if err := s.fail("RecordArtifacts"); err != nil {
+		return err
+	}
 	s.artifactCalls++
 	s.storedObjects = append([]targetstore.StoredObjectRecord(nil), storedObjects...)
 	s.artifacts = append([]targetstore.ArtifactRecord(nil), artifacts...)
@@ -1534,12 +2474,18 @@ func (s *fakeTargetRuntimeStore) RecordArtifacts(_ context.Context, storedObject
 }
 
 func (s *fakeTargetRuntimeStore) RecordDiagnostics(_ context.Context, diagnostics []targetstore.DiagnosticRecord) error {
+	if err := s.fail("RecordDiagnostics"); err != nil {
+		return err
+	}
 	s.diagnosticCalls++
 	s.diagnostics = append([]targetstore.DiagnosticRecord(nil), diagnostics...)
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) FinalizeAnalysisRunStep(_ context.Context, params targetstore.FinalizeAnalysisRunStepParams) (targetstore.AnalysisRunRecord, error) {
+	if err := s.fail("FinalizeAnalysisRunStep"); err != nil {
+		return targetstore.AnalysisRunRecord{}, err
+	}
 	s.finalizeCalls++
 	return targetstore.AnalysisRunRecord{
 		ID:                params.AnalysisRunID,
@@ -1557,12 +2503,18 @@ func (s *fakeTargetRuntimeStore) FinalizeAnalysisRunStep(_ context.Context, para
 }
 
 func (s *fakeTargetRuntimeStore) UpsertChannelSurface(_ context.Context, record targetstore.ChannelSurfaceRecord, subjects []targetstore.ChannelSurfaceSubjectRecord) (targetstore.ChannelSurfaceRecord, error) {
+	if err := s.fail("UpsertChannelSurface"); err != nil {
+		return targetstore.ChannelSurfaceRecord{}, err
+	}
 	s.surface = record
 	s.surfaceSubjects = append([]targetstore.ChannelSurfaceSubjectRecord(nil), subjects...)
 	return record, nil
 }
 
 func (s *fakeTargetRuntimeStore) ListChannelSurfaces(_ context.Context, query targetstore.ChannelSurfaceQuery, _ int) ([]targetstore.ChannelSurfaceRecord, error) {
+	if err := s.fail("ListChannelSurfaces"); err != nil {
+		return nil, err
+	}
 	return []targetstore.ChannelSurfaceRecord{{
 		ID:                 "surface-1",
 		ChannelAccountID:   query.ChannelAccountID,
@@ -1579,6 +2531,9 @@ func (s *fakeTargetRuntimeStore) ListChannelSurfaces(_ context.Context, query ta
 }
 
 func (s *fakeTargetRuntimeStore) ListChannelSurfaceSubjects(_ context.Context, surfaceID string) ([]targetstore.ChannelSurfaceSubjectRecord, error) {
+	if err := s.fail("ListChannelSurfaceSubjects"); err != nil {
+		return nil, err
+	}
 	return []targetstore.ChannelSurfaceSubjectRecord{{
 		SurfaceID:   surfaceID,
 		SubjectType: "analysis_run",
@@ -1589,6 +2544,9 @@ func (s *fakeTargetRuntimeStore) ListChannelSurfaceSubjects(_ context.Context, s
 }
 
 func (s *fakeTargetRuntimeStore) ReplaceChannelSurfaceDisplayState(_ context.Context, params targetstore.ReplaceChannelSurfaceDisplayStateParams) (targetstore.ChannelSurfaceRecord, error) {
+	if err := s.fail("ReplaceChannelSurfaceDisplayState"); err != nil {
+		return targetstore.ChannelSurfaceRecord{}, err
+	}
 	return targetstore.ChannelSurfaceRecord{
 		ID:                 params.SurfaceID,
 		ChannelAccountID:   "channel-account-1",
@@ -1606,11 +2564,17 @@ func (s *fakeTargetRuntimeStore) ReplaceChannelSurfaceDisplayState(_ context.Con
 }
 
 func (s *fakeTargetRuntimeStore) SupersedeChannelSurface(_ context.Context, params targetstore.SupersedeChannelSurfaceParams) error {
+	if err := s.fail("SupersedeChannelSurface"); err != nil {
+		return err
+	}
 	s.supersede = params
 	return nil
 }
 
 func (s *fakeTargetRuntimeStore) ListChannelSurfaceEvents(_ context.Context, surfaceID string, _ int) ([]targetstore.ChannelSurfaceEventRecord, error) {
+	if err := s.fail("ListChannelSurfaceEvents"); err != nil {
+		return nil, err
+	}
 	return []targetstore.ChannelSurfaceEventRecord{{
 		ID:        "surface-event-1",
 		SurfaceID: surfaceID,

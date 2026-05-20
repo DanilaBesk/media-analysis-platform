@@ -1425,6 +1425,37 @@ func TestApiTargetWorkerFallbackHandlerBranches(t *testing.T) {
 			assertErrorCode(t, rec, http.StatusNotFound, "not_found")
 		})
 	}
+
+	workerSuccessMux := newFinalMux(Dependencies{Target: target, Worker: &fakeWorkerService{}})
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "target artifacts legacy execution id worker success",
+			path: "/internal/v1/analysis-runs/run-1/artifacts",
+			body: `{"execution_id":"exec-1","artifacts":[]}`,
+		},
+		{
+			name: "target diagnostics legacy execution id worker success",
+			path: "/internal/v1/analysis-runs/run-1/diagnostics",
+			body: `{"execution_id":"exec-1","diagnostics":[]}`,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			workerSuccessMux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusAccepted, rec.Body.String())
+			}
+		})
+	}
 }
 
 func TestApiRuntimeDependencyConstructorCreatesTargetWhenStateIsProvided(t *testing.T) {
