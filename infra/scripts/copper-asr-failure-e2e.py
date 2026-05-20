@@ -294,7 +294,6 @@ def _resource_limit_config() -> dict[str, str]:
         "COPPER_ASR_MAX_CONCURRENT_REQUESTS": "1",
         "COPPER_ASR_ACQUIRE_TIMEOUT_S": "30",
         "COPPER_ASR_CLIENT_TIMEOUT_S": "28800",
-        "TORCH_HOME": "/var/cache/copper-asr/torch",
     }
     for key, value in required.items():
         source = copper_env if key != "COPPER_ASR_CLIENT_TIMEOUT_S" else worker_env

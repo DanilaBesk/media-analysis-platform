@@ -265,7 +265,7 @@ CopperASR failures must finalize runs instead of leaving active task cards stuck
 Failed ASR runs and retries must record analysis_run diagnostics and publish only run policy artifacts, never transcript artifacts.
 Cancellation must reach a terminal canceled state and must not publish orphan artifacts.
 The failure E2E must assert runtime concurrency/timeout knobs used for long-audio backpressure.
-The live corrupt_audio fixture now resolves to asr_invalid_audio after updating external/copper-asr to f880151cfc57e082a94c028fb0d7483ccc1a921b and rebuilding the runtime image.
+The live corrupt_audio fixture now resolves to asr_invalid_audio after updating external/copper-asr to bc3c0da673ee8a7eabb82e2a1530ddf7d5e9bd01 and rebuilding the runtime image.
 The manifest no longer accepts asr_unexpected_runtime_error for corrupt-audio proof.
 Closure evidence for media-b8s.2.9: python3 infra/scripts/copper-asr-failure-e2e.py --json --require-invalid-audio recorded asr_invalid_audio for corrupt and retry runs, with only run_diagnostics/run_manifest artifacts and cancellation artifact_count=0.
     ]]></contract-excerpt>

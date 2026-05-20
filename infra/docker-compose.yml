@@ -150,7 +150,6 @@ services:
       COPPER_ASR_PORT: "8000"
       COPPER_ASR_CACHE_DIR: /var/cache/copper-asr
       COPPER_ASR_TMP_DIR: /tmp/copper-asr
-      TORCH_HOME: /var/cache/copper-asr/torch
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     networks:

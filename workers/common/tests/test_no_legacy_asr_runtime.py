@@ -96,8 +96,10 @@ def test_copper_asr_runtime_image_keeps_cpu_onnx_runtime_extra() -> None:
     assert '".[server,cpu]"' in dockerfile_text
     assert "onnxruntime-gpu" not in dockerfile_text
     assert "COPPER_ASR_ONNX_NUM_THREADS=2" in env_text
-    assert "TORCH_HOME=/var/cache/copper-asr/torch" in dockerfile_text
-    assert "TORCH_HOME=/var/cache/copper-asr/torch" in env_text
+    assert "COPPER_ASR_CACHE_DIR=/var/cache/copper-asr" in dockerfile_text
+    assert "COPPER_ASR_CACHE_DIR=/var/cache/copper-asr" in env_text
+    assert "TORCH_HOME" not in dockerfile_text
+    assert "TORCH_HOME" not in env_text
 
 
 def _iter_active_files() -> list[Path]:

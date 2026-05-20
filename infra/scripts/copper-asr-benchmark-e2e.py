@@ -550,7 +550,6 @@ def run_benchmark(
                 "COPPER_ASR_DEVICE": copper_env.get("COPPER_ASR_DEVICE", ""),
                 "COPPER_ASR_MODEL_PATH": copper_env.get("COPPER_ASR_MODEL_PATH", ""),
                 "COPPER_ASR_CACHE_DIR": copper_env.get("COPPER_ASR_CACHE_DIR", ""),
-                "TORCH_HOME": copper_env.get("TORCH_HOME", ""),
             },
             "compose_resource_limits": resource_limits_by_service,
         },

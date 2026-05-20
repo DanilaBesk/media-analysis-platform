@@ -48,7 +48,7 @@ git config --file .gitmodules --get-regexp '^submodule\..*\.(path|url)$'
 Result:
 
 - `external/copper-asr` is pinned at
-  `f880151cfc57e082a94c028fb0d7483ccc1a921b`.
+  `bc3c0da673ee8a7eabb82e2a1530ddf7d5e9bd01`.
 - `external/copper-asr` has no local source edits.
 - `.gitmodules` path is `external/copper-asr` and URL is the upstream CopperASR
   GitLab repository.

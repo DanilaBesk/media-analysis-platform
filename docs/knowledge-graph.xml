@@ -161,10 +161,10 @@
       <verification-ref>EV-ASR-RUNTIME, media-b8s.1.4, media-b8s.1.5, media-b8s.1.6, media-b8s.1.7, media-b8s.1.8, media-b8s.1.9, media-b8s.1.10, media-b8s.2.2, media-b8s.2.3, media-b8s.2.4, media-b8s.2.5, media-b8s.2.7, media-b8s.2.9, media-b8s.2.10, media-b8s.2.11, media-b8s.3.1, media-b8s.3.2, media-b8s.3.3, media-b8s.3.4, media-b8s.3, media-b8s</verification-ref>
       <annotations>
         <source-remote URL="https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git" />
-        <source-pin COMMIT="f880151cfc57e082a94c028fb0d7483ccc1a921b" />
+        <source-pin COMMIT="bc3c0da673ee8a7eabb82e2a1530ddf7d5e9bd01" />
         <source-location-decision TARGET_PATH="external/copper-asr" PURPOSE="Keep CopperASR source outside apps/ because this repo consumes it as an external upstream runtime service, not as first-party app code." />
         <compose-service PATH="infra/docker-compose.yml" SERVICE="copper-asr" DOCKERFILE="infra/images/copper-asr/Dockerfile" ENV_FILE="infra/env/copper-asr.env.example" LOCAL_CPU_QUOTA_ENV="COPPER_ASR_LOCAL_CPUS" LOCAL_CPU_QUOTA_DEFAULT="4.0" />
-        <runtime-provider-policy PURPOSE="The local compose runtime installs CopperASR with the server,cpu extra, so upstream ONNX VAD provider delegation remains CPU-only in this project unless the image extra is explicitly changed. TORCH_HOME points at the copper-asr-cache volume so Silero torch.hub assets survive container recreation." />
+        <runtime-provider-policy PURPOSE="The local compose runtime installs CopperASR with the server,cpu extra, so upstream ONNX VAD provider delegation remains CPU-only in this project unless the image extra is explicitly changed. The consumer mounts COPPER_ASR_CACHE_DIR on the copper-asr-cache volume; CopperASR owns the internal model and VAD cache fanout." />
         <runtime-boundary PURPOSE="CopperASR owns ASR model lifecycle, inference, sanitized provider errors, /health, and /transcribe. The platform owns analysis_run_steps, progress, cancellation, artifacts, diagnostics, and user-visible state." />
         <worker-client PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="HTTP client, source materialization, response normalization, timeout handling, and asr_* diagnostic mapping." />
         <manifest-contract PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Stores sanitized CopperASR provider metadata only in run_manifest/service artifacts while content artifacts stay provider-agnostic." />

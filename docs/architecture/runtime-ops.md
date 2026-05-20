@@ -6,7 +6,7 @@ Normal compose runtime is container-native. `copper-asr` owns ASR inference, `wo
 
 The local compose service caps `copper-asr` with `COPPER_ASR_LOCAL_CPUS` and defaults it to `4.0` CPUs. This is a consumer-side Mac/local-stack guardrail: it does not edit CopperASR, does not change CopperASR production defaults, and can be overridden from the shell or `.env` before running compose.
 
-`copper-asr` also maps `TORCH_HOME` to `/var/cache/copper-asr/torch` so Silero VAD torch.hub assets live on the `copper-asr-cache` volume rather than in a throwaway container home directory.
+`copper-asr` mounts `COPPER_ASR_CACHE_DIR=/var/cache/copper-asr` on the `copper-asr-cache` volume. CopperASR owns the internal cache fanout for model and VAD assets, so this consumer stack does not configure provider-specific cache internals.
 
 ```bash
 bash infra/scripts/compose-smoke.sh --check-config

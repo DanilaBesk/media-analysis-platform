@@ -199,10 +199,10 @@ Additional ASR engine knob:
 - `COPPER_ASR_ONNX_NUM_THREADS` controls ONNX Runtime CPU threads. If unset,
   CopperASR uses `min(16, os.cpu_count())` for CPU-like execution.
 
-The runtime maps `COPPER_ASR_CACHE_DIR` to `HF_HOME` before creating
-`CopperASR`. A complete local model bundle through `COPPER_ASR_MODEL_PATH` is
-preferred for deterministic compose operation and for avoiding runtime network
-downloads.
+The runtime maps `COPPER_ASR_CACHE_DIR` into CopperASR-owned model and VAD cache
+roots before creating `CopperASR`. A complete local model bundle through
+`COPPER_ASR_MODEL_PATH` is preferred for deterministic compose operation and for
+avoiding runtime network downloads.
 
 ## ONNX model contract
 
