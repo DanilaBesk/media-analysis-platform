@@ -811,12 +811,57 @@ describe("createWebUiRoutes", () => {
             created_at: "2026-05-10T00:00:00Z",
           },
           {
+            diagnostic_id: "diagnostic-selection-snapshot",
+            owner,
+            subject: { subject_type: "selection_snapshot", subject_id: "snapshot-1" },
+            severity: "warning",
+            code: "origin_warning",
+            message: "Selection snapshot warning kept visible",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            diagnostic_id: "diagnostic-media-asset",
+            owner,
+            subject: { subject_type: "media_asset", subject_id: "media-1" },
+            severity: "warning",
+            code: "origin_warning",
+            message: "Media asset warning kept visible",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
             diagnostic_id: "diagnostic-channel",
             owner,
             subject: { subject_type: "channel", subject_id: "telegram-main" },
             severity: "info",
             code: "adapter_notice_without_label",
             message: "Adapter reported an unknown notice",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            diagnostic_id: "diagnostic-adapter",
+            owner,
+            subject: { subject_type: "adapter", subject_id: "telegram-main" },
+            severity: "info",
+            code: "adapter_notice_without_label",
+            message: "Adapter fallback label stayed visible",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            diagnostic_id: "diagnostic-legacy",
+            owner,
+            subject_type: "artifact",
+            subject_id: "artifact-legacy",
+            severity: "info",
+            code: "artifact_preview_ready",
+            message: "Legacy diagnostic subject stayed visible",
+            created_at: "2026-05-10T00:00:00Z",
+          },
+          {
+            diagnostic_id: "diagnostic-missing-subject",
+            owner,
+            severity: "info",
+            code: "retention_hold_pending",
+            message: "Missing subject falls back to run",
             created_at: "2026-05-10T00:00:00Z",
           },
         ],
@@ -826,11 +871,18 @@ describe("createWebUiRoutes", () => {
 
     expect(await screen.findByText("Collection warning kept visible")).toBeVisible();
     expect(await screen.findByText("Selection warning kept visible")).toBeVisible();
+    expect(await screen.findByText("Selection snapshot warning kept visible")).toBeVisible();
+    expect(await screen.findByText("Media asset warning kept visible")).toBeVisible();
     expect(await screen.findByText("Adapter reported an unknown notice")).toBeVisible();
-    expect(screen.getByText("группа")).toBeVisible();
-    expect(screen.getByText("подборка")).toBeVisible();
-    expect(screen.getByText("канал")).toBeVisible();
-    expect(screen.getByText("Проверка")).toBeVisible();
+    expect(await screen.findByText("Adapter fallback label stayed visible")).toBeVisible();
+    expect(await screen.findByText("Legacy diagnostic subject stayed visible")).toBeVisible();
+    expect(await screen.findByText("Missing subject falls back to run")).toBeVisible();
+    expect(screen.getAllByText("группа").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("подборка").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("канал").length).toBeGreaterThan(0);
+    expect(screen.getByText("результат")).toBeVisible();
+    expect(screen.getByText("запуск")).toBeVisible();
+    expect(screen.getAllByText("Проверка").length).toBeGreaterThan(0);
   });
 
   it("covers inbox validation and alternate ingest modes", async () => {
@@ -1099,9 +1151,39 @@ describe("createWebUiRoutes", () => {
             origin: { origin_type: "url", url: "https://example.test/file", origin_ref: "https://example.test/file" },
           }),
           mediaAsset({
+            media_asset_id: "media-url-ref",
+            kind: "url",
+            display_name: "URL ref origin",
+            origin: { origin_type: "url", origin_ref: "https://example.test/from-ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-url-empty",
+            kind: "url",
+            display_name: "URL empty origin",
+            origin: { origin_type: "url" },
+          }),
+          mediaAsset({
             media_asset_id: "media-raw",
             display_name: "Raw origin",
             origin: { origin_type: "object", origin_ref: "web-local://raw", object_ref: "web-local://raw" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-object-kind",
+            kind: "object",
+            display_name: "Object kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-document-kind",
+            kind: "document",
+            display_name: "Document kind",
+            origin: { origin_type: "remote_ref" },
+          }),
+          mediaAsset({
+            media_asset_id: "media-telegram-file-kind",
+            kind: "telegram_file",
+            display_name: "Telegram file kind",
+            origin: { origin_type: "remote_ref" },
           }),
           mediaAsset({
             media_asset_id: "media-remote",
@@ -1202,6 +1284,8 @@ describe("createWebUiRoutes", () => {
 
     expect(await screen.findByText("URL origin")).toBeVisible();
     expect(screen.getByText("https://example.test/file")).toBeVisible();
+    expect(screen.getByText("https://example.test/from-ref")).toBeVisible();
+    expect(screen.getAllByText("Ссылка").length).toBeGreaterThan(0);
     expect(screen.getByText("Загруженный файл")).toBeVisible();
     expect(screen.getAllByText("remote ref").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Ссылка").length).toBeGreaterThan(0);
@@ -1472,6 +1556,36 @@ describe("createWebUiRoutes", () => {
     expect(screen.getByText("{invalid-json")).toBeVisible();
     expect(screen.getAllByText("2.4 MB")).toHaveLength(2);
     expect(screen.queryByRole("link", { name: "Открыть результат" })).toBeNull();
+  });
+
+  it("renders valid JSON artifact previews with formatted object text", async () => {
+    renderRoute("/artifacts/artifact-json-valid", {
+      getArtifact: vi.fn().mockResolvedValue({
+        artifact_id: "artifact-json-valid",
+        analysis_run_id: "run-1",
+        kind: "structured_data",
+        status: "available",
+        content_type: "application/octet-stream",
+        size_bytes: 128,
+        preview: {
+          available: true,
+          kind: "text",
+          format: "json",
+          text_excerpt: "{\"nested\":{\"value\":1}}",
+        },
+        created_at: "2026-05-10T00:00:00Z",
+        diagnostics: [],
+        download: { available: false, url: "" },
+      }),
+      listDiagnostics: vi.fn().mockResolvedValue({
+        items: [],
+        page: { page_size: 50, has_more: false },
+      }),
+    });
+
+    const preview = await screen.findByText(/"nested":/);
+    expect(preview).toBeVisible();
+    expect(preview.textContent).toContain('"value": 1');
   });
 
   it("renders direct source and preview artifact labels", async () => {
@@ -1773,6 +1887,27 @@ describe("createWebUiRoutes", () => {
         }),
       );
     });
+  });
+
+  it("shows concrete and generic run-builder errors", async () => {
+    const errorRuntime = renderRoute("/runs", {
+      createAnalysisRun: vi.fn().mockRejectedValue(new Error("Run creation exploded")),
+    });
+
+    fireEvent.click(await within(errorRuntime.container).findByLabelText("Выбрать Call note"));
+    fireEvent.click(within(errorRuntime.container).getByRole("button", { name: "Запустить: 1" }));
+
+    expect(await within(errorRuntime.container).findByText("Run creation exploded")).toBeVisible();
+    errorRuntime.unmount();
+
+    const genericRuntime = renderRoute("/runs", {
+      createSelectionSnapshot: vi.fn().mockRejectedValue("selection failed without Error"),
+    });
+
+    fireEvent.click(await within(genericRuntime.container).findByLabelText("Выбрать Call note"));
+    fireEvent.click(within(genericRuntime.container).getByRole("button", { name: "Запустить: 1" }));
+
+    expect(await within(genericRuntime.container).findByText("Не удалось запустить обработку.")).toBeVisible();
   });
 
   it("renders localized selection counts for several selected materials", async () => {
