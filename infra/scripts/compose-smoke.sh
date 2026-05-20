@@ -179,6 +179,7 @@ validate_static_contract() {
   require_service_block_snippet "copper-asr" 'cpus: ${COPPER_ASR_LOCAL_CPUS:-4.0}'
   require_service_block_snippet "copper-asr" "COPPER_ASR_CACHE_DIR: /var/cache/copper-asr"
   require_service_block_snippet "copper-asr" "COPPER_ASR_TMP_DIR: /tmp/copper-asr"
+  require_service_block_snippet "copper-asr" "TORCH_HOME: /var/cache/copper-asr/torch"
   require_service_block_snippet "copper-asr" "healthcheck:"
   require_service_block_snippet "worker-transcription" "dockerfile: infra/images/worker-transcription/Dockerfile"
   require_service_block_snippet "worker-transcription" "image: media-analysis-worker-transcription:local"
@@ -192,6 +193,9 @@ validate_static_contract() {
   require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_TORCH_NUM_THREADS=2"
   require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_TORCH_INTEROP_THREADS=1"
   require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_FFMPEG_THREADS=1"
+  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "TORCH_HOME=/var/cache/copper-asr/torch"
+  require_file_snippet "${ROOT_DIR}/infra/images/copper-asr/Dockerfile" ".[server,cpu]"
+  require_file_snippet "${ROOT_DIR}/infra/images/copper-asr/Dockerfile" "TORCH_HOME=/var/cache/copper-asr/torch"
   reject_file_snippet "${ROOT_DIR}/infra/env/worker-transcription.env.example" "WHISPER_"
   reject_file_snippet "${ROOT_DIR}/infra/images/copper-asr/Dockerfile" "faster-whisper"
   require_service_block_snippet "worker-agent-runner" "dockerfile: infra/images/worker-agent-runner/Dockerfile"

@@ -53,11 +53,11 @@ Initial source pin:
 - Reviewed HEAD: `f2a8278fb236b2ba471083ca2debcc3e9052cd64`
 - Reviewed remote: `https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git`
 
-Current runtime source pin after the CopperASR thread-cap, telemetry, and invalid-audio classification updates:
+Current runtime source pin after the CopperASR thread-cap, telemetry, invalid-audio classification, and ONNX VAD provider-policy updates:
 
 - Runtime branch: `main`
-- Runtime HEAD: `7aec7bee3a7500a16ce0b3de66c9cad9ed354754`
-- Update reason: consumes upstream `fix/runtime-thread-caps-telemetry` and `fix/invalid-audio-decode-classification` without editing the submodule from this repository.
+- Runtime HEAD: `f880151cfc57e082a94c028fb0d7483ccc1a921b`
+- Update reason: consumes upstream `fix/runtime-thread-caps-telemetry`, `fix/invalid-audio-decode-classification`, and `fix/vad-onnx-provider-policy` without editing the submodule from this repository.
 
 Implementation rule:
 
@@ -123,6 +123,7 @@ Runtime env:
 - `COPPER_ASR_MODEL_PATH`
 - `COPPER_ASR_CACHE_DIR=/var/cache/copper-asr`
 - `COPPER_ASR_TMP_DIR=/tmp/copper-asr`
+- `TORCH_HOME=/var/cache/copper-asr/torch`
 - `COPPER_ASR_DEVICE=auto`
 - `COPPER_ASR_PRELOAD_MODEL=true`
 - `COPPER_ASR_REQUEST_TIMEOUT_S=28800`
@@ -139,6 +140,8 @@ Runtime env:
 Local compose resource cap:
 
 - `COPPER_ASR_LOCAL_CPUS=4.0` in `infra/docker-compose.yml` caps only the local consumer `copper-asr` container and is recorded by the benchmark artifact. It does not modify CopperASR source or upstream production defaults.
+- The local runtime image installs `external/copper-asr[server,cpu]`. This is intentional after upstream ONNX VAD provider delegation: ONNX Runtime may choose from installed providers, and the media-analysis-platform local compose contract remains CPU-only unless the Dockerfile extra is explicitly changed.
+- `TORCH_HOME` is pinned under `COPPER_ASR_CACHE_DIR` so Silero VAD torch.hub assets use the existing `copper-asr-cache` volume instead of a throwaway container home directory.
 
 Volumes:
 

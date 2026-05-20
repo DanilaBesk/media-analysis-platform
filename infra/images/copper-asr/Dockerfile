@@ -15,7 +15,8 @@ ENV COPPER_ASR_HOST=0.0.0.0 \
     COPPER_ASR_FFMPEG_THREADS=1 \
     COPPER_ASR_LOG_LEVEL=info \
     COPPER_ASR_CACHE_DIR=/var/cache/copper-asr \
-    COPPER_ASR_TMP_DIR=/tmp/copper-asr
+    COPPER_ASR_TMP_DIR=/tmp/copper-asr \
+    TORCH_HOME=/var/cache/copper-asr/torch
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl ffmpeg \
@@ -25,10 +26,12 @@ WORKDIR /opt/copper-asr
 
 COPY external/copper-asr ./
 
+# Keep the local compose runtime CPU-only: CopperASR VAD delegates ONNX provider
+# choice to the installed runtime, and this image intentionally installs cpu.
 RUN python -m pip install --no-cache-dir torch==2.5.1 torchaudio==2.5.1 \
     && python -m pip install --no-cache-dir ".[server,cpu]" \
     && useradd --create-home --shell /usr/sbin/nologin copperasr \
-    && mkdir -p /var/cache/copper-asr /tmp/copper-asr /var/log/platform \
+    && mkdir -p /var/cache/copper-asr/torch /tmp/copper-asr /var/log/platform \
     && chown -R copperasr:copperasr /var/cache/copper-asr /tmp/copper-asr /var/log/platform
 
 USER copperasr

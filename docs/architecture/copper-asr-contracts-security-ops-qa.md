@@ -48,7 +48,7 @@ git config --file .gitmodules --get-regexp '^submodule\..*\.(path|url)$'
 Result:
 
 - `external/copper-asr` is pinned at
-  `7aec7bee3a7500a16ce0b3de66c9cad9ed354754`.
+  `f880151cfc57e082a94c028fb0d7483ccc1a921b`.
 - `external/copper-asr` has no local source edits.
 - `.gitmodules` path is `external/copper-asr` and URL is the upstream CopperASR
   GitLab repository.
@@ -74,6 +74,9 @@ Result:
   `COPPER_ASR_LOCAL_CPUS=4.0`, `COPPER_ASR_MAX_CONCURRENT_REQUESTS=1`,
   `COPPER_ASR_ONNX_NUM_THREADS=2`, `COPPER_ASR_TORCH_NUM_THREADS=2`,
   `COPPER_ASR_TORCH_INTEROP_THREADS=1`, and `COPPER_ASR_FFMPEG_THREADS=1`.
+- The runtime image installs `external/copper-asr[server,cpu]`, keeping upstream
+  ONNX VAD provider delegation on the CPU provider for this local compose
+  profile.
 
 Failure isolation:
 

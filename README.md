@@ -76,7 +76,7 @@ Current pin:
 
 ```text
 remote https://copperside.gitlab.yandexcloud.net/clara/copper-asr.git
-external/copper-asr 7aec7bee3a7500a16ce0b3de66c9cad9ed354754
+external/copper-asr f880151cfc57e082a94c028fb0d7483ccc1a921b
 ```
 
 Local install path for CopperASR development:

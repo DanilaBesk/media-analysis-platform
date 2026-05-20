@@ -86,6 +86,20 @@ def test_no_legacy_asr_gate_is_single_ci_command_wired_into_inventory() -> None:
     assert "bash infra/scripts/no-legacy-asr-gate.sh" in target_gate_text
 
 
+def test_copper_asr_runtime_image_keeps_cpu_onnx_runtime_extra() -> None:
+    dockerfile = ROOT / "infra/images/copper-asr/Dockerfile"
+    env_example = ROOT / "infra/env/copper-asr.env.example"
+
+    dockerfile_text = dockerfile.read_text(encoding="utf-8")
+    env_text = env_example.read_text(encoding="utf-8")
+
+    assert '".[server,cpu]"' in dockerfile_text
+    assert "onnxruntime-gpu" not in dockerfile_text
+    assert "COPPER_ASR_ONNX_NUM_THREADS=2" in env_text
+    assert "TORCH_HOME=/var/cache/copper-asr/torch" in dockerfile_text
+    assert "TORCH_HOME=/var/cache/copper-asr/torch" in env_text
+
+
 def _iter_active_files() -> list[Path]:
     files: list[Path] = []
     for relative in ACTIVE_PATHS:

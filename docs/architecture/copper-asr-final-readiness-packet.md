@@ -14,7 +14,7 @@ The repo now consumes CopperASR as an external upstream runtime source at
 `external/copper-asr`, pinned to:
 
 ```text
-7aec7bee3a7500a16ce0b3de66c9cad9ed354754 external/copper-asr
+f880151cfc57e082a94c028fb0d7483ccc1a921b external/copper-asr
 ```
 
 The old Whisper/faster-whisper runtime is not active in compose, env templates,
