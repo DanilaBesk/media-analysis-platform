@@ -31,7 +31,7 @@ No source-plan requirement was found orphaned from implementation, coverage proo
 | FPF domains and target vocabulary | `docs/requirements.xml`, `packages/contracts`, `apps/api/internal/api/target_runtime.go`, adapter clients. | `packages/contracts/tests/test_contract_surfaces.py`, `infra/scripts/no-legacy-target-gate.sh`. | `media-7f3.11.1` traceability plus `11.2` and `11.3` semantic reviews. |
 | Target table set and table contracts | `apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql`, `apps/api/internal/storage/target`. | `apps/api/internal/storage/target/store_postgres_test.go`, storage tests, target reset smoke. | `media-7f3.11.2`. |
 | API operation groups | `apps/api/internal/api`, `packages/contracts/openapi/openapi.yaml`. | API tests, contract tests, runtime-final E2E, no-legacy gate. | `media-7f3.11.2`. |
-| DTO and type naming | Go target types, shared contract schemas, worker DTO parsing, Web/MCP client types. | Contract tests, worker-common tests, no-legacy gate, MCP typecheck. | `media-7f3.11.1` for compatibility isolation; `11.2` and `11.3` for code review depth. |
+| DTO and type naming | Go target types, shared contract schemas, worker DTO parsing, Web/MCP client types. | Contract tests, worker-common tests, no-legacy gate, MCP typecheck. | `media-7f3.11.1` for removed-surface isolation; `11.2` and `11.3` for code review depth. |
 | App responsibilities: API | Target runtime service, target store, artifact/download and admin runtime fixes. | Go API/storage tests, runtime-final E2E, admin observability/reconcile live proof from `10.4`. | `media-7f3.11.2`. |
 | App responsibilities: Telegram | `apps/telegram-bot/src/telegram_adapter` over target media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, channel_surface APIs. | Telegram adapter tests and runtime proof. | `media-7f3.11.3`. |
 | App responsibilities: Web | `apps/web/src` target client and human-facing routes. | Web tests, coverage inventory, no-legacy gate. | `media-7f3.11.3` challenges visible copy and user-flow ergonomics. |
@@ -47,7 +47,7 @@ No source-plan requirement was found orphaned from implementation, coverage proo
 | Check | Evidence | Result |
 | --- | --- | --- |
 | Target contract proof | `packages/contracts/tests/test_contract_surfaces.py`, OpenAPI target operations, target coverage matrix. | Covered. |
-| Compatibility isolation proof | `infra/scripts/no-legacy-target-gate.sh`, deprecated compatibility route tests, target coverage matrix compatibility rows. | Covered; old names are allowed only in explicit compatibility, migration, or historical contexts. |
+| Removed-surface isolation proof | `infra/scripts/no-legacy-target-gate.sh`, contract negative tests, target coverage matrix removed-surface rows. | Covered; removed names remain only in negative assertions, guard patterns, or historical audit notes. |
 | Web human-language proof | Web route tests, no-legacy gate, target coverage matrix boundary row. | Covered for committed tests; exploratory UX challenge remains in `media-7f3.11.3`. |
 | Worker step-input and prerequisite proof | Worker-common claim parsing, transcription and agent-runner tests, runtime-final proof, target coverage matrix worker rows. | Covered for committed tests; backend/worker review remains in `media-7f3.11.2`. |
 | Beads graph contradiction check | `bd list --all` shows superseded flat `media-7f3.1` through `media-7f3.8` closed, replacement epics `9` and `10` closed, QA epic `11` open. | Covered. |
@@ -73,7 +73,7 @@ Resolution:
 ## Accepted Traceability Notes
 
 - The live runtime proof uses unique throwaway channel_accounts instead of only fixed manifest ids. This is accepted for runtime E2E because it avoids stale idempotency collisions while deterministic fixture ids and object bytes are still validated separately.
-- Line/statement coverage percentages are not the semantic definition of target rebuild closure. The semantic closure target is source-plan proof for table invariants, API operations, DTO compatibility, user flows, worker steps, channel recovery, diagnostics, retention, vocabulary, and reset behavior.
+- Line/statement coverage percentages are not the semantic definition of target rebuild closure. The semantic closure target is source-plan proof for table invariants, API operations, DTO naming, user flows, worker steps, channel recovery, diagnostics, retention, vocabulary, and reset behavior.
 
 ## Remaining QA Work
 

@@ -2137,7 +2137,7 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
 
 
 @pytest.mark.asyncio
-async def test_legacy_collection_and_selection_callbacks_start_terminal_runs() -> None:
+async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs() -> None:
     api, gateway, app = make_app()
     gateway.add_text(channel_identity=channel_identity(), text="ready to finish")
     status = status_for(gateway)
@@ -2186,9 +2186,9 @@ async def test_legacy_collection_and_selection_callbacks_start_terminal_runs() -
 
 
 @pytest.mark.asyncio
-async def test_legacy_collection_callback_schedules_tracking_for_active_run() -> None:
+async def test_collection_callback_schedules_tracking_for_active_run() -> None:
     _, gateway, app = make_app()
-    gateway.add_text(channel_identity=channel_identity(), text="watch legacy run")
+    gateway.add_text(channel_identity=channel_identity(), text="watch active run")
     status = status_for(gateway)
     base_message = FakeMessage()
     tick = asyncio.Event()

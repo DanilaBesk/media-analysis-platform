@@ -1045,14 +1045,14 @@ Historical behavior kept input records API-owned and appended them to inbox or n
   <HotfixPacket packet-id="media-fwx-paged-empty-array" module="M-API-HTTP" phase="RuntimeBugfix" verification-ref="EV-API,EV-RUNTIME">
     <purpose>Fix Telegram status refresh failure caused by empty diagnostics lists encoded as null.</purpose>
     <write-scope>
-      <file-1>apps/api/internal/api/media_handlers.go</file-1>
-      <file-2>apps/api/internal/api/api_test.go</file-2>
+      <file-1>apps/api/internal/api/target_api.go</file-1>
+      <file-2>apps/api/internal/api/target_api_test.go</file-2>
       <file-3>docs/requirements.xml</file-3>
       <file-4>docs/verification-plan.xml</file-4>
       <file-5>docs/operational-packets.xml</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-Public paginated list envelopes must encode items as an array on every page, including empty diagnostics, artifacts, media, run, and event pages. Adapters must not need legacy local fallback state to render an empty API-owned result.
+Public paginated list envelopes must encode items as an array on every page, including empty diagnostics, artifacts, media, run, and event pages. Adapters must not need local fallback state to render an empty API-owned result.
     ]]></contract-excerpt>
     <verification>
       <check>Focused API regression proves nil source slices encode as items: [] through the shared paging helper.</check>

@@ -15,7 +15,7 @@ Allowed remaining references are limited to:
 
 - no-legacy guard patterns and negative assertions;
 - historical migration, research, benchmark, or readiness wording that describes
-  the removed legacy runtime instead of configuring or calling it.
+  the removed runtime instead of configuring or calling it.
 
 ## Finding Fixed
 
@@ -37,7 +37,7 @@ Passed:
 bash infra/scripts/no-legacy-asr-gate.sh
 ```
 
-Result: `2 passed`; active ASR surfaces exclude removed legacy runtime
+Result: `2 passed`; active ASR surfaces exclude removed runtime
 references.
 
 Passed:
@@ -52,7 +52,7 @@ Remaining matches are guard/negative checks or historical benchmark comparison:
 - CopperASR E2E assertions that run manifests must not leak legacy ASR wording.
 - `workers/common/tests/test_no_legacy_asr_runtime.py` split forbidden-token
   guard patterns.
-- `infra/scripts/copper-asr-benchmark-e2e.py` `previous_backend` historical
+- `infra/scripts/copper-asr-benchmark-e2e.py` `previous_backend` removed-runtime
   comparison metadata.
 
 Passed:

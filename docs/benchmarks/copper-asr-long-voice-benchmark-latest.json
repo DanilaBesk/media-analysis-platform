@@ -49,7 +49,7 @@
   },
   "backend": {
     "duration_seconds": 157.77897375600878,
-    "legacy_asr_allowed": false,
+    "removed_asr_allowed": false,
     "metadata": {
       "diarization": {
         "enabled": false
@@ -84,10 +84,10 @@
   },
   "generated_at": "2026-05-20T00:49:09Z",
   "previous_runtime_comparison": {
-    "comparison_mode": "current CopperASR-only runtime measured under compose; removed legacy runtime is not retained as a fallback",
+    "comparison_mode": "current CopperASR-only runtime measured under compose; removed runtime is not retained as a fallback",
     "evidence_basis": "media-11o runtime diagnosis and user-observed long voice latency complaint",
-    "legacy_runtime_preserved": false,
-    "previous_backend": "legacy faster-whisper CPU"
+    "removed_runtime_preserved": false,
+    "previous_backend": "removed faster-whisper CPU"
   },
   "progress_events": [
     {

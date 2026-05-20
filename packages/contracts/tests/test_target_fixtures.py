@@ -65,7 +65,7 @@ def test_copper_asr_e2e_fixture_manifest_covers_required_inputs_and_hashes() -> 
 
     assert e2e["backend"] == "CopperASR"
     assert e2e["run_manifest_assertions"]["transcription_backend"] == "copperasr"
-    assert e2e["run_manifest_assertions"]["legacy_asr_allowed"] is False
+    assert e2e["run_manifest_assertions"]["removed_asr_allowed"] is False
 
     stored_by_id = {item["stored_object_id"]: item for item in fixtures["stored_objects"]}
     cases = {case["case_id"]: case for case in e2e["cases"]}
@@ -175,8 +175,8 @@ def test_copper_asr_long_voice_benchmark_artifact_records_runtime_thresholds() -
     assert payload["fixture"]["case_id"] == "representative_long_voice"
     assert payload["fixture"]["duration_seconds"] == 960.006
     assert payload["backend"]["provider"] == "copperasr"
-    assert payload["backend"]["legacy_asr_allowed"] is False
-    assert payload["previous_runtime_comparison"]["legacy_runtime_preserved"] is False
+    assert payload["backend"]["removed_asr_allowed"] is False
+    assert payload["previous_runtime_comparison"]["removed_runtime_preserved"] is False
 
     timings = payload["timings"]
     assert timings["input_duration_seconds"] == 960.006

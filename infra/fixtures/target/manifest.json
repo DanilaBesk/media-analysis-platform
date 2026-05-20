@@ -161,7 +161,7 @@
       },
       "run_manifest_assertions": {
         "transcription_backend": "copperasr",
-        "legacy_asr_allowed": false
+        "removed_asr_allowed": false
       },
       "cases": [
         {

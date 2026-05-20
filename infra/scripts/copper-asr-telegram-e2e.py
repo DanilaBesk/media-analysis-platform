@@ -375,7 +375,7 @@ def _assert_artifacts(account: TelegramAccount, analysis_run_id: str) -> dict[st
     backend = manifest_payload.get("transcription_backend")
     _assert(isinstance(backend, dict), f"run_manifest missing transcription_backend: {manifest_payload}")
     _assert(backend.get("provider") == "copperasr", f"run_manifest provider is not copperasr: {backend}")
-    _assert("whisper" not in json.dumps(manifest_payload, ensure_ascii=False).lower(), "run_manifest leaked legacy ASR wording")
+    _assert("whisper" not in json.dumps(manifest_payload, ensure_ascii=False).lower(), "run_manifest leaked removed ASR wording")
 
     return {
         "artifact_ids": [str(artifact["artifact_id"]) for artifact in details],

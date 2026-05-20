@@ -95,9 +95,9 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 	if !bytes.Equal(target.mediaAssetReq.Origin.UploadBody, []byte("hello")) {
 		t.Fatalf("upload media asset body = %q, want hello", string(target.mediaAssetReq.Origin.UploadBody))
 	}
-	legacyUploadID := legacyTargetUploadStoredObjectID("channel-account-1", "notes.txt", []byte("hello"))
-	if target.mediaAssetReq.Origin.StoredObjectID == legacyUploadID {
-		t.Fatalf("upload reused legacy stored_object_id %q; old rows with uploads/ keys can conflict with sources/uploads/ keys", legacyUploadID)
+	preTargetUploadID := preTargetUploadStoredObjectID("channel-account-1", "notes.txt", []byte("hello"))
+	if target.mediaAssetReq.Origin.StoredObjectID == preTargetUploadID {
+		t.Fatalf("upload reused pre-target stored_object_id %q; old rows with uploads/ keys can conflict with sources/uploads/ keys", preTargetUploadID)
 	}
 	if !strings.HasPrefix(target.mediaAssetReq.Origin.ObjectRef, "sources/uploads/"+target.mediaAssetReq.Origin.StoredObjectID+"/") {
 		t.Fatalf("upload object_ref %q must be keyed by its new stored_object_id %q", target.mediaAssetReq.Origin.ObjectRef, target.mediaAssetReq.Origin.StoredObjectID)
@@ -990,7 +990,7 @@ func rawMultipartTargetUploadRequest(t *testing.T, path, metadata, filename, bod
 	return req
 }
 
-func legacyTargetUploadStoredObjectID(channelAccountID, filename string, body []byte) string {
+func preTargetUploadStoredObjectID(channelAccountID, filename string, body []byte) string {
 	sum := sha256.Sum256(body)
 	checksum := fmt.Sprintf("sha256:%x", sum[:])
 	return stableTargetID(strings.Join([]string{channelAccountID, filename, checksum}, ":"))

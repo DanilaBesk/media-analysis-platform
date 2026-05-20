@@ -190,7 +190,7 @@
     <bead id="media-7f3.9.7">Run Web, MCP, API artifact refresh, GRACE XML, and focused stale target vocabulary checks.</bead>
     <bead id="media-7f3.9.8">Run cleanup, OpenAPI, GRACE XML, and stale public vocabulary checks before closing the implementation epic.</bead>
     <bead id="media-7f3.10.1">Run target coverage matrix review, deterministic fixture manifest validation, and target reset smoke before starting storage/API coverage expansion.</bead>
-    <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and legacy storage package tests before starting adapter/worker/runtime E2E coverage.</bead>
+    <bead id="media-7f3.10.2">Run live target Postgres storage contract tests, target API tests, target storage package tests, and removed-surface storage regression tests before starting adapter/worker/runtime E2E coverage.</bead>
     <bead id="media-7f3.10.3">Run Telegram, worker-common, transcription, agent-runner, Web, MCP, API artifact/download, target runtime proof, compose smoke, and GRACE XML checks before starting inventory/no-legacy gates.</bead>
     <bead id="media-7f3.10.4">Run full coverage inventory, no-legacy target gate, admin target-reset regression tests, live admin observability proof, GRACE XML checks, and git diff checks before starting QA traceability.</bead>
     <bead id="media-7f3.11.1">Run source-plan to artifact traceability audit, Beads graph status audit, GRACE XML checks, no-legacy target gate, contract fixture tests, stale closure wording scan, and git diff checks before starting backend/security/worker QA.</bead>

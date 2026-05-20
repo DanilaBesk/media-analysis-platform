@@ -520,7 +520,7 @@ def run_benchmark(
             "revision": backend.get("revision"),
             "duration_seconds": backend.get("duration"),
             "metadata": backend.get("metadata") if isinstance(backend.get("metadata"), dict) else {},
-            "legacy_asr_allowed": False,
+            "removed_asr_allowed": False,
         },
         "runtime": {
             "api_base_url": API_BASE_URL,
@@ -610,9 +610,9 @@ def run_benchmark(
         },
         "thresholds": thresholds,
         "previous_runtime_comparison": {
-            "previous_backend": "legacy faster-whisper CPU",
-            "legacy_runtime_preserved": False,
-            "comparison_mode": "current CopperASR-only runtime measured under compose; removed legacy runtime is not retained as a fallback",
+            "previous_backend": "removed faster-whisper CPU",
+            "removed_runtime_preserved": False,
+            "comparison_mode": "current CopperASR-only runtime measured under compose; removed runtime is not retained as a fallback",
             "evidence_basis": "media-11o runtime diagnosis and user-observed long voice latency complaint",
         },
     }

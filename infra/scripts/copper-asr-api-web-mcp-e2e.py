@@ -293,7 +293,7 @@ def _assert_artifacts(
     _assert(isinstance(backend, dict), f"run_manifest missing transcription_backend: {manifest_payload}")
     _assert(backend.get("provider") == "copperasr", f"run_manifest provider is not copperasr: {backend}")
     _assert(manifest_payload.get("summary", {}).get("included_count") == 1, f"unexpected manifest summary: {manifest_payload}")
-    _assert("whisper" not in json.dumps(manifest_payload, ensure_ascii=False).lower(), "run_manifest leaked legacy ASR wording")
+    _assert("whisper" not in json.dumps(manifest_payload, ensure_ascii=False).lower(), "run_manifest leaked removed ASR wording")
 
     refreshed = _refresh_artifact(account, str(plain_artifact["artifact_id"]))
     _assert(refreshed.get("artifact_id") == plain_artifact["artifact_id"], "artifact refresh returned the wrong artifact")

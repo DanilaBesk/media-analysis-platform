@@ -8,7 +8,7 @@ This review challenges the backend, storage, security, object storage, diagnosti
 
 ## Executive Result
 
-The reviewed target architecture is still coherent: API owns product state, target storage is disposable and resettable, workers consume sealed `selection_snapshot` data through `analysis_run_step` contracts, and compatibility vocabulary remains isolated to explicit deprecated or historical surfaces.
+The reviewed target architecture is still coherent: API owns product state, target storage is disposable and resettable, workers consume sealed `selection_snapshot` data through `analysis_run_step` contracts, and removed vocabulary is isolated to negative assertions, guard patterns, or historical audit notes.
 
 The review found four real backend/worker hardening issues. All four were fixed with regression tests:
 
@@ -78,8 +78,8 @@ Regression proof: covered by Go package build/test gates in this review.
 ## Accepted Notes
 
 - The current local database remains disposable by target policy. This review did not add preservation, migration, or backfill work for existing rows.
-- Compatibility names still exist in deprecated routes, historical docs, and explicit tests by design; the active target gate remains `infra/scripts/no-legacy-target-gate.sh`.
-- Worker DTO parsing still accepts non-UUID strings because older tests and compatibility fixtures use readable ids. The filesystem and object-store boundaries now sanitize those ids before side effects.
+- Removed names remain only in negative assertions, guard patterns, and historical audit notes; the active target gate remains `infra/scripts/no-legacy-target-gate.sh`.
+- Worker DTO parsing still accepts non-UUID strings because current fixtures use readable ids. The filesystem and object-store boundaries sanitize those ids before side effects.
 
 ## Verification
 

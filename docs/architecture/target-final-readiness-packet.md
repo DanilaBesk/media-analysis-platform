@@ -8,7 +8,7 @@ Prepared on: 2026-05-18
 
 The target rebuild is ready for MR/review from the repository evidence available in this branch.
 
-The implemented product model is the single-user, channel-aware target architecture: API owns product state, Telegram/Web/MCP are adapters over that state, channels own presentation/recovery state, workers consume immutable `selection_snapshot` data through `analysis_run_step` contracts, and target public vocabulary avoids the old owner/workspace/job/batch/source-set model outside explicit deprecated, historical, or debug contexts.
+The implemented product model is the single-user, channel-aware target architecture: API owns product state, Telegram/Web/MCP are adapters over that state, channels own presentation/recovery state, workers consume immutable `selection_snapshot` data through `analysis_run_step` contracts, and target public vocabulary excludes the old owner/workspace/job/batch/source-set model from active contracts and runtime paths.
 
 No target-readiness blocker remains in `media-7f3.11`. Remaining unrelated Beads do not block this target rebuild readiness packet.
 
