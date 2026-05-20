@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { RECONCILE_STATE_MARKER, requiresRestReconciliation } from "../../lib/api/client";
 import type {
-  AddMediaAssetDraft,
+  AddMediaAssetInput,
   AnalysisRun,
   AnalysisRunSummary,
   Artifact,
@@ -582,12 +582,12 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
     setError("");
     setMessage("");
     try {
-      let draft: AddMediaAssetDraft;
+      let input: AddMediaAssetInput;
       if (mode === "text") {
         if (text.trim() === "") {
           throw new Error("Добавьте текст.");
         }
-        draft = {
+        input = {
           kind: "text",
           displayName: displayName.trim() || text.trim().slice(0, 64),
           origin: { origin_type: "text", text: text.trim(), origin_ref: text.trim().slice(0, 64) },
@@ -596,7 +596,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         if (url.trim() === "") {
           throw new Error("Добавьте ссылку.");
         }
-        draft = {
+        input = {
           kind: "url",
           displayName: displayName.trim() || url.trim(),
           origin: { origin_type: "url", url: url.trim(), origin_ref: url.trim() },
@@ -605,7 +605,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
         if (!file) {
           throw new Error("Выберите файл.");
         }
-        draft = {
+        input = {
           kind: file.type.startsWith("audio/")
             ? "audio"
             : file.type.startsWith("video/")
@@ -623,7 +623,7 @@ function IngestPanel({ onCreated }: { onCreated: () => Promise<void> }): JSX.Ele
           },
         };
       }
-      const item = await apiClient.addMediaAsset(DEFAULT_CHANNEL_ACCOUNT_ID, draft);
+      const item = await apiClient.addMediaAsset(DEFAULT_CHANNEL_ACCOUNT_ID, input);
       setMessage(`Добавлено: ${item.display_name}`);
       setDisplayName("");
       setText("");

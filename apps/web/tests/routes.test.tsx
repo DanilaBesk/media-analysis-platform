@@ -466,9 +466,9 @@ describe("createWebUiRoutes", () => {
       page: { page_size: 50, has_more: false },
     }));
     runtime.apiClient.getCollection = vi.fn().mockImplementation(async () => mutableCollection);
-    runtime.apiClient.replaceCollectionItems = vi.fn().mockImplementation(async (_channelAccountId, _collectionId, draft) => {
+    runtime.apiClient.replaceCollectionItems = vi.fn().mockImplementation(async (_channelAccountId, _collectionId, input) => {
       mutableCollection = collection({
-        version: draft.expectedVersion + 1,
+        version: input.expectedVersion + 1,
         items: [
           {
             media_asset_id: "media-1",

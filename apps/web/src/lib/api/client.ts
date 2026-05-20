@@ -1,12 +1,13 @@
 import type {
-  AddMediaAssetDraft,
+  AddMediaAssetInput,
+  AnalysisRunInput,
   AnalysisRun,
   AnalysisRunSummary,
   Artifact,
   ArtifactSummary,
   ChannelAccountId,
   Collection,
-  CollectionDraft,
+  CollectionInput,
   Diagnostic,
   DiagnosticSeverity,
   DiagnosticSubjectType,
@@ -14,13 +15,12 @@ import type {
   MediaAssetSummary,
   ObservabilitySnapshot,
   PaginatedResponse,
-  ReplaceCollectionItemsDraft,
-  RunDraft,
+  ReplaceCollectionItemsInput,
   RunEvent,
   RunType,
   SelectionSnapshot,
-  SelectionSnapshotDraft,
-  UpdateCollectionDraft,
+  SelectionSnapshotInput,
+  UpdateCollectionInput,
 } from "./types";
 
 export const RECONCILE_STATE_MARKER = "[WebUi][reconcileRunState]";
@@ -47,23 +47,23 @@ export interface WebSocketLike {
 export interface WebUiApiClient {
   listMediaAssets(channelAccountId: ChannelAccountId, filter?: ListMediaAssetsFilter): Promise<PaginatedResponse<MediaAssetSummary>>;
   getMediaAsset(channelAccountId: ChannelAccountId, mediaAssetId: string): Promise<MediaAsset>;
-  addMediaAsset(channelAccountId: ChannelAccountId, draft: AddMediaAssetDraft, collectionId?: string): Promise<MediaAsset>;
+  addMediaAsset(channelAccountId: ChannelAccountId, input: AddMediaAssetInput, collectionId?: string): Promise<MediaAsset>;
   removeMediaAsset(channelAccountId: ChannelAccountId, mediaAssetId: string): Promise<MediaAsset>;
   getInboxCollection(channelAccountId: ChannelAccountId): Promise<Collection>;
   listCollections(channelAccountId: ChannelAccountId, page?: PageRequest): Promise<PaginatedResponse<Collection>>;
   getCollection(channelAccountId: ChannelAccountId, collectionId: string, page?: PageRequest): Promise<Collection>;
-  createCollection(channelAccountId: ChannelAccountId, draft: CollectionDraft): Promise<Collection>;
-  updateCollection(channelAccountId: ChannelAccountId, collectionId: string, draft: UpdateCollectionDraft): Promise<Collection>;
-  replaceCollectionItems(channelAccountId: ChannelAccountId, collectionId: string, draft: ReplaceCollectionItemsDraft): Promise<Collection>;
+  createCollection(channelAccountId: ChannelAccountId, input: CollectionInput): Promise<Collection>;
+  updateCollection(channelAccountId: ChannelAccountId, collectionId: string, input: UpdateCollectionInput): Promise<Collection>;
+  replaceCollectionItems(channelAccountId: ChannelAccountId, collectionId: string, input: ReplaceCollectionItemsInput): Promise<Collection>;
   removeCollectionItem(
     channelAccountId: ChannelAccountId,
     collectionId: string,
     mediaAssetId: string,
     expectedVersion: number,
   ): Promise<Collection>;
-  createSelectionSnapshot(channelAccountId: ChannelAccountId, draft: SelectionSnapshotDraft): Promise<SelectionSnapshot>;
+  createSelectionSnapshot(channelAccountId: ChannelAccountId, input: SelectionSnapshotInput): Promise<SelectionSnapshot>;
   getSelectionSnapshot(channelAccountId: ChannelAccountId, selectionSnapshotId: string): Promise<SelectionSnapshot>;
-  createAnalysisRun(channelAccountId: ChannelAccountId, draft: RunDraft): Promise<AnalysisRun>;
+  createAnalysisRun(channelAccountId: ChannelAccountId, input: AnalysisRunInput): Promise<AnalysisRun>;
   listAnalysisRuns(channelAccountId: ChannelAccountId, filter?: ListAnalysisRunsFilter): Promise<PaginatedResponse<AnalysisRunSummary>>;
   getAnalysisRun(channelAccountId: ChannelAccountId, analysisRunId: string): Promise<AnalysisRun>;
   cancelAnalysisRun(channelAccountId: ChannelAccountId, analysisRunId: string): Promise<AnalysisRun>;
@@ -302,13 +302,13 @@ export function createWebUiApiClient({
       return extractEnvelope<MediaAsset>(payload, "media_asset");
     },
 
-    async addMediaAsset(channelAccountID, draft, collectionId) {
+    async addMediaAsset(channelAccountID, input, collectionId) {
       const payload = await postJson<unknown>("/v1/media-assets", {
         channel_account_id: channelAccountID,
-        kind: draft.kind,
-        origin: draft.origin,
+        kind: input.kind,
+        origin: input.origin,
         collection_id: collectionId || undefined,
-        display_name: draft.displayName.trim() || undefined,
+        display_name: input.displayName.trim() || undefined,
       });
       return extractEnvelope<MediaAsset>(payload, "media_asset");
     },
@@ -341,30 +341,30 @@ export function createWebUiApiClient({
       return normalizeCollection(extractEnvelope<Collection>(payload, "collection"));
     },
 
-    async createCollection(channelAccountID, draft) {
+    async createCollection(channelAccountID, input) {
       const payload = await postJson<unknown>("/v1/collections", {
         channel_account_id: channelAccountID,
-        name: draft.name.trim(),
-        items: draft.items,
+        name: input.name.trim(),
+        items: input.items,
       });
       return normalizeCollection(extractEnvelope<Collection>(payload, "collection"));
     },
 
-    async updateCollection(channelAccountID, collectionId, draft) {
+    async updateCollection(channelAccountID, collectionId, input) {
       const payload = await patchJson<unknown>(`/v1/collections/${collectionId}`, {
         channel_account_id: channelAccountID,
-        expected_version: draft.expectedVersion,
-        name: draft.name?.trim() || undefined,
-        status: draft.status || undefined,
+        expected_version: input.expectedVersion,
+        name: input.name?.trim() || undefined,
+        status: input.status || undefined,
       });
       return normalizeCollection(extractEnvelope<Collection>(payload, "collection"));
     },
 
-    async replaceCollectionItems(channelAccountID, collectionId, draft) {
+    async replaceCollectionItems(channelAccountID, collectionId, input) {
       const payload = await postJson<unknown>(`/v1/collections/${collectionId}/items`, {
         channel_account_id: channelAccountID,
-        expected_version: draft.expectedVersion,
-        items: draft.items,
+        expected_version: input.expectedVersion,
+        items: input.items,
       });
       return normalizeCollection(extractEnvelope<Collection>(payload, "collection"));
     },
@@ -379,12 +379,12 @@ export function createWebUiApiClient({
       return normalizeCollection(extractEnvelope<Collection>(payload, "collection"));
     },
 
-    async createSelectionSnapshot(channelAccountID, draft) {
+    async createSelectionSnapshot(channelAccountID, input) {
       const payload = await postJson<unknown>("/v1/selection-snapshots", {
         channel_account_id: channelAccountID,
-        source_collection_id: draft.sourceCollectionId || undefined,
-        items: draft.items,
-        option_snapshot: draft.optionSnapshot,
+        source_collection_id: input.sourceCollectionId || undefined,
+        items: input.items,
+        option_snapshot: input.optionSnapshot,
         created_via_channel_account_id: channelAccountID,
       });
       return extractEnvelope<SelectionSnapshot>(payload, "selection_snapshot");
@@ -396,13 +396,13 @@ export function createWebUiApiClient({
       return extractEnvelope<SelectionSnapshot>(payload, "selection_snapshot");
     },
 
-    async createAnalysisRun(channelAccountID, draft) {
+    async createAnalysisRun(channelAccountID, input) {
       const payload = await postJson<unknown>("/v1/analysis-runs", {
         channel_account_id: channelAccountID,
-        selection_snapshot_id: draft.selectionSnapshotId,
-        run_type: draft.runType,
-        params: draft.params,
-        delivery: draft.delivery,
+        selection_snapshot_id: input.selectionSnapshotId,
+        run_type: input.runType,
+        params: input.params,
+        delivery: input.delivery,
         created_via_channel_id: channelAccountID,
       });
       return normalizeAnalysisRun(extractEnvelope<AnalysisRun>(payload, "analysis_run"));

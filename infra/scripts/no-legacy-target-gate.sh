@@ -100,6 +100,13 @@ reject_regex \
   workers/common/src
 
 reject_regex \
+  "web target request vocabulary" \
+  '\b(AddMediaAssetDraft|CollectionDraft|SelectionSnapshotDraft|RunDraft|UpdateCollectionDraft|ReplaceCollectionItemsDraft)\b|\bdraft\b' \
+  apps/web/src/lib/api \
+  apps/web/src/features/media \
+  apps/web/tests
+
+reject_regex \
   "target storage implementation" \
   '\b(media_items|selection_items|analysis_run_tasks|owner_type|owner_id|tenant_id|safe_adapter_context)\b' \
   apps/api/internal/storage/target/fixtures.go \

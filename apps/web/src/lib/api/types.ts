@@ -276,37 +276,37 @@ export interface ObservabilitySnapshot {
   generated_at: string;
 }
 
-export interface AddMediaAssetDraft {
+export interface AddMediaAssetInput {
   kind: MediaKind;
   displayName: string;
   origin: MediaAssetOrigin;
 }
 
-export interface CollectionDraft {
+export interface CollectionInput {
   name: string;
   items: string[];
 }
 
-export interface SelectionSnapshotDraft {
+export interface SelectionSnapshotInput {
   sourceCollectionId?: string;
   items: Array<{ media_asset_id: string; position: number }>;
   optionSnapshot?: Record<string, unknown>;
 }
 
-export interface RunDraft {
+export interface AnalysisRunInput {
   selectionSnapshotId: string;
   runType: RunType;
   params?: Record<string, unknown>;
   delivery: DeliveryPreference;
 }
 
-export interface UpdateCollectionDraft {
+export interface UpdateCollectionInput {
   expectedVersion: number;
   name?: string;
   status?: CollectionStatus;
 }
 
-export interface ReplaceCollectionItemsDraft {
+export interface ReplaceCollectionItemsInput {
   expectedVersion: number;
   items: Array<{ media_asset_id: string; position: number }>;
 }
