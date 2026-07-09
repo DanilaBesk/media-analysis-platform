@@ -509,11 +509,55 @@ def test_load_settings_reads_explicit_env_mapping() -> None:
         env={
             "TELEGRAM_BOT_TOKEN": "  secret-token  ",
             "ALLOWED_USER_IDS": "1, 2,3",
+            "TELEGRAM_BOT_API_BASE_URL": "  http://telegram-bot-api:8081/  ",
+            "TELEGRAM_BOT_API_IS_LOCAL": "true",
         },
     )
 
     assert settings.telegram_bot_token == "secret-token"
     assert settings.allowed_user_ids == (1, 2, 3)
+    assert settings.telegram_bot_api_base_url == "http://telegram-bot-api:8081"
+    assert settings.telegram_bot_api_local_mode is True
+
+
+def test_load_settings_supports_explicit_non_local_custom_bot_api_server() -> None:
+    settings = load_settings(
+        Path("/tmp/runtime"),
+        env={
+            "TELEGRAM_BOT_TOKEN": "secret-token",
+            "TELEGRAM_BOT_API_BASE_URL": "http://bot-api-proxy.internal:8081",
+            "TELEGRAM_BOT_API_IS_LOCAL": "false",
+        },
+    )
+
+    assert settings.telegram_bot_api_base_url == "http://bot-api-proxy.internal:8081"
+    assert settings.telegram_bot_api_local_mode is False
+
+
+def test_load_settings_keeps_cloud_bot_api_default_for_compatibility() -> None:
+    settings = load_settings(
+        Path("/tmp/runtime"),
+        env={
+            "TELEGRAM_BOT_TOKEN": "secret-token",
+        },
+    )
+
+    assert settings.telegram_bot_api_base_url is None
+    assert settings.telegram_bot_api_local_mode is False
+
+
+def test_load_settings_reads_local_bot_api_endpoint() -> None:
+    settings = load_settings(
+        Path("/tmp/runtime"),
+        env={
+            "TELEGRAM_BOT_TOKEN": "123:ABC",
+            "TELEGRAM_BOT_API_BASE_URL": "  http://telegram-bot-api:8081/  ",
+            "TELEGRAM_BOT_API_LOCAL_MODE": "true",
+        },
+    )
+
+    assert settings.telegram_bot_api_base_url == "http://telegram-bot-api:8081"
+    assert settings.telegram_bot_api_local_mode is True
 
 
 def test_message_files_preserves_telegram_voice_duration_for_status_summary() -> None:
@@ -553,6 +597,25 @@ def test_load_settings_loads_dotenv_from_base_dir_when_env_is_implicit(monkeypat
 def test_load_settings_requires_bot_token() -> None:
     with pytest.raises(RuntimeError, match="TELEGRAM_BOT_TOKEN is required"):
         load_settings(Path("/tmp/runtime"), env={"ALLOWED_USER_IDS": "1"})
+
+
+@pytest.mark.asyncio
+async def test_app_uses_local_telegram_bot_api_session_when_configured() -> None:
+    api = FakeFinalApiClient()
+    settings = TelegramAdapterSettings(
+        telegram_bot_token="123:ABC",
+        allowed_user_ids=(),
+        telegram_bot_api_base_url="http://telegram-bot-api:8081",
+        telegram_bot_api_local_mode=True,
+    )
+    app = TelegramInboxApp(settings, TelegramInboxGateway(api))
+
+    try:
+        assert app.bot.session.api.base == "http://telegram-bot-api:8081/bot{token}/{method}"
+        assert app.bot.session.api.file == "http://telegram-bot-api:8081/file/bot{token}/{path}"
+        assert app.bot.session.api.is_local is True
+    finally:
+        await app.bot.session.close()
 
 
 def test_run_builds_adapter_dependencies_and_uses_default_api_url(monkeypatch: pytest.MonkeyPatch) -> None:

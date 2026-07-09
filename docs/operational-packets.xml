@@ -1162,6 +1162,34 @@ Generic backend-unavailable Telegram copy must not claim inbox content has alrea
       <check>Full Telegram adapter tests pass.</check>
     </verification>
   </HotfixPacket>
+
+  <HotfixPacket packet-id="media-qb3-local-telegram-bot-api-large-media-ingress" module="M-INFRA,M-TELEGRAM-ADAPTER,M-GRACE" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-RUNTIME,EV-GRACE">
+    <purpose>Route compose Telegram media ingestion through a local Telegram Bot API server so large Telegram video/audio downloads do not fail on the cloud Bot API file-size limit.</purpose>
+    <write-scope>
+      <file-1>infra/docker-compose.yml</file-1>
+      <file-2>.env.example</file-2>
+      <file-3>infra/env/telegram-bot.env.example</file-3>
+      <file-4>infra/env/telegram-bot-api.env.example</file-4>
+      <file-5>apps/telegram-bot/src/telegram_adapter/config.py</file-5>
+      <file-6>apps/telegram-bot/src/telegram_adapter/bot.py</file-6>
+      <file-7>apps/telegram-bot/tests/test_bot_runtime.py</file-7>
+      <file-8>infra/scripts/compose-smoke.sh</file-8>
+      <file-9>README.md</file-9>
+      <file-10>docs/requirements.xml</file-10>
+      <file-11>docs/technology.xml</file-11>
+      <file-12>docs/knowledge-graph.xml</file-12>
+      <file-13>docs/operational-packets.xml</file-13>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The compose runtime owns a local telegram-bot-api service with persistent telegram-bot-api-data storage, TELEGRAM_API_ID and TELEGRAM_API_HASH placeholders, local mode enabled, and getMe health. The telegram-bot adapter must explicitly use TELEGRAM_BOT_API_BASE_URL=http://telegram-bot-api:8081 and aiogram local mode, sharing the Bot API data volume read-only so absolute getFile file_path values remain readable from the adapter container. Without a configured custom endpoint, local development code keeps the cloud Bot API default for compatibility.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN config regression proves TELEGRAM_BOT_API_BASE_URL is normalized and TELEGRAM_BOT_API_IS_LOCAL can disable local mode for custom non-local endpoints.</check>
+      <check>RED/GREEN adapter regression proves TelegramInboxApp creates an aiogram Bot with TelegramAPIServer.from_base and local mode when configured.</check>
+      <check>Compose static check proves telegram-bot-api service, env placeholders, persistent volume, adapter dependency, local endpoint, and shared read-only data volume exist.</check>
+      <check>Live proof with real TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, and cloud Bot API logOut remains required before closing media-qb3.</check>
+    </verification>
+  </HotfixPacket>
   <HotfixPacket packet-id="media-5n4-local-compose-runtime-readiness-and-port-repair" module="M-INFRA,M-GRACE" phase="RuntimeOps" verification-ref="EV-RUNTIME,EV-GRACE">
     <purpose>Allow the local compose runtime to start reliably on developer machines with occupied MinIO ports, cold API Go caches, and first-run CopperASR model bootstrap.</purpose>
     <write-scope>

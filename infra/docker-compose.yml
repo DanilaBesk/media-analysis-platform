@@ -8,8 +8,8 @@ x-runtime-infra-depends: &runtime-infra-depends
   minio-init:
     condition: service_completed_successfully
 
-x-platform-no-proxy: &platform-no-proxy "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,mcp-server,0.250.250.0/24,fd07:b51a:cc66:f0::/64,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
-x-platform-no-proxy-httpx-safe: &platform-no-proxy-httpx-safe "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,mcp-server,0.250.250.0/24,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
+x-platform-no-proxy: &platform-no-proxy "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,telegram-bot-api,mcp-server,0.250.250.0/24,fd07:b51a:cc66:f0::/64,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
+x-platform-no-proxy-httpx-safe: &platform-no-proxy-httpx-safe "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,telegram-bot-api,mcp-server,0.250.250.0/24,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
 x-platform-minio-public-endpoint: &platform-minio-public-endpoint "${MINIO_PUBLIC_ENDPOINT:-http://localhost:${MINIO_HOST_PORT:-19100}}"
 
 services:
@@ -275,6 +275,35 @@ services:
       - ..:/workspace
       - retained-log-volume:/var/log/platform
 
+  telegram-bot-api:
+    image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api:latest}
+    restart: unless-stopped
+    env_file:
+      - ./env/telegram-bot-api.env.example
+      - path: ../.env
+        required: false
+    environment:
+      TELEGRAM_LOCAL: "1"
+      TELEGRAM_HTTP_IP_ADDRESS: 0.0.0.0
+      TELEGRAM_HTTP_PORT: "8081"
+      NO_PROXY: *platform-no-proxy
+      no_proxy: *platform-no-proxy
+    networks:
+      - platform
+    ports:
+      - "${TELEGRAM_BOT_API_HOST_PORT:-18081}:8081"
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+      - retained-log-volume:/var/log/platform
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "test -n \"$$TELEGRAM_BOT_TOKEN\" && wget -q -T 10 -O - \"http://127.0.0.1:8081/bot$${TELEGRAM_BOT_TOKEN}/getMe\" | grep -q '\"ok\":true'"
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
   telegram-bot:
     build:
       context: ..
@@ -287,6 +316,8 @@ services:
       PYTHONPATH: /workspace/apps/telegram-bot/src:/workspace/workers/common/src:/workspace/src
       DATA_DIR: /tmp/runtime/telegram-bot
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
+      TELEGRAM_BOT_API_BASE_URL: http://telegram-bot-api:8081
+      TELEGRAM_BOT_API_IS_LOCAL: "true"
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     env_file:
@@ -295,6 +326,8 @@ services:
         required: false
     depends_on:
       api:
+        condition: service_healthy
+      telegram-bot-api:
         condition: service_healthy
     working_dir: /workspace
     command:
@@ -305,6 +338,7 @@ services:
     volumes:
       - ..:/workspace
       - telegram-bot-runtime:/tmp/runtime
+      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
       - retained-log-volume:/var/log/platform
 
   mcp-server:
@@ -342,6 +376,7 @@ volumes:
   copper-asr-tmp:
   api-go-build-cache:
   api-go-mod-cache:
+  telegram-bot-api-data:
   agent-runner-runtime:
   telegram-bot-runtime:
   retained-log-volume:

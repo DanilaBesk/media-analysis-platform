@@ -9,6 +9,7 @@ MARKER='[InfraCompose][verifyLocalStack][BLOCK_VERIFY_LOCAL_STACK_HEALTH]'
 RUNTIME_SERVICES=(
   api
   copper-asr
+  telegram-bot-api
   web
   telegram-bot
   mcp-server
@@ -107,6 +108,7 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/env/worker-agent-runner.env.example"
   require_file "${ROOT_DIR}/infra/env/web.env.example"
   require_file "${ROOT_DIR}/infra/env/telegram-bot.env.example"
+  require_file "${ROOT_DIR}/infra/env/telegram-bot-api.env.example"
   require_file "${ROOT_DIR}/infra/env/mcp-server.env.example"
   require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
   require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
@@ -143,6 +145,7 @@ validate_static_contract() {
   require_compose_snippet "- ./env/worker-agent-runner.env.example"
   require_compose_snippet "- ./env/web.env.example"
   require_compose_snippet "- ./env/telegram-bot.env.example"
+  require_compose_snippet "- ./env/telegram-bot-api.env.example"
   require_compose_snippet "path: ../.env"
   require_compose_snippet "required: false"
   require_compose_snippet "- ./env/mcp-server.env.example"
@@ -157,6 +160,7 @@ validate_static_contract() {
   require_compose_snippet "copper-asr-tmp:"
   require_compose_snippet "api-go-build-cache:"
   require_compose_snippet "api-go-mod-cache:"
+  require_compose_snippet "telegram-bot-api-data:"
   require_compose_snippet "agent-runner-runtime:"
   require_compose_snippet "retained-log-volume:"
   reject_compose_snippet "whisper-model-cache:"
@@ -224,6 +228,21 @@ validate_static_contract() {
   reject_file_snippet "${ROOT_DIR}/infra/images/worker-agent-runner/Dockerfile" "apt-get install -y --no-install-recommends nodejs npm"
   require_service_block_snippet "web" '${WEB_HOST_PORT:-3201}:3201'
   require_service_block_snippet "web" "condition: service_healthy"
+  require_service_block_snippet "telegram-bot-api" 'image: ${TELEGRAM_BOT_API_IMAGE:-aiogram/telegram-bot-api:latest}'
+  require_service_block_snippet "telegram-bot-api" "TELEGRAM_LOCAL: \"1\""
+  require_service_block_snippet "telegram-bot-api" "TELEGRAM_HTTP_PORT: \"8081\""
+  require_service_block_snippet "telegram-bot-api" '${TELEGRAM_BOT_API_HOST_PORT:-18081}:8081'
+  require_service_block_snippet "telegram-bot-api" "telegram-bot-api-data:/var/lib/telegram-bot-api"
+  require_service_block_snippet "telegram-bot-api" "healthcheck:"
+  require_service_block_snippet "telegram-bot-api" "getMe"
+  require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot-api.env.example" "TELEGRAM_API_ID="
+  require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot-api.env.example" "TELEGRAM_API_HASH="
+  require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot.env.example" "TELEGRAM_BOT_API_BASE_URL=http://telegram-bot-api:8081"
+  require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot.env.example" "TELEGRAM_BOT_API_IS_LOCAL=true"
+  require_service_block_snippet "telegram-bot" "TELEGRAM_BOT_API_BASE_URL: http://telegram-bot-api:8081"
+  require_service_block_snippet "telegram-bot" "TELEGRAM_BOT_API_IS_LOCAL: \"true\""
+  require_service_block_snippet "telegram-bot" "telegram-bot-api:"
+  require_service_block_snippet "telegram-bot" "telegram-bot-api-data:/var/lib/telegram-bot-api:ro"
   require_service_block_snippet "telegram-bot" "condition: service_healthy"
   require_service_block_snippet "mcp-server" "condition: service_healthy"
   reject_file_snippet "${ROOT_DIR}/workers/transcription/src/transcriber_worker_transcription.py" "_ensure_worker_dependency_paths"

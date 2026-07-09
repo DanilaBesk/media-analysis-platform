@@ -25,6 +25,8 @@ from urllib.request import urlopen
 from uuid import UUID
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import (
     TelegramAPIError,
     TelegramBadRequest,
@@ -103,11 +105,22 @@ class _TelegramSurfaceDeliveryFailure(RuntimeError):
     pass
 
 
+def _create_bot(settings: Any) -> Bot:
+    bot_api_base_url = str(getattr(settings, "telegram_bot_api_base_url", "") or "").strip()
+    if not bot_api_base_url:
+        return Bot(settings.telegram_bot_token)
+    api = TelegramAPIServer.from_base(
+        bot_api_base_url,
+        is_local=bool(getattr(settings, "telegram_bot_api_local_mode", False)),
+    )
+    return Bot(settings.telegram_bot_token, session=AiohttpSession(api=api))
+
+
 class TelegramInboxApp:
     def __init__(self, settings: Any, gateway: TelegramInboxGateway, bot: Bot | None = None) -> None:
         self.settings = settings
         self.gateway = gateway
-        self.bot = bot or Bot(settings.telegram_bot_token)
+        self.bot = bot or _create_bot(settings)
         self.dispatcher = Dispatcher()
         self.router = Router(name="telegram-inbox")
         self.locale_service = TelegramLocaleService()

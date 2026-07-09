@@ -81,6 +81,7 @@
         <item>Inbox visible items, remove actions, and clear-visible actions follow collection membership rather than the broad media inventory.</item>
         <item>Active transcription cards show material duration, user-facing stage, and elapsed time from analysis_run lifecycle/events while normal copy hides provider-specific VAD/ASR/internal progress fields.</item>
         <item>Status text and inline action labels are Russian-first and make refresh, collection actions, cancellation, diagnostics, and transcription launch controls self-explanatory; successful transcription results auto-deliver as Telegram document messages rather than requiring a Result button.</item>
+        <item>Compose-owned Telegram runtime uses the local Telegram Bot API service with local mode and shared file volume for getFile/download behavior, not the cloud Bot API file-size-limited download path.</item>
         <item>Callbacks use API ids and versions and cannot mutate another channel-account state.</item>
         <item>No user-facing execution mode is required to accumulate multiple items.</item>
       </Telegram>
@@ -142,7 +143,7 @@
     </Gate>
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
-      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-telegram-e2e.py --json` must prove the live Telegram voice-to-transcript delivery, result surface, duplicate guard, and inbox clear contract; focused Telegram regressions must prove successful transcript delivery uses Telegram document messages and hides the normal Result button after auto-delivery; `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP; `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
+      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-telegram-e2e.py --json` must prove the live Telegram voice-to-transcript delivery, result surface, duplicate guard, and inbox clear contract; focused Telegram regressions must prove successful transcript delivery uses Telegram document messages and hides the normal Result button after auto-delivery; Telegram transport regressions and compose-smoke must prove local Bot API endpoint parsing, aiogram local-mode session configuration, telegram-bot-api compose service health wiring, and shared read-only Bot API data volume. `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP; `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
     </Gate>
     <Gate id="EV-COVERAGE-INVENTORY">
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
@@ -230,6 +231,7 @@
     <bead id="media-b8s.3.4">Closed by docs/architecture/copper-asr-final-readiness-packet.md, with exact verification commands, runtime proof, Beads closure state, residual risks, and blocker/follow-up status.</bead>
     <bead id="media-pyj">Closed by focused Telegram runtime regressions proving transcript result auto-delivery as a document, no normal Result button after successful auto-delivery, stale addressless result-surface recovery, and failed send isolation.</bead>
     <bead id="media-11o">Closed by CopperASR runtime migration plus passing long-voice performance proof under the local compose CPU quota.</bead>
+    <bead id="media-qb3">Before closure, run config/adapter/compose static tests plus live compose proof with real TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, and a bot logged out from the cloud Bot API so large Telegram media ingestion uses the local Bot API server.</bead>
     <bead id="media-5cj">Historical inbox-first storage and API orchestration checks; superseded by media-7f3 target implementation evidence when contracts conflict.</bead>
     <bead id="media-sfx">Historical worker execution checks; superseded by media-7f3.9.6 target worker evidence.</bead>
     <bead id="media-7al">Historical Telegram adapter checks; superseded by media-7f3.9.5 target adapter evidence.</bead>

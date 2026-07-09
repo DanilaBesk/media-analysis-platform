@@ -43,7 +43,16 @@ async def _run(env: Mapping[str, str] | None = None) -> None:
     api_client = TelegramApiClient(api_base_url)
     gateway = TelegramInboxGateway(api_client)
     app = TelegramInboxApp(settings, gateway)
-    _LOGGER.info("%s api_base_url=%s mode=token_configured", _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER, api_base_url)
+    bot_api_mode = "cloud"
+    if settings.telegram_bot_api_base_url:
+        bot_api_mode = "local" if settings.telegram_bot_api_local_mode else "custom"
+    _LOGGER.info(
+        "%s api_base_url=%s telegram_bot_api_base_url=%s telegram_bot_api_mode=%s mode=token_configured",
+        _LOG_MARKER_LAUNCH_TELEGRAM_ADAPTER,
+        api_base_url,
+        settings.telegram_bot_api_base_url or "https://api.telegram.org",
+        bot_api_mode,
+    )
     await app.run()
 
 

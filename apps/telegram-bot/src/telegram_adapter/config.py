@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 class TelegramAdapterSettings:
     telegram_bot_token: str
     allowed_user_ids: tuple[int, ...]
+    telegram_bot_api_base_url: str | None = None
+    telegram_bot_api_local_mode: bool = False
 
 
 def load_settings(base_dir: Path | None = None, *, env: Mapping[str, str] | None = None) -> TelegramAdapterSettings:
@@ -27,4 +29,29 @@ def load_settings(base_dir: Path | None = None, *, env: Mapping[str, str] | None
     allowed_user_ids = tuple(
         int(part.strip()) for part in values.get("ALLOWED_USER_IDS", "").split(",") if part.strip()
     )
-    return TelegramAdapterSettings(telegram_bot_token=token, allowed_user_ids=allowed_user_ids)
+    bot_api_base_url = values.get("TELEGRAM_BOT_API_BASE_URL", "").strip().rstrip("/") or None
+    bot_api_local_mode_raw = values.get("TELEGRAM_BOT_API_IS_LOCAL")
+    if bot_api_local_mode_raw is None:
+        bot_api_local_mode_raw = values.get("TELEGRAM_BOT_API_LOCAL_MODE")
+    bot_api_local_mode = _parse_bool(
+        bot_api_local_mode_raw,
+        default=bot_api_base_url is not None,
+        name="TELEGRAM_BOT_API_IS_LOCAL",
+    )
+    return TelegramAdapterSettings(
+        telegram_bot_token=token,
+        allowed_user_ids=allowed_user_ids,
+        telegram_bot_api_base_url=bot_api_base_url,
+        telegram_bot_api_local_mode=bot_api_local_mode,
+    )
+
+
+def _parse_bool(value: str | None, *, default: bool, name: str) -> bool:
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean value")

@@ -36,6 +36,9 @@ bash infra/scripts/compose-smoke.sh --check-config
 docker compose -f infra/docker-compose.yml up -d --build --wait
 ```
 
+Перед запуском Telegram runtime заполните в `.env` `TELEGRAM_BOT_TOKEN`, `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`.
+Compose поднимает локальный `telegram-bot-api` service в `--local` режиме и считает его healthy только после успешного `getMe` через локальный endpoint. Это нужно для больших видео/аудио, где cloud `api.telegram.org` download path возвращает `Bad Request: file is too big`. `api_id`/`api_hash` выдаются в `my.telegram.org`; при переносе уже существующего бота с cloud Bot API на local server один раз выполните Bot API `logOut`, иначе Telegram не гарантирует доставку updates в локальный server.
+
 По умолчанию MinIO публикуется на `localhost:19100`, консоль MinIO - на `localhost:19101`. Это позволяет запускать stack рядом с другими локальными проектами, которые часто занимают `9000/9001`. Если нужны другие порты, задайте `MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT` и, чтобы artifact download links оставались корректными, `MINIO_PUBLIC_ENDPOINT`.
 
 Первый запуск CopperASR скачивает ONNX bundle и Silero VAD в volume `copper-asr-cache`; на медленной сети это занимает несколько минут. Compose healthcheck поэтому дает CopperASR расширенный startup window. Для более надежного первого скачивания можно задать `HF_TOKEN` в `.env`; значение прокидывается только в `copper-asr` runtime и не должно попадать в логи или документацию.
@@ -55,6 +58,10 @@ Root package entrypoint intentionally does not exist. Runtime code lives under `
 
 - `API_BASE_URL` — HTTP endpoint API для thin adapters.
 - `TELEGRAM_BOT_TOKEN` — обязателен для Telegram adapter.
+- `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` — обязательны для локального Telegram Bot API server в compose; храните только в `.env`.
+- `TELEGRAM_BOT_API_BASE_URL` — endpoint Bot API для aiogram; compose задает `http://telegram-bot-api:8081`.
+- `TELEGRAM_BOT_API_IS_LOCAL` — включает aiogram local mode, чтобы `getFile` absolute paths читались через shared `telegram-bot-api-data` volume.
+- `TELEGRAM_BOT_API_HOST_PORT` — optional host port для диагностики local Bot API, по умолчанию `18081`.
 - `ALLOWED_USER_IDS` — optional allow-list для Telegram adapter.
 - `MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `MINIO_PUBLIC_ENDPOINT` — host-порты и внешний endpoint локального MinIO для artifact download links.
 - `API_HEALTH_START_PERIOD`, `COPPER_ASR_HEALTH_START_PERIOD` — startup windows для холодного локального запуска API и CopperASR.
@@ -105,7 +112,7 @@ through `media-b8s.*`.
 ## Архитектура
 
 - `apps/api` — Go control plane for media_assets, collections, selection_snapshots, analysis_runs, artifacts, diagnostics, retry/cancel/progress, and channel surface recovery state.
-- `apps/telegram-bot/src/telegram_adapter` — compose-owned Telegram adapter over the API.
+- `apps/telegram-bot/src/telegram_adapter` — compose-owned Telegram adapter over the API; in compose it talks to local `telegram-bot-api` for large Telegram media downloads.
 - `apps/web` — Web UI over the same media and run APIs.
 - `apps/mcp-server` — MCP adapter over the same media and run APIs.
 - `packages/contracts` — OpenAPI and JSON schema contracts for public, internal, webhook, and websocket surfaces.
