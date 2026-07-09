@@ -38,6 +38,13 @@ docker compose -f infra/docker-compose.yml up -d --build --wait
 
 Перед запуском Telegram runtime заполните в `.env` `TELEGRAM_BOT_TOKEN`, `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`.
 Compose поднимает локальный `telegram-bot-api` service в `--local` режиме и считает его healthy только после успешного `getMe` через локальный endpoint. Это нужно для больших видео/аудио, где cloud `api.telegram.org` download path возвращает `Bad Request: file is too big`. `api_id`/`api_hash` выдаются в `my.telegram.org`; при переносе уже существующего бота с cloud Bot API на local server один раз выполните Bot API `logOut`, иначе Telegram не гарантирует доставку updates в локальный server.
+Перед перезапуском проверьте cutover без вывода секретов:
+
+```bash
+bash infra/scripts/telegram-local-bot-api-preflight.sh
+docker compose -f infra/docker-compose.yml up -d --build --force-recreate --wait telegram-bot-api telegram-bot
+bash infra/scripts/telegram-local-bot-api-preflight.sh --runtime
+```
 
 По умолчанию MinIO публикуется на `localhost:19100`, консоль MinIO - на `localhost:19101`. Это позволяет запускать stack рядом с другими локальными проектами, которые часто занимают `9000/9001`. Если нужны другие порты, задайте `MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT` и, чтобы artifact download links оставались корректными, `MINIO_PUBLIC_ENDPOINT`.
 

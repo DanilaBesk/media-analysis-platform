@@ -111,6 +111,7 @@ validate_static_contract() {
   require_file "${ROOT_DIR}/infra/env/telegram-bot-api.env.example"
   require_file "${ROOT_DIR}/infra/env/mcp-server.env.example"
   require_file "${ROOT_DIR}/infra/init/minio/bootstrap-buckets.sh"
+  require_file "${ROOT_DIR}/infra/scripts/telegram-local-bot-api-preflight.sh"
   require_file "${ROOT_DIR}/infra/images/worker-transcription/Dockerfile"
   require_file "${ROOT_DIR}/infra/images/copper-asr/Dockerfile"
   require_file "${ROOT_DIR}/infra/images/worker-agent-runner/Dockerfile"
@@ -234,9 +235,15 @@ validate_static_contract() {
   require_service_block_snippet "telegram-bot-api" '${TELEGRAM_BOT_API_HOST_PORT:-18081}:8081'
   require_service_block_snippet "telegram-bot-api" "telegram-bot-api-data:/var/lib/telegram-bot-api"
   require_service_block_snippet "telegram-bot-api" "healthcheck:"
+  require_service_block_snippet "telegram-bot-api" 'test -n \"$$TELEGRAM_API_ID\"'
+  require_service_block_snippet "telegram-bot-api" 'test -n \"$$TELEGRAM_API_HASH\"'
   require_service_block_snippet "telegram-bot-api" "getMe"
   require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot-api.env.example" "TELEGRAM_API_ID="
   require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot-api.env.example" "TELEGRAM_API_HASH="
+  require_file_snippet "${ROOT_DIR}/infra/scripts/telegram-local-bot-api-preflight.sh" "TELEGRAM_API_ID"
+  require_file_snippet "${ROOT_DIR}/infra/scripts/telegram-local-bot-api-preflight.sh" "TELEGRAM_API_HASH"
+  require_file_snippet "${ROOT_DIR}/infra/scripts/telegram-local-bot-api-preflight.sh" "telegram-bot-api"
+  require_file_snippet "${ROOT_DIR}/infra/scripts/telegram-local-bot-api-preflight.sh" "telegram_bot_api_mode=local"
   require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot.env.example" "TELEGRAM_BOT_API_BASE_URL=http://telegram-bot-api:8081"
   require_file_snippet "${ROOT_DIR}/infra/env/telegram-bot.env.example" "TELEGRAM_BOT_API_IS_LOCAL=true"
   require_service_block_snippet "telegram-bot" "TELEGRAM_BOT_API_BASE_URL: http://telegram-bot-api:8081"

@@ -298,7 +298,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - "test -n \"$$TELEGRAM_BOT_TOKEN\" && wget -q -T 10 -O - \"http://127.0.0.1:8081/bot$${TELEGRAM_BOT_TOKEN}/getMe\" | grep -q '\"ok\":true'"
+        - "test -n \"$$TELEGRAM_BOT_TOKEN\" && test -n \"$$TELEGRAM_API_ID\" && test -n \"$$TELEGRAM_API_HASH\" && wget -q -T 10 -O - \"http://127.0.0.1:8081/bot$${TELEGRAM_BOT_TOKEN}/getMe\" | grep -q '\"ok\":true'"
       interval: 10s
       timeout: 10s
       retries: 12
