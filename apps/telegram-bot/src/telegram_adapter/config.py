@@ -14,6 +14,7 @@ class TelegramAdapterSettings:
     allowed_user_ids: tuple[int, ...]
     telegram_bot_api_base_url: str | None = None
     telegram_bot_api_local_mode: bool = False
+    telegram_bot_api_required: bool = False
 
 
 def load_settings(base_dir: Path | None = None, *, env: Mapping[str, str] | None = None) -> TelegramAdapterSettings:
@@ -38,11 +39,21 @@ def load_settings(base_dir: Path | None = None, *, env: Mapping[str, str] | None
         default=bot_api_base_url is not None,
         name="TELEGRAM_BOT_API_IS_LOCAL",
     )
+    bot_api_required = _parse_bool(
+        values.get("TELEGRAM_BOT_API_REQUIRED"),
+        default=False,
+        name="TELEGRAM_BOT_API_REQUIRED",
+    )
+    if bot_api_required and bot_api_base_url is None:
+        raise RuntimeError("TELEGRAM_BOT_API_BASE_URL is required when TELEGRAM_BOT_API_REQUIRED=true")
+    if bot_api_required and not bot_api_local_mode:
+        raise RuntimeError("TELEGRAM_BOT_API_IS_LOCAL must be true when TELEGRAM_BOT_API_REQUIRED=true")
     return TelegramAdapterSettings(
         telegram_bot_token=token,
         allowed_user_ids=allowed_user_ids,
         telegram_bot_api_base_url=bot_api_base_url,
         telegram_bot_api_local_mode=bot_api_local_mode,
+        telegram_bot_api_required=bot_api_required,
     )
 
 

@@ -318,6 +318,7 @@ services:
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
       TELEGRAM_BOT_API_BASE_URL: http://telegram-bot-api:8081
       TELEGRAM_BOT_API_IS_LOCAL: "true"
+      TELEGRAM_BOT_API_REQUIRED: "true"
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     env_file:

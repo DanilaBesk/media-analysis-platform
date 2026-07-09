@@ -68,6 +68,7 @@ Root package entrypoint intentionally does not exist. Runtime code lives under `
 - `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` — обязательны для локального Telegram Bot API server в compose; храните только в `.env`.
 - `TELEGRAM_BOT_API_BASE_URL` — endpoint Bot API для aiogram; compose задает `http://telegram-bot-api:8081`.
 - `TELEGRAM_BOT_API_IS_LOCAL` — включает aiogram local mode, чтобы `getFile` absolute paths читались через shared `telegram-bot-api-data` volume.
+- `TELEGRAM_BOT_API_REQUIRED` — для compose должен быть `true`, чтобы runtime не мог тихо вернуться на cloud Bot API.
 - `TELEGRAM_BOT_API_HOST_PORT` — optional host port для диагностики local Bot API, по умолчанию `18081`.
 - `ALLOWED_USER_IDS` — optional allow-list для Telegram adapter.
 - `MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `MINIO_PUBLIC_ENDPOINT` — host-порты и внешний endpoint локального MinIO для artifact download links.
