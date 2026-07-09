@@ -742,6 +742,44 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
 
 
 @pytest.mark.asyncio
+async def test_handle_any_message_reports_too_large_telegram_file_as_unsupported_input(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class TooLargeFileBot(FakeBot):
+        async def get_file(self, file_id: str) -> SimpleNamespace:
+            self.get_file_calls.append(file_id)
+            raise telegram_bad_request("getFile", "Bad Request: file is too big")
+
+    bot = TooLargeFileBot()
+    _, _, app = make_app(bot=bot)
+    message = FakeMessage(
+        video=SimpleNamespace(
+            file_id="video-too-large",
+            file_unique_id="video-too-large-unique",
+            file_name="long-call.mp4",
+            mime_type="video/mp4",
+            file_size=125_000_000,
+            duration=1501,
+        ),
+        message_id=664,
+    )
+
+    with caplog.at_level(logging.ERROR):
+        await app._handle_any_message(message)
+
+    assert message.answers[-1]["text"] == (
+        "неподдерживаемый ввод: файл слишком большой для скачивания через Telegram-бот. "
+        "Отправьте ссылку на видео или файл меньшего размера."
+    )
+    assert "Сервис временно недоступен" not in message.answers[-1]["text"]
+    assert bot.get_file_calls == ["video-too-large"]
+    assert bot.download_calls == []
+    assert "scope=message_ingest" in caplog.text
+    assert "normalized_code=unsupported_input" in caplog.text
+    assert "detail=telegram_file_too_big" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_download_message_files_hydrates_content_and_rejects_empty_download() -> None:
     photo = SimpleNamespace(file_id="photo-1", file_unique_id="photo-u", file_size=10)
     good_bot = FakeBot(file_bytes={"remote/photo-1": b"photo-bytes"})

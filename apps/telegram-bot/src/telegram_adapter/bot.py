@@ -1795,11 +1795,19 @@ def _normalize_callback_error(error: Exception) -> BaseException | TelegramUserE
 def _normalize_message_error(error: Exception) -> BaseException | TelegramUserErrorCode:
     if isinstance(error, TelegramApiClientError) and error.status in {404, 409}:
         return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=error.code)
+    if _is_telegram_file_too_big_error(error):
+        return TelegramUserError(TelegramUserErrorCode.UNSUPPORTED_INPUT, detail="telegram_file_too_big")
     if isinstance(error, RuntimeError) and str(error) == "telegram_file_download_failed":
         return TelegramUserError(TelegramUserErrorCode.UNSUPPORTED_INPUT, detail="missing_file_content")
     if isinstance(error, RuntimeError) and str(error) in {"slot_not_visible", "slot_missing_media_asset_id", "inbox_empty"}:
         return TelegramUserError(TelegramUserErrorCode.STALE_ACTION, detail=str(error))
     return error
+
+
+def _is_telegram_file_too_big_error(error: BaseException) -> bool:
+    if isinstance(error, TelegramEntityTooLarge):
+        return True
+    return isinstance(error, TelegramBadRequest) and "file is too big" in str(error).lower()
 
 
 def _log_handler_exception(
