@@ -470,6 +470,24 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 		t.Fatalf("list active surfaces subject filters were dropped: %#v", target.listActiveSurfacesReq)
 	}
 
+	reusableTranscript := httptest.NewRecorder()
+	mux.ServeHTTP(
+		reusableTranscript,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/internal/v1/reusable-transcripts?channel_account_id=channel-account-1&stored_object_id=stored-source-1&checksum=sha256%3Asource",
+			nil,
+		),
+	)
+	assertTargetStatus(t, reusableTranscript, http.StatusOK)
+	assertNoLegacyTargetVocabulary(t, reusableTranscript.Body.String())
+	if target.reusableTranscriptReq.ChannelAccountID != "channel-account-1" ||
+		target.reusableTranscriptReq.StoredObjectID != "stored-source-1" ||
+		target.reusableTranscriptReq.Checksum != "sha256:source" {
+		t.Fatalf("reusable transcript request = %#v", target.reusableTranscriptReq)
+	}
+	assertTargetEnvelopeID(t, reusableTranscript.Body.Bytes(), "reusable_transcript", "artifact_id", "artifact-1")
+
 	replaceDisplay := httptest.NewRecorder()
 	mux.ServeHTTP(replaceDisplay, jsonRequest(http.MethodPatch, "/internal/v1/channel-surfaces/surface-1/display-state", map[string]any{
 		"expected_version": 1,
@@ -1026,6 +1044,7 @@ type fakeTargetService struct {
 	retryRunReq              TargetRetryAnalysisRunRequest
 	listRunEventsReq         TargetListAnalysisRunEventsRequest
 	listArtifactsReq         TargetListArtifactsRequest
+	reusableTranscriptReq    TargetReusableTranscriptRequest
 	getArtifactReq           TargetGetArtifactRequest
 	refreshArtifactReq       TargetRefreshArtifactRequest
 	listDiagnosticsReq       TargetListDiagnosticsRequest
@@ -1472,6 +1491,40 @@ func (f *fakeTargetService) ListArtifacts(_ context.Context, req TargetListArtif
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
+}
+
+func (f *fakeTargetService) FindReusableTranscript(_ context.Context, req TargetReusableTranscriptRequest) (TargetReusableTranscript, bool, error) {
+	f.reusableTranscriptReq = req
+	if f.err != nil {
+		return TargetReusableTranscript{}, false, f.err
+	}
+	run := TargetAnalysisRun{
+		AnalysisRunID:       "run-1",
+		ChannelAccountID:    req.ChannelAccountID,
+		SelectionSnapshotID: "selection-1",
+		RunType:             "transcription",
+		Status:              "succeeded",
+		Version:             2,
+		CreatedAt:           f.now,
+	}
+	artifact := TargetArtifact{
+		ArtifactID:       "artifact-1",
+		ChannelAccountID: req.ChannelAccountID,
+		AnalysisRunID:    "run-1",
+		Kind:             "transcript",
+		Status:           "available",
+		ContentType:      "text/plain",
+		Visibility:       "channel_deliverable",
+		Preview:          []byte(`{"available":true}`),
+		CreatedAt:        f.now,
+	}
+	return TargetReusableTranscript{
+		AnalysisRunID:      run.AnalysisRunID,
+		AnalysisRunVersion: run.Version,
+		ArtifactID:         artifact.ArtifactID,
+		AnalysisRun:        run,
+		Artifact:           artifact,
+	}, true, nil
 }
 
 func (f *fakeTargetService) GetArtifact(_ context.Context, req TargetGetArtifactRequest) (TargetArtifact, error) {

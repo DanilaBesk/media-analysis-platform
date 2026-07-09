@@ -91,6 +91,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/ws",
 		"/internal/v1/channel-accounts",
 		"/internal/v1/channel-accounts/{channel_account_id}",
+		"/internal/v1/reusable-transcripts",
 		"/internal/v1/channel-surfaces",
 		"/internal/v1/channel-surfaces/active",
 		"/internal/v1/channel-surfaces/{channel_surface_id}/display-state",
@@ -140,6 +141,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /internal/v1/channel-accounts", s.withCORS(s.handleListTargetChannelAccounts))
 	mux.HandleFunc("PUT /internal/v1/channel-accounts", s.withCORS(s.handleResolveTargetChannelAccount))
 	mux.HandleFunc("PATCH /internal/v1/channel-accounts/{channel_account_id}", s.withCORS(s.handleUpdateTargetChannelAccount))
+	mux.HandleFunc("GET /internal/v1/reusable-transcripts", s.withCORS(s.handleFindTargetReusableTranscript))
 	mux.HandleFunc("PUT /internal/v1/channel-surfaces", s.withCORS(s.handleUpsertTargetChannelSurface))
 	mux.HandleFunc("GET /internal/v1/channel-surfaces", s.withCORS(s.handleListTargetChannelSurfaces))
 	mux.HandleFunc("GET /internal/v1/channel-surfaces/active", s.withCORS(s.handleListActiveTargetChannelSurfaces))

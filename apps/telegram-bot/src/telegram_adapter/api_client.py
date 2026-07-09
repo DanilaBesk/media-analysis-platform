@@ -276,6 +276,21 @@ class TelegramApiClient:
     def get_internal_artifact_download_access(self, *, artifact_id: str) -> JsonObject:
         return self._request_json(f"/internal/v1/artifacts/{artifact_id}/download-access")
 
+    def get_reusable_transcript(
+        self,
+        *,
+        channel_account_id: str,
+        stored_object_id: str,
+        checksum: str | None = None,
+    ) -> JsonObject | None:
+        params = _channel_account_query(channel_account_id)
+        params["stored_object_id"] = stored_object_id
+        if checksum:
+            params["checksum"] = checksum
+        payload = self._request_json(f"/internal/v1/reusable-transcripts?{urlencode(params)}")
+        value = payload.get("reusable_transcript")
+        return value if isinstance(value, dict) else None
+
     def resolve_channel_account(self, *, channel_identity: JsonObject) -> JsonObject:
         metadata: JsonObject = {"channel_identity": channel_identity}
         if channel_identity.get("adapter_identity"):

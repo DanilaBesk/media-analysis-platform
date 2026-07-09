@@ -47,6 +47,7 @@
         <export-registerAnalysisRunRoutes PURPOSE="Bind analysis_run create, read, list, events, and cancel routes." />
         <export-registerArtifactRoutes PURPOSE="Bind channel-account-scoped artifact preview and download-resolution routes." />
         <export-registerDiagnosticRoutes PURPOSE="Bind channel-account-scoped diagnostics query routes." />
+        <export-registerReusableTranscriptRoute PURPOSE="Bind internal reusable transcript lookup for duplicate single-source media by stored_object identity." />
         <export-registerTargetStepRoutes PURPOSE="Bind target analysis_run_step claim, cancel-check, progress, and finalize routes." />
         <export-registerChannelSurfaceRoutes PURPOSE="Bind channel_surface list, active recovery, display-state, supersede, and event routes." />
       </annotations>
@@ -63,6 +64,7 @@
         <export-createSelectionSnapshot PURPOSE="Validate media_asset references and seal immutable selection snapshots." />
         <export-createAnalysisRun PURPOSE="Create analysis_run from selection_snapshot, plan analysis_run_steps, and declare analysis_run_step_inputs." />
         <export-planPrerequisites PURPOSE="Create prerequisite transcription steps or diagnostics for report and research work that needs transcript/text-corpus artifacts." />
+        <export-findReusableTranscript PURPOSE="Find successful single-source transcript artifacts for repeated media without mutating selection_snapshot or analysis_run lifecycle." />
         <export-cancelAnalysisRun PURPOSE="Apply cooperative cancellation against analysis_run and internal execution rows." />
         <export-applyRetention PURPOSE="Evaluate stored_object, media_asset, selection_snapshot, run, artifact, and diagnostics retention actions." />
         <export-recordDiagnostic PURPOSE="Persist safe diagnostic evidence for rejected and partial flows." />
@@ -79,6 +81,7 @@
       <annotations>
         <migration-targetReset PATH="apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql" PURPOSE="Destructively resets disposable local storage and recreates the target channel-aware table set." />
         <repository-targetStore PATH="apps/api/internal/storage/target" PURPOSE="Provides target SQL repository methods for channel accounts, operation requests, media assets with inbox membership, collections, selection snapshots, analysis run graphs/events/step lifecycle, artifacts, diagnostics, and channel surfaces." />
+        <query-findReusableTranscript PATH="apps/api/internal/storage/target/store.go" PURPOSE="Find the latest available transcript artifact for a successful single-source transcription run matching stored_object identity." />
         <table-channelAccounts PURPOSE="Store durable channel identity and access scope for the single-user product." />
         <table-operationRequests PURPOSE="Store idempotency and accepted mutation attempts for safe retries." />
         <table-storedObjects PURPOSE="Store object body and origin metadata." />
@@ -221,6 +224,7 @@
         <compose-service PATH="infra/docker-compose.yml" SERVICE="telegram-bot-api" IMAGE_DEFAULT="aiogram/telegram-bot-api:latest" DATA_VOLUME="telegram-bot-api-data" REQUIRED_ENV="TELEGRAM_API_ID,TELEGRAM_API_HASH,TELEGRAM_BOT_TOKEN" HEALTHCHECK="getMe" />
         <compose-service PATH="infra/docker-compose.yml" SERVICE="telegram-bot" BOT_API_BASE_URL="http://telegram-bot-api:8081" LOCAL_MODE="true" SHARED_LOCAL_FILE_VOLUME="telegram-bot-api-data:/var/lib/telegram-bot-api:ro" DEPENDS_ON="api,telegram-bot-api" />
         <export-resultDeliveryDeduplication PURPOSE="Auto-deliver successful transcript results as Telegram document messages, then use result_artifact_surface records with valid Telegram addresses to avoid duplicate delivery after restart without mutating product lifecycle; supersede addressless stale result surfaces and retry delivery." />
+        <export-reusableTranscriptDelivery PURPOSE="Before creating a new run for one uploaded media item, query API reusable transcript state and resend the matched transcript artifact for explicit duplicate user input." />
         <contract-selectionTranscriptionCards PATH="docs/architecture/telegram-selection-transcription-cards.md" PURPOSE="Define Telegram user-facing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>

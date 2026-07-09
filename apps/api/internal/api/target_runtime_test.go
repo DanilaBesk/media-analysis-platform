@@ -653,6 +653,58 @@ func TestTargetRuntimeServiceRecordsWorkerWrites(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceFindsReusableTranscriptForStoredObject(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 5, 18, 14, 30, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		reusableRun: targetstore.AnalysisRunRecord{
+			ID:                "run-reused",
+			ChannelAccountID:  "channel-account-1",
+			SelectionSnapshot: "snapshot-reused",
+			RunType:           "transcription",
+			Status:            "succeeded",
+			Version:           3,
+			ParamsJSON:        []byte(`{}`),
+			DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+			EvidenceGateState: "not_required",
+			CreatedAt:         now.Add(-time.Hour),
+			CompletedAt:       &now,
+		},
+		reusableArtifact: targetstore.ArtifactRecord{
+			ID:               "artifact-reused",
+			ChannelAccountID: "channel-account-1",
+			AnalysisRunID:    "run-reused",
+			Kind:             "transcript",
+			Status:           "available",
+			ContentType:      "text/plain; charset=utf-8",
+			Visibility:       "channel_deliverable",
+			PreviewJSON:      []byte(`{"available":true,"filename":"transcript.txt"}`),
+			CreatedAt:        now,
+		},
+	}
+	service := NewTargetRuntimeService(store, WithTargetClock(func() time.Time { return now }))
+
+	result, found, err := service.FindReusableTranscript(context.Background(), TargetReusableTranscriptRequest{
+		ChannelAccountID: "channel-account-1",
+		StoredObjectID:   "stored-source-1",
+		Checksum:         "sha256:source",
+	})
+
+	if err != nil {
+		t.Fatalf("FindReusableTranscript() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("FindReusableTranscript() found=false, want true")
+	}
+	if result.AnalysisRun.AnalysisRunID != "run-reused" || result.Artifact.ArtifactID != "artifact-reused" {
+		t.Fatalf("FindReusableTranscript() = %#v", result)
+	}
+	if store.reusableTranscriptReq.StoredObjectID != "stored-source-1" || store.reusableTranscriptReq.Checksum != "sha256:source" {
+		t.Fatalf("store reusable request = %#v", store.reusableTranscriptReq)
+	}
+}
+
 func TestTargetRuntimeRecordHelpersCoverPayloadEdges(t *testing.T) {
 	t.Parallel()
 
@@ -1930,6 +1982,9 @@ type fakeTargetRuntimeStore struct {
 	artifactCalls          int
 	storedObjects          []targetstore.StoredObjectRecord
 	artifacts              []targetstore.ArtifactRecord
+	reusableTranscriptReq  TargetReusableTranscriptRequest
+	reusableRun            targetstore.AnalysisRunRecord
+	reusableArtifact       targetstore.ArtifactRecord
 	artifactSubjects       []targetstore.ArtifactSubjectRecord
 	diagnosticCalls        int
 	diagnostics            []targetstore.DiagnosticRecord
@@ -2359,6 +2414,21 @@ func (s *fakeTargetRuntimeStore) ListArtifacts(_ context.Context, channelAccount
 		PreviewJSON:      []byte(`{"available":true}`),
 		CreatedAt:        time.Date(2026, 5, 18, 13, 0, 0, 0, time.UTC),
 	}}, nil
+}
+
+func (s *fakeTargetRuntimeStore) FindReusableTranscriptBySource(_ context.Context, channelAccountID, storedObjectID, checksum string) (targetstore.AnalysisRunRecord, targetstore.ArtifactRecord, error) {
+	if err := s.fail("FindReusableTranscriptBySource"); err != nil {
+		return targetstore.AnalysisRunRecord{}, targetstore.ArtifactRecord{}, err
+	}
+	s.reusableTranscriptReq = TargetReusableTranscriptRequest{
+		ChannelAccountID: channelAccountID,
+		StoredObjectID:   storedObjectID,
+		Checksum:         checksum,
+	}
+	if s.reusableRun.ID == "" {
+		return targetstore.AnalysisRunRecord{}, targetstore.ArtifactRecord{}, sql.ErrNoRows
+	}
+	return s.reusableRun, s.reusableArtifact, nil
 }
 
 func (s *fakeTargetRuntimeStore) GetArtifact(_ context.Context, channelAccountID, artifactID string) (targetstore.ArtifactRecord, error) {

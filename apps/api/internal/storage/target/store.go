@@ -1005,6 +1005,81 @@ LIMIT $3`, channelAccountID, analysisRunID, limit)
 	return artifacts, nil
 }
 
+func (s *Store) FindReusableTranscriptBySource(ctx context.Context, channelAccountID, storedObjectID, checksum string) (AnalysisRunRecord, ArtifactRecord, error) {
+	var run AnalysisRunRecord
+	var artifact ArtifactRecord
+	err := s.db.QueryRowContext(ctx, `
+SELECT r.id, COALESCE(r.channel_account_id::text,''), r.selection_snapshot_id, r.run_type,
+       r.status, r.version, COALESCE(r.idempotency_key,''), r.params, r.delivery,
+       r.evidence_gate_state, COALESCE(r.created_via_channel_account_id::text,''),
+       r.created_at, r.started_at, r.completed_at, r.cancel_requested_at, r.canceled_at, r.expires_at,
+       a.id, COALESCE(a.channel_account_id::text,''), a.analysis_run_id,
+       COALESCE(a.stored_object_id::text,''), a.kind, a.status, a.content_type,
+       COALESCE(a.checksum,''), a.size_bytes, a.visibility, a.preview,
+       a.created_at, a.expires_at, a.deleted_at
+FROM analysis_runs r
+JOIN selection_snapshot_items ssi ON ssi.selection_snapshot_id=r.selection_snapshot_id
+JOIN artifacts a ON a.analysis_run_id=r.id
+WHERE r.channel_account_id=$1
+  AND r.run_type='transcription'
+  AND r.status IN ('succeeded', 'partially_succeeded')
+  AND a.kind='transcript'
+  AND a.status='available'
+  AND a.visibility='channel_deliverable'
+  AND a.deleted_at IS NULL
+  AND ($2<>'' OR $3<>'')
+  AND ($2='' OR ssi.storage_snapshot->>'stored_object_id'=$2)
+  AND ($3='' OR ssi.storage_snapshot->>'checksum'=$3)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM selection_snapshot_items other
+      WHERE other.selection_snapshot_id=r.selection_snapshot_id
+        AND other.id<>ssi.id
+  )
+ORDER BY COALESCE(r.completed_at, r.created_at) DESC,
+         CASE
+             WHEN lower(a.content_type) LIKE 'text/plain%' THEN 0
+             WHEN lower(a.content_type) LIKE 'text/markdown%' THEN 1
+             WHEN lower(a.content_type)='application/vnd.openxmlformats-officedocument.wordprocessingml.document' THEN 2
+             ELSE 3
+         END ASC,
+         a.created_at DESC
+LIMIT 1`, channelAccountID, storedObjectID, checksum).Scan(
+		&run.ID,
+		&run.ChannelAccountID,
+		&run.SelectionSnapshot,
+		&run.RunType,
+		&run.Status,
+		&run.Version,
+		&run.IdempotencyKey,
+		&run.ParamsJSON,
+		&run.DeliveryJSON,
+		&run.EvidenceGateState,
+		&run.CreatedViaChannel,
+		&run.CreatedAt,
+		&run.StartedAt,
+		&run.CompletedAt,
+		&run.CancelRequestedAt,
+		&run.CanceledAt,
+		&run.ExpiresAt,
+		&artifact.ID,
+		&artifact.ChannelAccountID,
+		&artifact.AnalysisRunID,
+		&artifact.StoredObjectID,
+		&artifact.Kind,
+		&artifact.Status,
+		&artifact.ContentType,
+		&artifact.Checksum,
+		&artifact.SizeBytes,
+		&artifact.Visibility,
+		&artifact.PreviewJSON,
+		&artifact.CreatedAt,
+		&artifact.ExpiresAt,
+		&artifact.DeletedAt,
+	)
+	return run, artifact, err
+}
+
 func (s *Store) GetArtifact(ctx context.Context, channelAccountID, artifactID string) (ArtifactRecord, error) {
 	var artifact ArtifactRecord
 	err := s.db.QueryRowContext(ctx, `

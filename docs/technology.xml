@@ -160,6 +160,7 @@
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/steps/progress">Record step progress.</endpoint>
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/steps/finalize">Finalize a step.</endpoint>
     <endpoint method="GET" path="/internal/v1/analysis-runs/{analysis_run_id}/request-access">Resolve private agent-runner operation envelopes by analysis_run_step_id.</endpoint>
+    <endpoint method="GET" path="/internal/v1/reusable-transcripts">Find a channel-account-scoped successful single-source transcript artifact by stored_object id or checksum for duplicate media reuse.</endpoint>
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/artifacts">Record artifacts.</endpoint>
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/diagnostics">Record diagnostics.</endpoint>
   </InternalApiSurface>

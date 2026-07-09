@@ -436,6 +436,38 @@ class TelegramInboxGateway:
             created_via_channel_account_id=channel_account_id,
         )
 
+    def find_reusable_transcript_for_collection(
+        self,
+        *,
+        channel_identity: JsonObject,
+        collection_id: str,
+        expected_version: int,
+    ) -> JsonObject | None:
+        collection = self._get_verified_inbox_collection(
+            channel_identity=channel_identity,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        collection_items = [
+            item
+            for item in collection.get("items", [])
+            if str(item.get("media_asset_id") or "").strip()
+        ]
+        if len(collection_items) != 1:
+            return None
+        channel_account_id = self._channel_account_id(channel_identity)
+        asset = self._collection_item_media_asset(channel_account_id=channel_account_id, collection_item=collection_items[0])
+        if asset is None:
+            return None
+        stored_object_id = _media_asset_stored_object_id(asset)
+        if not stored_object_id:
+            return None
+        return self.api_client.get_reusable_transcript(
+            channel_account_id=channel_account_id,
+            stored_object_id=stored_object_id,
+            checksum=_media_asset_checksum(asset),
+        )
+
     def start_analysis(
         self,
         *,
@@ -769,6 +801,16 @@ class TelegramInboxGateway:
             cursor = str(next_cursor)
         return [found[media_asset_id] for media_asset_id in media_asset_ids if media_asset_id in found]
 
+    def _collection_item_media_asset(self, *, channel_account_id: str, collection_item: JsonObject) -> JsonObject | None:
+        asset = collection_item.get("media_asset")
+        if isinstance(asset, dict):
+            return asset
+        media_asset_id = str(collection_item.get("media_asset_id") or "").strip()
+        if not media_asset_id:
+            return None
+        loaded = self._load_media_assets_by_id(channel_account_id=channel_account_id, media_asset_ids=[media_asset_id])
+        return loaded[0] if loaded else None
+
     def _clear_collection_items(
         self,
         *,
@@ -865,6 +907,26 @@ def _telegram_metadata(
     if duration_seconds is not None and duration_seconds >= 0:
         metadata["duration_seconds"] = duration_seconds
     return metadata
+
+
+def _media_asset_stored_object_id(asset: JsonObject) -> str | None:
+    origin = asset.get("origin")
+    if isinstance(origin, dict):
+        value = str(origin.get("stored_object_id") or "").strip()
+        if value:
+            return value
+    value = str(asset.get("stored_object_id") or "").strip()
+    return value or None
+
+
+def _media_asset_checksum(asset: JsonObject) -> str | None:
+    origin = asset.get("origin")
+    if isinstance(origin, dict):
+        value = str(origin.get("checksum") or "").strip()
+        if value:
+            return value
+    value = str(asset.get("checksum") or "").strip()
+    return value or None
 
 
 def _surface_subject(subject_type: str, subject_id: str, subject_role: str) -> JsonObject:

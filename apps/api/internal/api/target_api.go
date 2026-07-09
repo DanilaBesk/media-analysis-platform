@@ -37,6 +37,7 @@ type TargetService interface {
 	RetryAnalysisRun(ctx context.Context, analysisRunID string, req TargetRetryAnalysisRunRequest) (TargetAnalysisRun, error)
 	ListAnalysisRunEvents(ctx context.Context, req TargetListAnalysisRunEventsRequest) (TargetAnalysisRunEventPage, error)
 	ListArtifacts(ctx context.Context, req TargetListArtifactsRequest) (TargetArtifactPage, error)
+	FindReusableTranscript(ctx context.Context, req TargetReusableTranscriptRequest) (TargetReusableTranscript, bool, error)
 	GetArtifact(ctx context.Context, req TargetGetArtifactRequest) (TargetArtifact, error)
 	RefreshArtifactLink(ctx context.Context, req TargetRefreshArtifactRequest) (TargetArtifact, error)
 	ListDiagnostics(ctx context.Context, req TargetListDiagnosticsRequest) (TargetDiagnosticPage, error)
@@ -566,6 +567,20 @@ type TargetArtifactSubject struct {
 	SubjectType string `json:"subject_type"`
 	SubjectID   string `json:"subject_id"`
 	SubjectRole string `json:"subject_role"`
+}
+
+type TargetReusableTranscriptRequest struct {
+	ChannelAccountID string
+	StoredObjectID   string
+	Checksum         string
+}
+
+type TargetReusableTranscript struct {
+	AnalysisRunID      string            `json:"analysis_run_id"`
+	AnalysisRunVersion int64             `json:"analysis_run_version"`
+	ArtifactID         string            `json:"artifact_id"`
+	AnalysisRun        TargetAnalysisRun `json:"analysis_run"`
+	Artifact           TargetArtifact    `json:"artifact"`
 }
 
 type TargetDiagnostic struct {
@@ -1253,6 +1268,27 @@ func (s *Server) handleListTargetArtifacts(w http.ResponseWriter, r *http.Reques
 		page.Items = []TargetArtifact{}
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) handleFindTargetReusableTranscript(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	result, found, err := s.deps.Target.FindReusableTranscript(r.Context(), TargetReusableTranscriptRequest{
+		ChannelAccountID: strings.TrimSpace(r.URL.Query().Get("channel_account_id")),
+		StoredObjectID:   strings.TrimSpace(r.URL.Query().Get("stored_object_id")),
+		Checksum:         strings.TrimSpace(r.URL.Query().Get("checksum")),
+	})
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	if !found {
+		writeJSON(w, http.StatusOK, map[string]any{"reusable_transcript": nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"reusable_transcript": result})
 }
 
 func (s *Server) handleGetTargetArtifact(w http.ResponseWriter, r *http.Request) {

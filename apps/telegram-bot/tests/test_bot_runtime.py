@@ -98,6 +98,8 @@ class FakeFinalApiClient:
         self.get_artifact_requests: list[str] = []
         self.internal_artifact_download_access_requests: list[str] = []
         self.internal_artifact_download_access: dict[str, dict[str, Any]] = {}
+        self.reusable_transcripts: dict[str, dict[str, Any]] = {}
+        self.reusable_transcript_requests: list[dict[str, Any]] = []
         self.channel_accounts: list[dict[str, Any]] = []
         self.channel_surfaces: list[dict[str, Any]] = []
         self.surface_events: list[dict[str, Any]] = []
@@ -227,6 +229,10 @@ class FakeFinalApiClient:
         if artifact_id in self.internal_artifact_download_access:
             return self.internal_artifact_download_access[artifact_id]
         return self.get_artifact(artifact_id=artifact_id)
+
+    def get_reusable_transcript(self, **kwargs) -> dict[str, Any] | None:
+        self.reusable_transcript_requests.append(kwargs)
+        return self.reusable_transcripts.get(str(kwargs.get("stored_object_id") or ""))
 
     def list_diagnostics(self, **kwargs) -> dict[str, Any]:
         subject_type = kwargs.get("subject_type")
@@ -2310,6 +2316,99 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
     assert selection_callback.answers[-1]["text"] == "Транскрибация: успешно"
     assert api.runs[-1]["selection_snapshot_id"] == selection["selection_snapshot_id"]
     assert app.run_watch_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_duplicate_uploaded_media_reuses_ready_transcript_without_new_run() -> None:
+    api, gateway, app = make_app()
+    media_asset = api.upload_media_asset(
+        channel_account_id="channel-account-1",
+        kind="video",
+        content=b"same-video",
+        file_name="clip.mp4",
+        content_type="video/mp4",
+        display_name="clip.mp4",
+        metadata={"file_unique_id": "telegram-stable-file"},
+    )
+    media_asset["origin"]["stored_object_id"] = "stored-source-1"
+    media_asset["origin"]["checksum"] = "sha256:source"
+    api.runs.append(
+        {
+            "analysis_run_id": "run-reused",
+            "selection_snapshot_id": "selection-reused",
+            "run_type": "transcription",
+            "status": "succeeded",
+            "version": 2,
+        }
+    )
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-reused",
+            "analysis_run_id": "run-reused",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain; charset=utf-8",
+            "object_key": "run-reused/transcript/plain/transcript.txt",
+            "download": {"url": "https://download.test/transcript.txt"},
+        }
+    )
+    api.reusable_transcripts["stored-source-1"] = {
+        "analysis_run_id": "run-reused",
+        "analysis_run_version": 2,
+        "artifact_id": "artifact-reused",
+        "analysis_run": dict(api.runs[0]),
+        "artifact": dict(api.artifacts[0]),
+    }
+    api.internal_artifact_download_access["artifact-reused"] = {
+        "artifact_id": "artifact-reused",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain; charset=utf-8",
+        "download": {"url": "http://minio:9000/artifacts/run-reused/transcript.txt"},
+    }
+    api.channel_surfaces.append(
+        {
+            "channel_surface_id": "surface-old-result",
+            "channel_account_id": "channel-account-1",
+            "channel": "telegram",
+            "surface_type": "result_artifact_surface",
+            "surface_key": "artifact:artifact-reused",
+            "address": {"chat_id": 10, "message_id": 700},
+            "address_fingerprint": "telegram:10:700",
+            "display_state": {"artifact_id": "artifact-reused"},
+            "lifecycle_status": "active",
+            "version": 1,
+            "subjects": [{"subject_type": "artifact", "subject_id": "artifact-reused", "subject_role": "primary"}],
+        }
+    )
+    status = status_for(gateway)
+    base_message = FakeMessage()
+    app._set_page_state((10, 7), status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+    app._download_artifact_bytes = lambda _url: b"cached transcript"  # type: ignore[method-assign]
+
+    callback = FakeCallback(
+        data=_callback_payload(
+            "rn",
+            _encode_callback_token(str(status.collection["collection_id"])),
+            _encode_callback_version(int(status.collection["version"])),
+        ),
+        message=base_message,
+    )
+    await app._handle_status_callback(callback)
+
+    assert len(api.runs) == 1
+    assert api.reusable_transcript_requests == [
+        {
+            "channel_account_id": "channel-account-1",
+            "stored_object_id": "stored-source-1",
+            "checksum": "sha256:source",
+        }
+    ]
+    assert callback.answers[-1] == {"text": "Транскрипт отправлен файлом", "show_alert": False}
+    assert base_message.documents[-1]["document"].data == b"cached transcript"
+    assert api.internal_artifact_download_access_requests == ["artifact-reused"]
+    assert api.collection["items"] == []
+    result_surface = next(surface for surface in api.channel_surfaces if surface["surface_key"] == "artifact:artifact-reused")
+    assert result_surface["address"] == {"chat_id": 10, "message_id": 9002}
 
 
 @pytest.mark.asyncio

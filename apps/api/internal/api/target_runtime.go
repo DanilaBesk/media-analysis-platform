@@ -44,6 +44,7 @@ type TargetStateStore interface {
 	GetAnalysisRunByID(ctx context.Context, analysisRunID string) (targetstore.AnalysisRunRecord, error)
 	ListAnalysisRunStepQueue(ctx context.Context, status, runType, workerKind, stepKind string, limit int) ([]targetstore.AnalysisRunStepQueueRecord, error)
 	ListArtifacts(ctx context.Context, channelAccountID, analysisRunID string, limit int) ([]targetstore.ArtifactRecord, error)
+	FindReusableTranscriptBySource(ctx context.Context, channelAccountID, storedObjectID, checksum string) (targetstore.AnalysisRunRecord, targetstore.ArtifactRecord, error)
 	GetArtifact(ctx context.Context, channelAccountID, artifactID string) (targetstore.ArtifactRecord, error)
 	GetArtifactByID(ctx context.Context, artifactID string) (targetstore.ArtifactRecord, error)
 	ListDiagnostics(ctx context.Context, query targetstore.DiagnosticQuery, limit int) ([]targetstore.DiagnosticRecord, error)
@@ -864,6 +865,29 @@ func (s *TargetRuntimeService) ListArtifacts(ctx context.Context, req TargetList
 		items = append(items, targetArtifactFromRecord(record))
 	}
 	return TargetArtifactPage{Items: items, Page: 1, PageSize: limit}, nil
+}
+
+func (s *TargetRuntimeService) FindReusableTranscript(ctx context.Context, req TargetReusableTranscriptRequest) (TargetReusableTranscript, bool, error) {
+	if s.store == nil {
+		return TargetReusableTranscript{}, false, fmt.Errorf("target storage is required")
+	}
+	channelAccountID := strings.TrimSpace(req.ChannelAccountID)
+	storedObjectID := strings.TrimSpace(req.StoredObjectID)
+	checksum := strings.TrimSpace(req.Checksum)
+	if channelAccountID == "" {
+		return TargetReusableTranscript{}, false, fmt.Errorf("%w: channel_account_id is required", storage.ErrContractViolation)
+	}
+	if storedObjectID == "" && checksum == "" {
+		return TargetReusableTranscript{}, false, nil
+	}
+	run, artifact, err := s.store.FindReusableTranscriptBySource(ctx, channelAccountID, storedObjectID, checksum)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetReusableTranscript{}, false, nil
+	}
+	if err != nil {
+		return TargetReusableTranscript{}, false, err
+	}
+	return targetReusableTranscriptFromRecords(run, artifact), true, nil
 }
 
 func (s *TargetRuntimeService) GetArtifact(ctx context.Context, req TargetGetArtifactRequest) (TargetArtifact, error) {
@@ -1834,6 +1858,18 @@ func targetArtifactFromRecordWithObject(record targetstore.ArtifactRecord, objec
 		artifact.Checksum = object.Checksum
 	}
 	return artifact
+}
+
+func targetReusableTranscriptFromRecords(run targetstore.AnalysisRunRecord, artifact targetstore.ArtifactRecord) TargetReusableTranscript {
+	runDTO := targetAnalysisRunFromRecord(run)
+	artifactDTO := targetArtifactFromRecord(artifact)
+	return TargetReusableTranscript{
+		AnalysisRunID:      runDTO.AnalysisRunID,
+		AnalysisRunVersion: runDTO.Version,
+		ArtifactID:         artifactDTO.ArtifactID,
+		AnalysisRun:        runDTO,
+		Artifact:           artifactDTO,
+	}
 }
 
 func targetWorkerArtifactKind(artifact targetstore.ArtifactRecord) string {

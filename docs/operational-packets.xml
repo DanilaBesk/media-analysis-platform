@@ -1280,6 +1280,29 @@ Successful Telegram transcription results are auto-delivered as document message
       <check>Focused failure regression proves failed document delivery supersedes the task surface, creates no result surface, and preserves inbox membership.</check>
     </verification>
   </HotfixPacket>
+
+  <HotfixPacket id="media-lny-reuse-ready-transcript-for-duplicate-telegram-media" status="completed" bead="media-lny">
+    <purpose>Return a ready transcript immediately when a repeated single-source Telegram upload already has a successful transcript artifact.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/api</file-1>
+      <file-2>apps/api/internal/storage/target</file-2>
+      <file-3>apps/telegram-bot/src/telegram_adapter</file-3>
+      <file-4>apps/telegram-bot/tests/test_bot_runtime.py</file-4>
+      <file-5>docs/requirements.xml</file-5>
+      <file-6>docs/technology.xml</file-6>
+      <file-7>docs/knowledge-graph.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Repeated Telegram media still creates API-owned media_asset and collection membership for the new input, but launching transcription for a one-item selection first asks the API for a reusable transcript by channel_account and stored_object identity. If a successful single-source transcription run already has an available transcript artifact, Telegram delivers that artifact as a fresh document response and clears the active collection membership without creating a new selection_snapshot or analysis_run. Existing result_artifact_surface rows continue to prevent restart duplicate delivery, but they must not suppress this explicit resend.
+    ]]></contract-excerpt>
+    <verification>
+      <check>API runtime regression proves reusable transcript lookup returns the existing run and artifact by stored_object identity.</check>
+      <check>Postgres storage regression proves the lookup only matches successful single-source transcript artifacts scoped to the channel_account.</check>
+      <check>Telegram runtime regression proves duplicate uploaded media reuses the artifact, sends a document, clears the collection, and creates no new run.</check>
+      <check>Full Telegram bot runtime tests pass.</check>
+    </verification>
+  </HotfixPacket>
   <HotfixPacket id="telegram-focused-run-cancel" status="completed" bead="media-dph">
     <purpose>Add a Telegram cancel action for the focused active transcription run.</purpose>
     <write-scope>

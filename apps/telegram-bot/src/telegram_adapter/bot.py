@@ -386,7 +386,7 @@ class TelegramInboxApp:
             if action == "sl":
                 collection_id = _decode_callback_token(tokens[0])
                 expected_version = _decode_callback_version(tokens[1])
-                status, prefix, answer_text, run_id, terminal_status = await self._start_analysis_from_collection(
+                status, prefix, answer_text, run_id, terminal_status, reused_transcript = await self._start_analysis_from_collection(
                     channel_identity=channel_identity,
                     collection_id=collection_id,
                     expected_version=expected_version,
@@ -401,9 +401,12 @@ class TelegramInboxApp:
                             expected_version=run_version,
                             chat_id=callback.message.chat.id,
                             message=callback.message,
+                            allow_repeat_delivery=reused_transcript,
                         )
                         status = delivery.status
                         delivered = delivery.delivered
+                        if reused_transcript and delivered:
+                            answer_text = "Транскрипт отправлен файлом"
                 self._set_page_state(
                     key,
                     status,
@@ -438,7 +441,7 @@ class TelegramInboxApp:
                 if len(tokens) >= 2:
                     collection_id = _decode_callback_token(tokens[0])
                     expected_version = _decode_callback_version(tokens[1])
-                    status, prefix, answer_text, run_id, terminal_status = await self._start_analysis_from_collection(
+                    status, prefix, answer_text, run_id, terminal_status, reused_transcript = await self._start_analysis_from_collection(
                         channel_identity=channel_identity,
                         collection_id=collection_id,
                         expected_version=expected_version,
@@ -450,6 +453,7 @@ class TelegramInboxApp:
                         channel_identity=channel_identity,
                         run=run,
                     )
+                    reused_transcript = False
                 delivered = False
                 if terminal_status in _AUTO_DELIVER_RUN_STATUSES and run_id:
                     run_version = _analysis_run_version(status, run_id)
@@ -460,9 +464,12 @@ class TelegramInboxApp:
                             expected_version=run_version,
                             chat_id=callback.message.chat.id,
                             message=callback.message,
+                            allow_repeat_delivery=reused_transcript,
                         )
                         status = delivery.status
                         delivered = delivery.delivered
+                        if reused_transcript and delivered:
+                            answer_text = "Транскрипт отправлен файлом"
                 self._set_page_state(
                     key,
                     status,
@@ -707,6 +714,7 @@ class TelegramInboxApp:
         chat_id: int | None = None,
         failure_surface: JsonObject | None = None,
         raise_on_surface_failure: bool = False,
+        allow_repeat_delivery: bool = False,
     ) -> tuple[str, bool]:
         if message is None and chat_id is None:
             return ("Готовый транскрипт пока недоступен.", True)
@@ -722,7 +730,7 @@ class TelegramInboxApp:
             channel_identity=channel_identity,
             artifact_id=str(selected["artifact_id"]),
         )
-        if existing_surface is not None:
+        if existing_surface is not None and not allow_repeat_delivery:
             if _surface_address(existing_surface) is not None:
                 return ("Транскрипт уже отправлен в чат.", True)
             self._try_supersede_channel_surface(
@@ -786,14 +794,41 @@ class TelegramInboxApp:
         channel_identity: JsonObject,
         collection_id: str,
         expected_version: int,
-    ) -> tuple[InboxStatus, str, str, str | None, str | None]:
+    ) -> tuple[InboxStatus, str, str, str | None, str | None, bool]:
+        reusable = self.gateway.find_reusable_transcript_for_collection(
+            channel_identity=channel_identity,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        if reusable is not None:
+            run = _reusable_transcript_run(reusable)
+            run_id = str(run.get("analysis_run_id") or reusable.get("analysis_run_id") or "")
+            status_name = str(run.get("status") or "succeeded")
+            status = self.gateway.restore_status(channel_identity=channel_identity)
+            if run_id and _analysis_run_version(status, run_id) is None:
+                status.recent_runs.insert(0, run)
+            artifact = reusable.get("artifact")
+            if run_id and isinstance(artifact, dict):
+                status.artifacts_by_run[run_id] = [artifact]
+            return (
+                status,
+                "Готовый транскрипт найден.\n\n",
+                "Готовый транскрипт найден",
+                run_id or None,
+                status_name,
+                True,
+            )
         selection = self.gateway.create_selection_snapshot(
             channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
         run = self.gateway.start_analysis(channel_identity=channel_identity, selection_snapshot_id=str(selection["selection_snapshot_id"]))
-        return await self._resolve_run_start_status(channel_identity=channel_identity, run=run)
+        status, prefix, answer_text, run_id, terminal_status = await self._resolve_run_start_status(
+            channel_identity=channel_identity,
+            run=run,
+        )
+        return status, prefix, answer_text, run_id, terminal_status, False
 
     async def _resolve_run_start_status(
         self,
@@ -837,6 +872,7 @@ class TelegramInboxApp:
         cursor: str | None = None,
         surface: JsonObject | None = None,
         raise_on_surface_failure: bool = False,
+        allow_repeat_delivery: bool = False,
     ) -> _AutoDeliveryResult:
         status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
         result_notice, show_alert = await self._deliver_run_result(
@@ -847,6 +883,7 @@ class TelegramInboxApp:
             chat_id=chat_id,
             failure_surface=surface,
             raise_on_surface_failure=raise_on_surface_failure,
+            allow_repeat_delivery=allow_repeat_delivery,
         )
         delivered = (not show_alert) or result_notice == "Транскрипт уже отправлен в чат."
         if show_alert or status.collection is None:
@@ -2079,6 +2116,19 @@ def _run_for_id(status: InboxStatus, analysis_run_id: str) -> JsonObject | None:
         if str(run.get("analysis_run_id") or "") == analysis_run_id:
             return run
     return None
+
+
+def _reusable_transcript_run(reusable: JsonObject) -> JsonObject:
+    run = reusable.get("analysis_run")
+    if isinstance(run, dict):
+        return run
+    run_id = str(reusable.get("analysis_run_id") or "").strip()
+    version = int(reusable.get("analysis_run_version") or 0)
+    return {
+        "analysis_run_id": run_id,
+        "status": "succeeded",
+        "version": version,
+    }
 
 
 def _status_surface_display_state(status: InboxStatus, state: _PageState) -> JsonObject:

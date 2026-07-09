@@ -114,6 +114,10 @@
       <Action>Run speech transcription through CopperASR as the only active ASR backend.</Action>
       <AcceptanceCriteria>For audio, voice, video, and URL speech sources, transcription workers call the dedicated CopperASR HTTP runtime through COPPER_ASR_* configuration, publish transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics artifacts through the API, include sanitized provider metadata only in service artifacts, map provider failures to stable asr_* diagnostics, and keep Telegram, Web, and MCP provider-agnostic in normal user flows. Legacy ASR imports, env switches, model cache volumes, dependencies, and fallback tests are removed from active runtime paths.</AcceptanceCriteria>
     </Requirement>
+    <Requirement id="REQ-TRANSCRIPT-REUSE-001">
+      <Action>Reuse ready transcript artifacts for repeated single-source media instead of creating duplicate transcription runs.</Action>
+      <AcceptanceCriteria>For a channel_account-scoped single-source Telegram selection whose stored_object id or checksum already belongs to a terminal successful transcription run with an available transcript artifact, the API exposes that reusable transcript and adapters deliver the existing artifact immediately without creating a new selection_snapshot or analysis_run. Result_artifact_surface delivery deduplication remains restart-safe, but it must not block an explicit resend caused by a new duplicate user input.</AcceptanceCriteria>
+    </Requirement>
     <Requirement id="REQ-RUN-002">
       <Action>Cancel analysis_run records through a cooperative API-owned lifecycle.</Action>
       <AcceptanceCriteria>Canceling an unclaimed queued run terminally records canceled and stops queued tasks. Canceling a claimed run records cancel_requested, preserves the claimed task for worker observation, stops unclaimed queued tasks, exposes cancel_requested through worker cancel-check, and forces late worker finalization to resolve as canceled rather than succeeded or failed.</AcceptanceCriteria>
@@ -164,6 +168,7 @@
       <rule>Telegram may persist message mappings through the internal channel surfaces API, but the API treats those mappings as opaque channel surfaces rather than Telegram-specific domain fields.</rule>
       <rule>After accepted Telegram input, a status refresh or channel_surface persistence failure must not turn the saved inbox mutation into a user-facing backend failure; the adapter confirms the saved material and offers /inbox recovery while logging the presentation-layer failure.</rule>
       <rule>Compose-owned Telegram ingestion must use a local Telegram Bot API server for large media so aiogram getFile/download paths do not rely on the cloud Bot API file-size-limited download path. The local server requires TELEGRAM_API_ID and TELEGRAM_API_HASH credentials, stores data in a persistent telegram-bot-api-data volume, and shares that volume read-only with the adapter when aiogram local mode returns absolute file paths.</rule>
+      <rule>Telegram transcription launch for one uploaded media item must query API-owned reusable transcript state by stored_object identity before creating a new run, and a matched transcript artifact is delivered as a fresh Telegram document response for the new user action.</rule>
       <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
       <rule>Internal active channel_surface listing must honor subject_type and subject_id filters so current materials or task-card surfaces cannot be mistaken for delivered result artifact surfaces.</rule>
       <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics.</rule>
@@ -268,6 +273,7 @@
     <bead id="media-b8s.3.4" status="completed">Final readiness packet closes with source plan, implemented scope, verification inventory, runtime proof, Beads state, residual risks, and no-regression evidence.</bead>
     <bead id="media-5n4" status="completed">Local compose runtime now publishes MinIO on configurable non-conflicting host ports, aligns artifact presigned URLs and runtime E2E downloads with the local MinIO host endpoint, preserves API Go caches, allows first-run CopperASR model bootstrap through healthcheck startup windows, and uses Node 22 for the agent-runner claude-code harness.</bead>
     <bead id="media-pyj" status="completed">Telegram successful transcription results now auto-deliver as document messages, hide the normal Result button after successful auto-delivery, and keep result_artifact_surface only as delivery/deduplication evidence.</bead>
+    <bead id="media-lny" status="completed">Repeated single-source Telegram media now reuses an existing successful transcript artifact by stored_object identity and resends that artifact without creating another transcription analysis_run.</bead>
   </BeadsTrace>
 
   <NonGoals>

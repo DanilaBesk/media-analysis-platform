@@ -451,6 +451,101 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 		}
 	})
 
+	t.Run("reusable transcript lookup matches single stored source", func(t *testing.T) {
+		completedAt := now.Add(10 * time.Second)
+		must(t, store.CreateSelectionSnapshot(ctx, SelectionSnapshotRecord{
+			ID:                 targetTestReusableSnapshotID,
+			ChannelAccountID:   targetTestTelegramChannelID,
+			SourceCollectionID: targetTestTelegramInboxID,
+			Status:             "sealed",
+			OptionSnapshotJSON: []byte(`{"language":"ru"}`),
+			DiagnosticsJSON:    []byte(`[]`),
+			CreatedViaChannel:  targetTestTelegramChannelID,
+			CreatedAt:          now.Add(6 * time.Second),
+			SealedAt:           now.Add(6 * time.Second),
+		}, []SelectionSnapshotItemRecord{{
+			ID:                  targetTestReusableSnapshotItemID,
+			SelectionSnapshotID: targetTestReusableSnapshotID,
+			Position:            0,
+			MediaAssetID:        targetTestTelegramAssetID,
+			Kind:                "voice",
+			DisplayName:         "voice.ogg",
+			OriginSnapshotJSON:  []byte(`{"origin_type":"telegram_file"}`),
+			StorageSnapshotJSON: []byte(`{"stored_object_id":"` + targetTestTelegramStoredObjectID + `","checksum":"sha256:telegram"}`),
+			MetadataJSON:        []byte(`{"fixture":"reusable"}`),
+			StatusAtSelection:   "available",
+			DiagnosticsJSON:     []byte(`[]`),
+		}}), "create reusable transcript selection")
+		must(t, store.CreateAnalysisRunGraph(ctx, AnalysisRunGraph{
+			Run: AnalysisRunRecord{
+				ID:                targetTestReusableRunID,
+				ChannelAccountID:  targetTestTelegramChannelID,
+				SelectionSnapshot: targetTestReusableSnapshotID,
+				RunType:           "transcription",
+				Status:            "succeeded",
+				Version:           2,
+				ParamsJSON:        []byte(`{}`),
+				DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+				EvidenceGateState: "not_required",
+				CreatedViaChannel: targetTestTelegramChannelID,
+				CreatedAt:         now.Add(7 * time.Second),
+				StartedAt:         &completedAt,
+				CompletedAt:       &completedAt,
+			},
+			Event: AnalysisRunEventRecord{
+				ID:            targetTestReusableRunEventID,
+				AnalysisRunID: targetTestReusableRunID,
+				EventType:     "analysis_run.created",
+				Version:       1,
+				Status:        "succeeded",
+				PayloadJSON:   []byte(`{}`),
+				CreatedAt:     now.Add(7 * time.Second),
+			},
+		}), "create reusable analysis run")
+		must(t, store.RecordArtifacts(ctx, []StoredObjectRecord{{
+			ID:             targetTestReusableArtifactStoredObjectID,
+			Bucket:         "artifacts",
+			ObjectKey:      "run-reusable/transcript/plain/transcript.txt",
+			ContentType:    "text/plain",
+			SizeBytes:      42,
+			Checksum:       "sha256:transcript",
+			StorageStatus:  "available",
+			RetentionState: "active",
+			CreatedAt:      completedAt,
+		}}, []ArtifactRecord{{
+			ID:               targetTestReusableArtifactID,
+			ChannelAccountID: targetTestTelegramChannelID,
+			AnalysisRunID:    targetTestReusableRunID,
+			StoredObjectID:   targetTestReusableArtifactStoredObjectID,
+			Kind:             "transcript",
+			Status:           "available",
+			ContentType:      "text/plain; charset=utf-8",
+			Checksum:         "sha256:transcript",
+			SizeBytes:        42,
+			Visibility:       "channel_deliverable",
+			PreviewJSON:      []byte(`{"available":true,"filename":"transcript.txt"}`),
+			CreatedAt:        completedAt,
+		}}, []ArtifactSubjectRecord{{
+			ID:          targetTestReusableArtifactSubjectID,
+			ArtifactID:  targetTestReusableArtifactID,
+			SubjectType: "analysis_run",
+			SubjectID:   targetTestReusableRunID,
+			SubjectRole: "result",
+			CreatedAt:   completedAt,
+		}}), "record reusable transcript artifact")
+
+		run, artifact, err := store.FindReusableTranscriptBySource(ctx, targetTestTelegramChannelID, targetTestTelegramStoredObjectID, "sha256:telegram")
+		if err != nil {
+			t.Fatalf("FindReusableTranscriptBySource() error = %v", err)
+		}
+		if run.ID != targetTestReusableRunID || artifact.ID != targetTestReusableArtifactID {
+			t.Fatalf("reusable transcript run=%#v artifact=%#v", run, artifact)
+		}
+		if _, _, err := store.FindReusableTranscriptBySource(ctx, targetTestTelegramChannelID, targetTestTelegramStoredObjectID, "sha256:missing"); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("FindReusableTranscriptBySource(missing checksum) error = %v, want sql.ErrNoRows", err)
+		}
+	})
+
 	t.Run("channel surface upsert hands off an active address to a new surface key", func(t *testing.T) {
 		_, err := store.UpsertChannelSurface(ctx, ChannelSurfaceRecord{
 			ID:                 targetTestSurfaceAddressOwnerID,
@@ -836,38 +931,45 @@ func must(t *testing.T, err error, label string) {
 }
 
 const (
-	targetTestTelegramChannelID        = "00000000-0000-4000-8000-000000000002"
-	targetTestTelegramInboxID          = "00000000-0000-4000-8000-000000000102"
-	targetTestOperationID              = "00000000-0000-4000-8000-000000000151"
-	targetTestReplayOperationID        = "00000000-0000-4000-8000-000000000152"
-	targetTestLocalStoredObjectID      = "00000000-0000-4000-8000-000000000201"
-	targetTestTelegramStoredObjectID   = "00000000-0000-4000-8000-000000000202"
-	targetTestArtifactStoredObjectID   = "00000000-0000-4000-8000-000000000203"
-	targetTestLocalAssetID             = "00000000-0000-4000-8000-000000000301"
-	targetTestTelegramAssetID          = "00000000-0000-4000-8000-000000000302"
-	targetTestLocalCollectionItemID    = "00000000-0000-4000-8000-000000000401"
-	targetTestTelegramCollectionItemID = "00000000-0000-4000-8000-000000000402"
-	targetTestCollectionID             = "00000000-0000-4000-8000-000000000501"
-	targetTestCollectionItemID         = "00000000-0000-4000-8000-000000000502"
-	targetTestCollectionItemTwoID      = "00000000-0000-4000-8000-000000000503"
-	targetTestCollectionItemThreeID    = "00000000-0000-4000-8000-000000000504"
-	targetTestSnapshotID               = "00000000-0000-4000-8000-000000000601"
-	targetTestSnapshotItemID           = "00000000-0000-4000-8000-000000000602"
-	targetTestRunID                    = "00000000-0000-4000-8000-000000000701"
-	targetTestStepID                   = "00000000-0000-4000-8000-000000000702"
-	targetTestStepInputID              = "00000000-0000-4000-8000-000000000703"
-	targetTestRunEventID               = "00000000-0000-4000-8000-000000000704"
-	targetTestProgressEventID          = "00000000-0000-4000-8000-000000000705"
-	targetTestCancelEventID            = "00000000-0000-4000-8000-000000000706"
-	targetTestFinalizeEventID          = "00000000-0000-4000-8000-000000000707"
-	targetTestArtifactID               = "00000000-0000-4000-8000-000000000801"
-	targetTestArtifactSubjectID        = "00000000-0000-4000-8000-000000000802"
-	targetTestDiagnosticID             = "00000000-0000-4000-8000-000000000901"
-	targetTestSurfaceID                = "00000000-0000-4000-8000-000000001001"
-	targetTestSurfaceReplayID          = "00000000-0000-4000-8000-000000001002"
-	targetTestSurfaceDisplayEventID    = "00000000-0000-4000-8000-000000001003"
-	targetTestSurfaceStaleEventID      = "00000000-0000-4000-8000-000000001004"
-	targetTestSurfaceSupersedeEventID  = "00000000-0000-4000-8000-000000001005"
-	targetTestSurfaceAddressOwnerID    = "00000000-0000-4000-8000-000000001006"
-	targetTestSurfaceAddressHandoffID  = "00000000-0000-4000-8000-000000001007"
+	targetTestTelegramChannelID              = "00000000-0000-4000-8000-000000000002"
+	targetTestTelegramInboxID                = "00000000-0000-4000-8000-000000000102"
+	targetTestOperationID                    = "00000000-0000-4000-8000-000000000151"
+	targetTestReplayOperationID              = "00000000-0000-4000-8000-000000000152"
+	targetTestLocalStoredObjectID            = "00000000-0000-4000-8000-000000000201"
+	targetTestTelegramStoredObjectID         = "00000000-0000-4000-8000-000000000202"
+	targetTestArtifactStoredObjectID         = "00000000-0000-4000-8000-000000000203"
+	targetTestLocalAssetID                   = "00000000-0000-4000-8000-000000000301"
+	targetTestTelegramAssetID                = "00000000-0000-4000-8000-000000000302"
+	targetTestLocalCollectionItemID          = "00000000-0000-4000-8000-000000000401"
+	targetTestTelegramCollectionItemID       = "00000000-0000-4000-8000-000000000402"
+	targetTestCollectionID                   = "00000000-0000-4000-8000-000000000501"
+	targetTestCollectionItemID               = "00000000-0000-4000-8000-000000000502"
+	targetTestCollectionItemTwoID            = "00000000-0000-4000-8000-000000000503"
+	targetTestCollectionItemThreeID          = "00000000-0000-4000-8000-000000000504"
+	targetTestSnapshotID                     = "00000000-0000-4000-8000-000000000601"
+	targetTestSnapshotItemID                 = "00000000-0000-4000-8000-000000000602"
+	targetTestReusableSnapshotID             = "00000000-0000-4000-8000-000000000603"
+	targetTestReusableSnapshotItemID         = "00000000-0000-4000-8000-000000000604"
+	targetTestRunID                          = "00000000-0000-4000-8000-000000000701"
+	targetTestStepID                         = "00000000-0000-4000-8000-000000000702"
+	targetTestStepInputID                    = "00000000-0000-4000-8000-000000000703"
+	targetTestRunEventID                     = "00000000-0000-4000-8000-000000000704"
+	targetTestProgressEventID                = "00000000-0000-4000-8000-000000000705"
+	targetTestCancelEventID                  = "00000000-0000-4000-8000-000000000706"
+	targetTestFinalizeEventID                = "00000000-0000-4000-8000-000000000707"
+	targetTestReusableRunID                  = "00000000-0000-4000-8000-000000000708"
+	targetTestReusableRunEventID             = "00000000-0000-4000-8000-000000000709"
+	targetTestArtifactID                     = "00000000-0000-4000-8000-000000000801"
+	targetTestArtifactSubjectID              = "00000000-0000-4000-8000-000000000802"
+	targetTestReusableArtifactID             = "00000000-0000-4000-8000-000000000803"
+	targetTestReusableArtifactSubjectID      = "00000000-0000-4000-8000-000000000804"
+	targetTestReusableArtifactStoredObjectID = "00000000-0000-4000-8000-000000000805"
+	targetTestDiagnosticID                   = "00000000-0000-4000-8000-000000000901"
+	targetTestSurfaceID                      = "00000000-0000-4000-8000-000000001001"
+	targetTestSurfaceReplayID                = "00000000-0000-4000-8000-000000001002"
+	targetTestSurfaceDisplayEventID          = "00000000-0000-4000-8000-000000001003"
+	targetTestSurfaceStaleEventID            = "00000000-0000-4000-8000-000000001004"
+	targetTestSurfaceSupersedeEventID        = "00000000-0000-4000-8000-000000001005"
+	targetTestSurfaceAddressOwnerID          = "00000000-0000-4000-8000-000000001006"
+	targetTestSurfaceAddressHandoffID        = "00000000-0000-4000-8000-000000001007"
 )
