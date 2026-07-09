@@ -64,6 +64,7 @@
         <export-createSelectionSnapshot PURPOSE="Validate media_asset references and seal immutable selection snapshots." />
         <export-createAnalysisRun PURPOSE="Create analysis_run from selection_snapshot, plan analysis_run_steps, and declare analysis_run_step_inputs." />
         <export-planPrerequisites PURPOSE="Create prerequisite transcription steps or diagnostics for report and research work that needs transcript/text-corpus artifacts." />
+        <export-planMixedTranscriptReuse PATH="apps/api/internal/api/target_runtime.go" PURPOSE="Resolve reusable channel-scoped transcript artifacts per selection_snapshot speech item, emit transcript_artifact inputs for ready speech, and leave only missing speech as ASR selection_snapshot_item inputs." />
         <export-findReusableTranscript PURPOSE="Find successful single-source transcript artifacts for repeated media without mutating selection_snapshot or analysis_run lifecycle." />
         <export-cancelAnalysisRun PURPOSE="Apply cooperative cancellation against analysis_run and internal execution rows." />
         <export-applyRetention PURPOSE="Evaluate stored_object, media_asset, selection_snapshot, run, artifact, and diagnostics retention actions." />
@@ -81,7 +82,8 @@
       <annotations>
         <migration-targetReset PATH="apps/api/internal/storage/migrations/0001_final_inbox_analysis_run_schema.sql" PURPOSE="Destructively resets disposable local storage and recreates the target channel-aware table set." />
         <repository-targetStore PATH="apps/api/internal/storage/target" PURPOSE="Provides target SQL repository methods for channel accounts, operation requests, media assets with inbox membership, collections, selection snapshots, analysis run graphs/events/step lifecycle, artifacts, diagnostics, and channel surfaces." />
-        <query-findReusableTranscript PATH="apps/api/internal/storage/target/store.go" PURPOSE="Find the latest available transcript artifact for a successful single-source transcription run matching stored_object identity." />
+        <query-findReusableTranscript PATH="apps/api/internal/storage/target/store.go" PURPOSE="Find the latest available transcript artifact for a successful single-source transcription run matching stored_object identity and channel_account scope." />
+        <query-singleSourceReusableTranscriptGuard PATH="apps/api/internal/storage/target/store.go" PURPOSE="Reject ambiguous multi-item transcription artifacts for per-source reuse unless precise source-level lineage exists." />
         <table-channelAccounts PURPOSE="Store durable channel identity and access scope for the single-user product." />
         <table-operationRequests PURPOSE="Store idempotency and accepted mutation attempts for safe retries." />
         <table-storedObjects PURPOSE="Store object body and origin metadata." />
@@ -148,7 +150,8 @@
       <verification-ref>EV-WORKERS</verification-ref>
       <annotations>
         <export-claimRunStep PURPOSE="Claim analysis_run_steps by analysis_run_id." />
-        <export-processStepInputs PURPOSE="Process declared selection_snapshot_item inputs from sealed selection_snapshot facts without reading mutable collection state." />
+        <export-processStepInputs PURPOSE="Process declared selection_snapshot_item and transcript_artifact inputs from sealed selection_snapshot facts without reading mutable collection state." />
+        <export-mixedMaterialTranscriptAssembly PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Assemble transcript artifacts from original text-origin selection items, reusable transcript artifacts, and CopperASR speech output so mixed Telegram selections keep all materials in selection order." />
         <export-publishArtifacts PURPOSE="Publish transcript artifacts and artifact_subject lineage through API-owned artifact contracts." />
         <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
         <export-copperAsrBoundary PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="Build and call the CopperASR HTTP runtime through COPPER_ASR_* env, normalize ASR responses into TranscriptResult, and propagate stable asr_* failure codes without legacy ASR fallback." />

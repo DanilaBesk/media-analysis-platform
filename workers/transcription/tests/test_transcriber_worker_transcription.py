@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 from transcriber_workers_common.api import (
+    AnalysisRunStepInput,
     ArtifactResolutionResult,
     CancelCheckResult,
     ClaimedAnalysisRunStep,
@@ -627,28 +628,205 @@ def test_run_transcription_mixed_selection_records_item_diagnostics_and_partial_
     assert result.source.display_name == "voice_a"
     diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
     diagnostics = diagnostics_call[1]["diagnostics"]
-    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == ["media-source-note", "media-source-url"]
-    assert [diagnostic["context"]["item_position"] for diagnostic in diagnostics] == [1, 2]
-    assert {diagnostic["context"]["origin_type"] for diagnostic in diagnostics} == {"text", "url"}
+    assert [diagnostic["subject_id"] for diagnostic in diagnostics] == ["media-source-url"]
+    assert [diagnostic["context"]["item_position"] for diagnostic in diagnostics] == [2]
+    assert {diagnostic["context"]["origin_type"] for diagnostic in diagnostics} == {"url"}
     assert all(diagnostic["context"]["analysis_run_id"] == execution.analysis_run_id for diagnostic in diagnostics)
     assert all(diagnostic["context"]["selection_snapshot_id"] == execution.selection_snapshot.selection_snapshot_id for diagnostic in diagnostics)
     assert all(diagnostic["context"]["selection_snapshot_item_id"] for diagnostic in diagnostics)
     assert all(diagnostic["context"]["media_asset_id"] for diagnostic in diagnostics)
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
-    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "skipped", "skipped"]
-    assert manifest["summary"] == {"included_count": 1, "skipped_count": 2, "failed_count": 0}
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded", "skipped"]
+    assert manifest["summary"] == {"included_count": 2, "skipped_count": 1, "failed_count": 0}
     assert manifest["items"][0]["artifact_kinds"] == [
         "transcript_plain",
         "transcript_segmented_markdown",
         "transcript_docx",
     ]
     assert manifest["items"][1]["lineage"]["selection_snapshot_item_id"] == "selection-snapshot-item-1"
+    assert "source-note" in result.artifacts.text_path.read_text(encoding="utf-8")
     diagnostics_bundle = _artifact_json(artifact_store, "run/diagnostics/run-diagnostics.json")
     assert diagnostics_bundle["diagnostics"] == list(diagnostics)
     finalize_call = api_client.calls[-1]
     assert finalize_call[0] == "finalize_analysis_run"
     assert finalize_call[1]["outcome"] == "partially_succeeded"
     assert result.diagnostics == diagnostics
+
+
+def test_run_transcription_includes_text_materials_in_transcript_artifacts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-note",
+            source_kind="text",
+            display_name="Manual note",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-audio",
+            source_label="voice_a",
+            source_kind="uploaded_file",
+            display_name="Voice A",
+            original_filename="voice.ogg",
+            object_key="uploads/voice.ogg",
+        ),
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/voice.ogg": b"audio"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    def fail_concat(input_paths: list[Path], output_path: Path) -> None:
+        raise AssertionError("single voice plus text must not require media concatenation")
+
+    monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fail_concat)
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert "source-note" in result.artifacts.text_path.read_text(encoding="utf-8")
+    assert "Hello world" in result.artifacts.text_path.read_text(encoding="utf-8")
+    assert result.diagnostics == ()
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded"]
+    assert manifest["summary"] == {"included_count": 2, "skipped_count": 0, "failed_count": 0}
+
+
+def test_run_transcription_text_only_selection_writes_transcript_without_asr(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-note-a",
+            source_kind="text",
+            display_name="Manual note A",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-note-b",
+            source_kind="text",
+            display_name="Manual note B",
+        ),
+    )
+    api_client = RecordingApiClient(execution)
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=FakeSourceStore({}),
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    transcript_text = result.artifacts.text_path.read_text(encoding="utf-8")
+    assert "source-note-a" in transcript_text
+    assert "source-note-b" in transcript_text
+    assert transcriber.calls == []
+    assert result.diagnostics == ()
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded"]
+    assert manifest["summary"] == {"included_count": 2, "skipped_count": 0, "failed_count": 0}
+
+
+def test_run_transcription_reuses_declared_transcript_artifact_and_transcribes_only_missing_speech(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    reused_transcript = tmp_path / "reused-transcript.txt"
+    reused_transcript.write_text("Reusable speech transcript", encoding="utf-8")
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-reused",
+            source_label="voice_reused",
+            source_kind="uploaded_file",
+            display_name="Reused voice",
+            original_filename="reused.ogg",
+            object_key="uploads/reused.ogg",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-new",
+            source_label="voice_new",
+            source_kind="uploaded_file",
+            display_name="New voice",
+            original_filename="new.ogg",
+            object_key="uploads/new.ogg",
+        ),
+        OrderedWorkerInput(
+            position=2,
+            source_id="source-note",
+            source_kind="text",
+            display_name="Manual note",
+        ),
+        step_inputs=(
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-reused",
+                analysis_run_step_id="exec-1",
+                input_kind="transcript_artifact",
+                position=0,
+                required=True,
+                selection_snapshot_item_id="selection-snapshot-item-0",
+                artifact_id="artifact-reused",
+            ),
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-new",
+                analysis_run_step_id="exec-1",
+                input_kind="selection_snapshot_item",
+                position=1,
+                required=True,
+                selection_snapshot_item_id="selection-snapshot-item-1",
+            ),
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-text",
+                analysis_run_step_id="exec-1",
+                input_kind="selection_snapshot_item",
+                position=2,
+                required=True,
+                selection_snapshot_item_id="selection-snapshot-item-2",
+            ),
+        ),
+    )
+    api_client = RecordingApiClient(execution, artifact_downloads={"artifact-reused": reused_transcript})
+    source_store = FakeSourceStore({"uploads/reused.ogg": b"old-audio", "uploads/new.ogg": b"new-audio"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    def fake_concat(input_paths: list[Path], output_path: Path) -> None:
+        output_path.write_bytes(b"combined")
+
+    monkeypatch.setattr(worker_module, "_concatenate_media_inputs", fake_concat)
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert [call[0] for call in source_store.calls] == ["uploads/new.ogg"]
+    assert [call for call in api_client.calls if call[0] == "resolve_artifact"] == [
+        ("resolve_artifact", {"artifact_id": "artifact-reused"})
+    ]
+    assert len(transcriber.calls) == 1
+    transcript_text = result.artifacts.text_path.read_text(encoding="utf-8")
+    assert transcript_text.index("Reusable speech transcript") < transcript_text.index("Hello world")
+    assert transcript_text.index("Hello world") < transcript_text.index("source-note")
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded", "succeeded"]
 
 
 def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
@@ -746,17 +924,16 @@ def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
     diagnostics_call = next(call for call in api_client.calls if call[0] == "register_diagnostics")
     diagnostics = diagnostics_call[1]["diagnostics"]
     assert [diagnostic["subject_id"] for diagnostic in diagnostics] == [
-        "media-text",
         "media-url",
         "media-document",
     ]
-    assert [diagnostic["context"]["role"] for diagnostic in diagnostics] == ["context", "reference", "reference"]
+    assert [diagnostic["context"]["role"] for diagnostic in diagnostics] == ["reference", "reference"]
     assert [diagnostic["context"]["selection_snapshot_item_id"] for diagnostic in diagnostics] == [
-        "sel-item-text",
         "sel-item-url",
         "sel-item-document",
     ]
-    assert diagnostics[2]["context"]["materialized_filename"] == "item-0003-source-document.pdf"
+    assert diagnostics[1]["context"]["materialized_filename"] == "item-0003-source-document.pdf"
+    assert "text:source-text" in result.artifacts.text_path.read_text(encoding="utf-8")
     assert api_client.calls[-1][1]["outcome"] == "partially_succeeded"
 
 
@@ -1388,6 +1565,7 @@ def _build_execution(
     analysis_run_id: str = "run-1",
     root_analysis_run_id: str = "root-1",
     params: dict[str, object] | None = None,
+    step_inputs: tuple[AnalysisRunStepInput, ...] = (),
 ) -> ClaimedAnalysisRunStep:
     items = tuple(_selection_item_from_ordered_input(item) for item in ordered_inputs)
     if not items:
@@ -1415,7 +1593,7 @@ def _build_execution(
             option_snapshot={},
             sealed_at="2026-05-10T12:00:00Z",
         ),
-        analysis_run_step_inputs=(),
+        analysis_run_step_inputs=step_inputs,
         params=params or {},
         claimed_at="2026-05-10T12:01:00Z",
     )

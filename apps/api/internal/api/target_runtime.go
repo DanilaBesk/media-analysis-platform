@@ -613,7 +613,11 @@ func (s *TargetRuntimeService) CreateAnalysisRun(ctx context.Context, req Target
 		return TargetAnalysisRun{}, err
 	}
 	runID := s.nextID()
-	steps, inputs := s.planAnalysisRunSteps(runID, req.RunType, snapshotItems, now)
+	plannedInputs, err := s.planSelectionInputs(ctx, req.ChannelAccountID, snapshotItems)
+	if err != nil {
+		return TargetAnalysisRun{}, err
+	}
+	steps, inputs := s.planAnalysisRunSteps(runID, req.RunType, plannedInputs, now)
 	eventID := s.nextID()
 	graph := targetstore.AnalysisRunGraph{
 		Run: targetstore.AnalysisRunRecord{
@@ -664,9 +668,39 @@ func (s *TargetRuntimeService) CreateAnalysisRun(ctx context.Context, req Target
 	}, nil
 }
 
-func (s *TargetRuntimeService) planAnalysisRunSteps(runID, runType string, snapshotItems []targetstore.SelectionSnapshotItemRecord, now time.Time) ([]targetstore.AnalysisRunStepRecord, []targetstore.AnalysisRunStepInputRecord) {
+type plannedSelectionInput struct {
+	item             targetstore.SelectionSnapshotItemRecord
+	reusableRun      targetstore.AnalysisRunRecord
+	reusableArtifact targetstore.ArtifactRecord
+	hasReusable      bool
+}
+
+func (s *TargetRuntimeService) planSelectionInputs(ctx context.Context, channelAccountID string, snapshotItems []targetstore.SelectionSnapshotItemRecord) ([]plannedSelectionInput, error) {
+	planned := make([]plannedSelectionInput, 0, len(snapshotItems))
+	for _, item := range snapshotItems {
+		input := plannedSelectionInput{item: item}
+		if isSpeechMediaKind(item.Kind) && strings.TrimSpace(channelAccountID) != "" {
+			storedObjectID, checksum := selectionSnapshotItemStoredObjectIdentity(item)
+			if storedObjectID != "" || checksum != "" {
+				run, artifact, err := s.store.FindReusableTranscriptBySource(ctx, channelAccountID, storedObjectID, checksum)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return nil, err
+				}
+				if err == nil {
+					input.reusableRun = run
+					input.reusableArtifact = artifact
+					input.hasReusable = true
+				}
+			}
+		}
+		planned = append(planned, input)
+	}
+	return planned, nil
+}
+
+func (s *TargetRuntimeService) planAnalysisRunSteps(runID, runType string, plannedInputs []plannedSelectionInput, now time.Time) ([]targetstore.AnalysisRunStepRecord, []targetstore.AnalysisRunStepInputRecord) {
 	if runType == "report" || runType == "deep_research" {
-		return s.planReportLikeRunSteps(runID, runType, snapshotItems, now)
+		return s.planReportLikeRunSteps(runID, runType, plannedInputs, now)
 	}
 	stepID := s.nextID()
 	step := targetstore.AnalysisRunStepRecord{
@@ -679,30 +713,28 @@ func (s *TargetRuntimeService) planAnalysisRunSteps(runID, runType string, snaps
 		MetadataJSON:  []byte(`{}`),
 		CreatedAt:     now,
 	}
-	return []targetstore.AnalysisRunStepRecord{step}, s.selectionSnapshotStepInputs(stepID, snapshotItems, now)
+	return []targetstore.AnalysisRunStepRecord{step}, s.plannedStepInputs(stepID, plannedInputs, now)
 }
 
-func (s *TargetRuntimeService) planReportLikeRunSteps(runID, runType string, snapshotItems []targetstore.SelectionSnapshotItemRecord, now time.Time) ([]targetstore.AnalysisRunStepRecord, []targetstore.AnalysisRunStepInputRecord) {
-	speechItems := make([]targetstore.SelectionSnapshotItemRecord, 0, len(snapshotItems))
-	textReadyItems := make([]targetstore.SelectionSnapshotItemRecord, 0, len(snapshotItems))
-	for _, item := range snapshotItems {
-		if isSpeechMediaKind(item.Kind) {
-			speechItems = append(speechItems, item)
-			continue
+func (s *TargetRuntimeService) planReportLikeRunSteps(runID, runType string, plannedInputs []plannedSelectionInput, now time.Time) ([]targetstore.AnalysisRunStepRecord, []targetstore.AnalysisRunStepInputRecord) {
+	missingSpeechInputs := make([]plannedSelectionInput, 0, len(plannedInputs))
+	for _, input := range plannedInputs {
+		if isSpeechMediaKind(input.item.Kind) && !input.hasReusable {
+			missingSpeechInputs = append(missingSpeechInputs, input)
 		}
-		textReadyItems = append(textReadyItems, item)
 	}
+	requiresTranscription := len(missingSpeechInputs) > 0
 	analysisStepKind := "report.analysis"
 	if runType == "deep_research" {
 		analysisStepKind = "deep_research.analysis"
 	}
 	analysisStatus := "queued"
-	if len(speechItems) > 0 {
+	if requiresTranscription {
 		analysisStatus = "pending"
 	}
 	steps := make([]targetstore.AnalysisRunStepRecord, 0, 2)
-	inputs := make([]targetstore.AnalysisRunStepInputRecord, 0, len(snapshotItems))
-	if len(speechItems) > 0 {
+	inputs := make([]targetstore.AnalysisRunStepInputRecord, 0, len(plannedInputs))
+	if requiresTranscription {
 		transcriptionStepID := s.nextID()
 		steps = append(steps, targetstore.AnalysisRunStepRecord{
 			ID:            transcriptionStepID,
@@ -714,7 +746,7 @@ func (s *TargetRuntimeService) planReportLikeRunSteps(runID, runType string, sna
 			MetadataJSON:  []byte(`{"prerequisite_for":"analysis"}`),
 			CreatedAt:     now,
 		})
-		inputs = append(inputs, s.selectionSnapshotStepInputs(transcriptionStepID, speechItems, now)...)
+		inputs = append(inputs, s.plannedStepInputs(transcriptionStepID, plannedInputs, now)...)
 	}
 	analysisStepID := s.nextID()
 	steps = append(steps, targetstore.AnalysisRunStepRecord{
@@ -724,11 +756,11 @@ func (s *TargetRuntimeService) planReportLikeRunSteps(runID, runType string, sna
 		WorkerKind:    "agent_runner",
 		Status:        analysisStatus,
 		AttemptNo:     1,
-		MetadataJSON:  jsonOrDefaultRaw(mustJSON(map[string]any{"requires_transcript_artifacts": len(speechItems) > 0}), "{}"),
+		MetadataJSON:  jsonOrDefaultRaw(mustJSON(map[string]any{"requires_transcript_artifacts": requiresTranscription}), "{}"),
 		CreatedAt:     now,
 	})
-	if len(speechItems) == 0 {
-		inputs = append(inputs, s.selectionSnapshotStepInputs(analysisStepID, textReadyItems, now)...)
+	if !requiresTranscription {
+		inputs = append(inputs, s.plannedStepInputs(analysisStepID, plannedInputs, now)...)
 	}
 	return steps, inputs
 }
@@ -748,6 +780,48 @@ func (s *TargetRuntimeService) selectionSnapshotStepInputs(stepID string, snapsh
 		})
 	}
 	return inputs
+}
+
+func (s *TargetRuntimeService) plannedStepInputs(stepID string, plannedInputs []plannedSelectionInput, now time.Time) []targetstore.AnalysisRunStepInputRecord {
+	inputs := make([]targetstore.AnalysisRunStepInputRecord, 0, len(plannedInputs))
+	for _, planned := range plannedInputs {
+		if planned.hasReusable {
+			inputs = append(inputs, targetstore.AnalysisRunStepInputRecord{
+				ID:                      s.nextID(),
+				AnalysisRunStepID:       stepID,
+				InputKind:               "transcript_artifact",
+				SelectionSnapshotItemID: planned.item.ID,
+				ArtifactID:              planned.reusableArtifact.ID,
+				Position:                planned.item.Position,
+				Required:                true,
+				MetadataJSON: jsonObjectBytes(map[string]any{
+					"source_analysis_run_id": planned.reusableRun.ID,
+					"artifact_kind":          planned.reusableArtifact.Kind,
+					"content_type":           planned.reusableArtifact.ContentType,
+				}),
+				CreatedAt: now,
+			})
+			continue
+		}
+		inputs = append(inputs, targetstore.AnalysisRunStepInputRecord{
+			ID:                      s.nextID(),
+			AnalysisRunStepID:       stepID,
+			InputKind:               "selection_snapshot_item",
+			SelectionSnapshotItemID: planned.item.ID,
+			Position:                planned.item.Position,
+			Required:                true,
+			MetadataJSON:            []byte(`{}`),
+			CreatedAt:               now,
+		})
+	}
+	return inputs
+}
+
+func selectionSnapshotItemStoredObjectIdentity(item targetstore.SelectionSnapshotItemRecord) (string, string) {
+	payload := jsonObject(item.StorageSnapshotJSON)
+	storedObjectID, _ := payload["stored_object_id"].(string)
+	checksum, _ := payload["checksum"].(string)
+	return strings.TrimSpace(storedObjectID), strings.TrimSpace(checksum)
 }
 
 func (s *TargetRuntimeService) ListAnalysisRuns(ctx context.Context, req TargetListAnalysisRunsRequest) (TargetAnalysisRunPage, error) {

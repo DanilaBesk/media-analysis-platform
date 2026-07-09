@@ -705,6 +705,317 @@ func TestTargetRuntimeServiceFindsReusableTranscriptForStoredObject(t *testing.T
 	}
 }
 
+func TestTargetRuntimeServicePlansMixedTranscriptionWithReusableTranscriptInputs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 9, 13, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		snapshotItems: []targetstore.SelectionSnapshotItemRecord{{
+			ID:                  "snapshot-item-reused",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            0,
+			MediaAssetID:        "media-asset-reused",
+			Kind:                "voice",
+			DisplayName:         "reused.ogg",
+			StorageSnapshotJSON: []byte(`{"stored_object_id":"stored-reused","checksum":"sha256:reused","object_key":"uploads/reused.ogg"}`),
+			StatusAtSelection:   "available",
+		}, {
+			ID:                  "snapshot-item-new",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            1,
+			MediaAssetID:        "media-asset-new",
+			Kind:                "voice",
+			DisplayName:         "new.ogg",
+			StorageSnapshotJSON: []byte(`{"stored_object_id":"stored-new","checksum":"sha256:new","object_key":"uploads/new.ogg"}`),
+			StatusAtSelection:   "available",
+		}, {
+			ID:                  "snapshot-item-text",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            2,
+			MediaAssetID:        "media-asset-text",
+			Kind:                "text",
+			DisplayName:         "note",
+			OriginSnapshotJSON:  []byte(`{"origin_type":"text","text":"manual note"}`),
+			StatusAtSelection:   "available",
+		}},
+		reusableTranscripts: map[string]fakeReusableTranscript{
+			fakeReusableTranscriptKey("stored-reused", "sha256:reused"): {
+				run: targetstore.AnalysisRunRecord{
+					ID:                "run-reused",
+					ChannelAccountID:  "channel-account-1",
+					SelectionSnapshot: "snapshot-reused",
+					RunType:           "transcription",
+					Status:            "succeeded",
+					Version:           2,
+					ParamsJSON:        []byte(`{}`),
+					DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+					EvidenceGateState: "not_required",
+					CreatedAt:         now.Add(-time.Hour),
+					CompletedAt:       &now,
+				},
+				artifact: targetstore.ArtifactRecord{
+					ID:               "artifact-reused",
+					ChannelAccountID: "channel-account-1",
+					AnalysisRunID:    "run-reused",
+					Kind:             "transcript",
+					Status:           "available",
+					ContentType:      "text/plain; charset=utf-8",
+					Visibility:       "channel_deliverable",
+					PreviewJSON:      []byte(`{"available":true,"filename":"reused.txt"}`),
+					CreatedAt:        now,
+				},
+			},
+		},
+	}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"run-mixed-1",
+			"step-transcription-1",
+			"step-input-reused",
+			"step-input-new",
+			"step-input-text",
+			"event-mixed-1",
+		)),
+	)
+
+	if _, err := service.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{
+		ChannelAccountID:    "channel-account-1",
+		SelectionSnapshotID: "snapshot-1",
+		RunType:             "transcription",
+	}); err != nil {
+		t.Fatalf("CreateAnalysisRun(transcription) error = %v", err)
+	}
+
+	if len(store.reusableTranscriptReqs) != 2 {
+		t.Fatalf("reusable transcript lookup count = %d, want 2", len(store.reusableTranscriptReqs))
+	}
+	inputs := store.analysisRunGraph.StepInputs
+	if len(inputs) != 3 {
+		t.Fatalf("planned inputs = %#v, want 3 mixed inputs", inputs)
+	}
+	if inputs[0].InputKind != "transcript_artifact" ||
+		inputs[0].SelectionSnapshotItemID != "snapshot-item-reused" ||
+		inputs[0].ArtifactID != "artifact-reused" ||
+		inputs[0].Position != 0 {
+		t.Fatalf("reused input = %#v, want transcript_artifact at original position", inputs[0])
+	}
+	if inputs[1].InputKind != "selection_snapshot_item" ||
+		inputs[1].SelectionSnapshotItemID != "snapshot-item-new" ||
+		inputs[1].ArtifactID != "" ||
+		inputs[1].Position != 1 {
+		t.Fatalf("new speech input = %#v, want raw selection item for ASR", inputs[1])
+	}
+	if inputs[2].InputKind != "selection_snapshot_item" ||
+		inputs[2].SelectionSnapshotItemID != "snapshot-item-text" ||
+		inputs[2].Position != 2 {
+		t.Fatalf("text input = %#v, want text selection item in original order", inputs[2])
+	}
+}
+
+func TestTargetRuntimeServicePlansReportDirectlyWithReusableSpeechAndTextInputs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 9, 13, 15, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		snapshotItems: []targetstore.SelectionSnapshotItemRecord{{
+			ID:                  "snapshot-item-reused",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            0,
+			MediaAssetID:        "media-asset-reused",
+			Kind:                "voice",
+			DisplayName:         "reused.ogg",
+			StorageSnapshotJSON: []byte(`{"stored_object_id":"stored-reused","checksum":"sha256:reused","object_key":"uploads/reused.ogg"}`),
+			StatusAtSelection:   "available",
+		}, {
+			ID:                  "snapshot-item-text",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            1,
+			MediaAssetID:        "media-asset-text",
+			Kind:                "text",
+			DisplayName:         "note",
+			OriginSnapshotJSON:  []byte(`{"origin_type":"text","text":"manual note"}`),
+			StatusAtSelection:   "available",
+		}},
+		reusableTranscripts: map[string]fakeReusableTranscript{
+			fakeReusableTranscriptKey("stored-reused", "sha256:reused"): {
+				run: targetstore.AnalysisRunRecord{
+					ID:                "run-reused",
+					ChannelAccountID:  "channel-account-1",
+					SelectionSnapshot: "snapshot-reused",
+					RunType:           "transcription",
+					Status:            "succeeded",
+					Version:           2,
+					ParamsJSON:        []byte(`{}`),
+					DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+					EvidenceGateState: "not_required",
+					CreatedAt:         now.Add(-time.Hour),
+					CompletedAt:       &now,
+				},
+				artifact: targetstore.ArtifactRecord{
+					ID:               "artifact-reused",
+					ChannelAccountID: "channel-account-1",
+					AnalysisRunID:    "run-reused",
+					Kind:             "transcript",
+					Status:           "available",
+					ContentType:      "text/plain; charset=utf-8",
+					Visibility:       "channel_deliverable",
+					PreviewJSON:      []byte(`{"available":true,"filename":"reused.txt"}`),
+					CreatedAt:        now,
+				},
+			},
+		},
+	}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"run-report-1",
+			"step-analysis-1",
+			"step-input-reused",
+			"step-input-text",
+			"event-report-1",
+		)),
+	)
+
+	run, err := service.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{
+		ChannelAccountID:    "channel-account-1",
+		SelectionSnapshotID: "snapshot-1",
+		RunType:             "report",
+	})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun(report) error = %v", err)
+	}
+
+	if len(store.analysisRunGraph.Steps) != 1 {
+		t.Fatalf("planned steps = %#v, want direct analysis without ASR prerequisite", store.analysisRunGraph.Steps)
+	}
+	if run.Steps[0].WorkerKind != "agent_runner" || run.Steps[0].Status != "queued" {
+		t.Fatalf("run steps = %#v, want queued agent_runner", run.Steps)
+	}
+	inputs := store.analysisRunGraph.StepInputs
+	if len(inputs) != 2 {
+		t.Fatalf("planned inputs = %#v, want reusable transcript plus text input", inputs)
+	}
+	if inputs[0].AnalysisRunStepID != "step-analysis-1" ||
+		inputs[0].InputKind != "transcript_artifact" ||
+		inputs[0].SelectionSnapshotItemID != "snapshot-item-reused" ||
+		inputs[0].ArtifactID != "artifact-reused" {
+		t.Fatalf("reused report input = %#v, want transcript_artifact for agent runner", inputs[0])
+	}
+	if inputs[1].AnalysisRunStepID != "step-analysis-1" ||
+		inputs[1].InputKind != "selection_snapshot_item" ||
+		inputs[1].SelectionSnapshotItemID != "snapshot-item-text" {
+		t.Fatalf("text report input = %#v, want text selection item for agent runner", inputs[1])
+	}
+}
+
+func TestTargetRuntimeServicePlansReportPrerequisiteWithReusableAndMissingSpeechInputs(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 7, 9, 13, 30, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		snapshotItems: []targetstore.SelectionSnapshotItemRecord{{
+			ID:                  "snapshot-item-reused",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            0,
+			MediaAssetID:        "media-asset-reused",
+			Kind:                "voice",
+			DisplayName:         "reused.ogg",
+			StorageSnapshotJSON: []byte(`{"stored_object_id":"stored-reused","checksum":"sha256:reused"}`),
+			StatusAtSelection:   "available",
+		}, {
+			ID:                  "snapshot-item-new",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            1,
+			MediaAssetID:        "media-asset-new",
+			Kind:                "voice",
+			DisplayName:         "new.ogg",
+			StorageSnapshotJSON: []byte(`{"stored_object_id":"stored-new","checksum":"sha256:new"}`),
+			StatusAtSelection:   "available",
+		}, {
+			ID:                  "snapshot-item-text",
+			SelectionSnapshotID: "snapshot-1",
+			Position:            2,
+			MediaAssetID:        "media-asset-text",
+			Kind:                "text",
+			DisplayName:         "note",
+			OriginSnapshotJSON:  []byte(`{"origin_type":"text","text":"manual note"}`),
+			StatusAtSelection:   "available",
+		}},
+		reusableTranscripts: map[string]fakeReusableTranscript{
+			fakeReusableTranscriptKey("stored-reused", "sha256:reused"): {
+				run: targetstore.AnalysisRunRecord{
+					ID:                "run-reused",
+					ChannelAccountID:  "channel-account-1",
+					SelectionSnapshot: "snapshot-reused",
+					RunType:           "transcription",
+					Status:            "succeeded",
+					Version:           2,
+					ParamsJSON:        []byte(`{}`),
+					DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+					EvidenceGateState: "not_required",
+					CreatedAt:         now.Add(-time.Hour),
+					CompletedAt:       &now,
+				},
+				artifact: targetstore.ArtifactRecord{
+					ID:               "artifact-reused",
+					ChannelAccountID: "channel-account-1",
+					AnalysisRunID:    "run-reused",
+					Kind:             "transcript",
+					Status:           "available",
+					ContentType:      "text/plain; charset=utf-8",
+					Visibility:       "channel_deliverable",
+					PreviewJSON:      []byte(`{"available":true,"filename":"reused.txt"}`),
+					CreatedAt:        now,
+				},
+			},
+		},
+	}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs(
+			"run-report-1",
+			"step-transcription-1",
+			"step-input-reused",
+			"step-input-new",
+			"step-input-text",
+			"step-analysis-1",
+			"event-report-1",
+		)),
+	)
+
+	run, err := service.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{
+		ChannelAccountID:    "channel-account-1",
+		SelectionSnapshotID: "snapshot-1",
+		RunType:             "report",
+	})
+	if err != nil {
+		t.Fatalf("CreateAnalysisRun(report) error = %v", err)
+	}
+
+	if len(run.Steps) != 2 || run.Steps[0].WorkerKind != "transcription" || run.Steps[1].Status != "pending" {
+		t.Fatalf("run steps = %#v, want transcription prerequisite and pending analysis", run.Steps)
+	}
+	inputs := store.analysisRunGraph.StepInputs
+	if len(inputs) != 3 {
+		t.Fatalf("planned inputs = %#v, want three prerequisite inputs", inputs)
+	}
+	if inputs[0].AnalysisRunStepID != "step-transcription-1" ||
+		inputs[0].InputKind != "transcript_artifact" ||
+		inputs[0].ArtifactID != "artifact-reused" ||
+		inputs[0].SelectionSnapshotItemID != "snapshot-item-reused" {
+		t.Fatalf("reused prerequisite input = %#v, want transcript_artifact", inputs[0])
+	}
+	if inputs[1].InputKind != "selection_snapshot_item" ||
+		inputs[1].SelectionSnapshotItemID != "snapshot-item-new" ||
+		inputs[1].ArtifactID != "" {
+		t.Fatalf("missing speech input = %#v, want ASR selection_snapshot_item", inputs[1])
+	}
+	if inputs[2].InputKind != "selection_snapshot_item" || inputs[2].SelectionSnapshotItemID != "snapshot-item-text" {
+		t.Fatalf("text input = %#v, want direct text selection_snapshot_item", inputs[2])
+	}
+}
+
 func TestTargetRuntimeRecordHelpersCoverPayloadEdges(t *testing.T) {
 	t.Parallel()
 
@@ -1983,8 +2294,10 @@ type fakeTargetRuntimeStore struct {
 	storedObjects          []targetstore.StoredObjectRecord
 	artifacts              []targetstore.ArtifactRecord
 	reusableTranscriptReq  TargetReusableTranscriptRequest
+	reusableTranscriptReqs []TargetReusableTranscriptRequest
 	reusableRun            targetstore.AnalysisRunRecord
 	reusableArtifact       targetstore.ArtifactRecord
+	reusableTranscripts    map[string]fakeReusableTranscript
 	artifactSubjects       []targetstore.ArtifactSubjectRecord
 	diagnosticCalls        int
 	diagnostics            []targetstore.DiagnosticRecord
@@ -1995,6 +2308,15 @@ type fakeTargetRuntimeStore struct {
 	failMethod             string
 	failErr                error
 	claimUnclaimed         bool
+}
+
+type fakeReusableTranscript struct {
+	run      targetstore.AnalysisRunRecord
+	artifact targetstore.ArtifactRecord
+}
+
+func fakeReusableTranscriptKey(storedObjectID, checksum string) string {
+	return storedObjectID + "\x00" + checksum
 }
 
 func (s *fakeTargetRuntimeStore) fail(method string) error {
@@ -2420,10 +2742,19 @@ func (s *fakeTargetRuntimeStore) FindReusableTranscriptBySource(_ context.Contex
 	if err := s.fail("FindReusableTranscriptBySource"); err != nil {
 		return targetstore.AnalysisRunRecord{}, targetstore.ArtifactRecord{}, err
 	}
-	s.reusableTranscriptReq = TargetReusableTranscriptRequest{
+	req := TargetReusableTranscriptRequest{
 		ChannelAccountID: channelAccountID,
 		StoredObjectID:   storedObjectID,
 		Checksum:         checksum,
+	}
+	s.reusableTranscriptReq = req
+	s.reusableTranscriptReqs = append(s.reusableTranscriptReqs, req)
+	if s.reusableTranscripts != nil {
+		match, ok := s.reusableTranscripts[fakeReusableTranscriptKey(storedObjectID, checksum)]
+		if !ok {
+			return targetstore.AnalysisRunRecord{}, targetstore.ArtifactRecord{}, sql.ErrNoRows
+		}
+		return match.run, match.artifact, nil
 	}
 	if s.reusableRun.ID == "" {
 		return targetstore.AnalysisRunRecord{}, targetstore.ArtifactRecord{}, sql.ErrNoRows

@@ -1163,6 +1163,30 @@ Generic backend-unavailable Telegram copy must not claim inbox content has alrea
     </verification>
   </HotfixPacket>
 
+  <HotfixPacket packet-id="media-9ba-api-owned-partial-transcript-reuse" module="M-API-DOMAIN,M-API-STORAGE,M-WORKER-TRANSCRIPTION" phase="RuntimeUX" verification-ref="EV-API,EV-STORAGE,EV-WORKERS,EV-GRACE">
+    <purpose>Support mixed Telegram selections where some speech materials already have transcript artifacts and other speech materials still need ASR.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/api/target_runtime.go</file-1>
+      <file-2>apps/api/internal/api/target_runtime_test.go</file-2>
+      <file-3>apps/api/internal/storage/target/store_postgres_test.go</file-3>
+      <file-4>workers/transcription/src/transcriber_worker_transcription.py</file-4>
+      <file-5>workers/transcription/tests/test_transcriber_worker_transcription.py</file-5>
+      <file-6>docs/requirements.xml</file-6>
+      <file-7>docs/knowledge-graph.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Mixed selection reuse is API-owned. During analysis_run creation, the API resolves each speech selection_snapshot_item against channel_account-scoped single-source transcript history. Ready speech becomes transcript_artifact step input with selection_snapshot_item lineage; missing speech remains selection_snapshot_item work for CopperASR; text-origin materials remain direct selection inputs. Transcription workers execute declared inputs, resolve reusable transcript artifacts through the API, transcribe only missing speech inputs, and assemble the final transcript in selection_snapshot order. Ambiguous multi-item transcript artifacts are not reusable as single-source transcripts without precise source-level lineage.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN API runtime regression proves mixed transcription plans emit transcript_artifact for ready speech and selection_snapshot_item only for missing speech/text.</check>
+      <check>RED/GREEN API runtime regression proves report planning uses ready transcript_artifact/text inputs directly when no speech ASR prerequisite is needed.</check>
+      <check>Postgres storage regression proves cross-channel transcript reuse is denied and ambiguous multi-item transcript artifacts are not matched for per-source reuse.</check>
+      <check>Worker regression proves declared transcript_artifact input is resolved as text, its original media is not downloaded or sent to ASR, missing speech is transcribed, and final text order is preserved.</check>
+      <check>Full API, transcription worker, and GRACE XML gates pass.</check>
+    </verification>
+  </HotfixPacket>
+
   <HotfixPacket packet-id="media-qb3-local-telegram-bot-api-large-media-ingress" module="M-INFRA,M-TELEGRAM-ADAPTER,M-GRACE" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-RUNTIME,EV-GRACE">
     <purpose>Route compose Telegram media ingestion through a local Telegram Bot API server so large Telegram video/audio downloads do not fail on the cloud Bot API file-size limit.</purpose>
     <write-scope>

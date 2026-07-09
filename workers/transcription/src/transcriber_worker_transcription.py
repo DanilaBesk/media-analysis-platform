@@ -29,6 +29,7 @@ import json
 import logging
 import shutil
 import subprocess
+import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
@@ -36,8 +37,9 @@ from pathlib import Path
 from typing import Protocol
 
 from transcriber_workers_common.api import (
-    ClaimedAnalysisRunStep,
     AnalysisRunControlClient,
+    AnalysisRunStepInput,
+    ClaimedAnalysisRunStep,
     SelectionItemMaterialization,
 )
 from transcriber_workers_common.artifacts import ArtifactDescriptor, ArtifactObjectStore, ArtifactWriter
@@ -85,6 +87,12 @@ class SourceMaterializationError(RuntimeError):
     def __init__(self, message: str, *, diagnostics: tuple[Mapping[str, object], ...] = ()) -> None:
         super().__init__(message)
         self.diagnostics = diagnostics
+
+
+@dataclass(frozen=True, slots=True)
+class _TranscriptBlock:
+    position: int
+    text: str
 
 
 def materialize_local_source(source: SourceCandidate, workspace_dir: Path) -> SourceCandidate:
@@ -144,13 +152,17 @@ def runTranscription(
             progress_stage="materializing_sources",
             progress_message="Resolving claimed transcription inputs",
         )
-        source, diagnostics, item_outcomes = _materialize_execution_source(execution, workspace_dir, source_store)
-        if diagnostics:
-            api_client.register_diagnostics(
-                execution.analysis_run_id,
-                analysis_run_step_id=execution.analysis_run_step_id,
-                diagnostics=diagnostics,
-            )
+        uses_declared_artifacts = _has_declared_transcript_artifact_inputs(execution)
+        if uses_declared_artifacts:
+            source = _source_candidate_from_text_materials()
+        else:
+            source, diagnostics, item_outcomes = _materialize_execution_source(execution, workspace_dir, source_store)
+            if diagnostics:
+                api_client.register_diagnostics(
+                    execution.analysis_run_id,
+                    analysis_run_step_id=execution.analysis_run_step_id,
+                    diagnostics=diagnostics,
+                )
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
@@ -166,11 +178,33 @@ def runTranscription(
             execution.analysis_run_step_id,
             len(execution.selection_snapshot.items),
         )
-        materialized_source, transcript_result, artifacts = process_local_transcription(
-            source,
-            workspace_dir=workspace_dir,
-            transcriber=transcriber,
-        )
+        if uses_declared_artifacts:
+            materialized_source, transcript_result, diagnostics, item_outcomes = _transcribe_declared_step_inputs(
+                execution,
+                workspace_dir,
+                api_client,
+                source_store,
+                transcriber,
+            )
+            if diagnostics:
+                api_client.register_diagnostics(
+                    execution.analysis_run_id,
+                    analysis_run_step_id=execution.analysis_run_step_id,
+                    diagnostics=diagnostics,
+                )
+            artifacts = _write_transcript_artifacts(workspace_dir, transcript_result)
+        elif source.local_path is None and source.url is None:
+            materialized_source = source
+            transcript_result = _text_materials_transcript(execution, item_outcomes)
+            artifacts = _write_transcript_artifacts(workspace_dir, transcript_result)
+        else:
+            materialized_source, transcript_result, artifacts = process_local_transcription(
+                source,
+                workspace_dir=workspace_dir,
+                transcriber=transcriber,
+            )
+            transcript_result = _include_text_materials_in_transcript(execution, item_outcomes, transcript_result)
+            artifacts = _write_transcript_artifacts(workspace_dir, transcript_result)
 
         _check_cancellation(api_client, execution)
         api_client.publish_progress(
@@ -330,6 +364,9 @@ def _materialize_execution_source(
         if supports_direct_url and _is_supported_direct_youtube_descriptor(descriptor):
             item_outcomes.append(_item_outcome(execution, descriptor, "succeeded"))
             return _source_candidate_from_supported_url(descriptor), tuple(diagnostics), tuple(item_outcomes)
+        if _is_text_descriptor(descriptor):
+            item_outcomes.append(_item_outcome(execution, descriptor, "succeeded"))
+            continue
         if descriptor.is_object_backed and _is_transcribable_descriptor(descriptor):
             input_dir = workspace_dir / "inputs" / f"{descriptor.position:02d}-{descriptor.source_id}"
             input_dir.mkdir(parents=True, exist_ok=True)
@@ -354,6 +391,8 @@ def _materialize_execution_source(
         item_outcomes.append(_item_outcome(execution, descriptor, "skipped", diagnostic_ids=(str(diagnostic["diagnostic_id"]),)))
 
     if not materialized_inputs:
+        if any(item.get("outcome") == "succeeded" for item in item_outcomes):
+            return _source_candidate_from_text_materials(), tuple(diagnostics), tuple(item_outcomes)
         error_message = "selection contains no object-backed media items that can be transcribed"
         object_key_failures = [
             diagnostic["message"]
@@ -383,6 +422,207 @@ def _materialize_execution_source(
             tuple(item_outcomes),
         )
     return _materialize_combined_source(materialized_inputs, workspace_dir), tuple(diagnostics), tuple(item_outcomes)
+
+
+def _has_declared_transcript_artifact_inputs(execution: ClaimedAnalysisRunStep) -> bool:
+    return any(step_input.input_kind == "transcript_artifact" for step_input in execution.analysis_run_step_inputs)
+
+
+def _transcribe_declared_step_inputs(
+    execution: ClaimedAnalysisRunStep,
+    workspace_dir: Path,
+    api_client: AnalysisRunControlClient,
+    source_store: SourceObjectStore,
+    transcriber,
+) -> tuple[SourceCandidate, TranscriptResult, tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
+    items_by_id = {
+        item.selection_snapshot_item_id: item
+        for item in execution.selection_snapshot.items
+    }
+    diagnostics: list[Mapping[str, object]] = []
+    item_outcomes: list[Mapping[str, object]] = []
+    blocks: list[_TranscriptBlock] = []
+    segments = []
+    provider_metadata: Mapping[str, object] = {}
+    materialized_source = _source_candidate_from_text_materials()
+
+    for step_input in sorted(execution.analysis_run_step_inputs, key=lambda item: (item.position, item.analysis_run_step_input_id)):
+        item = _selection_item_for_step_input(step_input, items_by_id)
+        materialization = SelectionItemMaterialization.from_selection_item(item) if item is not None else None
+        if step_input.input_kind == "transcript_artifact":
+            if materialization is None:
+                raise SourceMaterializationError("required transcript_artifact input must reference a selection_snapshot_item")
+            if not step_input.artifact_id:
+                raise SourceMaterializationError("required transcript_artifact input is missing artifact_id")
+            text = _read_transcript_artifact_text(api_client, step_input.artifact_id)
+            if text:
+                blocks.append(_TranscriptBlock(step_input.position, text))
+            item_outcomes.append(_item_outcome(execution, materialization, "succeeded"))
+            continue
+
+        if step_input.input_kind != "selection_snapshot_item":
+            if step_input.required:
+                raise SourceMaterializationError(f"unsupported required transcription step input kind: {step_input.input_kind}")
+            continue
+        if materialization is None:
+            if step_input.required:
+                raise SourceMaterializationError("required selection_snapshot_item input is missing selection_snapshot_item_id")
+            continue
+
+        if _is_text_descriptor(materialization):
+            text = _text_material_content(materialization)
+            if text:
+                blocks.append(_TranscriptBlock(step_input.position, text))
+            item_outcomes.append(_item_outcome(execution, materialization, "succeeded"))
+            continue
+
+        source: SourceCandidate | None = None
+        if _is_supported_direct_youtube_descriptor(materialization):
+            source = _source_candidate_from_supported_url(materialization)
+        elif materialization.is_object_backed and _is_transcribable_descriptor(materialization):
+            try:
+                source = _materialize_single_selection_item(materialization, workspace_dir, source_store)
+            except SourceMaterializationError as exc:
+                diagnostic = _failed_selection_item_diagnostic(execution, materialization, message=str(exc))
+                diagnostics.append(diagnostic)
+                item_outcomes.append(_item_outcome(execution, materialization, "failed", diagnostic_ids=(str(diagnostic["diagnostic_id"]),)))
+                continue
+
+        if source is None:
+            materialized_path = None
+            if materialization.is_object_backed:
+                try:
+                    materialized_path = _materialize_unsupported_object_descriptor(materialization, workspace_dir, source_store)
+                except SourceMaterializationError:
+                    materialized_path = None
+            diagnostic = _unsupported_selection_item_diagnostic(execution, materialization, materialized_path=materialized_path)
+            diagnostics.append(diagnostic)
+            item_outcomes.append(_item_outcome(execution, materialization, "skipped", diagnostic_ids=(str(diagnostic["diagnostic_id"]),)))
+            continue
+
+        materialized_source = source
+        transcript_result = transcriber.transcribe(materialized_source, workspace_dir)
+        if transcript_result.raw_text.strip():
+            blocks.append(_TranscriptBlock(step_input.position, transcript_result.raw_text.strip()))
+        if transcript_result.segments:
+            segments.extend(transcript_result.segments)
+        if transcript_result.provider_metadata and not provider_metadata:
+            provider_metadata = transcript_result.provider_metadata
+        item_outcomes.append(_item_outcome(execution, materialization, "succeeded", materialized_path=materialized_source.local_path))
+
+    if not blocks:
+        if diagnostics:
+            raise SourceMaterializationError(
+                "selection contains no reusable or transcribable inputs that produced transcript text",
+                diagnostics=tuple(diagnostics),
+            )
+        raise SourceMaterializationError("declared transcription step produced no transcript text")
+
+    transcript_text = "\n\n".join(block.text for block in sorted(blocks, key=lambda block: block.position)).strip()
+    return (
+        materialized_source,
+        TranscriptResult(
+            title="Смешанные материалы",
+            source_label="Selection transcript",
+            segments=segments,
+            language="und",
+            raw_text=transcript_text,
+            provider_metadata=provider_metadata,
+        ),
+        tuple(diagnostics),
+        tuple(item_outcomes),
+    )
+
+
+def _selection_item_for_step_input(
+    step_input: AnalysisRunStepInput,
+    items_by_id: Mapping[str, object],
+):
+    if not step_input.selection_snapshot_item_id:
+        return None
+    return items_by_id.get(step_input.selection_snapshot_item_id)
+
+
+def _read_transcript_artifact_text(api_client: AnalysisRunControlClient, artifact_id: str) -> str:
+    resolution = api_client.resolve_artifact(artifact_id)
+    if not resolution.download_url:
+        raise SourceMaterializationError(f"transcript artifact {artifact_id} has no download_url")
+    with urllib.request.urlopen(resolution.download_url, timeout=60) as response:
+        data = response.read()
+    return data.decode("utf-8").strip()
+
+
+def _source_candidate_from_text_materials() -> SourceCandidate:
+    return SourceCandidate(
+        source_id="text-materials",
+        kind="telegram_audio",
+        display_name="Text materials",
+        url=None,
+        telegram_file_id=None,
+        mime_type="text/plain",
+        file_name=None,
+        file_unique_id=None,
+        local_path=None,
+    )
+
+
+def _include_text_materials_in_transcript(
+    execution: ClaimedAnalysisRunStep,
+    item_outcomes: tuple[Mapping[str, object], ...],
+    transcript_result: TranscriptResult,
+) -> TranscriptResult:
+    succeeded_item_ids = {
+        str(item.get("selection_snapshot_item_id") or "")
+        for item in item_outcomes
+        if item.get("outcome") == "succeeded"
+    }
+    blocks: list[tuple[int, str]] = []
+    speech_position: int | None = None
+    for item in sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position):
+        if str(item.selection_snapshot_item_id) not in succeeded_item_ids:
+            continue
+        materialization = SelectionItemMaterialization.from_selection_item(item)
+        if _is_text_descriptor(materialization):
+            text = _text_material_content(materialization)
+            if text:
+                blocks.append((materialization.position, text))
+            continue
+        if speech_position is None and _is_transcribable_descriptor(materialization):
+            speech_position = materialization.position
+    if not blocks:
+        return transcript_result
+    if transcript_result.raw_text.strip() and speech_position is not None:
+        blocks.append((speech_position, transcript_result.raw_text.strip()))
+    combined_text = "\n\n".join(text for _, text in sorted(blocks, key=lambda block: block[0])).strip()
+    return replace(transcript_result, raw_text=combined_text)
+
+
+def _text_materials_transcript(
+    execution: ClaimedAnalysisRunStep,
+    item_outcomes: tuple[Mapping[str, object], ...],
+) -> TranscriptResult:
+    succeeded_item_ids = {
+        str(item.get("selection_snapshot_item_id") or "")
+        for item in item_outcomes
+        if item.get("outcome") == "succeeded"
+    }
+    text_blocks: list[str] = []
+    for item in sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position):
+        if str(item.selection_snapshot_item_id) not in succeeded_item_ids:
+            continue
+        materialization = SelectionItemMaterialization.from_selection_item(item)
+        if not _is_text_descriptor(materialization):
+            continue
+        text = _text_material_content(materialization)
+        if text:
+            text_blocks.append(text)
+    return TranscriptResult(
+        title="Текстовые материалы",
+        source_label="Text materials",
+        segments=[],
+        language="und",
+        raw_text="\n\n".join(text_blocks).strip(),
+    )
 
 
 def _unsupported_selection_item_diagnostic(
@@ -615,6 +855,14 @@ def _is_transcribable_descriptor(materialization: SelectionItemMaterialization) 
         return True
     mime_type = (materialization.mime_type or "").split(";", 1)[0].strip().casefold()
     return mime_type.startswith("audio/") or mime_type.startswith("video/")
+
+
+def _is_text_descriptor(materialization: SelectionItemMaterialization) -> bool:
+    return materialization.origin_type == "text" or materialization.media_kind == "text"
+
+
+def _text_material_content(materialization: SelectionItemMaterialization) -> str:
+    return (materialization.text_ref or materialization.origin_ref or materialization.labels.display_label or "").strip()
 
 
 def _source_candidate_kind(materialization: SelectionItemMaterialization) -> str:
