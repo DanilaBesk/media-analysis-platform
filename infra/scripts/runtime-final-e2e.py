@@ -16,6 +16,11 @@ from typing import Any
 API_BASE_URL = os.environ.get("RUNTIME_E2E_API_BASE_URL", "http://localhost:8080")
 POLL_TIMEOUT_SECONDS = int(os.environ.get("RUNTIME_E2E_POLL_TIMEOUT_SECONDS", "180"))
 POLL_INTERVAL_SECONDS = float(os.environ.get("RUNTIME_E2E_POLL_INTERVAL_SECONDS", "2"))
+MINIO_HOST_ENDPOINT = (
+    os.environ.get("RUNTIME_E2E_MINIO_HOST_ENDPOINT")
+    or os.environ.get("MINIO_PUBLIC_ENDPOINT")
+    or f"http://localhost:{os.environ.get('MINIO_HOST_PORT', '19100')}"
+)
 
 
 class RuntimeProofError(RuntimeError):
@@ -70,7 +75,13 @@ def _download_bytes(url: str) -> bytes:
     headers: dict[str, str] = {}
     request_url = url
     if parsed.hostname == "minio":
-        public = parsed._replace(netloc=f"localhost:{parsed.port or 9000}")
+        host_endpoint = urllib.parse.urlparse(MINIO_HOST_ENDPOINT)
+        if host_endpoint.scheme not in {"http", "https"} or not host_endpoint.netloc:
+            raise RuntimeProofError(f"invalid MINIO host endpoint for local download rewrite: {MINIO_HOST_ENDPOINT}")
+        public = parsed._replace(
+            scheme=host_endpoint.scheme,
+            netloc=host_endpoint.netloc,
+        )
         request_url = urllib.parse.urlunparse(public)
         headers["Host"] = parsed.netloc
     request = urllib.request.Request(request_url, headers=headers, method="GET")

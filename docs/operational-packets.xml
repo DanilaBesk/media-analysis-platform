@@ -70,6 +70,7 @@
     <completed-packet bead="media-b8s.3.4">final-readiness-packet closed with coverage inventory, runtime evidence, Beads state, residual risks, and readiness context.</completed-packet>
     <completed-closure-gate bead="media-b8s.3">Pre-MR QA is complete after no-legacy, contracts/security/ops, runtime soak, and final readiness packets.</completed-closure-gate>
     <completed-closure-gate bead="media-b8s">root migration is complete after implementation, full E2E coverage, QA, final readiness, and live compose proof.</completed-closure-gate>
+    <completed-packet bead="media-5n4">local-compose-runtime-readiness-and-port-repair</completed-packet>
     <completed-packet bead="media-pyj">telegram-transcription-result-auto-document-delivery</completed-packet>
     <completed-packet bead="media-h2a.1">stale-legacy-instruction-and-compatibility-schema-guard</completed-packet>
     <completed-packet bead="media-h2a.2">worker-test-fixture-analysis-run-vocabulary-normalization</completed-packet>
@@ -1161,6 +1162,40 @@ Generic backend-unavailable Telegram copy must not claim inbox content has alrea
       <check>Full Telegram adapter tests pass.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket packet-id="media-5n4-local-compose-runtime-readiness-and-port-repair" module="M-INFRA,M-GRACE" phase="RuntimeOps" verification-ref="EV-RUNTIME,EV-GRACE">
+    <purpose>Allow the local compose runtime to start reliably on developer machines with occupied MinIO ports, cold API Go caches, and first-run CopperASR model bootstrap.</purpose>
+    <write-scope>
+      <file-1>infra/docker-compose.yml</file-1>
+      <file-2>infra/scripts/compose-smoke.sh</file-2>
+      <file-3>infra/env/shared.env.example</file-3>
+      <file-4>.env.example</file-4>
+      <file-5>README.md</file-5>
+      <file-6>docs/requirements.xml</file-6>
+      <file-7>docs/technology.xml</file-7>
+      <file-8>docs/knowledge-graph.xml</file-8>
+      <file-9>docs/operational-packets.xml</file-9>
+      <file-10>infra/images/worker-agent-runner/Dockerfile</file-10>
+      <file-11>infra/scripts/runtime-final-e2e.py</file-11>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The internal object-store endpoint remains http://minio:9000 inside the compose network. Host-published MinIO API and console ports are configurable through MINIO_HOST_PORT and MINIO_CONSOLE_HOST_PORT, defaulting to 19100 and 19101 to avoid common local conflicts. API-generated artifact download links use MINIO_PUBLIC_ENDPOINT, defaulting to http://localhost:19100 through compose service environment.
+
+The API local dev container persists Go module and build caches in named volumes so repeated container recreates do not re-download the full module graph. CopperASR keeps model preload semantics but its healthcheck startup window must cover first-run ONNX/VAD downloads into the persistent copper-asr-cache volume, with optional HF_TOKEN passthrough for authenticated Hugging Face bootstrap. The agent-runner image uses Node 22 for the container-local claude-code harness.
+
+Runtime E2E host-side artifact downloads must rewrite internal MinIO presigned URLs to the configured host endpoint, defaulting to localhost:19100, while preserving the original Host header used in the signature.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Reproduce the old failure with host port 9000 already allocated by another local container.</check>
+      <check>docker compose config renders MinIO host port 19100 and API MINIO_PUBLIC_ENDPOINT=http://localhost:19100 by default.</check>
+      <check>docker compose config renders API Go cache volumes and CopperASR startup health window defaults.</check>
+      <check>worker-agent-runner image reports Node v22.x and claude-code is executable.</check>
+      <check>bash infra/scripts/compose-smoke.sh --check-config passes after static contract updates.</check>
+      <check>python3 infra/scripts/runtime-final-e2e.py succeeds against the local stack and downloads artifacts through the configured MinIO host endpoint.</check>
+      <check>Local compose stack starts with MinIO reachable on localhost:19100 while another service keeps localhost:9000.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
 
   <HotfixPacket packet-id="media-cjb-channel-surface-active-address-handoff" module="M-API-HTTP M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS">
     <purpose>Prevent Telegram callback actions from surfacing backend-unavailable errors when a message changes from a current_materials_panel to an analysis_task_surface and reuses the same active channel_surface address.</purpose>

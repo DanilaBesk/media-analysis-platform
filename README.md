@@ -36,6 +36,10 @@ bash infra/scripts/compose-smoke.sh --check-config
 docker compose -f infra/docker-compose.yml up -d --build --wait
 ```
 
+По умолчанию MinIO публикуется на `localhost:19100`, консоль MinIO - на `localhost:19101`. Это позволяет запускать stack рядом с другими локальными проектами, которые часто занимают `9000/9001`. Если нужны другие порты, задайте `MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT` и, чтобы artifact download links оставались корректными, `MINIO_PUBLIC_ENDPOINT`.
+
+Первый запуск CopperASR скачивает ONNX bundle и Silero VAD в volume `copper-asr-cache`; на медленной сети это занимает несколько минут. Compose healthcheck поэтому дает CopperASR расширенный startup window. Для более надежного первого скачивания можно задать `HF_TOKEN` в `.env`; значение прокидывается только в `copper-asr` runtime и не должно попадать в логи или документацию.
+
 3. Для deterministic smoke используйте `worker-agent-runner` fixture/test-fixture lanes из `infra/env/worker-agent-runner.env.example`. Report/deep-research AI execution больше не запускается отдельными LLM worker services.
 
 4. Для runtime/runbook follow-up используйте:
@@ -52,6 +56,9 @@ Root package entrypoint intentionally does not exist. Runtime code lives under `
 - `API_BASE_URL` — HTTP endpoint API для thin adapters.
 - `TELEGRAM_BOT_TOKEN` — обязателен для Telegram adapter.
 - `ALLOWED_USER_IDS` — optional allow-list для Telegram adapter.
+- `MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `MINIO_PUBLIC_ENDPOINT` — host-порты и внешний endpoint локального MinIO для artifact download links.
+- `API_HEALTH_START_PERIOD`, `COPPER_ASR_HEALTH_START_PERIOD` — startup windows для холодного локального запуска API и CopperASR.
+- `HF_TOKEN` — optional Hugging Face token for first CopperASR model bootstrap.
 - worker/model/storage переменные задаются package-local env examples и compose files.
 
 ## Что должно быть в системе

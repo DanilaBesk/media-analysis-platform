@@ -10,6 +10,7 @@ x-runtime-infra-depends: &runtime-infra-depends
 
 x-platform-no-proxy: &platform-no-proxy "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,mcp-server,0.250.250.0/24,fd07:b51a:cc66:f0::/64,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
 x-platform-no-proxy-httpx-safe: &platform-no-proxy-httpx-safe "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,mcp-server,0.250.250.0/24,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
+x-platform-minio-public-endpoint: &platform-minio-public-endpoint "${MINIO_PUBLIC_ENDPOINT:-http://localhost:${MINIO_HOST_PORT:-19100}}"
 
 services:
   postgres:
@@ -73,8 +74,8 @@ services:
     networks:
       - platform
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "${MINIO_HOST_PORT:-19100}:9000"
+      - "${MINIO_CONSOLE_HOST_PORT:-19101}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -112,6 +113,7 @@ services:
       - ./env/shared.env.example
       - ./env/api.env.example
     environment:
+      MINIO_PUBLIC_ENDPOINT: *platform-minio-public-endpoint
       NO_PROXY: *platform-no-proxy
       no_proxy: *platform-no-proxy
     depends_on: *runtime-infra-depends
@@ -126,6 +128,8 @@ services:
       - "8080:8080"
     volumes:
       - ..:/workspace
+      - api-go-build-cache:/root/.cache/go-build
+      - api-go-mod-cache:/go/pkg/mod
       - retained-log-volume:/var/log/platform
     healthcheck:
       test:
@@ -134,7 +138,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 10s
+      start_period: ${API_HEALTH_START_PERIOD:-4m}
 
   copper-asr:
     build:
@@ -150,6 +154,7 @@ services:
       COPPER_ASR_PORT: "8000"
       COPPER_ASR_CACHE_DIR: /var/cache/copper-asr
       COPPER_ASR_TMP_DIR: /tmp/copper-asr
+      HF_TOKEN: ${HF_TOKEN:-}
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     networks:
@@ -169,7 +174,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: ${COPPER_ASR_HEALTH_START_PERIOD:-8m}
 
   worker-transcription:
     build:
@@ -183,6 +188,7 @@ services:
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
       UV_HTTP_TIMEOUT: "600"
       COPPER_ASR_BASE_URL: http://copper-asr:8000
+      MINIO_PUBLIC_ENDPOINT: *platform-minio-public-endpoint
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     env_file:
@@ -219,6 +225,7 @@ services:
       PYTHONPATH: /workspace/workers/agent-runner/src:/workspace/workers/common/src
       WORKER_WORKSPACE_ROOT: /tmp/runtime/agent-runner
       UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
+      MINIO_PUBLIC_ENDPOINT: *platform-minio-public-endpoint
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     env_file:
@@ -333,6 +340,8 @@ volumes:
   minio-data:
   copper-asr-cache:
   copper-asr-tmp:
+  api-go-build-cache:
+  api-go-mod-cache:
   agent-runner-runtime:
   telegram-bot-runtime:
   retained-log-volume:
