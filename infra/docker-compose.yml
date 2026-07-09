@@ -154,6 +154,10 @@ services:
       COPPER_ASR_PORT: "8000"
       COPPER_ASR_CACHE_DIR: /var/cache/copper-asr
       COPPER_ASR_TMP_DIR: /tmp/copper-asr
+      COPPER_ASR_ONNX_NUM_THREADS: ${COPPER_ASR_ONNX_NUM_THREADS:-4}
+      COPPER_ASR_TORCH_NUM_THREADS: ${COPPER_ASR_TORCH_NUM_THREADS:-4}
+      COPPER_ASR_TORCH_INTEROP_THREADS: ${COPPER_ASR_TORCH_INTEROP_THREADS:-1}
+      COPPER_ASR_FFMPEG_THREADS: ${COPPER_ASR_FFMPEG_THREADS:-2}
       HF_TOKEN: ${HF_TOKEN:-}
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe

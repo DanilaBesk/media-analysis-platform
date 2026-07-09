@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Mapping
@@ -126,6 +127,48 @@ def test_transcriber_maps_copper_asr_segments(tmp_path: Path) -> None:
             "timeout_seconds": 5.0,
         }
     ]
+
+
+def test_transcriber_logs_copper_asr_processing_telemetry(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    audio = tmp_path / "voice.ogg"
+    audio.write_bytes(b"audio")
+    transport = RecordingTransport(
+        {
+            "text": "Привет",
+            "provider": "copperasr",
+            "model": "Copperside/CoppersideASR",
+            "segments": [{"timestamp": [0.0, 1.0], "text": "Привет"}],
+            "metadata": {
+                "processing": {
+                    "audio_duration_s": 1501.9595625,
+                    "audio_preparation_s": 1.4432668829686008,
+                    "vad_s": 5.327543514024001,
+                    "asr_inference_s": 87.42638859117869,
+                    "total_s": 94.5157656900119,
+                    "chunk_count": 86,
+                    "vad_segment_count": 86,
+                    "word_count": 2834,
+                }
+            },
+        }
+    )
+    transcriber = CopperAsrHttpTranscriber(CopperAsrClientConfig(), transport=transport)
+
+    caplog.set_level(logging.INFO, logger="transcriber_workers_common.copper_asr")
+    transcriber.transcribe(_source(audio), tmp_path)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "processing_total_s=94.5157656900119" in message
+        and "audio_duration_s=1501.9595625" in message
+        and "audio_preparation_s=1.4432668829686008" in message
+        and "vad_s=5.327543514024001" in message
+        and "asr_inference_s=87.42638859117869" in message
+        and "chunk_count=86" in message
+        and "vad_segment_count=86" in message
+        and "word_count=2834" in message
+        for message in messages
+    )
 
 
 def test_transcriber_builds_stable_segment_from_words_when_sentences_missing(tmp_path: Path) -> None:

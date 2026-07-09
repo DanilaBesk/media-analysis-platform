@@ -194,6 +194,9 @@ validate_static_contract() {
   require_service_block_snippet "copper-asr" 'cpus: ${COPPER_ASR_LOCAL_CPUS:-4.0}'
   require_service_block_snippet "copper-asr" "COPPER_ASR_CACHE_DIR: /var/cache/copper-asr"
   require_service_block_snippet "copper-asr" "COPPER_ASR_TMP_DIR: /tmp/copper-asr"
+  require_service_block_snippet "copper-asr" 'COPPER_ASR_ONNX_NUM_THREADS: ${COPPER_ASR_ONNX_NUM_THREADS:-4}'
+  require_service_block_snippet "copper-asr" 'COPPER_ASR_TORCH_NUM_THREADS: ${COPPER_ASR_TORCH_NUM_THREADS:-4}'
+  require_service_block_snippet "copper-asr" 'COPPER_ASR_FFMPEG_THREADS: ${COPPER_ASR_FFMPEG_THREADS:-2}'
   require_service_block_snippet "copper-asr" 'HF_TOKEN: ${HF_TOKEN:-}'
   require_service_block_snippet "copper-asr" "healthcheck:"
   require_service_block_snippet "copper-asr" '${COPPER_ASR_HEALTH_START_PERIOD:-8m}'
@@ -206,10 +209,10 @@ validate_static_contract() {
   require_service_block_snippet "worker-transcription" "condition: service_healthy"
   require_service_block_snippet "worker-transcription" "- transcriber_worker_transcription_main"
   require_file_snippet "${ROOT_DIR}/infra/env/worker-transcription.env.example" "COPPER_ASR_BASE_URL=http://copper-asr:8000"
-  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_ONNX_NUM_THREADS=2"
-  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_TORCH_NUM_THREADS=2"
+  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_ONNX_NUM_THREADS=4"
+  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_TORCH_NUM_THREADS=4"
   require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_TORCH_INTEROP_THREADS=1"
-  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_FFMPEG_THREADS=1"
+  require_file_snippet "${ROOT_DIR}/infra/env/copper-asr.env.example" "COPPER_ASR_FFMPEG_THREADS=2"
   require_file_snippet "${ROOT_DIR}/infra/images/copper-asr/Dockerfile" ".[server,cpu]"
   reject_file_snippet "${ROOT_DIR}/infra/env/worker-transcription.env.example" "WHISPER_"
   reject_file_snippet "${ROOT_DIR}/infra/images/copper-asr/Dockerfile" "faster-whisper"

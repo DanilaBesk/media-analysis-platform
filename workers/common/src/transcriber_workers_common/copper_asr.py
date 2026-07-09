@@ -192,14 +192,27 @@ class CopperAsrHttpTranscriber:
             )
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             result = _transcript_from_payload(payload, source=source, audio_path=audio_path)
+            processing = _processing_metadata(payload)
             _LOGGER.info(
-                "%s provider=%s model=%s source_id=%s elapsed_ms=%s segment_count=%s",
+                (
+                    "%s provider=%s model=%s source_id=%s elapsed_ms=%s segment_count=%s "
+                    "processing_total_s=%s audio_duration_s=%s audio_preparation_s=%s vad_s=%s "
+                    "asr_inference_s=%s chunk_count=%s vad_segment_count=%s word_count=%s"
+                ),
                 _LOG_MARKER_COPPER_ASR_TRANSCRIBE,
                 payload.get("provider", "copperasr"),
                 payload.get("model", "unknown"),
                 source.source_id,
                 elapsed_ms,
                 len(result.segments),
+                processing.get("total_s"),
+                processing.get("audio_duration_s"),
+                processing.get("audio_preparation_s"),
+                processing.get("vad_s"),
+                processing.get("asr_inference_s"),
+                processing.get("chunk_count"),
+                processing.get("vad_segment_count"),
+                processing.get("word_count"),
             )
             return result
         except CopperAsrTranscriptionError as exc:
@@ -242,6 +255,16 @@ def _transcript_from_payload(
         raw_text=raw_text,
         provider_metadata=_provider_metadata(payload),
     )
+
+
+def _processing_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    processing = metadata.get("processing")
+    if not isinstance(processing, Mapping):
+        return {}
+    return processing
 
 
 def _segments_from_payload(payload: Mapping[str, object], *, fallback_text: str) -> list[TranscriptSegment]:

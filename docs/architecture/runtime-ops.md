@@ -4,7 +4,7 @@
 
 Normal compose runtime is container-native. `copper-asr` owns ASR inference, `worker-transcription` owns transcript step orchestration and artifact publication, and report/deep-research AI execution is routed through the single `worker-agent-runner` model worker. Dedicated report/deep-research LLM worker services are no longer part of the compose topology.
 
-The local compose service caps `copper-asr` with `COPPER_ASR_LOCAL_CPUS` and defaults it to `4.0` CPUs. This is a consumer-side Mac/local-stack guardrail: it does not edit CopperASR, does not change CopperASR production defaults, and can be overridden from the shell or `.env` before running compose.
+The local compose service caps `copper-asr` with `COPPER_ASR_LOCAL_CPUS` and defaults it to `4.0` CPUs. The matching local ASR profile defaults to `COPPER_ASR_ONNX_NUM_THREADS=4`, `COPPER_ASR_TORCH_NUM_THREADS=4`, `COPPER_ASR_TORCH_INTEROP_THREADS=1`, and `COPPER_ASR_FFMPEG_THREADS=2`. This is a consumer-side Mac/local-stack guardrail: it does not edit CopperASR, does not change CopperASR production defaults, and can be overridden from the shell or `.env` before running compose.
 
 `copper-asr` mounts `COPPER_ASR_CACHE_DIR=/var/cache/copper-asr` on the `copper-asr-cache` volume. CopperASR owns the internal cache fanout for model and VAD assets, so this consumer stack does not configure provider-specific cache internals.
 

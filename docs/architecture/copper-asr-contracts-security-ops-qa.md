@@ -72,8 +72,8 @@ Result:
 - `infra-copper-asr-1` is running and healthy.
 - Local consumer resource controls are present:
   `COPPER_ASR_LOCAL_CPUS=4.0`, `COPPER_ASR_MAX_CONCURRENT_REQUESTS=1`,
-  `COPPER_ASR_ONNX_NUM_THREADS=2`, `COPPER_ASR_TORCH_NUM_THREADS=2`,
-  `COPPER_ASR_TORCH_INTEROP_THREADS=1`, and `COPPER_ASR_FFMPEG_THREADS=1`.
+  `COPPER_ASR_ONNX_NUM_THREADS=4`, `COPPER_ASR_TORCH_NUM_THREADS=4`,
+  `COPPER_ASR_TORCH_INTEROP_THREADS=1`, and `COPPER_ASR_FFMPEG_THREADS=2`.
 - The runtime image installs `external/copper-asr[server,cpu]`, keeping upstream
   ONNX VAD provider delegation on the CPU provider for this local compose
   profile.
