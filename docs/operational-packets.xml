@@ -1187,6 +1187,25 @@ Mixed selection reuse is API-owned. During analysis_run creation, the API resolv
     </verification>
   </HotfixPacket>
 
+  <HotfixPacket packet-id="media-0i1-telegram-video-note-ingress" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-GRACE">
+    <purpose>Accept forwarded Telegram round videos instead of rejecting Bot API video_note messages as unsupported input.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram Bot API round videos arrive as message.video_note, not message.video. The adapter must classify video_note as a video TelegramFileInput with stable mp4 metadata so forwarded round-video messages enter the normal media upload, current materials, selection, and transcription flow instead of producing an unsupported_message rejection.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN runtime regression proves _message_files converts video_note to kind=video with file id, file_unique_id, duration, size, message id, and video/mp4 metadata.</check>
+      <check>Full Telegram bot tests pass.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
   <HotfixPacket packet-id="media-qb3-local-telegram-bot-api-large-media-ingress" module="M-INFRA,M-TELEGRAM-ADAPTER,M-GRACE" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-RUNTIME,EV-GRACE">
     <purpose>Route compose Telegram media ingestion through a local Telegram Bot API server so large Telegram video/audio downloads do not fail on the cloud Bot API file-size limit.</purpose>
     <write-scope>

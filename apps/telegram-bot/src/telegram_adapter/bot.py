@@ -1957,6 +1957,19 @@ def _message_files(message: Message) -> Iterable[TelegramFileInput]:
             media_group_id=message.media_group_id,
             message_id=message.message_id,
         )
+    if message.video_note:
+        yield TelegramFileInput(
+            kind="video",
+            file_id=message.video_note.file_id,
+            file_unique_id=message.video_note.file_unique_id,
+            file_name="telegram-video-note.mp4",
+            content_type="video/mp4",
+            size_bytes=message.video_note.file_size,
+            duration_seconds=_telegram_media_duration_seconds(message.video_note),
+            caption=message.caption,
+            media_group_id=message.media_group_id,
+            message_id=message.message_id,
+        )
     if message.document:
         yield TelegramFileInput(
             kind="document",

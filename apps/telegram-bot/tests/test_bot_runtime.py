@@ -419,6 +419,7 @@ class FakeMessage:
         message_id: int = 101,
         photo: list[Any] | None = None,
         video: Any | None = None,
+        video_note: Any | None = None,
         document: Any | None = None,
         audio: Any | None = None,
         voice: Any | None = None,
@@ -432,6 +433,7 @@ class FakeMessage:
         self.message_id = message_id
         self.photo = photo or []
         self.video = video
+        self.video_note = video_note
         self.document = document
         self.audio = audio
         self.voice = voice
@@ -582,6 +584,30 @@ def test_message_files_preserves_telegram_voice_duration_for_status_summary() ->
     assert len(files) == 1
     assert files[0].kind == "voice"
     assert files[0].duration_seconds == 966
+
+
+def test_message_files_accepts_telegram_video_note_as_video_input() -> None:
+    message = FakeMessage(
+        video_note=SimpleNamespace(
+            file_id="round-video-file",
+            file_unique_id="round-video-unique",
+            file_size=1_234_567,
+            duration=25,
+        ),
+        message_id=555,
+    )
+
+    files = list(_message_files(message))
+
+    assert len(files) == 1
+    assert files[0].kind == "video"
+    assert files[0].file_id == "round-video-file"
+    assert files[0].file_unique_id == "round-video-unique"
+    assert files[0].file_name == "telegram-video-note.mp4"
+    assert files[0].content_type == "video/mp4"
+    assert files[0].size_bytes == 1_234_567
+    assert files[0].duration_seconds == 25
+    assert files[0].message_id == 555
 
 
 def test_load_settings_loads_dotenv_from_base_dir_when_env_is_implicit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
