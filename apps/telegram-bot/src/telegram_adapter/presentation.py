@@ -1,7 +1,7 @@
 # FILE: apps/telegram-bot/src/telegram_adapter/presentation.py
 # VERSION: 1.0.0
 # START_MODULE_CONTRACT
-# PURPOSE: Render compact Telegram-facing material summaries for the transcription card.
+# PURPOSE: Render compact Telegram-facing material summaries for the processing card.
 # SCOPE: Format file, text, and link media items into short user-facing lines and apply top-N overflow compaction.
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER

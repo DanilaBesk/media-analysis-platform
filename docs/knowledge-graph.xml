@@ -229,7 +229,7 @@
         <export-videoNoteIngress PATH="apps/telegram-bot/src/telegram_adapter/bot.py" PURPOSE="Convert Telegram Bot API video_note round-video updates into normal video TelegramFileInput records for upload and transcription." />
         <export-resultDeliveryDeduplication PURPOSE="Auto-deliver successful transcript results as Telegram document messages, then use result_artifact_surface records with valid Telegram addresses to avoid duplicate delivery after restart without mutating product lifecycle; supersede addressless stale result surfaces and retry delivery." />
         <export-reusableTranscriptDelivery PURPOSE="Before creating a new run for one uploaded media item, query API reusable transcript state and resend the matched transcript artifact for explicit duplicate user input." />
-        <contract-selectionTranscriptionCards PATH="docs/architecture/telegram-selection-transcription-cards.md" PURPOSE="Define Telegram user-facing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
+        <contract-selectionProcessingCards PATH="docs/architecture/telegram-selection-processing-cards.md" PURPOSE="Define Telegram user-facing processing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>
 

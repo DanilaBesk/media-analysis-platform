@@ -1,4 +1,4 @@
-# Telegram Selection And Transcription Card Contract
+# Telegram Selection And Processing Card Contract
 
 Status: historical; superseded by the media-7f3.9.5 Telegram target materials and run-card flow
 Beads: media-lgf
@@ -11,21 +11,21 @@ This historical document defined the Telegram presentation contract before the t
 The product goal is to make Telegram feel like a task-oriented workspace:
 
 - the user always has one current material selection to manage;
-- each transcription is a separate task card with its own lifecycle;
-- results belong to the transcription task, not to the current selection;
-- users can start a new transcription while older tasks are still running;
+- each processing run is a separate task card with its own lifecycle;
+- results belong to the processing task, not to the current selection;
+- users can start a new processing run while older tasks are still running;
 - the interface uses human product language, not internal technical terms.
 
 ## User-Facing Terms
 
 Use these terms in Telegram copy:
 
-- `Подборка` - the current mutable set of materials prepared for the next transcription.
-- `Материалы` - the list of items inside the current set or a transcription task snapshot.
-- `Транскрибация` - a concrete processing task created from a snapshot of the current materials.
-- `Файл` - the produced transcript file.
+- `Подборка` - the current mutable set of materials prepared for the next processing run.
+- `Материалы` - the list of items inside the current set or a processing task snapshot.
+- `Обработка` - a concrete processing task created from a snapshot of the current materials.
+- `Результат` - the produced output artifact; for speech-to-text work this may be a transcript file.
 - `Диагностика` - processing notes, warnings, and errors for a task.
-- `Повторить` - start another transcription from the same task snapshot or copy its materials back into a new current set, depending on implementation stage.
+- `Повторить` - start another processing run from the same task snapshot or copy its materials back into a new current set, depending on implementation stage.
 
 Do not show these terms to users:
 
@@ -46,13 +46,13 @@ Telegram has two visible card families.
 
 Product name: `Подборка`.
 
-This is the always-current control panel for materials the user is preparing now. It is mutable. It can be empty, have materials, show recent transcriptions, and launch a new transcription.
+This is the always-current control panel for materials the user is preparing now. It is mutable. It can be empty, have materials, show recent processing runs, and launch a new processing run.
 
 Implementation names should align with the API contract, for example `current_materials_panel` or `current_materials_surface`. User copy must say `Подборка`.
 
-### 2. Transcription Task Card
+### 2. Processing Task Card
 
-Product name: `Транскрибация`.
+Product name: `Обработка`.
 
 Each task card represents one immutable snapshot and one API-owned `analysis_run`. It has its own status, buttons, result file, diagnostics, and retry path.
 
@@ -63,7 +63,7 @@ Task cards are independent from the current selection card. A running task must 
 Telegram does not provide a real fixed-bottom panel. The application must emulate the "current selection is always at the bottom" behavior:
 
 - after accepted user input, render or update the current selection card as the latest visible bot message;
-- after starting a transcription, create a separate transcription task card, clear the current selection, then render the current selection card again as the latest bot message;
+- after starting a processing run, create a separate processing task card, clear the current selection, then render the current selection card again as the latest bot message;
 - after task updates, edit the task card in place when possible and avoid stealing the bottom position from the current selection card unless the user explicitly opens that task;
 - if the stored current selection card message cannot be edited, send a new current selection card and mark the old interaction surface as superseded.
 
@@ -87,9 +87,9 @@ Buttons:
 
 Rules:
 
-- `Последние` is shown only when there are recent transcription task cards.
+- `Последние` is shown only when there are recent processing task cards.
 - `Обновить` refreshes the current selection card from API state.
-- No `Транскрибировать` button is shown when there are no materials.
+- No `Обработать` button is shown when there are no materials.
 
 ## Card: Current Selection With Materials
 
@@ -102,7 +102,7 @@ Text:
 1. Голосовое из Telegram · 3.5 МБ
 2. Документ · report.pdf
 
-Последние транскрибации:
+Последние обработки:
 1. Готово · 2 материала · 14:25
 2. В работе · 1 материал · 14:28
 3. Ошибка · 4 материала · 14:31
@@ -113,7 +113,7 @@ Buttons:
 ```text
 [Материалы]
 [Очистить]
-[🎙 Транскрибировать (2)]
+[Обработать (2)]
 ```
 
 Optional recent-task navigation:
@@ -124,11 +124,11 @@ Optional recent-task navigation:
 
 Rules:
 
-- `🎙 Транскрибировать (N)` is the primary action and should be the last row.
-- The microphone marker is acceptable in Telegram because inline buttons cannot use SVG icons. Do not add decorative emoji elsewhere.
+- `Обработать (N)` is the primary action and should be the last row.
+- Do not use a microphone marker for the broad processing action; speech transcription is only one possible processing step.
 - `Материалы` opens the detailed material-management screen.
 - `Очистить` removes all current selection materials after confirmation or intentional friction if destructive-confirmation is added.
-- Recent transcription lines show at most 3 tasks.
+- Recent processing lines show at most 3 tasks.
 - Recent tasks are navigation hints, not result actions for the current selection.
 
 ## Screen: Current Selection Materials
@@ -164,12 +164,12 @@ Rules:
 - Removing a material affects only current selection membership, not historical task snapshots.
 - `К подборке` returns to the current selection card.
 
-## Card: Transcription Queued
+## Card: Processing Queued
 
 Text:
 
 ```text
-Транскрибация
+Обработка
 Материалов: 2
 
 Статус: в очереди
@@ -185,17 +185,17 @@ Buttons:
 
 Rules:
 
-- This card is created immediately after `🎙 Транскрибировать`.
+- This card is created immediately after `Обработать`.
 - The task snapshot is immutable.
 - The current selection is cleared after the task is created successfully.
 - The current selection card is rendered again after this card.
 
-## Card: Transcription Running
+## Card: Processing Running
 
 Text:
 
 ```text
-Транскрибация
+Обработка
 Материалов: 2
 
 Статус: в работе
@@ -219,14 +219,14 @@ Rules:
 
 - The watcher edits the task card in place.
 - The current selection card remains the user's active control panel.
-- Running task cards must not remove or hide `🎙 Транскрибировать` from a new current selection.
+- Running task cards must not remove or hide `Обработать` from a new current selection.
 
-## Card: Transcription Cancel Requested
+## Card: Processing Cancel Requested
 
 Text:
 
 ```text
-Транскрибация
+Обработка
 Материалов: 2
 
 Статус: отмена запрошена
@@ -244,22 +244,22 @@ Rules:
 - `Отмена` is removed after cancellation has been requested.
 - The card stays visible until the task becomes terminal.
 
-## Card: Transcription Succeeded
+## Card: Processing Succeeded
 
 Text:
 
 ```text
-Транскрибация
+Обработка
 Материалов: 2
 
 Статус: готово
-Файл транскрибации прикреплён ниже.
+Результат прикреплён ниже.
 ```
 
 Buttons:
 
 ```text
-[Файл]
+[Результат]
 [Материалы]
 [Диагностика]
 [Повторить]
@@ -268,19 +268,19 @@ Buttons:
 
 Rules:
 
-- The transcript file belongs to this task card.
-- MVP behavior: send the transcript as a separate document message near the task card, preferably as a reply to the task card if Telegram behavior is stable.
-- `Файл` resends or opens the transcript artifact.
+- The produced artifact belongs to this task card.
+- MVP behavior: send the result as a separate document message near the task card, preferably as a reply to the task card if Telegram behavior is stable.
+- `Результат` resends or opens the produced artifact.
 - `Диагностика` is shown when diagnostics exist or when the task was partial.
 - `Повторить` starts from the same immutable snapshot in the first implementation stage.
 - Do not put this result button on the current selection card.
 
-## Card: Transcription Failed
+## Card: Processing Failed
 
 Text:
 
 ```text
-Транскрибация
+Обработка
 Материалов: 2
 
 Статус: ошибка
@@ -302,12 +302,12 @@ Rules:
 - Detailed failure reasons belong in `Диагностика`.
 - The current selection remains independent and can continue collecting new materials.
 
-## Card: Transcription Canceled
+## Card: Processing Canceled
 
 Text:
 
 ```text
-Транскрибация
+Обработка
 Материалов: 2
 
 Статус: отменено
@@ -326,14 +326,14 @@ Rules:
 - Canceled tasks remain in recent history.
 - `Повторить` is available because the task snapshot still exists.
 
-## Recent Transcription Navigation
+## Recent Processing Navigation
 
-The current selection card shows at most 3 recent transcription tasks.
+The current selection card shows at most 3 recent processing tasks.
 
 Preferred text:
 
 ```text
-Последние транскрибации:
+Последние обработки:
 1. Готово · 2 материала · 14:25
 2. В работе · 1 материал · 14:28
 3. Ошибка · 4 материала · 14:31
@@ -356,13 +356,13 @@ When the user sends text, URL, file, voice, audio, video, photo, image, or docum
 2. Telegram renders the current selection card as the latest bot message.
 3. Existing task cards are not modified.
 
-### Starting Transcription
+### Starting Processing
 
-When the user taps `🎙 Транскрибировать (N)`:
+When the user taps `Обработать (N)`:
 
 1. API creates an immutable selection snapshot from the current selection.
 2. API creates an `analysis_run`.
-3. Telegram creates a transcription task card.
+3. Telegram creates a processing task card.
 4. Telegram clears the current selection through the API collection mutation path.
 5. Telegram renders the current selection card again as the latest bot message.
 6. A watcher is attached to the task card, not to the current selection card.
@@ -382,7 +382,7 @@ From the current selection card:
 
 - opens mutable current materials.
 
-From a transcription task card:
+From a processing task card:
 
 - opens immutable task snapshot materials.
 
@@ -392,7 +392,7 @@ The copy must make this distinction clear through context, not technical words.
 
 Stage 1 behavior:
 
-- `Повторить` starts a new transcription from the same immutable selection snapshot.
+- `Повторить` starts a new processing run from the same immutable selection snapshot.
 
 Future behavior:
 
@@ -410,7 +410,7 @@ Do not add this complexity in the first implementation slice unless users ask fo
 - Avoid raw IDs, versions, internal statuses, or technical nouns.
 - Use status words consistently: `в очереди`, `в работе`, `отмена запрошена`, `готово`, `ошибка`, `отменено`.
 - Destructive actions such as `Очистить` should be separated from the primary action and may require confirmation in a later stage.
-- Avoid decorative emoji. The `🎙` marker is reserved for the primary transcription launch action.
+- Avoid decorative emoji. The primary processing launch action is the plain text button `Обработать`.
 
 ## Persistent Interaction Surface State
 
@@ -428,7 +428,7 @@ Recommended interaction surface records:
   - lifecycle status;
   - updated_at.
 
-- transcription task card:
+- processing task card:
   - analysis_run_id;
   - owner scope;
   - chat id;
@@ -449,7 +449,7 @@ Goal: ship the product model without risky Telegram media-edit behavior.
 Scope:
 
 - current selection card copy and buttons;
-- separate transcription task card;
+- separate processing task card;
 - clear current selection after successful run creation;
 - watcher edits task cards;
 - result file sent as a separate document message;
@@ -459,8 +459,8 @@ Scope:
 Verification:
 
 - Telegram tests prove current selection card remains current after task creation.
-- Telegram tests prove a running task does not block a new current selection transcription.
-- Runtime smoke proves a completed task sends its transcript file and leaves current selection usable.
+- Telegram tests prove a running task does not block a new current selection processing run.
+- Runtime smoke proves a completed task sends its result file and leaves current selection usable.
 
 ### Stage 2: Durable Interaction Surfaces
 
@@ -495,7 +495,7 @@ Verification:
 
 - Do not expose internal `selection`, `analysis_run`, `artifact`, or `buffer` vocabulary to users.
 - Do not make the current selection card responsible for historical results.
-- Do not block new transcriptions solely because another task is active.
+- Do not block new processing runs solely because another task is active.
 - Do not require message links for the MVP.
 - Do not depend on Telegram fixed-bottom UI because the platform does not provide it.
 

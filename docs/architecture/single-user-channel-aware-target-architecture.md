@@ -1235,9 +1235,9 @@ Owns:
 7. Telegram updates or creates `channel_surface` with `surface_type=current_materials_panel`.
 8. User sees `Подборка`.
 
-### Start Transcription
+### Start Processing
 
-1. User taps `🎙 Транскрибировать`.
+1. User taps `Обработать`.
 2. Telegram calls create selection snapshot from inbox collection.
 3. API creates `selection_snapshot` and items.
 4. API creates `analysis_run`.

@@ -1337,7 +1337,7 @@ Successful Telegram transcription results are auto-delivered as document message
       <file-8>docs/operational-packets.xml</file-8>
     </write-scope>
     <contract-excerpt><![CDATA[
-Repeated Telegram media still creates API-owned media_asset and collection membership for the new input, but launching transcription for a one-item selection first asks the API for a reusable transcript by channel_account and stored_object identity. If a successful single-source transcription run already has an available transcript artifact, Telegram delivers that artifact as a fresh document response and clears the active collection membership without creating a new selection_snapshot or analysis_run. Existing result_artifact_surface rows continue to prevent restart duplicate delivery, but they must not suppress this explicit resend.
+Repeated Telegram media still creates API-owned media_asset and collection membership for the new input, but launching processing for a one-item selection first asks the API for a reusable transcript by channel_account and stored_object identity. If a successful single-source transcription run already has an available transcript artifact, Telegram delivers that artifact as a fresh document response and clears the active collection membership without creating a new selection_snapshot or analysis_run. Existing result_artifact_surface rows continue to prevent restart duplicate delivery, but they must not suppress this explicit resend.
     ]]></contract-excerpt>
     <verification>
       <check>API runtime regression proves reusable transcript lookup returns the existing run and artifact by stored_object identity.</check>
@@ -1347,7 +1347,7 @@ Repeated Telegram media still creates API-owned media_asset and collection membe
     </verification>
   </HotfixPacket>
   <HotfixPacket id="telegram-focused-run-cancel" status="completed" bead="media-dph">
-    <purpose>Add a Telegram cancel action for the focused active transcription run.</purpose>
+    <purpose>Add a Telegram cancel action for the focused active processing run.</purpose>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter/api_client.py</file-1>
       <file-2>apps/telegram-bot/src/telegram_adapter/gateway.py</file-2>
@@ -1367,8 +1367,8 @@ Telegram shows Отмена only for the current focused queued or running analy
       <check>Gateway and runtime regressions prove cancel is shown only for a focused active run, rejects stale focus, calls the API cancel path, and removes the cancel action after refresh.</check>
     </verification>
   </HotfixPacket>
-  <HotfixPacket id="telegram-transcription-button-emphasis" status="completed" bead="media-ffd">
-    <purpose>Make the Telegram transcription launch action visually emphasized and last in the main-card keyboard.</purpose>
+  <HotfixPacket id="telegram-processing-button-emphasis" status="completed" bead="media-ffd">
+    <purpose>Make the Telegram processing launch action visually clear and last in the main-card keyboard.</purpose>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
       <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
@@ -1376,14 +1376,14 @@ Telegram shows Отмена only for the current focused queued or running analy
       <file-4>docs/operational-packets.xml</file-4>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram main-card keyboards show management actions first and the emphasized 🎙 Транскрибация launch action as the final row, while preserving the existing run callback payload and API-owned collection/version semantics.
+Telegram main-card keyboards show management actions first and the Обработать launch action as the final row, while preserving the existing run callback payload and API-owned collection/version semantics.
     ]]></contract-excerpt>
     <verification>
-      <check>Focused Telegram keyboard regressions prove Материалы remains first and the accented transcription launch button is the last row.</check>
+      <check>Focused Telegram keyboard regressions prove Материалы remains first and the processing launch button is the last row.</check>
     </verification>
   </HotfixPacket>
   <HotfixPacket id="telegram-hide-launch-during-active-run" status="completed" bead="media-x2l">
-    <purpose>Hide duplicate Telegram transcription launch while the card is focused on an active transcription run.</purpose>
+    <purpose>Hide duplicate Telegram processing launch while the card is focused on an active processing run.</purpose>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
       <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
@@ -1391,15 +1391,15 @@ Telegram main-card keyboards show management actions first and the emphasized �
       <file-4>docs/operational-packets.xml</file-4>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram main-card keyboards must not expose a duplicate transcription launch action while the current card is focused on an active analysis_run. Background active runs are tracked separately and do not block launching a new current selection.
+Telegram main-card keyboards must not expose a duplicate processing launch action while the current card is focused on an active analysis_run. Background active runs are tracked separately and do not block launching a new current selection.
     ]]></contract-excerpt>
     <verification>
-      <check>Focused Telegram keyboard regressions prove focused active runs remove the transcription launch callback.</check>
+      <check>Focused Telegram keyboard regressions prove focused active runs remove the processing launch callback.</check>
       <check>Runtime regressions prove background active runs remain cancelable while new material selections can still launch.</check>
     </verification>
   </HotfixPacket>
   <HotfixPacket id="telegram-active-run-dead-end" status="completed" bead="media-ktn">
-    <purpose>Remove the Telegram dead-end state where an active run is visible but neither cancel nor new transcription actions are available.</purpose>
+    <purpose>Remove the Telegram dead-end state where an active run is visible but neither cancel nor new processing actions are available.</purpose>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
       <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
@@ -1409,11 +1409,11 @@ Telegram main-card keyboards must not expose a duplicate transcription launch ac
       <file-6>docs/verification-plan.xml</file-6>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram separates background active tasks from the current material selection. If the card is not focused on an active run, the latest visible active run remains cancelable and the current materials can launch a new transcription as an independent analysis_run.
+Telegram separates background active tasks from the current material selection. If the card is not focused on an active run, the latest visible active run remains cancelable and the current materials can launch a new processing run as an independent analysis_run.
     ]]></contract-excerpt>
     <verification>
-      <check>Gateway regressions prove unfocused active runs show both cancellation and the emphasized transcription launch action.</check>
-      <check>Runtime regressions prove an unfocused active run can be canceled and a new transcription can still be launched from the current material selection.</check>
+      <check>Gateway regressions prove unfocused active runs show both cancellation and the processing launch action.</check>
+      <check>Runtime regressions prove an unfocused active run can be canceled and a new processing run can still be launched from the current material selection.</check>
     </verification>
   </HotfixPacket>
   <HotfixPacket id="analysis-run-cooperative-cancellation" status="completed" bead="media-n48">
@@ -1444,7 +1444,7 @@ Public cancel requests terminally cancel unclaimed queued analysis_run records, 
       <file-2>docs/requirements.xml</file-2>
       <file-3>docs/knowledge-graph.xml</file-3>
       <file-4>docs/operational-packets.xml</file-4>
-      <file-5>docs/architecture/telegram-selection-transcription-cards.md</file-5>
+      <file-5>docs/architecture/telegram-selection-processing-cards.md</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
 Historical interaction surfaces persisted channel-scoped external presentation state through an internal API. The target architecture supersedes this wording with channel_surface and channel_account contracts.

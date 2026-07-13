@@ -422,7 +422,7 @@ def test_album_status_preview_groups_visible_media_together() -> None:
 
     text = render_status_text(gateway.restore_status(channel_identity=channel_identity()))
 
-    assert text.startswith("Транскрибация\nМатериалов: 3\n")
+    assert text.startswith("Обработка\nМатериалов: 3\n")
     assert "Фото из Telegram · 10 B" in text
     assert "clip.mp4 · 10 B" in text
     assert "brief.pdf · 8 B" in text
@@ -482,9 +482,9 @@ def test_status_surface_splits_main_card_and_materials_actions() -> None:
     )
     run = gateway.start_analysis(channel_identity=channel_identity(), selection_snapshot_id=selection["selection_snapshot_id"])
 
-    assert text.startswith("Транскрибация\nМатериалов: 2\n")
+    assert text.startswith("Обработка\nМатериалов: 2\n")
     assert [button.text for button in keyboard.inline_keyboard[0]] == ["Материалы"]
-    assert [button.text for button in keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (2)"]
+    assert [button.text for button in keyboard.inline_keyboard[-1]] == ["Обработать (2)"]
     assert run_action == "rn"
     assert _decode_callback_token(run_tokens[0]) == "inbox-1"
     assert _decode_callback_version(run_tokens[1]) == 1
@@ -519,7 +519,7 @@ def test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_pag
     status = gateway.restore_status(channel_identity=channel_identity())
     main_keyboard = build_status_keyboard(status, current_cursor=None)
     assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Материалы"]
-    assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (12)"]
+    assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["Обработать (12)"]
 
     keyboard = build_status_keyboard(status, current_cursor=None, screen="materials")
     callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
@@ -869,12 +869,12 @@ def test_main_card_hides_old_result_while_focused_run_is_active() -> None:
 
     assert "Активная задача: в работе" in text
     assert "Результат" not in button_texts
-    assert "🎙 Транскрибация (1)" not in button_texts
+    assert "Обработать (1)" not in button_texts
     assert not any(callback.startswith("ib:rn:") for callback in callbacks)
     assert all("run-old" not in callback for callback in callbacks)
 
 
-def test_main_card_separates_background_active_run_from_new_transcription_action() -> None:
+def test_main_card_separates_background_active_run_from_new_processing_action() -> None:
     api = FakeFinalApiClient()
     gateway = TelegramInboxGateway(api)
     gateway.add_text(channel_identity=channel_identity(), text="cancelable transcript candidate")
@@ -904,8 +904,8 @@ def test_main_card_separates_background_active_run_from_new_transcription_action
     action, tokens = _parse_callback_payload(callbacks_by_text["Отмена"])
     unfocused_action, unfocused_tokens = _parse_callback_payload(unfocused_callbacks_by_text["Отмена"])
 
-    assert "🎙 Транскрибация (1)" not in focused_texts
-    assert "🎙 Транскрибация (1)" in unfocused_texts
+    assert "Обработать (1)" not in focused_texts
+    assert "Обработать (1)" in unfocused_texts
     assert action == "cn"
     assert _decode_callback_token(tokens[0]) == "run-current"
     assert _decode_callback_version(tokens[1]) == 4

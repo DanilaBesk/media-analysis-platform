@@ -818,7 +818,7 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
 
     await app._handle_any_message(accepted_message)
 
-    assert accepted_message.answers[0]["text"].startswith("Транскрибация\nМатериалов: 1\nТекст: «Keep text»")
+    assert accepted_message.answers[0]["text"].startswith("Обработка\nМатериалов: 1\nТекст: «Keep text»")
     assert "Отклонено: ftp://bad.example/file" in accepted_message.answers[0]["text"]
     assert app.status_message_ids[(10, 7)] == 9001
 
@@ -1630,8 +1630,8 @@ async def test_resolve_run_start_status_keeps_queued_prefix_when_run_stays_activ
     )
 
     assert api.runs[0]["status"] == "queued"
-    assert answer_text == "Транскрибация запущена"
-    assert prefix.startswith("Транскрибация запущена.")
+    assert answer_text == "Обработка запущена"
+    assert prefix.startswith("Обработка запущена.")
     assert status.active_runs[0]["analysis_run_id"] == run["analysis_run_id"]
     assert track_run_id == run["analysis_run_id"]
     assert terminal_status is None
@@ -1655,8 +1655,8 @@ async def test_resolve_run_start_status_returns_terminal_status_after_initial_po
         run=run,
     )
 
-    assert answer_text == "Транскрибация: успешно"
-    assert prefix == "Транскрибация: успешно\n\n"
+    assert answer_text == "Обработка: успешно"
+    assert prefix == "Обработка: успешно\n\n"
     assert status.recent_runs[0]["analysis_run_id"] == run["analysis_run_id"]
     assert track_run_id == run["analysis_run_id"]
     assert terminal_status == "succeeded"
@@ -1707,7 +1707,7 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
 
     main_keyboard = build_status_keyboard(refresh_status)
     assert [button.text for button in main_keyboard.inline_keyboard[0]] == ["Материалы"]
-    assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["🎙 Транскрибация (2)"]
+    assert [button.text for button in main_keyboard.inline_keyboard[-1]] == ["Обработать (2)"]
 
     materials_callback = FakeCallback(data="ib:mt", message=base_message)
     await app._handle_status_callback(materials_callback)
@@ -1762,7 +1762,7 @@ async def test_callback_actions_cover_materials_screen_paging_remove_clear_and_b
     await app._handle_status_callback(back_callback)
     assert back_callback.answers[-1]["text"] == "Открыта главная карточка"
     assert app.page_states[(10, 7)].screen == "main"
-    assert base_message.edits[-1]["text"].startswith("Транскрибация\nМатериалов: 1")
+    assert base_message.edits[-1]["text"].startswith("Обработка\nМатериалов: 1")
 
 
 @pytest.mark.asyncio
@@ -1870,7 +1870,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert run_callback.answers[-1]["text"] == "Обработка запущена"
     assert app.page_states[(10, 7)].selection is None
     assert "Карточка обновится автоматически." in base_message.edits[-1]["text"]
 
@@ -2046,7 +2046,7 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
     cancel_callback = FakeCallback(data=cancel_callback_data, message=base_message)
     await app._handle_status_callback(cancel_callback)
 
-    assert cancel_callback.answers[-1] == {"text": "Транскрибация отменена", "show_alert": False}
+    assert cancel_callback.answers[-1] == {"text": "Обработка отменена", "show_alert": False}
     assert api.cancel_requests == [
         {
             "channel_account_id": "channel-account-1",
@@ -2065,7 +2065,7 @@ async def test_cancel_callback_cancels_focused_active_run_and_refreshes_card() -
 
 
 @pytest.mark.asyncio
-async def test_unfocused_active_run_can_be_canceled_while_new_transcription_can_start() -> None:
+async def test_unfocused_active_run_can_be_canceled_while_new_processing_can_start() -> None:
     api, gateway, app = make_app()
     gateway.add_text(channel_identity=channel_identity(), text="new independent material")
     base_message = FakeMessage()
@@ -2096,13 +2096,13 @@ async def test_unfocused_active_run_can_be_canceled_while_new_transcription_can_
     )
 
     assert "Отмена" in button_texts
-    assert "🎙 Транскрибация (1)" in button_texts
+    assert "Обработать (1)" in button_texts
 
     app._set_page_state((10, 7), status, current_cursor=None, previous_cursors=[], selection=None, screen="main", focused_run_id=None)
     cancel_callback = FakeCallback(data=cancel_callback_data, message=base_message)
     await app._handle_status_callback(cancel_callback)
 
-    assert cancel_callback.answers[-1] == {"text": "Транскрибация отменена", "show_alert": False}
+    assert cancel_callback.answers[-1] == {"text": "Обработка отменена", "show_alert": False}
     assert api.cancel_requests[-1]["analysis_run_id"] == "run-old"
     assert api.runs[0]["status"] == "canceled"
 
@@ -2112,7 +2112,7 @@ async def test_unfocused_active_run_can_be_canceled_while_new_transcription_can_
     run_callback = FakeCallback(data=run_callback_data, message=base_message)
     await app._handle_status_callback(run_callback)
 
-    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert run_callback.answers[-1]["text"] == "Обработка запущена"
     assert [run["analysis_run_id"] for run in api.runs] == ["run-old", "run-2"]
 
 
@@ -2277,7 +2277,7 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
     gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
 
     await app._handle_status_callback(run_callback)
-    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert run_callback.answers[-1]["text"] == "Обработка запущена"
 
     materials_callback = FakeCallback(data="ib:mt", message=base_message)
     await app._handle_status_callback(materials_callback)
@@ -2323,7 +2323,7 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
     )
     await app._handle_status_callback(collection_callback)
 
-    assert collection_callback.answers[-1]["text"] == "Транскрибация: успешно"
+    assert collection_callback.answers[-1]["text"] == "Обработка: успешно"
     assert api.runs[-1]["selection_snapshot_id"] == "selection-1"
     assert app.run_watch_tasks == {}
 
@@ -2339,7 +2339,7 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
     app._set_page_state((10, 7), status_for(gateway), current_cursor=None, previous_cursors=[], selection=None, screen="main")
     await app._handle_status_callback(selection_callback)
 
-    assert selection_callback.answers[-1]["text"] == "Транскрибация: успешно"
+    assert selection_callback.answers[-1]["text"] == "Обработка: успешно"
     assert api.runs[-1]["selection_snapshot_id"] == selection["selection_snapshot_id"]
     assert app.run_watch_tasks == {}
 
@@ -2464,7 +2464,7 @@ async def test_collection_callback_schedules_tracking_for_active_run() -> None:
     )
     await app._handle_status_callback(callback)
 
-    assert callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert callback.answers[-1]["text"] == "Обработка запущена"
     assert (10, 7) in app.run_watch_tasks
     app._cancel_run_status_tracking((10, 7))
     tick.set()
@@ -2526,7 +2526,7 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
     run_callback = FakeCallback(data=run_callback_data, message=base_message)
     await app._handle_status_callback(run_callback)
 
-    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert run_callback.answers[-1]["text"] == "Обработка запущена"
 
     tick.set()
     await asyncio.sleep(0)
@@ -2658,7 +2658,7 @@ async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
     run_callback = FakeCallback(data=run_callback_data, message=base_message)
     await app._handle_status_callback(run_callback)
 
-    assert run_callback.answers[-1]["text"] == "Транскрибация запущена"
+    assert run_callback.answers[-1]["text"] == "Обработка запущена"
 
     tick.set()
     await asyncio.sleep(0)

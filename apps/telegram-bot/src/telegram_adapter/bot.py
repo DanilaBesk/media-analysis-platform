@@ -564,7 +564,7 @@ class TelegramInboxApp:
                     focused_run_id=analysis_run_id,
                 )
                 await self._edit_callback_status(callback, status)
-                await callback.answer("Транскрибация отменена")
+                await callback.answer("Обработка отменена")
                 return
             if action == "dg":
                 analysis_run_id = _decode_callback_token(tokens[0])
@@ -844,8 +844,8 @@ class TelegramInboxApp:
                 status = self.gateway.restore_status(channel_identity=channel_identity)
                 return (
                     status,
-                    f"Транскрибация: {_run_status_text(status_name)}\n\n",
-                    f"Транскрибация: {_run_status_text(status_name)}",
+                    f"Обработка: {_run_status_text(status_name)}\n\n",
+                    f"Обработка: {_run_status_text(status_name)}",
                     run_id or None,
                     status_name,
                 )
@@ -854,9 +854,9 @@ class TelegramInboxApp:
         status = self.gateway.restore_status(channel_identity=channel_identity)
         return (
             status,
-            "Транскрибация запущена.\n"
+            "Обработка запущена.\n"
             "Карточка обновится автоматически.\n\n",
-            "Транскрибация запущена",
+            "Обработка запущена",
             run_id or None,
             None,
         )
@@ -1504,7 +1504,7 @@ def render_status_text(
     screen: str = "main",
 ) -> str:
     del selection
-    lines = ["Транскрибация" if screen == "main" else "Материалы"]
+    lines = ["Обработка" if screen == "main" else "Материалы"]
     lines.append(f"Материалов: {_material_count(status)}")
 
     if screen == "materials":
@@ -1632,13 +1632,13 @@ def build_status_keyboard(
     rows: list[list[InlineKeyboardButton]] = []
     collection_id = str(status.collection.get("collection_id") or "") if status.collection else ""
     collection_version = int(status.collection.get("version") or 0) if status.collection else 0
-    transcription_button: InlineKeyboardButton | None = None
+    processing_button: InlineKeyboardButton | None = None
     focused_active_run = _active_run_for_focus(status, focused_run_id)
     if screen == "main":
         material_count = _material_count(status)
         if material_count and collection_id and focused_active_run is None:
-            transcription_button = InlineKeyboardButton(
-                text=f"🎙 Транскрибация ({material_count})",
+            processing_button = InlineKeyboardButton(
+                text=f"Обработать ({material_count})",
                 callback_data=_callback_payload(
                     "rn",
                     _encode_callback_token(collection_id),
@@ -1736,8 +1736,8 @@ def build_status_keyboard(
             )
         if result_row:
             rows.append(result_row)
-        if transcription_button is not None:
-            rows.append([transcription_button])
+        if processing_button is not None:
+            rows.append([processing_button])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -2307,7 +2307,7 @@ def _start_text() -> str:
 def _help_text() -> str:
     return (
         "/inbox - показать текущее состояние входящих\n"
-        "Кнопки помогают открыть список материалов, убрать лишнее, запустить транскрибацию и открыть последний результат или диагностику."
+        "Кнопки помогают открыть список материалов, убрать лишнее, запустить обработку и открыть последний результат или диагностику."
     )
 
 
