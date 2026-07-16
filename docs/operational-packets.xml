@@ -1163,6 +1163,105 @@ Generic backend-unavailable Telegram copy must not claim inbox content has alrea
     </verification>
   </HotfixPacket>
 
+  <HotfixPacket packet-id="media-0i1-telegram-video-note-ingress" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-GRACE">
+    <purpose>Accept forwarded Telegram round videos instead of rejecting Bot API video_note messages as unsupported input.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram Bot API round videos arrive as message.video_note, not message.video. The adapter must classify video_note as a video TelegramFileInput with stable mp4 metadata so forwarded round-video messages enter the normal media upload, current materials, selection, and transcription flow instead of producing an unsupported_message rejection.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN runtime regression proves _message_files converts video_note to kind=video with file id, file_unique_id, duration, size, message id, and video/mp4 metadata.</check>
+      <check>Full Telegram bot tests pass.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-1px-telegram-current-card-burst-coalescing" module="M-TELEGRAM-ADAPTER" phase="RuntimeUX" verification-ref="EV-ADAPTERS,EV-GRACE">
+    <purpose>Prevent Telegram forwarded/sent message bursts from producing one current-materials card per accepted update.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram media_asset creation and inbox membership remain API-owned product mutations. The current_materials_panel is the durable presentation surface for the current chat/user scope. After accepted input, the adapter should edit that active panel when possible; rapid or forwarded same-scope input must be serialized around presentation refresh so only the first accepted update needs to create a Telegram message, and subsequent updates reuse the current panel address. If the stored Telegram message is unavailable or uneditable, the adapter may supersede the old channel_surface and create a replacement.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused runtime regression proves 20 concurrent accepted same-scope inbound messages produce one current_materials_panel answer and edit the same card for subsequent updates.</check>
+      <check>Full Telegram bot runtime tests pass.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-711-telegram-fresh-card-per-inbound-burst" module="M-TELEGRAM-ADAPTER" phase="RuntimeUX" verification-ref="EV-ADAPTERS,EV-GRACE">
+    <purpose>Restore visible Telegram acknowledgement for a new forwarded/sent message burst without returning to one-card-per-message spam.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The Telegram adapter must not silently edit an old current_materials_panel when a new inbound burst starts after the previous inbound burst window. The first accepted message in the new burst creates a fresh visible current_materials_panel and rebinds the active channel_surface address; subsequent same-scope accepted messages inside the burst window edit that fresh card. Explicit /inbox and callback refreshes may continue editing the active card.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN runtime regression proves a second inbound burst after an existing active card creates exactly one new visible answer and edits that new message for the rest of the burst.</check>
+      <check>Existing burst regression still proves 20 same-scope inbound messages produce one answer and 19 edits.</check>
+      <check>Full Telegram bot tests pass.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-9p3b-telegram-pending-media-ingest-card" module="M-TELEGRAM-ADAPTER" phase="RuntimeUX" verification-ref="EV-ADAPTERS,EV-GRACE">
+    <purpose>Make slow Telegram video/audio/document ingress visibly acknowledged before the file download and API upload complete.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Telegram file inputs have enough Bot API message metadata to render a provisional processing card before bytes are downloaded. That pending card is presentation-only: it must not create media_asset or channel_surface records before API ingest succeeds. After add_message_inputs accepts the hydrated files, the adapter edits the same Telegram message into the normal API-backed current_materials_panel so the user sees one continuous status surface.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN runtime regression proves a slow large-video download sends a visible pending processing card with filename and duration before download completion.</check>
+      <check>The same regression proves the pending card is edited into the normal current materials card after API ingest succeeds.</check>
+      <check>Focused neighboring Telegram runtime regressions pass.</check>
+      <check>Full Telegram bot tests pass.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
+  <HotfixPacket packet-id="media-jb7-transcription-mixed-material-transcript-assembly" module="M-WORKER-TRANSCRIPTION" phase="RuntimeUX" verification-ref="EV-WORKERS,EV-GRACE">
+    <purpose>Prevent mixed Telegram text and voice selections from losing text-origin materials in delivered transcript artifacts.</purpose>
+    <write-scope>
+      <file-1>workers/transcription/src/transcriber_worker_transcription.py</file-1>
+      <file-2>workers/transcription/tests/test_transcriber_worker_transcription.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/knowledge-graph.xml</file-4>
+      <file-5>docs/operational-packets.xml</file-5>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Transcription steps consume the immutable selection_snapshot. Text-origin selection items are already textual product inputs, so the worker must include their text directly in transcript_plain, transcript_segmented_markdown, and transcript_docx artifacts instead of recording skipped diagnostics. Speech items continue through CopperASR and are assembled into the same transcript result. Text-only selections complete without an ASR call.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN worker regression proves mixed text plus voice transcript artifacts contain both original text and ASR output.</check>
+      <check>Worker regression proves text-only selections write transcript artifacts without calling ASR.</check>
+      <check>Full transcription worker tests pass.</check>
+      <check>GRACE XML validates.</check>
+    </verification>
+  </HotfixPacket>
+
   <HotfixPacket packet-id="media-9ba-api-owned-partial-transcript-reuse" module="M-API-DOMAIN,M-API-STORAGE,M-WORKER-TRANSCRIPTION" phase="RuntimeUX" verification-ref="EV-API,EV-STORAGE,EV-WORKERS,EV-GRACE">
     <purpose>Support mixed Telegram selections where some speech materials already have transcript artifacts and other speech materials still need ASR.</purpose>
     <write-scope>
@@ -1184,25 +1283,6 @@ Mixed selection reuse is API-owned. During analysis_run creation, the API resolv
       <check>Postgres storage regression proves cross-channel transcript reuse is denied and ambiguous multi-item transcript artifacts are not matched for per-source reuse.</check>
       <check>Worker regression proves declared transcript_artifact input is resolved as text, its original media is not downloaded or sent to ASR, missing speech is transcribed, and final text order is preserved.</check>
       <check>Full API, transcription worker, and GRACE XML gates pass.</check>
-    </verification>
-  </HotfixPacket>
-
-  <HotfixPacket packet-id="media-0i1-telegram-video-note-ingress" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS,EV-GRACE">
-    <purpose>Accept forwarded Telegram round videos instead of rejecting Bot API video_note messages as unsupported input.</purpose>
-    <write-scope>
-      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
-      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
-      <file-3>docs/requirements.xml</file-3>
-      <file-4>docs/knowledge-graph.xml</file-4>
-      <file-5>docs/operational-packets.xml</file-5>
-    </write-scope>
-    <contract-excerpt><![CDATA[
-Telegram Bot API round videos arrive as message.video_note, not message.video. The adapter must classify video_note as a video TelegramFileInput with stable mp4 metadata so forwarded round-video messages enter the normal media upload, current materials, selection, and transcription flow instead of producing an unsupported_message rejection.
-    ]]></contract-excerpt>
-    <verification>
-      <check>RED/GREEN runtime regression proves _message_files converts video_note to kind=video with file id, file_unique_id, duration, size, message id, and video/mp4 metadata.</check>
-      <check>Full Telegram bot tests pass.</check>
-      <check>GRACE XML validates.</check>
     </verification>
   </HotfixPacket>
 
@@ -1233,6 +1313,7 @@ The compose runtime owns a local telegram-bot-api service with persistent telegr
       <check>Live proof with real TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_BOT_TOKEN, and cloud Bot API logOut remains required before closing media-qb3.</check>
     </verification>
   </HotfixPacket>
+
   <HotfixPacket packet-id="media-5n4-local-compose-runtime-readiness-and-port-repair" module="M-INFRA,M-GRACE" phase="RuntimeOps" verification-ref="EV-RUNTIME,EV-GRACE">
     <purpose>Allow the local compose runtime to start reliably on developer machines with occupied MinIO ports, cold API Go caches, and first-run CopperASR model bootstrap.</purpose>
     <write-scope>
@@ -1266,7 +1347,6 @@ Runtime E2E host-side artifact downloads must rewrite internal MinIO presigned U
       <check>GRACE XML validates.</check>
     </verification>
   </HotfixPacket>
-
 
   <HotfixPacket packet-id="media-cjb-channel-surface-active-address-handoff" module="M-API-HTTP M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS">
     <purpose>Prevent Telegram callback actions from surfacing backend-unavailable errors when a message changes from a current_materials_panel to an analysis_task_surface and reuses the same active channel_surface address.</purpose>

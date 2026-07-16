@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -125,12 +126,16 @@ class TelegramInboxApp:
         self.router = Router(name="telegram-inbox")
         self.locale_service = TelegramLocaleService()
         self.status_message_ids: dict[tuple[int, int | None], int] = {}
+        self.status_update_locks: dict[tuple[int, int | None], asyncio.Lock] = {}
         self.page_states: dict[tuple[int, int | None], _PageState] = {}
         self.run_status_poll_attempts = 3
         self.run_status_poll_delay_seconds = 0.2
         self.run_status_follow_attempts = 120
         self.run_status_follow_delay_seconds = 2.0
         self.run_watch_tasks: dict[tuple[int, int | None], asyncio.Task[None]] = {}
+        self.inbound_status_burst_until: dict[tuple[int, int | None], float] = {}
+        self.inbound_status_burst_window_seconds = 5.0
+        self._monotonic = time.monotonic
         self._sleep = asyncio.sleep
         self._register_handlers()
         self.dispatcher.include_router(self.router)
@@ -181,7 +186,9 @@ class TelegramInboxApp:
         if not await self._ensure_message_allowed(message):
             return
         channel_identity = self._channel_identity_from_message(message)
+        pending_status_sent = False
         try:
+            pending_status_sent = await self._send_pending_file_ingest_status(message, _message_files(message))
             files = await self._download_message_files(message)
             records = self.gateway.add_message_inputs(
                 channel_identity=channel_identity,
@@ -197,8 +204,8 @@ class TelegramInboxApp:
         await self._send_or_edit_status(
             message,
             rejected=[record for record in records if record.status == "rejected"],
-            prefer_edit=False,
             post_ingest_records=records,
+            fresh_for_inbound_burst=not pending_status_sent,
         )
 
     async def _download_message_files(self, message: Message) -> list[TelegramFileInput]:
@@ -212,6 +219,43 @@ class TelegramInboxApp:
                 raise RuntimeError("telegram_file_download_failed")
             hydrated.append(replace(file_input, content=content))
         return hydrated
+
+    async def _send_pending_file_ingest_status(
+        self,
+        message: Message,
+        file_inputs: Iterable[TelegramFileInput],
+    ) -> bool:
+        pending_files = list(file_inputs)
+        if not pending_files:
+            return False
+        key = self._scope_from_message(message).state_key
+        text = _pending_file_ingest_status_text(pending_files)
+        lock = self.status_update_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            now = self._monotonic()
+            prefer_edit = now < self.inbound_status_burst_until.get(key, 0.0)
+            self.inbound_status_burst_until[key] = now + self.inbound_status_burst_window_seconds
+            previous_message_id = self.status_message_ids.get(key) if prefer_edit else None
+            if previous_message_id is not None:
+                try:
+                    await self.bot.edit_message_text(
+                        text,
+                        chat_id=message.chat.id,
+                        message_id=previous_message_id,
+                        reply_markup=None,
+                    )
+                    self.status_message_ids[key] = previous_message_id
+                    return True
+                except TelegramBadRequest as error:
+                    if "message is not modified" in str(error).lower():
+                        self.status_message_ids[key] = previous_message_id
+                        return True
+                    self.status_message_ids.pop(key, None)
+                except Exception:
+                    self.status_message_ids.pop(key, None)
+            sent = await message.answer(text)
+            self.status_message_ids[key] = sent.message_id
+            return True
 
     async def _handle_status_callback(self, callback: CallbackQuery) -> None:
         if not await self._ensure_callback_allowed(callback):
@@ -611,7 +655,26 @@ class TelegramInboxApp:
         rejected: list[IngressRecord] | None = None,
         prefer_edit: bool = True,
         post_ingest_records: list[IngressRecord] | None = None,
+        fresh_for_inbound_burst: bool = False,
+        _lock_scope: bool = True,
     ) -> bool:
+        key = self._scope_from_message(message).state_key
+        if _lock_scope:
+            lock = self.status_update_locks.setdefault(key, asyncio.Lock())
+            async with lock:
+                return await self._send_or_edit_status(
+                    message,
+                    rejected=rejected,
+                    prefer_edit=prefer_edit,
+                    post_ingest_records=post_ingest_records,
+                    fresh_for_inbound_burst=fresh_for_inbound_burst,
+                    _lock_scope=False,
+                )
+        if fresh_for_inbound_burst:
+            now = self._monotonic()
+            if now >= self.inbound_status_burst_until.get(key, 0.0):
+                prefer_edit = False
+            self.inbound_status_burst_until[key] = now + self.inbound_status_burst_window_seconds
         channel_identity = self._channel_identity_from_message(message)
         try:
             status = self.gateway.restore_status(channel_identity=channel_identity, rejected=rejected)
@@ -623,7 +686,6 @@ class TelegramInboxApp:
                 return False
             await self._answer_message_error(message, normalized)
             return False
-        key = self._scope_from_message(message).state_key
         text = render_status_text(status)
         self._set_page_state(
             key,
@@ -937,6 +999,7 @@ class TelegramInboxApp:
         message_id: int,
         surface: JsonObject | None = None,
         ) -> None:
+        status_edit_retry_after_until = 0.0
         try:
             for _ in range(self.run_status_follow_attempts):
                 await self._sleep(self.run_status_follow_delay_seconds)
@@ -973,19 +1036,29 @@ class TelegramInboxApp:
                     focused_run_id=focused_run_id,
                 )
                 updated_state = self.page_states.get(key, _PageState())
-                await self._edit_status_message_via_bot(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    status=status,
-                    state=updated_state,
-                )
-                surface = self._persist_analysis_task_surface(
-                    channel_identity=channel_identity,
-                    analysis_run=latest,
-                    state=updated_state,
-                    chat_id=chat_id,
-                    message_id=message_id,
-                )
+                if self._monotonic() >= status_edit_retry_after_until:
+                    try:
+                        await self._edit_status_message_via_bot(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            status=status,
+                            state=updated_state,
+                        )
+                    except TelegramRetryAfter as exc:
+                        status_edit_retry_after_until = self._monotonic() + max(float(exc.retry_after), 0.0)
+                        _LOGGER.warning(
+                            "run status edit rate-limited for %s; continuing watcher retry_after=%s",
+                            analysis_run_id,
+                            exc.retry_after,
+                        )
+                    else:
+                        surface = self._persist_analysis_task_surface(
+                            channel_identity=channel_identity,
+                            analysis_run=latest,
+                            state=updated_state,
+                            chat_id=chat_id,
+                            message_id=message_id,
+                        )
                 if latest_status in TERMINAL_RUN_STATUSES:
                     return
         except asyncio.CancelledError:
@@ -1495,6 +1568,44 @@ class TelegramInboxApp:
 
 def _has_accepted_ingress(records: list[IngressRecord] | None) -> bool:
     return any(record.status == "accepted" for record in records or [])
+
+
+def _pending_file_ingest_status_text(file_inputs: list[TelegramFileInput]) -> str:
+    lines = ["Обработка", f"Материалов: {len(file_inputs)}"]
+    lines.extend(render_material_summary_lines([_pending_file_status_item(file_input) for file_input in file_inputs]))
+    lines.append("")
+    lines.append(f"Статус: получаем {_pending_file_kind_label(file_inputs)} из Telegram")
+    return "\n".join(lines)
+
+
+def _pending_file_status_item(file_input: TelegramFileInput) -> JsonObject:
+    item: JsonObject = {
+        "kind": file_input.kind,
+        "display_name": file_input.file_name or _kind_text(file_input.kind),
+        "metadata": {},
+    }
+    metadata = item["metadata"]
+    if file_input.size_bytes is not None:
+        metadata["size_bytes"] = file_input.size_bytes
+    if file_input.duration_seconds is not None:
+        metadata["duration_seconds"] = file_input.duration_seconds
+    return item
+
+
+def _pending_file_kind_label(file_inputs: list[TelegramFileInput]) -> str:
+    kinds = {file_input.kind for file_input in file_inputs}
+    if len(file_inputs) != 1 or len(kinds) != 1:
+        return "материалы"
+    kind = next(iter(kinds))
+    if kind in {"video", "video_note"}:
+        return "видео"
+    if kind in {"voice", "audio"}:
+        return "аудио"
+    if kind == "photo":
+        return "фото"
+    if kind == "document":
+        return "документ"
+    return "материал"
 
 
 def render_status_text(

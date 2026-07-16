@@ -16,6 +16,7 @@ from aiogram.exceptions import (
     TelegramBadRequest,
     TelegramForbiddenError,
     TelegramNetworkError,
+    TelegramRetryAfter,
     TelegramUnauthorizedError,
 )
 
@@ -75,7 +76,7 @@ from telegram_adapter.bot import (
 )
 from telegram_adapter.config import TelegramAdapterSettings, load_settings
 from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode, rejected_reason_text
-from telegram_adapter.gateway import InboxStatus, IngressRecord, TelegramInboxGateway
+from telegram_adapter.gateway import InboxStatus, IngressRecord, TelegramFileInput, TelegramInboxGateway
 from telegram_adapter.i18n import DEFAULT_LOCALE, TelegramTextKey
 
 
@@ -502,6 +503,14 @@ def telegram_forbidden(api_method: str, message: str) -> TelegramForbiddenError:
     return TelegramForbiddenError(method=SimpleNamespace(__api_method__=api_method), message=message)
 
 
+def telegram_retry_after(api_method: str, retry_after: int) -> TelegramRetryAfter:
+    return TelegramRetryAfter(
+        method=SimpleNamespace(__api_method__=api_method),
+        message=f"Too Many Requests: retry after {retry_after}",
+        retry_after=retry_after,
+    )
+
+
 def status_for(
     gateway: TelegramInboxGateway,
     *,
@@ -837,6 +846,59 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
 
 
 @pytest.mark.asyncio
+async def test_handle_any_message_shows_pending_card_before_large_media_download_finishes() -> None:
+    _, _, app = make_app()
+    download_started = asyncio.Event()
+    finish_download = asyncio.Event()
+    message = FakeMessage(
+        video=SimpleNamespace(
+            file_id="large-video-file",
+            file_unique_id="large-video-unique",
+            file_name="CS SEO.mp4",
+            mime_type="video/mp4",
+            file_size=180_000_000,
+            duration=2316,
+        ),
+        message_id=665,
+    )
+
+    async def slow_download_message_files(current: FakeMessage) -> list[TelegramFileInput]:
+        download_started.set()
+        await finish_download.wait()
+        return [
+            TelegramFileInput(
+                kind="video",
+                file_id=current.video.file_id,
+                file_unique_id=current.video.file_unique_id,
+                file_name=current.video.file_name,
+                content_type=current.video.mime_type,
+                content=b"video bytes",
+                size_bytes=current.video.file_size,
+                duration_seconds=current.video.duration,
+                message_id=current.message_id,
+            )
+        ]
+
+    app._download_message_files = slow_download_message_files  # type: ignore[method-assign]
+
+    task = asyncio.create_task(app._handle_any_message(message))
+    await download_started.wait()
+    await asyncio.sleep(0)
+
+    assert len(message.answers) == 1
+    assert message.answers[0]["text"].startswith("Обработка\nМатериалов: 1\nCS SEO.mp4 · 171.7 MB · 38:36")
+    assert "Статус: получаем видео из Telegram" in message.answers[0]["text"]
+    assert app.status_message_ids[(10, 7)] == 9001
+
+    finish_download.set()
+    await task
+
+    assert "Статус: получаем видео из Telegram" not in app.bot.edit_calls[-1]["text"]
+    assert app.bot.edit_calls[-1]["message_id"] == 9001
+    assert app.bot.edit_calls[-1]["text"].startswith("Обработка\nМатериалов: 1\nCS SEO.mp4 · 11 B · 38:36")
+
+
+@pytest.mark.asyncio
 async def test_handle_any_message_reports_too_large_telegram_file_as_unsupported_input(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -954,6 +1016,73 @@ async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message
     assert edit_bot.edit_calls == []
     assert app.status_message_ids[(10, 7)] == 9001
     assert "fresh inbound item" in message.answers[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_inbound_message_burst_reuses_one_current_materials_card() -> None:
+    class SlowAnswerMessage(FakeMessage):
+        async def answer(self, text: str, **kwargs) -> SimpleNamespace:
+            await asyncio.sleep(0)
+            return await super().answer(text, **kwargs)
+
+    bot = FakeBot()
+    api, _, app = make_app(bot=bot)
+    messages = [SlowAnswerMessage(text=f"forwarded note {index}", message_id=1000 + index) for index in range(20)]
+
+    await asyncio.gather(*(app._handle_any_message(message) for message in messages))
+
+    answer_count = sum(len(message.answers) for message in messages)
+    assert answer_count == 1
+    assert len(bot.edit_calls) == 19
+    assert bot.edit_calls[-1]["message_id"] == app.status_message_ids[(10, 7)]
+    assert "Материалов: 20" in bot.edit_calls[-1]["text"]
+    active_current_surfaces = [
+        surface
+        for surface in api.channel_surfaces
+        if surface["surface_type"] == "current_materials_panel" and surface["lifecycle_status"] == "active"
+    ]
+    assert len(active_current_surfaces) == 1
+    assert active_current_surfaces[0]["address"] == {"chat_id": 10, "message_id": app.status_message_ids[(10, 7)]}
+
+
+@pytest.mark.asyncio
+async def test_new_inbound_burst_creates_one_fresh_visible_card_after_previous_card() -> None:
+    class SequencedAnswerMessage(FakeMessage):
+        next_answer_id = 9001
+
+        async def answer(self, text: str, **kwargs) -> SimpleNamespace:
+            self.answers.append({"text": text, **kwargs})
+            message_id = SequencedAnswerMessage.next_answer_id
+            SequencedAnswerMessage.next_answer_id += 1
+            return SimpleNamespace(message_id=message_id)
+
+    now = 100.0
+    bot = FakeBot()
+    api, _, app = make_app(bot=bot)
+    app.inbound_status_burst_window_seconds = 10.0
+    app._monotonic = lambda: now  # type: ignore[assignment]
+
+    first_burst = [SequencedAnswerMessage(text=f"first burst {index}", message_id=1000 + index) for index in range(3)]
+    await asyncio.gather(*(app._handle_any_message(message) for message in first_burst))
+
+    assert sum(len(message.answers) for message in first_burst) == 1
+    assert app.status_message_ids[(10, 7)] == 9001
+
+    now = 200.0
+    second_burst = [SequencedAnswerMessage(text=f"second burst {index}", message_id=2000 + index) for index in range(20)]
+    await asyncio.gather(*(app._handle_any_message(message) for message in second_burst))
+
+    assert sum(len(message.answers) for message in second_burst) == 1
+    assert app.status_message_ids[(10, 7)] == 9002
+    assert bot.edit_calls[-1]["message_id"] == 9002
+    assert "Материалов: 23" in bot.edit_calls[-1]["text"]
+    active_current_surfaces = [
+        surface
+        for surface in api.channel_surfaces
+        if surface["surface_type"] == "current_materials_panel" and surface["lifecycle_status"] == "active"
+    ]
+    assert len(active_current_surfaces) == 1
+    assert active_current_surfaces[0]["address"] == {"chat_id": 10, "message_id": 9002}
 
 
 @pytest.mark.asyncio
@@ -2545,6 +2674,82 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
     assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
     assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
     assert "Результат" not in [button.text for row in app.bot.edit_calls[-1]["reply_markup"].inline_keyboard for button in row]
+
+
+@pytest.mark.asyncio
+async def test_run_watcher_continues_after_status_edit_retry_after_and_delivers_result() -> None:
+    class RetryAfterOnceBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self._raised_retry_after = False
+
+        async def edit_message_text(self, text: str, *, chat_id: int, message_id: int, reply_markup: Any) -> None:
+            if not self._raised_retry_after:
+                self._raised_retry_after = True
+                raise telegram_retry_after("editMessageText", 132)
+            await super().edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup)
+
+    api, gateway, app = make_app(page_size=1, bot=RetryAfterOnceBot())
+    gateway.add_text(channel_identity=channel_identity(), text="one")
+    base_message = FakeMessage()
+
+    run_status = status_for(gateway)
+    run_keyboard = build_status_keyboard(run_status)
+    run_callback_data = next(
+        button.callback_data
+        for row in run_keyboard.inline_keyboard
+        for button in row
+        if button.callback_data.startswith("ib:rn:")
+    )
+    app._set_page_state((10, 7), run_status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
+
+    tick = asyncio.Event()
+    original_get_run_status = gateway.get_run_status
+    statuses = iter(("queued", "queued", "succeeded"))
+
+    async def gated_sleep(_seconds: float) -> None:
+        await tick.wait()
+
+    def staged_run_status(*, channel_identity: dict[str, Any], analysis_run_id: str) -> dict[str, Any]:
+        api.runs[0]["status"] = next(statuses, "succeeded")
+        return original_get_run_status(channel_identity=channel_identity, analysis_run_id=analysis_run_id)
+
+    app._sleep = gated_sleep  # type: ignore[assignment]
+    app._download_artifact_bytes = lambda _url: b"transcript after retry-after"  # type: ignore[method-assign]
+    app.run_status_poll_attempts = 1
+    app.run_status_follow_attempts = 3
+    app.run_status_follow_delay_seconds = 0
+    gateway.get_run_status = staged_run_status  # type: ignore[method-assign]
+    api.artifacts.append(
+        {
+            "artifact_id": "artifact-1",
+            "analysis_run_id": "run-1",
+            "kind": "transcript",
+            "status": "available",
+            "content_type": "text/plain",
+            "object_key": "run-1/transcript/plain/transcript.txt",
+            "download": {"url": "https://download.test/transcript.txt"},
+        }
+    )
+    api.internal_artifact_download_access["artifact-1"] = {
+        "artifact_id": "artifact-1",
+        "filename": "transcript.txt",
+        "mime_type": "text/plain",
+        "download": {"url": "http://minio:9000/artifacts/run-1/transcript.txt"},
+    }
+
+    run_callback = FakeCallback(data=run_callback_data, message=base_message)
+    await app._handle_status_callback(run_callback)
+
+    tick.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert app.run_watch_tasks == {}
+    assert len(app.bot.send_document_calls) == 1
+    assert app.bot.send_document_calls[0]["document"].data == b"transcript after retry-after"
+    assert api.internal_artifact_download_access_requests == ["artifact-1"]
 
 
 @pytest.mark.asyncio
