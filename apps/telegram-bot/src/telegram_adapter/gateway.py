@@ -600,6 +600,31 @@ class TelegramInboxGateway:
             idempotency_key=f"telegram:surface:analysis-run:{analysis_run_id}",
         )
 
+    def find_analysis_task_surface(
+        self,
+        *,
+        channel_identity: JsonObject,
+        analysis_run_id: str,
+    ) -> JsonObject | None:
+        if not analysis_run_id.strip():
+            return None
+        account = self.resolve_channel_account(channel_identity=channel_identity)
+        page = self.api_client.list_channel_surfaces(
+            channel_account_id=str(account["channel_account_id"]),
+            subject_type="analysis_run",
+            subject_id=analysis_run_id,
+            active_only=True,
+            page_size=10,
+        )
+        return next(
+            (
+                surface
+                for surface in page.get("items") or []
+                if surface.get("surface_type") == ANALYSIS_TASK_SURFACE
+            ),
+            None,
+        )
+
     def upsert_result_artifact_surface(
         self,
         *,

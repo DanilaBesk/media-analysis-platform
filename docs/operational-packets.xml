@@ -1534,4 +1534,26 @@ Historical interaction surfaces persisted channel-scoped external presentation s
       <check>GRACE requirements and knowledge graph link the Interaction Surfaces boundary without moving it into public product vocabulary.</check>
     </verification>
   </PlanningPacket>
+  <HotfixPacket id="telegram-terminal-result-card-reanchor" status="completed" bead="media-9ruz">
+    <purpose>Keep the Telegram current materials card below each newly delivered result and eliminate stale processing-state presentation after terminal completion.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/src/telegram_adapter/gateway.py</file-2>
+      <file-3>apps/telegram-bot/tests/test_bot_runtime.py</file-3>
+      <file-4>docs/requirements.xml</file-4>
+      <file-5>docs/knowledge-graph.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+      <file-7>docs/operational-packets.xml</file-7>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Result delivery returns an explicit outcome that distinguishes a newly sent Telegram document from an already delivered artifact or a failed delivery. Only a newly sent result re-anchors the stable current_materials_panel after the document. The adapter retires the previous processing message best-effort and supersedes terminal analysis_task_surface state so restart recovery and delayed edits cannot present a completed run as active. Reused transcripts continue to deliver without creating a new analysis_run.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Reusable-transcript regression proves no new analysis_run is created, the result is delivered, and the new current card is persisted below it.</check>
+      <check>Watcher regression proves document-before-card ordering, old-card retirement, and terminal analysis_task_surface supersede.</check>
+      <check>Terminal edit-throttle regression proves the fresh final card is still sent when editing the prior processing card is rate-limited.</check>
+      <check>Restart recovery regression proves legacy terminal task surfaces are superseded and their old Telegram cards are retired without deleting the current materials panel.</check>
+      <check>Full Telegram adapter tests and GRACE XML parsing pass.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

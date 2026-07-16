@@ -368,6 +368,8 @@ class FakeBot:
         self.edit_calls: list[dict[str, Any]] = []
         self.send_message_calls: list[dict[str, Any]] = []
         self.send_document_calls: list[dict[str, Any]] = []
+        self.delete_message_calls: list[dict[str, int]] = []
+        self.outbound_call_order: list[str] = []
 
     async def set_my_commands(self, commands: list[Any], *, language_code: str) -> None:
         self.set_commands_calls.append((commands, language_code))
@@ -399,6 +401,7 @@ class FakeBot:
         scoped_error = self.send_message_errors.get(chat_id)
         if scoped_error is not None:
             raise scoped_error
+        self.outbound_call_order.append("message")
         self.send_message_calls.append({"chat_id": chat_id, "text": text, **kwargs})
         return SimpleNamespace(message_id=9003)
 
@@ -406,8 +409,13 @@ class FakeBot:
         scoped_error = self.send_document_errors.get(chat_id)
         if scoped_error is not None:
             raise scoped_error
+        self.outbound_call_order.append("document")
         self.send_document_calls.append({"chat_id": chat_id, "document": document, **kwargs})
         return SimpleNamespace(message_id=9004)
+
+    async def delete_message(self, chat_id: int, message_id: int) -> None:
+        self.outbound_call_order.append("delete")
+        self.delete_message_calls.append({"chat_id": chat_id, "message_id": message_id})
 
 
 class FakeMessage:
@@ -1406,9 +1414,10 @@ async def test_recover_current_materials_surface_ignores_missing_address_and_cha
     assert app.bot.edit_calls == []
 
 
-def test_recover_analysis_task_surface_ignores_missing_inputs_and_terminal_runs() -> None:
+@pytest.mark.asyncio
+async def test_recover_analysis_task_surface_ignores_missing_inputs_and_retires_terminal_runs() -> None:
     api, _, app = make_app(bot=FakeBot())
-    app._recover_analysis_task_surface(
+    await app._recover_analysis_task_surface(
         channel_identity=channel_identity(),
         surface={"address": {"chat_id": 10, "message_id": 5001}, "subjects": []},
     )
@@ -1421,16 +1430,27 @@ def test_recover_analysis_task_surface_ignores_missing_inputs_and_terminal_runs(
             "version": 1,
         }
     )
-    app._recover_analysis_task_surface(
+    account = api.resolve_channel_account(channel_identity=channel_identity())
+    terminal_surface = api.upsert_channel_surface(
+        channel_account_id=account["channel_account_id"],
+        surface_type="analysis_task_surface",
+        surface_key="analysis_run:run-done",
+        address={"chat_id": 10, "message_id": 5001},
+        address_fingerprint="telegram:10:5001",
+        display_state={"screen": "main"},
+        subjects=[{"subject_type": "analysis_run", "subject_id": "run-done", "subject_role": "primary"}],
+    )
+    app.status_message_ids[(10, 7)] = 6001
+
+    await app._recover_analysis_task_surface(
         channel_identity=channel_identity(),
-        surface={
-            "address": {"chat_id": 10, "message_id": 5001},
-            "display_state": {"screen": "main"},
-            "subjects": [{"subject_type": "analysis_run", "subject_id": "run-done", "subject_role": "primary"}],
-        },
+        surface=terminal_surface,
     )
 
     assert app.run_watch_tasks == {}
+    assert terminal_surface["lifecycle_status"] == "superseded"
+    assert api.supersede_surface_requests[-1]["reason"] == "analysis_run_terminal"
+    assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 5001}]
 
 
 def test_surface_persistence_helpers_cover_conflict_supersede_failure_and_missing_chat() -> None:
@@ -1538,15 +1558,16 @@ async def test_existing_result_surface_prevents_duplicate_delivery_after_restart
         subjects=[{"subject_type": "artifact", "subject_id": "artifact-1", "subject_role": "primary"}],
     )
 
-    notice, show_alert = await app._deliver_run_result(
+    delivery = await app._deliver_run_result(
         channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
         chat_id=10,
     )
 
-    assert notice == "Транскрипт уже отправлен в чат."
-    assert show_alert is True
+    assert delivery.notice == "Транскрипт уже отправлен в чат."
+    assert delivery.show_alert is True
+    assert delivery.message_id is None
     assert api.internal_artifact_download_access_requests == []
     assert app.bot.send_message_calls == []
 
@@ -1597,7 +1618,7 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
     )
     app._download_artifact_bytes = lambda _url: b"Recovered transcript."  # type: ignore[method-assign]
 
-    notice, show_alert = await app._deliver_run_result(
+    delivery = await app._deliver_run_result(
         channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
@@ -1609,8 +1630,9 @@ async def test_stale_result_surface_without_address_does_not_block_delivery() ->
         for surface in api.channel_surfaces
         if surface["lifecycle_status"] == "active"
     ]
-    assert notice == "Транскрипт отправлен файлом"
-    assert show_alert is False
+    assert delivery.notice == "Транскрипт отправлен файлом"
+    assert delivery.show_alert is False
+    assert delivery.message_id == 9004
     assert api.supersede_surface_requests[-1]["reason"] == "result_surface_missing_telegram_address"
     assert api.internal_artifact_download_access_requests == ["artifact-1"]
     assert app.bot.send_message_calls == []
@@ -1664,7 +1686,7 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
     )
     app._download_artifact_bytes = lambda _url: b"transcript that cannot be delivered"  # type: ignore[method-assign]
 
-    notice, show_alert = await app._deliver_run_result(
+    delivery = await app._deliver_run_result(
         channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
@@ -1676,8 +1698,9 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
         for surface in api.channel_surfaces
         if surface["lifecycle_status"] == "active" and surface["surface_type"] == "result_artifact_surface"
     ]
-    assert notice == "Готовый транскрипт пока недоступен."
-    assert show_alert is True
+    assert delivery.notice == "Готовый транскрипт пока недоступен."
+    assert delivery.show_alert is True
+    assert delivery.message_id is None
     assert api.supersede_surface_requests[-1]["reason"] == "result_surface_missing_telegram_address"
     assert active_result_surfaces == []
     assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
@@ -1688,14 +1711,15 @@ async def test_addressless_result_surface_failed_send_does_not_create_duplicate_
 async def test_deliver_run_result_requires_destination_and_download_url() -> None:
     api, _, app = make_app(bot=FakeBot())
 
-    notice, show_alert = await app._deliver_run_result(
+    delivery = await app._deliver_run_result(
         channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
     )
 
-    assert notice == "Готовый транскрипт пока недоступен."
-    assert show_alert is True
+    assert delivery.notice == "Готовый транскрипт пока недоступен."
+    assert delivery.show_alert is True
+    assert delivery.message_id is None
     assert api.internal_artifact_download_access_requests == []
 
     api.runs.append(
@@ -1724,15 +1748,16 @@ async def test_deliver_run_result_requires_destination_and_download_url() -> Non
         "download": {},
     }
 
-    missing_url_notice, missing_url_show_alert = await app._deliver_run_result(
+    missing_url_delivery = await app._deliver_run_result(
         channel_identity=channel_identity(),
         analysis_run_id="run-1",
         expected_version=1,
         chat_id=10,
     )
 
-    assert missing_url_notice == "Готовый транскрипт пока недоступен."
-    assert missing_url_show_alert is True
+    assert missing_url_delivery.notice == "Готовый транскрипт пока недоступен."
+    assert missing_url_delivery.show_alert is True
+    assert missing_url_delivery.message_id is None
     assert api.internal_artifact_download_access_requests == ["artifact-no-url"]
     assert app.bot.send_document_calls == []
 
@@ -2137,7 +2162,9 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
     assert api.collection["items"] == []
     assert api.items == []
     assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
-    assert "Материалов: 0" in base_message.edits[-1]["text"]
+    assert "Материалов: 0" in app.bot.send_message_calls[-1]["text"]
+    assert app.status_message_ids[(10, 7)] == 9003
+    assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 101}]
 
 
 @pytest.mark.asyncio
@@ -2564,6 +2591,21 @@ async def test_duplicate_uploaded_media_reuses_ready_transcript_without_new_run(
     assert api.collection["items"] == []
     result_surface = next(surface for surface in api.channel_surfaces if surface["surface_key"] == "artifact:artifact-reused")
     assert result_surface["address"] == {"chat_id": 10, "message_id": 9002}
+    assert app.bot.send_message_calls[-1]["chat_id"] == 10
+    assert "Материалов: 0" in app.bot.send_message_calls[-1]["text"]
+    assert app.status_message_ids[(10, 7)] == 9003
+    assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 101}]
+    current_surface = next(
+        surface
+        for surface in api.channel_surfaces
+        if surface["surface_type"] == "current_materials_panel" and surface["lifecycle_status"] == "active"
+    )
+    assert current_surface["address"] == {"chat_id": 10, "message_id": 9003}
+    assert [
+        surface
+        for surface in api.channel_surfaces
+        if surface["surface_type"] == "analysis_task_surface" and surface["lifecycle_status"] == "active"
+    ] == []
 
 
 @pytest.mark.asyncio
@@ -2662,7 +2704,11 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
     await asyncio.sleep(0)
 
     assert app.run_watch_tasks == {}
-    assert app.bot.send_message_calls == []
+    assert app.bot.outbound_call_order[:2] == ["document", "message"]
+    assert len(app.bot.send_message_calls) == 1
+    assert "Материалов: 0" in app.bot.send_message_calls[0]["text"]
+    assert app.status_message_ids[(10, 7)] == 9003
+    assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 101}]
     assert len(app.bot.send_document_calls) == 1
     assert app.bot.send_document_calls[0]["chat_id"] == 10
     assert app.bot.send_document_calls[0]["document"].filename == "transcript.txt"
@@ -2672,8 +2718,14 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
     assert api.collection["items"] == []
     assert api.items == []
     assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
-    assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
-    assert "Результат" not in [button.text for row in app.bot.edit_calls[-1]["reply_markup"].inline_keyboard for button in row]
+    assert "Результат" not in [
+        button.text
+        for row in app.bot.send_message_calls[-1]["reply_markup"].inline_keyboard
+        for button in row
+    ]
+    task_surface = next(surface for surface in api.channel_surfaces if surface["surface_type"] == "analysis_task_surface")
+    assert task_surface["lifecycle_status"] == "superseded"
+    assert api.supersede_surface_requests[-1]["reason"] == "analysis_run_terminal"
 
 
 @pytest.mark.asyncio
@@ -2750,6 +2802,9 @@ async def test_run_watcher_continues_after_status_edit_retry_after_and_delivers_
     assert len(app.bot.send_document_calls) == 1
     assert app.bot.send_document_calls[0]["document"].data == b"transcript after retry-after"
     assert api.internal_artifact_download_access_requests == ["artifact-1"]
+    assert len(app.bot.send_message_calls) == 1
+    assert "Материалов: 0" in app.bot.send_message_calls[0]["text"]
+    assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 101}]
 
 
 @pytest.mark.asyncio

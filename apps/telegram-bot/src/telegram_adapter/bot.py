@@ -90,6 +90,14 @@ class _PageState:
 class _AutoDeliveryResult:
     status: InboxStatus
     delivered: bool
+    result_message_id: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ResultDeliveryResult:
+    notice: str
+    show_alert: bool
+    message_id: int | None = None
 
 
 CALLBACK_NAMESPACE = "ib"
@@ -436,6 +444,7 @@ class TelegramInboxApp:
                     expected_version=expected_version,
                 )
                 delivered = False
+                result_message_id = None
                 if terminal_status in _AUTO_DELIVER_RUN_STATUSES and run_id:
                     run_version = _analysis_run_version(status, run_id)
                     if run_version is not None:
@@ -449,6 +458,7 @@ class TelegramInboxApp:
                         )
                         status = delivery.status
                         delivered = delivery.delivered
+                        result_message_id = delivery.result_message_id
                         if reused_transcript and delivered:
                             answer_text = "Транскрипт отправлен файлом"
                 self._set_page_state(
@@ -460,9 +470,8 @@ class TelegramInboxApp:
                     screen="main",
                     focused_run_id=None if delivered else run_id,
                 )
-                await self._edit_callback_status(callback, status, prefix=prefix)
                 task_surface = None
-                if run_id:
+                if terminal_status is None and run_id:
                     task_surface = self._persist_analysis_task_surface(
                         channel_identity=channel_identity,
                         analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
@@ -470,7 +479,6 @@ class TelegramInboxApp:
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
                     )
-                if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
                         channel_identity=channel_identity,
@@ -479,6 +487,23 @@ class TelegramInboxApp:
                         message_id=callback.message.message_id,
                         surface=task_surface,
                     )
+                elif terminal_status is not None and run_id:
+                    self._try_finish_analysis_task_surface(
+                        channel_identity=channel_identity,
+                        analysis_run_id=run_id,
+                        surface=task_surface,
+                    )
+                if result_message_id is not None:
+                    await self._reanchor_current_status_after_result(
+                        key=key,
+                        channel_identity=channel_identity,
+                        chat_id=callback.message.chat.id,
+                        previous_message_id=callback.message.message_id,
+                        status=status,
+                        prefix=prefix,
+                    )
+                else:
+                    await self._edit_callback_status(callback, status, prefix=prefix)
                 await callback.answer(answer_text)
                 return
             if action == "rn":
@@ -499,6 +524,7 @@ class TelegramInboxApp:
                     )
                     reused_transcript = False
                 delivered = False
+                result_message_id = None
                 if terminal_status in _AUTO_DELIVER_RUN_STATUSES and run_id:
                     run_version = _analysis_run_version(status, run_id)
                     if run_version is not None:
@@ -512,6 +538,7 @@ class TelegramInboxApp:
                         )
                         status = delivery.status
                         delivered = delivery.delivered
+                        result_message_id = delivery.result_message_id
                         if reused_transcript and delivered:
                             answer_text = "Транскрипт отправлен файлом"
                 self._set_page_state(
@@ -523,9 +550,8 @@ class TelegramInboxApp:
                     screen="main",
                     focused_run_id=None if delivered else run_id,
                 )
-                await self._edit_callback_status(callback, status, prefix=prefix)
                 task_surface = None
-                if run_id:
+                if terminal_status is None and run_id:
                     task_surface = self._persist_analysis_task_surface(
                         channel_identity=channel_identity,
                         analysis_run=_run_for_id(status, run_id) or {"analysis_run_id": run_id},
@@ -533,7 +559,6 @@ class TelegramInboxApp:
                         chat_id=callback.message.chat.id,
                         message_id=callback.message.message_id,
                     )
-                if terminal_status is None and run_id:
                     self._schedule_run_status_tracking(
                         key=key,
                         channel_identity=channel_identity,
@@ -542,6 +567,23 @@ class TelegramInboxApp:
                         message_id=callback.message.message_id,
                         surface=task_surface,
                     )
+                elif terminal_status is not None and run_id:
+                    self._try_finish_analysis_task_surface(
+                        channel_identity=channel_identity,
+                        analysis_run_id=run_id,
+                        surface=task_surface,
+                    )
+                if result_message_id is not None:
+                    await self._reanchor_current_status_after_result(
+                        key=key,
+                        channel_identity=channel_identity,
+                        chat_id=callback.message.chat.id,
+                        previous_message_id=callback.message.message_id,
+                        status=status,
+                        prefix=prefix,
+                    )
+                else:
+                    await self._edit_callback_status(callback, status, prefix=prefix)
                 await callback.answer(answer_text)
                 return
             if action == "ar":
@@ -550,7 +592,7 @@ class TelegramInboxApp:
                 if page_state is None or page_state.focused_run_id != analysis_run_id:
                     await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
                     return
-                result_notice, show_alert = await self._deliver_run_result(
+                result_delivery = await self._deliver_run_result(
                     channel_identity=channel_identity,
                     analysis_run_id=analysis_run_id,
                     expected_version=expected_version,
@@ -558,7 +600,7 @@ class TelegramInboxApp:
                 )
                 cursor = page_state.current_cursor if page_state else None
                 status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
-                if not show_alert and status.collection is not None:
+                if not result_delivery.show_alert and status.collection is not None:
                     status = self.gateway.clear_collection(
                         channel_identity=channel_identity,
                         collection_id=str(status.collection["collection_id"]),
@@ -574,8 +616,21 @@ class TelegramInboxApp:
                     screen=page_state.screen,
                     focused_run_id=page_state.focused_run_id,
                 )
-                await self._edit_callback_status(callback, status)
-                await callback.answer(result_notice, show_alert=show_alert)
+                if result_delivery.message_id is not None:
+                    self._try_finish_analysis_task_surface(
+                        channel_identity=channel_identity,
+                        analysis_run_id=analysis_run_id,
+                    )
+                    await self._reanchor_current_status_after_result(
+                        key=key,
+                        channel_identity=channel_identity,
+                        chat_id=callback.message.chat.id,
+                        previous_message_id=callback.message.message_id,
+                        status=status,
+                    )
+                else:
+                    await self._edit_callback_status(callback, status)
+                await callback.answer(result_delivery.notice, show_alert=result_delivery.show_alert)
                 return
             if action == "cn":
                 analysis_run_id = _decode_callback_token(tokens[0])
@@ -777,9 +832,9 @@ class TelegramInboxApp:
         failure_surface: JsonObject | None = None,
         raise_on_surface_failure: bool = False,
         allow_repeat_delivery: bool = False,
-    ) -> tuple[str, bool]:
+    ) -> _ResultDeliveryResult:
         if message is None and chat_id is None:
-            return ("Готовый транскрипт пока недоступен.", True)
+            return _ResultDeliveryResult("Готовый транскрипт пока недоступен.", True)
         artifacts = self.gateway.list_run_artifacts(
             channel_identity=channel_identity,
             analysis_run_id=analysis_run_id,
@@ -787,14 +842,14 @@ class TelegramInboxApp:
         )
         selected = _select_transcript_artifact(artifacts)
         if selected is None:
-            return ("Готовый транскрипт пока недоступен.", True)
+            return _ResultDeliveryResult("Готовый транскрипт пока недоступен.", True)
         existing_surface = self.gateway.find_result_artifact_surface(
             channel_identity=channel_identity,
             artifact_id=str(selected["artifact_id"]),
         )
         if existing_surface is not None and not allow_repeat_delivery:
             if _surface_address(existing_surface) is not None:
-                return ("Транскрипт уже отправлен в чат.", True)
+                return _ResultDeliveryResult("Транскрипт уже отправлен в чат.", True)
             self._try_supersede_channel_surface(
                 surface=existing_surface,
                 reason="result_surface_missing_telegram_address",
@@ -807,7 +862,7 @@ class TelegramInboxApp:
         access = self.gateway.api_client.get_internal_artifact_download_access(artifact_id=str(selected["artifact_id"]))
         download_url = _artifact_download_url(access)
         if not download_url:
-            return ("Готовый транскрипт пока недоступен.", True)
+            return _ResultDeliveryResult("Готовый транскрипт пока недоступен.", True)
         artifact = dict(selected)
         artifact["download"] = access.get("download")
         if access.get("mime_type"):
@@ -833,7 +888,7 @@ class TelegramInboxApp:
             )
             if raise_on_surface_failure and classification.lifecycle_reason is not None:
                 raise _TelegramSurfaceDeliveryFailure(classification.classification) from error
-            return ("Готовый транскрипт пока недоступен.", True)
+            return _ResultDeliveryResult("Готовый транскрипт пока недоступен.", True)
         self._persist_result_artifact_surface(
             channel_identity=channel_identity,
             artifact=artifact,
@@ -841,7 +896,7 @@ class TelegramInboxApp:
             message_id=sent.message_id,
             delivery_mode="document",
         )
-        return ("Транскрипт отправлен файлом", False)
+        return _ResultDeliveryResult("Транскрипт отправлен файлом", False, sent.message_id)
 
     def _download_artifact_bytes(self, download_url: str) -> bytes:
         with urlopen(download_url, timeout=30) as response:
@@ -937,7 +992,7 @@ class TelegramInboxApp:
         allow_repeat_delivery: bool = False,
     ) -> _AutoDeliveryResult:
         status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
-        result_notice, show_alert = await self._deliver_run_result(
+        result_delivery = await self._deliver_run_result(
             channel_identity=channel_identity,
             analysis_run_id=analysis_run_id,
             expected_version=expected_version,
@@ -947,9 +1002,13 @@ class TelegramInboxApp:
             raise_on_surface_failure=raise_on_surface_failure,
             allow_repeat_delivery=allow_repeat_delivery,
         )
-        delivered = (not show_alert) or result_notice == "Транскрипт уже отправлен в чат."
-        if show_alert or status.collection is None:
-            return _AutoDeliveryResult(status=status, delivered=delivered)
+        delivered = (not result_delivery.show_alert) or result_delivery.notice == "Транскрипт уже отправлен в чат."
+        if result_delivery.show_alert or status.collection is None:
+            return _AutoDeliveryResult(
+                status=status,
+                delivered=delivered,
+                result_message_id=result_delivery.message_id,
+            )
         return _AutoDeliveryResult(
             status=self.gateway.clear_collection(
                 channel_identity=channel_identity,
@@ -958,6 +1017,7 @@ class TelegramInboxApp:
                 cursor=cursor,
             ),
             delivered=delivered,
+            result_message_id=result_delivery.message_id,
         )
 
     def _schedule_run_status_tracking(
@@ -1009,6 +1069,7 @@ class TelegramInboxApp:
                 previous_cursors = page_state.previous_cursors if page_state.screen == "materials" else []
                 latest_status = str(latest.get("status") or "")
                 delivered = False
+                result_message_id = None
                 if latest_status in _AUTO_DELIVER_RUN_STATUSES:
                     delivery = await self._auto_deliver_and_maybe_clear_collection(
                         channel_identity=channel_identity,
@@ -1021,6 +1082,7 @@ class TelegramInboxApp:
                     )
                     status = delivery.status
                     delivered = delivery.delivered
+                    result_message_id = delivery.result_message_id
                 else:
                     status = self.gateway.restore_status(channel_identity=channel_identity, cursor=current_cursor)
                 focused_run_id = page_state.focused_run_id or analysis_run_id
@@ -1036,6 +1098,20 @@ class TelegramInboxApp:
                     focused_run_id=focused_run_id,
                 )
                 updated_state = self.page_states.get(key, _PageState())
+                if latest_status in TERMINAL_RUN_STATUSES and result_message_id is not None:
+                    await self._reanchor_current_status_after_result(
+                        key=key,
+                        channel_identity=channel_identity,
+                        chat_id=chat_id,
+                        previous_message_id=message_id,
+                        status=status,
+                    )
+                    self._try_finish_analysis_task_surface(
+                        channel_identity=channel_identity,
+                        analysis_run_id=analysis_run_id,
+                        surface=surface,
+                    )
+                    return
                 if self._monotonic() >= status_edit_retry_after_until:
                     try:
                         await self._edit_status_message_via_bot(
@@ -1052,14 +1128,20 @@ class TelegramInboxApp:
                             exc.retry_after,
                         )
                     else:
-                        surface = self._persist_analysis_task_surface(
-                            channel_identity=channel_identity,
-                            analysis_run=latest,
-                            state=updated_state,
-                            chat_id=chat_id,
-                            message_id=message_id,
-                        )
+                        if latest_status not in TERMINAL_RUN_STATUSES:
+                            surface = self._persist_analysis_task_surface(
+                                channel_identity=channel_identity,
+                                analysis_run=latest,
+                                state=updated_state,
+                                chat_id=chat_id,
+                                message_id=message_id,
+                            )
                 if latest_status in TERMINAL_RUN_STATUSES:
+                    self._try_finish_analysis_task_surface(
+                        channel_identity=channel_identity,
+                        analysis_run_id=analysis_run_id,
+                        surface=surface,
+                    )
                     return
         except asyncio.CancelledError:
             raise
@@ -1135,6 +1217,118 @@ class TelegramInboxApp:
             if "message is not modified" not in str(error).lower():
                 raise
 
+    async def _reanchor_current_status_after_result(
+        self,
+        *,
+        key: tuple[int, int | None],
+        channel_identity: JsonObject,
+        chat_id: int,
+        previous_message_id: int,
+        status: InboxStatus,
+        prefix: str = "",
+    ) -> bool:
+        state = self.page_states.get(key, _PageState())
+        text = prefix + render_status_text(status, selection=state.selection, screen=state.screen)
+        markup = build_status_keyboard(
+            status,
+            can_go_back=bool(state.previous_cursors),
+            current_cursor=state.current_cursor,
+            selection=state.selection,
+            screen=state.screen,
+            focused_run_id=state.focused_run_id,
+        )
+        lock = self.status_update_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            try:
+                sent = await self.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+            except TelegramAPIError as error:
+                _LOGGER.warning(
+                    "%s scope=terminal_result_reanchor operation=send chat_id=%s error_type=%s error=%s",
+                    _LOG_MARKER_TELEGRAM_SURFACE_FAILURE,
+                    chat_id,
+                    type(error).__name__,
+                    error,
+                )
+                try:
+                    await self.bot.edit_message_text(
+                        text,
+                        chat_id=chat_id,
+                        message_id=previous_message_id,
+                        reply_markup=markup,
+                    )
+                except TelegramAPIError as edit_error:
+                    _LOGGER.warning(
+                        "%s scope=terminal_result_reanchor operation=fallback_edit chat_id=%s message_id=%s "
+                        "error_type=%s error=%s",
+                        _LOG_MARKER_TELEGRAM_SURFACE_FAILURE,
+                        chat_id,
+                        previous_message_id,
+                        type(edit_error).__name__,
+                        edit_error,
+                    )
+                    return False
+                self.status_message_ids[key] = previous_message_id
+                return False
+
+            self.status_message_ids[key] = sent.message_id
+            current_surface = self._find_current_materials_surface_or_none(
+                channel_identity=channel_identity,
+                scope="terminal_result_reanchor",
+            )
+            self._try_persist_current_materials_surface(
+                channel_identity=channel_identity,
+                status=status,
+                state=state,
+                chat_id=chat_id,
+                message_id=sent.message_id,
+                surface=current_surface,
+            )
+            if previous_message_id != sent.message_id:
+                await self._retire_previous_status_message(
+                    chat_id=chat_id,
+                    message_id=previous_message_id,
+                    fallback_text=text,
+                )
+            return True
+
+    async def _retire_previous_status_message(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        fallback_text: str,
+    ) -> None:
+        try:
+            await self.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            return
+        except TelegramAPIError as error:
+            _LOGGER.warning(
+                "%s scope=terminal_result_reanchor operation=delete_previous chat_id=%s message_id=%s "
+                "error_type=%s error=%s",
+                _LOG_MARKER_TELEGRAM_SURFACE_FAILURE,
+                chat_id,
+                message_id,
+                type(error).__name__,
+                error,
+            )
+        try:
+            await self.bot.edit_message_text(
+                fallback_text,
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=None,
+            )
+        except TelegramAPIError as error:
+            _LOGGER.warning(
+                "%s scope=terminal_result_reanchor operation=retire_fallback_edit chat_id=%s message_id=%s "
+                "error_type=%s error=%s",
+                _LOG_MARKER_TELEGRAM_SURFACE_FAILURE,
+                chat_id,
+                message_id,
+                type(error).__name__,
+                error,
+            )
+
     async def _recover_active_channel_surfaces(self) -> None:
         for account in self.gateway.list_channel_accounts():
             if account.get("channel") != "telegram" or account.get("status") != "active":
@@ -1159,7 +1353,7 @@ class TelegramInboxApp:
                         )
             for surface in surfaces:
                 if surface.get("surface_type") == ANALYSIS_TASK_SURFACE:
-                    self._recover_analysis_task_surface(channel_identity=channel_identity, surface=surface)
+                    await self._recover_analysis_task_surface(channel_identity=channel_identity, surface=surface)
 
     async def _recover_current_materials_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
         address = _surface_address(surface)
@@ -1245,7 +1439,7 @@ class TelegramInboxApp:
                 surface=None,
             )
 
-    def _recover_analysis_task_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
+    async def _recover_analysis_task_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
         run_id = _surface_subject_id(surface, subject_type="analysis_run", role="primary")
         address = _surface_address(surface)
         key = _state_key_from_channel_identity(channel_identity)
@@ -1253,6 +1447,37 @@ class TelegramInboxApp:
             return
         latest = self.gateway.get_run_status(channel_identity=channel_identity, analysis_run_id=run_id)
         if str(latest.get("status") or "") not in ACTIVE_RUN_STATUSES:
+            self._try_finish_analysis_task_surface(
+                channel_identity=channel_identity,
+                analysis_run_id=run_id,
+                surface=surface,
+            )
+            chat_id, message_id = address
+            current_message_id = self.status_message_ids.get(key)
+            status = self.gateway.restore_status(channel_identity=channel_identity)
+            if current_message_id is None:
+                self._set_page_state(
+                    key,
+                    status,
+                    current_cursor=None,
+                    previous_cursors=[],
+                    selection=None,
+                    screen="main",
+                    focused_run_id=None,
+                )
+                await self._reanchor_current_status_after_result(
+                    key=key,
+                    channel_identity=channel_identity,
+                    chat_id=chat_id,
+                    previous_message_id=message_id,
+                    status=status,
+                )
+            elif current_message_id != message_id:
+                await self._retire_previous_status_message(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    fallback_text=render_status_text(status),
+                )
             return
         chat_id, message_id = address
         display_state = _surface_display_state(surface)
@@ -1374,6 +1599,36 @@ class TelegramInboxApp:
                 surface.get("channel_surface_id"),
             )
             return None
+
+    def _try_finish_analysis_task_surface(
+        self,
+        *,
+        channel_identity: JsonObject,
+        analysis_run_id: str,
+        surface: JsonObject | None = None,
+    ) -> JsonObject | None:
+        try:
+            active_surface = surface or self.gateway.find_analysis_task_surface(
+                channel_identity=channel_identity,
+                analysis_run_id=analysis_run_id,
+            )
+        except TelegramApiClientError as error:
+            _LOGGER.warning(
+                "%s scope=analysis_task_surface_terminal_lookup api_status=%s api_code=%s analysis_run_id=%s",
+                _LOG_MARKER_TELEGRAM_HANDLER_ERROR,
+                error.status,
+                error.code,
+                analysis_run_id,
+            )
+            return None
+        if active_surface is None or active_surface.get("lifecycle_status") != "active":
+            return None
+        return self._try_supersede_channel_surface(
+            surface=active_surface,
+            reason="analysis_run_terminal",
+            actor_id="telegram_adapter",
+            metadata={"analysis_run_id": analysis_run_id},
+        )
 
     def _handle_telegram_surface_error(
         self,
