@@ -1,8 +1,8 @@
 # FILE: workers/transcription/src/transcriber_worker_transcription.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 # PURPOSE: Execute claimed transcription analysis runs through the shared control-plane client while preserving the current transcript artifact contract.
-# SCOPE: Worker claim/run orchestration, ordered-input materialization, combined-media concatenation, transcript artifact persistence, cancellation checks, and packet-local helper functions for local transcription materialization.
+# SCOPE: Worker claim/run orchestration, ordered text and media materialization, combined-media concatenation, transcript artifact persistence, cancellation checks, and packet-local helper functions for local transcription materialization.
 # DEPENDS: M-WORKER-TRANSCRIPTION, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION
 # ROLE: RUNTIME
@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Introduced the transcription worker shell and extracted the local transcript orchestration path into one packet-scoped module.
+#   LAST_CHANGE: v1.1.0 - Added ordered object-backed text document materialization and transcript assembly without ASR.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
@@ -33,6 +33,7 @@ import urllib.request
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from email.message import Message
 from pathlib import Path
 from typing import Protocol
 
@@ -142,6 +143,7 @@ def runTranscription(
     workspace_dir.mkdir(parents=True, exist_ok=True)
     diagnostics: tuple[Mapping[str, object], ...] = ()
     item_outcomes: tuple[Mapping[str, object], ...] = ()
+    text_blocks: tuple[_TranscriptBlock, ...] = ()
 
     try:
         # START_BLOCK_BLOCK_EXECUTE_TRANSCRIPTION_PIPELINE
@@ -156,7 +158,11 @@ def runTranscription(
         if uses_declared_artifacts:
             source = _source_candidate_from_text_materials()
         else:
-            source, diagnostics, item_outcomes = _materialize_execution_source(execution, workspace_dir, source_store)
+            source, diagnostics, item_outcomes, text_blocks = _materialize_execution_source(
+                execution,
+                workspace_dir,
+                source_store,
+            )
             if diagnostics:
                 api_client.register_diagnostics(
                     execution.analysis_run_id,
@@ -195,7 +201,7 @@ def runTranscription(
             artifacts = _write_transcript_artifacts(workspace_dir, transcript_result)
         elif source.local_path is None and source.url is None:
             materialized_source = source
-            transcript_result = _text_materials_transcript(execution, item_outcomes)
+            transcript_result = _text_materials_transcript(text_blocks)
             artifacts = _write_transcript_artifacts(workspace_dir, transcript_result)
         else:
             materialized_source, transcript_result, artifacts = process_local_transcription(
@@ -203,7 +209,12 @@ def runTranscription(
                 workspace_dir=workspace_dir,
                 transcriber=transcriber,
             )
-            transcript_result = _include_text_materials_in_transcript(execution, item_outcomes, transcript_result)
+            transcript_result = _include_text_materials_in_transcript(
+                execution,
+                item_outcomes,
+                transcript_result,
+                text_blocks,
+            )
             artifacts = _write_transcript_artifacts(workspace_dir, transcript_result)
 
         _check_cancellation(api_client, execution)
@@ -353,19 +364,51 @@ def _materialize_execution_source(
     execution: ClaimedAnalysisRunStep,
     workspace_dir: Path,
     source_store: SourceObjectStore,
-) -> tuple[SourceCandidate, tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
+) -> tuple[
+    SourceCandidate,
+    tuple[Mapping[str, object], ...],
+    tuple[Mapping[str, object], ...],
+    tuple[_TranscriptBlock, ...],
+]:
     items = tuple(sorted(execution.selection_snapshot.items, key=lambda item: item.position))
     supports_direct_url = len(items) == 1
     materialized_inputs: list[tuple[SelectionItemMaterialization, Path]] = []
     diagnostics: list[Mapping[str, object]] = []
     item_outcomes: list[Mapping[str, object]] = []
+    text_blocks: list[_TranscriptBlock] = []
     for item in items:
         descriptor = SelectionItemMaterialization.from_selection_item(item)
         if supports_direct_url and _is_supported_direct_youtube_descriptor(descriptor):
             item_outcomes.append(_item_outcome(execution, descriptor, "succeeded"))
-            return _source_candidate_from_supported_url(descriptor), tuple(diagnostics), tuple(item_outcomes)
+            return (
+                _source_candidate_from_supported_url(descriptor),
+                tuple(diagnostics),
+                tuple(item_outcomes),
+                tuple(text_blocks),
+            )
         if _is_text_descriptor(descriptor):
+            text = _text_material_content(descriptor)
+            if text:
+                text_blocks.append(_TranscriptBlock(descriptor.position, text))
             item_outcomes.append(_item_outcome(execution, descriptor, "succeeded"))
+            continue
+        if _is_textual_object_descriptor(descriptor):
+            try:
+                local_path, text = _materialize_textual_object(descriptor, workspace_dir, source_store)
+            except SourceMaterializationError as exc:
+                diagnostic = _failed_selection_item_diagnostic(execution, descriptor, message=str(exc))
+                diagnostics.append(diagnostic)
+                item_outcomes.append(
+                    _item_outcome(
+                        execution,
+                        descriptor,
+                        "failed",
+                        diagnostic_ids=(str(diagnostic["diagnostic_id"]),),
+                    )
+                )
+                continue
+            text_blocks.append(_TranscriptBlock(descriptor.position, text))
+            item_outcomes.append(_item_outcome(execution, descriptor, "succeeded", materialized_path=local_path))
             continue
         if descriptor.is_object_backed and _is_transcribable_descriptor(descriptor):
             input_dir = workspace_dir / "inputs" / f"{descriptor.position:02d}-{descriptor.source_id}"
@@ -392,7 +435,12 @@ def _materialize_execution_source(
 
     if not materialized_inputs:
         if any(item.get("outcome") == "succeeded" for item in item_outcomes):
-            return _source_candidate_from_text_materials(), tuple(diagnostics), tuple(item_outcomes)
+            return (
+                _source_candidate_from_text_materials(),
+                tuple(diagnostics),
+                tuple(item_outcomes),
+                tuple(text_blocks),
+            )
         error_message = "selection contains no object-backed media items that can be transcribed"
         object_key_failures = [
             diagnostic["message"]
@@ -420,8 +468,14 @@ def _materialize_execution_source(
             _source_candidate_from_materialized_path(materialization, local_path),
             tuple(diagnostics),
             tuple(item_outcomes),
+            tuple(text_blocks),
         )
-    return _materialize_combined_source(materialized_inputs, workspace_dir), tuple(diagnostics), tuple(item_outcomes)
+    return (
+        _materialize_combined_source(materialized_inputs, workspace_dir),
+        tuple(diagnostics),
+        tuple(item_outcomes),
+        tuple(text_blocks),
+    )
 
 
 def _has_declared_transcript_artifact_inputs(execution: ClaimedAnalysisRunStep) -> bool:
@@ -474,6 +528,26 @@ def _transcribe_declared_step_inputs(
             if text:
                 blocks.append(_TranscriptBlock(step_input.position, text))
             item_outcomes.append(_item_outcome(execution, materialization, "succeeded"))
+            continue
+        if _is_textual_object_descriptor(materialization):
+            try:
+                local_path, text = _materialize_textual_object(materialization, workspace_dir, source_store)
+            except SourceMaterializationError as exc:
+                diagnostic = _failed_selection_item_diagnostic(execution, materialization, message=str(exc))
+                diagnostics.append(diagnostic)
+                item_outcomes.append(
+                    _item_outcome(
+                        execution,
+                        materialization,
+                        "failed",
+                        diagnostic_ids=(str(diagnostic["diagnostic_id"]),),
+                    )
+                )
+                continue
+            blocks.append(_TranscriptBlock(step_input.position, text))
+            item_outcomes.append(
+                _item_outcome(execution, materialization, "succeeded", materialized_path=local_path)
+            )
             continue
 
         source: SourceCandidate | None = None
@@ -570,23 +644,19 @@ def _include_text_materials_in_transcript(
     execution: ClaimedAnalysisRunStep,
     item_outcomes: tuple[Mapping[str, object], ...],
     transcript_result: TranscriptResult,
+    text_blocks: tuple[_TranscriptBlock, ...],
 ) -> TranscriptResult:
     succeeded_item_ids = {
         str(item.get("selection_snapshot_item_id") or "")
         for item in item_outcomes
         if item.get("outcome") == "succeeded"
     }
-    blocks: list[tuple[int, str]] = []
+    blocks = [(block.position, block.text) for block in text_blocks]
     speech_position: int | None = None
     for item in sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position):
         if str(item.selection_snapshot_item_id) not in succeeded_item_ids:
             continue
         materialization = SelectionItemMaterialization.from_selection_item(item)
-        if _is_text_descriptor(materialization):
-            text = _text_material_content(materialization)
-            if text:
-                blocks.append((materialization.position, text))
-            continue
         if speech_position is None and _is_transcribable_descriptor(materialization):
             speech_position = materialization.position
     if not blocks:
@@ -598,30 +668,14 @@ def _include_text_materials_in_transcript(
 
 
 def _text_materials_transcript(
-    execution: ClaimedAnalysisRunStep,
-    item_outcomes: tuple[Mapping[str, object], ...],
+    text_blocks: tuple[_TranscriptBlock, ...],
 ) -> TranscriptResult:
-    succeeded_item_ids = {
-        str(item.get("selection_snapshot_item_id") or "")
-        for item in item_outcomes
-        if item.get("outcome") == "succeeded"
-    }
-    text_blocks: list[str] = []
-    for item in sorted(execution.selection_snapshot.items, key=lambda selection_item: selection_item.position):
-        if str(item.selection_snapshot_item_id) not in succeeded_item_ids:
-            continue
-        materialization = SelectionItemMaterialization.from_selection_item(item)
-        if not _is_text_descriptor(materialization):
-            continue
-        text = _text_material_content(materialization)
-        if text:
-            text_blocks.append(text)
     return TranscriptResult(
         title="Текстовые материалы",
         source_label="Text materials",
         segments=[],
         language="und",
-        raw_text="\n\n".join(text_blocks).strip(),
+        raw_text="\n\n".join(block.text for block in sorted(text_blocks, key=lambda block: block.position)).strip(),
     )
 
 
@@ -765,6 +819,45 @@ def _materialize_single_selection_item(
     )
 
 
+def _materialize_textual_object(
+    materialization: SelectionItemMaterialization,
+    workspace_dir: Path,
+    source_store: SourceObjectStore,
+) -> tuple[Path, str]:
+    input_dir = workspace_dir / "inputs" / f"{materialization.position:02d}-{materialization.source_id}"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    local_path = _download_materialization_descriptor(materialization, input_dir, source_store)
+    return local_path, _read_textual_object(local_path, materialization.mime_type)
+
+
+def _read_textual_object(local_path: Path, mime_type: str | None) -> str:
+    try:
+        data = local_path.read_bytes()
+    except OSError as exc:
+        raise SourceMaterializationError(f"could not read text document: {exc}") from exc
+    encoding = _text_encoding(mime_type, data)
+    try:
+        text = data.decode(encoding)
+    except (LookupError, UnicodeDecodeError) as exc:
+        encoding_label = "UTF-8" if encoding == "utf-8-sig" else encoding
+        raise SourceMaterializationError(f"could not decode text document as {encoding_label}") from exc
+    if "\x00" in text:
+        raise SourceMaterializationError("text document contains NUL bytes")
+    text = text.strip()
+    if not text:
+        raise SourceMaterializationError("text document contains no text")
+    return text
+
+
+def _text_encoding(mime_type: str | None, data: bytes) -> str:
+    _, charset = _content_type_parts(mime_type)
+    if charset:
+        return "utf-8-sig" if charset.casefold().replace("_", "-") == "utf-8" else charset
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    return "utf-8-sig"
+
+
 def _materialize_combined_source(
     materialized_inputs: list[tuple[SelectionItemMaterialization, Path]],
     workspace_dir: Path,
@@ -859,6 +952,23 @@ def _is_transcribable_descriptor(materialization: SelectionItemMaterialization) 
 
 def _is_text_descriptor(materialization: SelectionItemMaterialization) -> bool:
     return materialization.origin_type == "text" or materialization.media_kind == "text"
+
+
+def _is_textual_object_descriptor(materialization: SelectionItemMaterialization) -> bool:
+    media_type, _ = _content_type_parts(materialization.mime_type)
+    return (
+        materialization.is_object_backed
+        and materialization.media_kind == "document"
+        and media_type.startswith("text/")
+    )
+
+
+def _content_type_parts(mime_type: str | None) -> tuple[str, str | None]:
+    if not mime_type:
+        return "", None
+    header = Message()
+    header["Content-Type"] = mime_type
+    return header.get_content_type().casefold(), header.get_content_charset()
 
 
 def _text_material_content(materialization: SelectionItemMaterialization) -> str:

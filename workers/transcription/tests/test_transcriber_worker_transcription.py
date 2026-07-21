@@ -1,8 +1,8 @@
 # FILE: workers/transcription/tests/test_transcriber_worker_transcription.py
-# VERSION: 1.0.0
+# VERSION: 1.1.0
 # START_MODULE_CONTRACT
 # PURPOSE: Verify the dedicated transcription worker claims analysis runs through the shared control plane, preserves transcript artifacts, and handles ordered combined inputs plus cancellation deterministically.
-# SCOPE: Success finalization ordering, combined-media concatenation, cancellation checkpoints, local extraction reuse, and deterministic failure classification.
+# SCOPE: Success finalization ordering, combined-media and textual-object assembly, cancellation checkpoints, local extraction reuse, and deterministic failure classification.
 # DEPENDS: M-WORKER-TRANSCRIPTION, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION
 # ROLE: TEST
@@ -10,7 +10,7 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.0.0 - Added packet-local verification for the transcription worker shell and extracted local orchestration path.
+#   LAST_CHANGE: v1.1.0 - Added mixed inline and object-backed text document assembly regressions.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
@@ -701,6 +701,95 @@ def test_run_transcription_includes_text_materials_in_transcript_artifacts(
     assert manifest["summary"] == {"included_count": 2, "skipped_count": 0, "failed_count": 0}
 
 
+def test_run_transcription_includes_uploaded_plain_text_document_in_selection_order_without_asr(
+    tmp_path: Path,
+) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-note-a",
+            source_kind="text",
+            display_name="Manual note A",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-note-b",
+            source_kind="text",
+            display_name="Manual note B",
+        ),
+        OrderedWorkerInput(
+            position=2,
+            source_id="source-transcript",
+            source_kind="uploaded_file",
+            display_name="transcript.txt",
+            original_filename="transcript.txt",
+            object_key="uploads/transcript.txt",
+        ),
+    )
+    api_client = RecordingApiClient(execution)
+    source_store = FakeSourceStore({"uploads/transcript.txt": "Текст из файла".encode()})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert result.artifacts.text_path.read_text(encoding="utf-8") == (
+        "source-note-a\n\nsource-note-b\n\nТекст из файла\n"
+    )
+    assert [call[0] for call in source_store.calls] == ["uploads/transcript.txt"]
+    assert transcriber.calls == []
+    assert result.diagnostics == ()
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded", "succeeded"]
+    assert manifest["summary"] == {"included_count": 3, "skipped_count": 0, "failed_count": 0}
+    assert api_client.calls[-1][1]["outcome"] == "succeeded"
+
+
+def test_run_transcription_marks_unreadable_plain_text_document_as_failed_item(tmp_path: Path) -> None:
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-note",
+            source_kind="text",
+            display_name="Manual note",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-unreadable",
+            source_kind="uploaded_file",
+            display_name="broken.txt",
+            original_filename="broken.txt",
+            object_key="uploads/broken.txt",
+        ),
+    )
+    api_client = RecordingApiClient(execution)
+    artifact_store = InMemoryArtifactStore()
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=FakeSourceStore({"uploads/broken.txt": b"\xff\xff\xff"}),
+        artifact_store=artifact_store,
+        transcriber=RecordingTranscriber(),
+    )
+
+    assert result.artifacts.text_path.read_text(encoding="utf-8") == "source-note\n"
+    assert len(result.diagnostics) == 1
+    assert "decode text document as UTF-8" in str(result.diagnostics[0]["message"])
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "failed"]
+    assert manifest["summary"] == {"included_count": 1, "skipped_count": 0, "failed_count": 1}
+    assert api_client.calls[-1][1]["outcome"] == "partially_succeeded"
+
+
 def test_run_transcription_text_only_selection_writes_transcript_without_asr(tmp_path: Path) -> None:
     execution = _build_execution(
         OrderedWorkerInput(
@@ -827,6 +916,72 @@ def test_run_transcription_reuses_declared_transcript_artifact_and_transcribes_o
     assert transcript_text.index("Hello world") < transcript_text.index("source-note")
     manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
     assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded", "succeeded"]
+
+
+def test_run_transcription_assembles_declared_transcript_artifact_with_uploaded_text_document(
+    tmp_path: Path,
+) -> None:
+    reused_transcript = tmp_path / "reused-transcript.txt"
+    reused_transcript.write_text("Reusable speech transcript", encoding="utf-8")
+    execution = _build_execution(
+        OrderedWorkerInput(
+            position=0,
+            source_id="source-reused",
+            source_kind="uploaded_file",
+            display_name="Reused voice",
+            original_filename="reused.ogg",
+            object_key="uploads/reused.ogg",
+        ),
+        OrderedWorkerInput(
+            position=1,
+            source_id="source-document",
+            source_kind="uploaded_file",
+            display_name="notes.txt",
+            original_filename="notes.txt",
+            object_key="uploads/notes.txt",
+        ),
+        step_inputs=(
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-reused",
+                analysis_run_step_id="exec-1",
+                input_kind="transcript_artifact",
+                position=0,
+                required=True,
+                selection_snapshot_item_id="selection-snapshot-item-0",
+                artifact_id="artifact-reused",
+            ),
+            AnalysisRunStepInput(
+                analysis_run_step_input_id="input-document",
+                analysis_run_step_id="exec-1",
+                input_kind="selection_snapshot_item",
+                position=1,
+                required=True,
+                selection_snapshot_item_id="selection-snapshot-item-1",
+            ),
+        ),
+    )
+    api_client = RecordingApiClient(execution, artifact_downloads={"artifact-reused": reused_transcript})
+    source_store = FakeSourceStore({"uploads/notes.txt": b"Document notes"})
+    artifact_store = InMemoryArtifactStore()
+    transcriber = RecordingTranscriber()
+
+    result = runTranscription(
+        execution.analysis_run_id,
+        workspace_root=tmp_path,
+        api_client=api_client,
+        source_store=source_store,
+        artifact_store=artifact_store,
+        transcriber=transcriber,
+    )
+
+    assert result.artifacts.text_path.read_text(encoding="utf-8") == (
+        "Reusable speech transcript\n\nDocument notes\n"
+    )
+    assert [call[0] for call in source_store.calls] == ["uploads/notes.txt"]
+    assert transcriber.calls == []
+    assert result.diagnostics == ()
+    manifest = _artifact_json(artifact_store, "run/manifest/run-manifest.json")
+    assert [item["outcome"] for item in manifest["items"]] == ["succeeded", "succeeded"]
 
 
 def test_run_transcription_uses_v2_materialization_without_filename_heuristics(
@@ -1617,9 +1772,13 @@ def _selection_item_from_ordered_input(ordered_input: OrderedWorkerInput) -> Sel
         kind = "url"
     elif (ordered_input.original_filename or "").endswith(".mp4"):
         kind = "video"
+    elif (ordered_input.original_filename or "").endswith(".txt"):
+        kind = "document"
     else:
         kind = "audio"
-    mime_type = "video/mp4" if kind == "video" else "audio/ogg"
+    mime_type = (
+        "video/mp4" if kind == "video" else "text/plain" if kind == "document" else "audio/ogg"
+    )
     target_origin_type = "telegram_file" if origin_type == "object" else origin_type
     origin_snapshot = (
         {"origin_type": "text", "text": f"text:{ordered_input.source_id}"}

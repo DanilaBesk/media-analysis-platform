@@ -136,7 +136,7 @@
     </Gate>
     <Gate id="EV-WORKERS">
       <description>Workers execute only through analysis_run_step contracts and immutable declared inputs.</description>
-      <required-evidence>Worker-common, transcription, and agent-runner tests pass for step_kind queue polling, step claim/progress/finalize, sealed selection_snapshot materialization, transcript/text-corpus artifact input materialization, diagnostics, and cancellation.</required-evidence>
+      <required-evidence>Worker-common, transcription, and agent-runner tests pass for step_kind queue polling, step claim/progress/finalize, sealed selection_snapshot materialization, ordered inline and object-backed text document assembly, transcript/text-corpus artifact input materialization, diagnostics, and cancellation. Mixed text messages plus a text/* document must produce one ordered transcript without sending the document to CopperASR; unreadable textual objects must produce an explicit failed item diagnostic.</required-evidence>
     </Gate>
     <Gate id="EV-ASR-RUNTIME">
       <description>CopperASR is the only active transcription backend.</description>

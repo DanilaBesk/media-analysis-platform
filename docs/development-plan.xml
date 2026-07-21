@@ -168,6 +168,7 @@
     <step id="media-b8s.1.6">Transcription publishes CopperASR provider metadata only inside run_manifest/service artifacts while transcript_plain, transcript_segmented_markdown, and transcript_docx remain user-facing content artifacts.</step>
     <step id="media-b8s.1.7">Compose starts a dedicated copper-asr service and passes COPPER_ASR_BASE_URL to the transcription worker.</step>
     <step id="media-b8s.1.9">Removed legacy ASR runtime modules, dependency entries, env switches, model cache volumes, and fallback tests from active paths.</step>
+    <step id="media-kzwf">Treat object-backed text documents as ordered transcript inputs: materialize and decode them through the transcription worker without CopperASR, preserve item outcomes, and combine them with inline text and speech output.</step>
   </WorkerPlan>
 
   <AdapterPlan>
@@ -271,6 +272,7 @@
     <completed bead="media-b8s.3.3">Runtime soak/full compose QA closed after live-smoke, Telegram/API/Web/MCP/failure E2E, long-voice benchmark, startup log scans, and stale-surface recovery fix proof.</completed>
     <completed bead="media-b8s.3.4">Final readiness packet is published in docs/architecture/copper-asr-final-readiness-packet.md with verification commands, runtime proof, Beads closure, residual risks, and commit readiness context.</completed>
     <completed bead="media-b8s">Root CopperASR migration is complete after implementation, coverage, QA, final readiness, and runtime proof.</completed>
+    <completed bead="media-kzwf">Transcription now assembles inline text and object-backed text/* documents in immutable selection order without ASR; live compose run bb8c3046-3a41-49ba-b868-30ce5119d4fe completed with three included items, no skips, no failures, and no diagnostics.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>

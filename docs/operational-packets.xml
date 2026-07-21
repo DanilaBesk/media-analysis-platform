@@ -1556,4 +1556,26 @@ Result delivery returns an explicit outcome that distinguishes a newly sent Tele
       <check>Full Telegram adapter tests and GRACE XML parsing pass.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="transcription-object-backed-text-assembly" status="completed" bead="media-kzwf">
+    <purpose>Include uploaded text files in the same ordered processing result as Telegram text messages and speech materials.</purpose>
+    <write-scope>
+      <file-1>workers/transcription/src/transcriber_worker_transcription.py</file-1>
+      <file-2>workers/transcription/tests/test_transcriber_worker_transcription.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/technology.xml</file-4>
+      <file-5>docs/development-plan.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+      <file-7>docs/knowledge-graph.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+Object-backed document inputs with a text/* media type are textual materials, not ASR sources. The transcription worker downloads each textual object through the same SourceObjectStore boundary used by media inputs, decodes it deterministically, and assembles its content with inline text, reusable transcripts, and speech output in immutable selection_snapshot order. Text documents are never sent to CopperASR. Download, decode, or empty-content failures remain explicit per-item failures rather than silent omissions.
+    ]]></contract-excerpt>
+    <verification>
+      <check>RED/GREEN worker regression proves two inline messages plus an uploaded text/plain document produce one transcript in selection order.</check>
+      <check>The textual object is fetched exactly once, CopperASR is not called for text-only material, and every item has a succeeded manifest outcome.</check>
+      <check>Unreadable textual object regression proves an explicit failed item diagnostic and no silent partial transcript.</check>
+      <check>Full repository tests and GRACE XML parsing pass.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

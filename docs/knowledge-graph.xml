@@ -151,7 +151,7 @@
       <annotations>
         <export-claimRunStep PURPOSE="Claim analysis_run_steps by analysis_run_id." />
         <export-processStepInputs PURPOSE="Process declared selection_snapshot_item and transcript_artifact inputs from sealed selection_snapshot facts without reading mutable collection state." />
-        <export-mixedMaterialTranscriptAssembly PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Assemble transcript artifacts from original text-origin selection items, reusable transcript artifacts, and CopperASR speech output so mixed Telegram selections keep all materials in selection order." />
+        <export-mixedMaterialTranscriptAssembly PATH="workers/transcription/src/transcriber_worker_transcription.py" PURPOSE="Assemble transcript artifacts from original inline text, object-backed text documents, reusable transcript artifacts, and CopperASR speech output so mixed selections keep all materials in selection order without sending textual documents to ASR." />
         <export-publishArtifacts PURPOSE="Publish transcript artifacts and artifact_subject lineage through API-owned artifact contracts." />
         <export-stepCancellation PURPOSE="Use analysis_run_step cancel-check and finalization contracts for cooperative cancellation." />
         <export-copperAsrBoundary PATH="workers/common/src/transcriber_workers_common/copper_asr.py" PURPOSE="Build and call the CopperASR HTTP runtime through COPPER_ASR_* env, normalize ASR responses into TranscriptResult, and propagate stable asr_* failure codes without legacy ASR fallback." />
