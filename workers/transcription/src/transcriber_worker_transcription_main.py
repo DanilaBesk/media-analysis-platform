@@ -29,6 +29,7 @@ from transcriber_workers_common.api import AnalysisRunControlClient
 from transcriber_workers_common.copper_asr import CopperAsrClientConfig, CopperAsrHttpTranscriber
 from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
 from transcriber_workers_common.runtime import WorkerRuntimeConfig, run_worker_loop
+from transcriber_workers_common.workspace import attempt_workspace
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,14 +46,15 @@ def build_runner(
     transcriber: object,
 ):
     def _runner(analysis_run_id: str) -> object:
-        return runTranscription(
-            analysis_run_id,
-            workspace_root=config.workspace_root,
-            api_client=api_client,
-            source_store=object_store,
-            artifact_store=object_store,
-            transcriber=transcriber,
-        )
+        with attempt_workspace(config.workspace_root, analysis_run_id) as attempt_root:
+            return runTranscription(
+                analysis_run_id,
+                workspace_root=attempt_root,
+                api_client=api_client,
+                source_store=object_store,
+                artifact_store=object_store,
+                transcriber=transcriber,
+            )
 
     return _runner
 

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/internal/export-control.schema.json",
+  "title": "InternalExportWorkerControl",
+  "$defs": {
+    "exportQueueResponse": {
+      "type": "object",
+      "required": ["items", "page", "page_size"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "../http/export-job.schema.json#/$defs/exportJob"}},
+        "page": {"type": "integer", "minimum": 1},
+        "page_size": {"type": "integer", "minimum": 1, "maximum": 1000}
+      },
+      "additionalProperties": false
+    },
+    "exportClaimRequest": {
+      "type": "object",
+      "required": ["lease_owner"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "lease_seconds": {"type": "integer", "minimum": 1, "maximum": 900}
+      },
+      "additionalProperties": false
+    },
+    "exportSource": {
+      "type": "object",
+      "required": ["media_asset_id", "source_type", "url", "expires_at"],
+      "properties": {
+        "media_asset_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "source_type": {"type": "string", "enum": ["uploaded_object", "remote_reference"]},
+        "url": {"type": "string", "format": "uri"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "content_type": {"type": ["string", "null"]},
+        "size_bytes": {"type": ["integer", "null"], "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "exportClaimResponse": {
+      "type": "object",
+      "required": ["export_job", "attempt_token", "lease_owner", "lease_expires_at", "source"],
+      "properties": {
+        "export_job": {"$ref": "../http/export-job.schema.json#/$defs/exportJob"},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "lease_expires_at": {"type": "string", "format": "date-time"},
+        "source": {"$ref": "#/$defs/exportSource"}
+      },
+      "additionalProperties": false
+    },
+    "exportProgressRequest": {
+      "type": "object",
+      "required": ["lease_owner", "attempt_token", "progress"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "progress": {"$ref": "../http/export-job.schema.json#/$defs/exportProgress"}
+      },
+      "additionalProperties": false
+    },
+    "exportCancelCheckRequest": {
+      "type": "object",
+      "required": ["lease_owner", "attempt_token"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160}
+      },
+      "additionalProperties": false
+    },
+    "exportCancelCheckResponse": {
+      "type": "object",
+      "required": ["cancel_requested", "status"],
+      "properties": {
+        "cancel_requested": {"type": "boolean"},
+        "status": {"$ref": "../common/enums.schema.json#/$defs/exportJobStatus"},
+        "cancel_requested_at": {"type": ["string", "null"], "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "exportOutputPublication": {
+      "type": "object",
+      "required": ["content_type", "filename", "size_bytes", "sha256", "staging_key"],
+      "properties": {
+        "content_type": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1, "maxLength": 255},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "staging_key": {"type": "string", "minLength": 1, "maxLength": 1024}
+      },
+      "additionalProperties": false
+    },
+    "exportFinalizeRequest": {
+      "type": "object",
+      "required": ["lease_owner", "attempt_token", "outcome"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "outcome": {"type": "string", "enum": ["succeeded", "failed", "canceled"]},
+        "output": {"$ref": "#/$defs/exportOutputPublication"},
+        "diagnostic_code": {"type": "string", "minLength": 1, "maxLength": 120},
+        "diagnostic_message": {"type": "string", "maxLength": 1000}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"outcome": {"const": "succeeded"}}},
+          "then": {"required": ["output"]}
+        },
+        {
+          "if": {"properties": {"outcome": {"const": "failed"}}},
+          "then": {"required": ["diagnostic_code"]}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "exportReclaimRequest": {
+      "type": "object",
+      "required": ["batch_size"],
+      "properties": {"batch_size": {"type": "integer", "minimum": 1, "maximum": 1000}},
+      "additionalProperties": false
+    },
+    "exportReclaimResponse": {
+      "type": "object",
+      "required": ["examined", "requeued", "failed"],
+      "properties": {
+        "examined": {"type": "integer", "minimum": 0},
+        "requeued": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -19,6 +19,9 @@ JsonMapping = Mapping[str, Any]
 DEFAULT_TEXT_PREVIEW_LIMIT = 48
 DEFAULT_URL_PREVIEW_LIMIT = 48
 DEFAULT_SUMMARY_LIMIT = 5
+_YOUTUBE_TITLE_PENDING = "загружаем название..."
+_YOUTUBE_PENDING_STATUSES = {"pending", "queued", "running", "resolving"}
+_YOUTUBE_SUCCEEDED_STATUSES = {"succeeded", "success", "completed"}
 
 
 def render_material_summary(
@@ -30,7 +33,10 @@ def render_material_summary(
     if _is_text_item(item):
         return f'Текст: «{_truncate(_extract_text_preview(item), text_preview_limit)}»'
     if _is_url_item(item):
-        return _compact_url(_extract_url(item), limit=url_preview_limit)
+        url = _extract_url(item)
+        if _is_youtube_url(url):
+            return _render_youtube_summary(item, title_limit=url_preview_limit)
+        return _compact_url(url, limit=url_preview_limit)
     return _render_file_summary(item)
 
 
@@ -122,6 +128,53 @@ def _compact_url(value: str, *, limit: int) -> str:
         compact = f"{host}{path}" if path else host
         return _truncate(compact, limit)
     return _truncate(_normalize_text(value) or "ссылка", limit)
+
+
+def _is_youtube_url(value: str) -> bool:
+    host = (urlparse(value).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
+def _render_youtube_summary(item: JsonMapping, *, title_limit: int) -> str:
+    enrichment = _youtube_enrichment(item)
+    status = _normalize_text(enrichment.get("status")).lower()
+    if status in _YOUTUBE_PENDING_STATUSES:
+        return f"YouTube: {_YOUTUBE_TITLE_PENDING}"
+    if status and status not in _YOUTUBE_SUCCEEDED_STATUSES:
+        return f"YouTube: {_YOUTUBE_TITLE_PENDING}"
+    title = _youtube_title(item, enrichment)
+    if title:
+        return f"YouTube: {_truncate(title, title_limit)}"
+    return f"YouTube: {_YOUTUBE_TITLE_PENDING}"
+
+
+def _youtube_enrichment(item: JsonMapping) -> JsonMapping:
+    metadata = _metadata(item)
+    for container in (item, metadata):
+        for key in ("provider_metadata", "enrichment"):
+            candidate = container.get(key)
+            if not isinstance(candidate, Mapping):
+                continue
+            provider = _normalize_text(candidate.get("provider")).lower()
+            if not provider or provider == "youtube":
+                return candidate
+    return {}
+
+
+def _youtube_title(item: JsonMapping, enrichment: JsonMapping) -> str:
+    metadata = _metadata(item)
+    for mapping, keys in (
+        (enrichment, ("title", "video_title")),
+        (item, ("youtube_title", "video_title")),
+        (metadata, ("youtube_title", "video_title", "title")),
+    ):
+        for key in keys:
+            title = _normalize_text(mapping.get(key))
+            if title:
+                return title
+    return ""
 
 
 def _format_size(size_bytes: int) -> str:

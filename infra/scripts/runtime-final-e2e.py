@@ -14,6 +14,7 @@ from typing import Any
 
 
 API_BASE_URL = os.environ.get("RUNTIME_E2E_API_BASE_URL", "http://localhost:8080")
+INTERNAL_TOKEN = os.environ.get("PLATFORM_INTERNAL_TOKEN", "local-media-platform-internal").strip()
 POLL_TIMEOUT_SECONDS = int(os.environ.get("RUNTIME_E2E_POLL_TIMEOUT_SECONDS", "180"))
 POLL_INTERVAL_SECONDS = float(os.environ.get("RUNTIME_E2E_POLL_INTERVAL_SECONDS", "2"))
 MINIO_HOST_ENDPOINT = (
@@ -47,6 +48,7 @@ def _request(
     request_headers = {
         "Accept": "application/json",
         **({"Content-Type": "application/json"} if body is not None else {}),
+        **({"X-Platform-Internal-Token": INTERNAL_TOKEN} if path.startswith("/internal/") else {}),
         **(headers or {}),
     }
     request = urllib.request.Request(

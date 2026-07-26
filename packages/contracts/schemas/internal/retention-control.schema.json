@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/internal/retention-control.schema.json",
+  "title": "InternalRetentionControl",
+  "$defs": {
+    "retentionSweepRequest": {
+      "type": "object",
+      "required": ["batch_size"],
+      "properties": {
+        "batch_size": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "deletion_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "claim_seconds": {"type": "integer", "minimum": 1, "maximum": 900}
+      },
+      "additionalProperties": false
+    },
+    "retentionClaim": {
+      "type": "object",
+      "required": [
+        "stored_object_id", "generation", "deletion_owner", "deletion_token", "lease_expires_at"
+      ],
+      "properties": {
+        "stored_object_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "generation": {"type": "integer", "minimum": 1},
+        "deletion_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "deletion_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "lease_expires_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "retentionSweepResponse": {
+      "type": "object",
+      "required": ["claimed", "deleted", "failed", "claims"],
+      "properties": {
+        "claimed": {"type": "integer", "minimum": 0},
+        "deleted": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0},
+        "claims": {"type": "array", "items": {"$ref": "#/$defs/retentionClaim"}}
+      },
+      "additionalProperties": false
+    },
+    "retentionReconcileRequest": {
+      "type": "object",
+      "required": ["batch_size"],
+      "properties": {
+        "batch_size": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "dry_run": {"type": "boolean", "default": false}
+      },
+      "additionalProperties": false
+    },
+    "retentionReconcileResponse": {
+      "type": "object",
+      "required": ["examined", "orphans_deleted", "publications_reconciled", "objects_marked_missing"],
+      "properties": {
+        "examined": {"type": "integer", "minimum": 0},
+        "orphans_deleted": {"type": "integer", "minimum": 0},
+        "publications_reconciled": {"type": "integer", "minimum": 0},
+        "objects_marked_missing": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -10,12 +10,12 @@
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
-#   LAST_CHANGE: v1.1.0 - Route claimed artifact downloads to the artifact bucket while preserving source downloads for transcription runs.
+#   LAST_CHANGE: v1.2.0 - Stream GET responses into atomic local attempt files instead of buffering complete objects in memory.
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
 #   ObjectStoreRequestFailed - Reports MinIO/S3 transport failures through one worker-common error type.
-#   RawObjectTransport - Defines the injectable byte-level object-store transport used by tests.
+#   RawObjectTransport - Defines the injectable request and streaming object-store transport used by tests.
 #   WorkerObjectStoreConfig - Carries MinIO endpoint, credentials, buckets, and region.
 #   WorkerObjectStore - Implements fetch_file and put_bytes for worker source/artifact contracts.
 # END_MODULE_MAP
@@ -25,10 +25,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, Mapping, Protocol
+from typing import Callable, ContextManager, Iterator, Mapping, Protocol
 from urllib import error, parse, request
 
 
@@ -44,8 +46,16 @@ class ObjectStoreRequestFailed(RuntimeError):
     pass
 
 
+class ReadableObjectBody(Protocol):
+    def read(self, size: int = -1) -> bytes: ...
+
+
 class RawObjectTransport(Protocol):
     def request(self, *, method: str, url: str, headers: Mapping[str, str], body: bytes | None = None) -> bytes: ...
+
+    def open_stream(
+        self, *, method: str, url: str, headers: Mapping[str, str], body: bytes | None = None
+    ) -> ContextManager[ReadableObjectBody]: ...
 
 
 class _UrllibObjectTransport:
@@ -54,6 +64,19 @@ class _UrllibObjectTransport:
         try:
             with request.urlopen(http_request, timeout=60) as response:
                 return response.read()
+        except error.HTTPError as exc:  # pragma: no cover - integration failure path
+            raise ObjectStoreRequestFailed(f"object-store request failed with HTTP {exc.code}: {exc.reason}") from exc
+        except error.URLError as exc:  # pragma: no cover - integration failure path
+            raise ObjectStoreRequestFailed(f"object-store request failed: {exc.reason}") from exc
+
+    @contextmanager
+    def open_stream(
+        self, *, method: str, url: str, headers: Mapping[str, str], body: bytes | None = None
+    ) -> Iterator[ReadableObjectBody]:
+        http_request = request.Request(url=url, data=body, headers=dict(headers), method=method)
+        try:
+            with request.urlopen(http_request, timeout=60) as response:
+                yield response
         except error.HTTPError as exc:  # pragma: no cover - integration failure path
             raise ObjectStoreRequestFailed(f"object-store request failed with HTTP {exc.code}: {exc.reason}") from exc
         except error.URLError as exc:  # pragma: no cover - integration failure path
@@ -106,6 +129,8 @@ class WorkerObjectStoreConfig:
 # LINKS: M-WORKER-COMMON, DF-001, DF-006
 # END_CONTRACT: WorkerObjectStore
 class WorkerObjectStore:
+    _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+
     def __init__(
         self,
         config: WorkerObjectStoreConfig,
@@ -125,9 +150,19 @@ class WorkerObjectStore:
     # LINKS: M-WORKER-COMMON, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH
     # END_CONTRACT: fetch_file
     def fetch_file(self, *, object_key: str, destination: Path) -> None:
-        body = self._request_object(method="GET", bucket=self._bucket_for_fetch(object_key), object_key=object_key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(body)
+        attempt = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.part")
+        try:
+            with self._open_object_stream(
+                method="GET", bucket=self._bucket_for_fetch(object_key), object_key=object_key
+            ) as response, attempt.open("xb+") as target:
+                while chunk := response.read(self._DOWNLOAD_CHUNK_BYTES):
+                    target.write(chunk)
+                target.flush()
+                target.seek(0)
+            os.replace(attempt, destination)
+        finally:
+            attempt.unlink(missing_ok=True)
 
     # START_CONTRACT: put_bytes
     # PURPOSE: Upload one worker artifact byte payload to the artifact bucket.
@@ -171,6 +206,28 @@ class WorkerObjectStore:
             content_type=content_type,
         )
         return self.transport.request(method=method, url=url, headers=headers, body=body)
+
+    def _open_object_stream(
+        self,
+        *,
+        method: str,
+        bucket: str,
+        object_key: str,
+        body: bytes | None = None,
+        content_type: str | None = None,
+    ) -> ContextManager[ReadableObjectBody]:
+        _require(bool(object_key.strip()), "object_key must not be empty")
+        _validate_object_key(object_key)
+        request_body = body or b""
+        url, canonical_uri, host = self._object_url(bucket=bucket, object_key=object_key)
+        headers = self._signed_headers(
+            method=method,
+            canonical_uri=canonical_uri,
+            host=host,
+            body=request_body,
+            content_type=content_type,
+        )
+        return self.transport.open_stream(method=method, url=url, headers=headers, body=body)
 
     def _object_url(self, *, bucket: str, object_key: str) -> tuple[str, str, str]:
         parsed = parse.urlparse(self.config.endpoint.rstrip("/"))

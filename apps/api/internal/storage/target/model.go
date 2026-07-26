@@ -31,17 +31,122 @@ type OperationRequestRecord struct {
 }
 
 type StoredObjectRecord struct {
+	ID                    string
+	ChannelAccountID      string
+	Bucket                string
+	ObjectKey             string
+	StagingKey            string
+	Generation            int
+	GenerationPublishedAt time.Time
+	ContentType           string
+	SizeBytes             int64
+	ChecksumAlgorithm     string
+	Checksum              string
+	StorageStatus         string
+	RetentionState        string
+	HoldState             string
+	LastSuccessfulUseAt   *time.Time
+	CreatedAt             time.Time
+	ExpiresAt             *time.Time
+	DeleteOwner           string
+	DeleteToken           string
+	DeleteLeaseExpiresAt  *time.Time
+	DeleteAttempts        int
+	DeletedAt             *time.Time
+}
+
+type StoredObjectPinRecord struct {
 	ID             string
-	Bucket         string
-	ObjectKey      string
-	ContentType    string
-	SizeBytes      int64
-	Checksum       string
-	StorageStatus  string
-	RetentionState string
-	CreatedAt      time.Time
+	StoredObjectID string
+	OwnerType      string
+	OwnerID        string
+	Purpose        string
 	ExpiresAt      *time.Time
-	DeletedAt      *time.Time
+	CreatedAt      time.Time
+	ReleasedAt     *time.Time
+}
+
+type ExportJobRecord struct {
+	ID                   string
+	ChannelAccountID     string
+	MediaAssetID         string
+	Operation            string
+	DeliveryChannel      string
+	VariantJSON          []byte
+	Status               string
+	Version              int64
+	IdempotencyKey       string
+	RetryGeneration      int
+	AttemptNo            int
+	AttemptToken         string
+	LeaseOwner           string
+	LeaseExpiresAt       *time.Time
+	HeartbeatAt          *time.Time
+	MaxAttempts          int
+	ProgressJSON         []byte
+	OutputStoredObjectID string
+	DiagnosticID         string
+	CreatedAt            time.Time
+	StartedAt            *time.Time
+	CompletedAt          *time.Time
+	CancelRequestedAt    *time.Time
+	CanceledAt           *time.Time
+	ExpiresAt            *time.Time
+}
+
+type ExportDeliveryRecord struct {
+	ID               string
+	ExportJobID      string
+	ChannelAccountID string
+	Channel          string
+	Status           string
+	Version          int64
+	AttemptNo        int
+	AttemptToken     string
+	LeaseOwner       string
+	LeaseExpiresAt   *time.Time
+	NextAttemptAt    *time.Time
+	MaxAttempts      int
+	ExpiresAt        time.Time
+	DeliveredAt      *time.Time
+	FailureCode      string
+	CreatedAt        time.Time
+}
+
+type ExportJobReclaimResult struct {
+	Examined int64
+	Requeued int64
+	Failed   int64
+}
+
+type MetadataEnrichmentRecord struct {
+	ID               string
+	MediaAssetID     string
+	ChannelAccountID string
+	Provider         string
+	CanonicalURL     string
+	Status           string
+	Version          int64
+	IdempotencyKey   string
+	AttemptNo        int
+	MaxAttempts      int
+	AttemptToken     string
+	LeaseOwner       string
+	LeaseExpiresAt   *time.Time
+	HeartbeatAt      *time.Time
+	NextAttemptAt    *time.Time
+	ProgressJSON     []byte
+	ErrorCode        string
+	ErrorMessage     string
+	CreatedAt        time.Time
+	StartedAt        *time.Time
+	CompletedAt      *time.Time
+}
+
+type MetadataEnrichmentReclaimResult struct {
+	Examined int64
+	Requeued int64
+	Failed   int64
 }
 
 type MediaAssetRecord struct {
@@ -281,6 +386,42 @@ type CreateMediaAssetWithInboxParams struct {
 	MediaAsset      MediaAssetRecord
 	InboxCollection CollectionRecord
 	CollectionItem  CollectionItemRecord
+	Enrichment      MetadataEnrichmentRecord
+}
+
+type ClaimMetadataEnrichmentParams struct {
+	EnrichmentID   string
+	LeaseOwner     string
+	AttemptToken   string
+	ClaimedAt      time.Time
+	LeaseExpiresAt time.Time
+}
+
+type RecordMetadataEnrichmentProgressParams struct {
+	EnrichmentID string
+	LeaseOwner   string
+	AttemptToken string
+	ProgressJSON []byte
+	HeartbeatAt  time.Time
+}
+
+type FinalizeMetadataEnrichmentParams struct {
+	EnrichmentID         string
+	LeaseOwner           string
+	AttemptToken         string
+	Status               string
+	Retryable            bool
+	RetryAt              *time.Time
+	DisplayName          string
+	ProviderMetadataJSON []byte
+	ErrorCode            string
+	ErrorMessage         string
+	CompletedAt          time.Time
+}
+
+type PrepareStoredObjectPublicationResult struct {
+	StoredObject StoredObjectRecord
+	Publisher    bool
 }
 
 type UpdateCollectionParams struct {
@@ -333,6 +474,7 @@ type FinalizeAnalysisRunStepParams struct {
 	Message           string
 	FinalizedAt       time.Time
 	Event             AnalysisRunEventRecord
+	RetentionDays     int
 }
 
 type ReplaceChannelSurfaceDisplayStateParams struct {
@@ -347,7 +489,92 @@ type AnalysisRunGraph struct {
 	Run        AnalysisRunRecord
 	Steps      []AnalysisRunStepRecord
 	StepInputs []AnalysisRunStepInputRecord
+	SourcePins []StoredObjectPinRecord
 	Event      AnalysisRunEventRecord
+}
+
+type CreateProcessingRunParams struct {
+	ChannelAccountID string
+	CollectionID     string
+	ExpectedVersion  int64
+	CapturedAssetIDs []string
+	DetachedAt       time.Time
+	Snapshot         SelectionSnapshotRecord
+	SnapshotItems    []SelectionSnapshotItemRecord
+	Graph            AnalysisRunGraph
+	SourcePins       []StoredObjectPinRecord
+}
+
+type CreateProcessingRunResult struct {
+	Snapshot          SelectionSnapshotRecord
+	SnapshotItems     []SelectionSnapshotItemRecord
+	Run               AnalysisRunRecord
+	DetachedAssetIDs  []string
+	CollectionVersion int64
+	Replayed          bool
+}
+
+type CreateExportJobParams struct {
+	Job       ExportJobRecord
+	SourcePin StoredObjectPinRecord
+}
+
+type ClaimExportJobParams struct {
+	ExportJobID    string
+	LeaseOwner     string
+	AttemptToken   string
+	ClaimedAt      time.Time
+	LeaseExpiresAt time.Time
+}
+
+type RecordExportJobProgressParams struct {
+	ExportJobID    string
+	LeaseOwner     string
+	AttemptToken   string
+	ProgressJSON   []byte
+	HeartbeatAt    time.Time
+	LeaseExpiresAt time.Time
+}
+
+type FinalizeExportJobParams struct {
+	ExportJobID   string
+	LeaseOwner    string
+	AttemptToken  string
+	Status        string
+	CompletedAt   time.Time
+	Output        StoredObjectRecord
+	Delivery      ExportDeliveryRecord
+	DeliveryPin   StoredObjectPinRecord
+	DiagnosticID  string
+	RetentionDays int
+}
+
+type ClaimExportDeliveryParams struct {
+	ExportJobID      string
+	ChannelAccountID string
+	Channel          string
+	LeaseOwner       string
+	AttemptToken     string
+	ClaimedAt        time.Time
+	LeaseExpiresAt   time.Time
+}
+
+type FinalizeExportDeliveryParams struct {
+	ExportJobID      string
+	ChannelAccountID string
+	ExportDeliveryID string
+	LeaseOwner       string
+	AttemptToken     string
+	Status           string
+	FailureCode      string
+	Retryable        bool
+	FinalizedAt      time.Time
+}
+
+type RetentionDeleteClaimRecord struct {
+	StoredObject StoredObjectRecord
+	DeleteOwner  string
+	DeleteToken  string
 }
 
 type SupersedeChannelSurfaceParams struct {

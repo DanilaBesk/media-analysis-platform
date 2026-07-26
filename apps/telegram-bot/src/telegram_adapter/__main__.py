@@ -40,7 +40,7 @@ async def _run(env: Mapping[str, str] | None = None) -> None:
     settings_base_dir = Path(values.get("SETTINGS_BASE_DIR", "/workspace"))
     settings = load_settings(settings_base_dir, env=None if env is None else values)
     api_base_url = values.get("API_BASE_URL", "").strip() or "http://api:8080"
-    api_client = TelegramApiClient(api_base_url)
+    api_client = TelegramApiClient(api_base_url, internal_token=values.get("PLATFORM_INTERNAL_TOKEN"))
     gateway = TelegramInboxGateway(api_client)
     app = TelegramInboxApp(settings, gateway)
     bot_api_mode = "cloud"

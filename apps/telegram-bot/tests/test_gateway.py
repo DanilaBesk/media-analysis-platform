@@ -131,6 +131,28 @@ class FakeFinalApiClient:
         self.runs.append(run)
         return run
 
+    def start_collection_processing_run(self, **kwargs) -> dict[str, Any]:
+        selection = self.create_selection_snapshot(
+            channel_account_id=kwargs["channel_account_id"],
+            source_collection_id=kwargs["collection_id"],
+            items=kwargs["items"],
+            option_snapshot=kwargs.get("option_snapshot"),
+        )
+        run = self.create_analysis_run(
+            channel_account_id=kwargs["channel_account_id"],
+            selection_snapshot_id=selection["selection_snapshot_id"],
+            run_type=kwargs["run_type"],
+        )
+        captured = {str(item["media_asset_id"]) for item in kwargs["items"]}
+        self.collection["items"] = [item for item in self.collection["items"] if str(item["media_asset_id"]) not in captured]
+        self.collection["version"] += 1
+        return {
+            "selection_snapshot": selection,
+            "analysis_run": run,
+            "detached_media_asset_ids": sorted(captured),
+            "collection_version": self.collection["version"],
+        }
+
     def list_analysis_runs(self, **kwargs) -> dict[str, Any]:
         return {"items": list(self.runs), "page": {"page_size": 10, "has_more": False}}
 
@@ -792,6 +814,185 @@ def test_uuid_callbacks_stay_within_telegram_limit() -> None:
     assert any(callback.startswith("ib:mt") for callback in callbacks)
     assert any(callback.startswith("ib:ar:") for callback in callbacks)
     assert any(callback.startswith("ib:dg:") for callback in callbacks)
+
+
+def test_export_controls_use_per_material_rows_and_only_single_item_main_shortcut() -> None:
+    base = TelegramInboxGateway(FakeFinalApiClient()).restore_status(channel_identity=channel_identity())
+    status = base.__class__(
+        channel_identity=base.channel_identity,
+        collection={"collection_id": "inbox-1", "version": 1, "items": [{"media_asset_id": "yt-1"}, {"media_asset_id": "video-1"}]},
+        items=[
+            {"media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT", "origin": {"origin_ref": "https://youtube.com/watch?v=one"}, "metadata": {}},
+            {"media_asset_id": "video-1", "kind": "video", "status": "ready", "display_name": "clip", "metadata": {}},
+        ],
+        page={"page_size": 5, "has_more": False}, active_runs=[], recent_runs=[], artifacts_by_run={}, diagnostics_by_run={}, rejected=[],
+    )
+
+    materials = build_status_keyboard(status, screen="materials")
+    assert [button.text for button in materials.inline_keyboard[0]] == ["Скачать", "Убрать"]
+    assert [button.text for button in materials.inline_keyboard[1]] == ["В аудио", "Убрать"]
+    main = build_status_keyboard(status)
+    assert all(button.text not in {"Скачать", "В аудио"} for row in main.inline_keyboard for button in row)
+
+    one_eligible_of_two = status.__class__(
+        channel_identity=status.channel_identity,
+        collection=status.collection,
+        items=[status.items[0], {**status.items[1], "kind": "text"}],
+        page=status.page, active_runs=[], recent_runs=[], artifacts_by_run={}, diagnostics_by_run={}, rejected=[],
+    )
+    assert all(
+        button.text not in {"Скачать", "В аудио"}
+        for row in build_status_keyboard(one_eligible_of_two).inline_keyboard
+        for button in row
+    )
+
+    single = status.__class__(
+        channel_identity=status.channel_identity,
+        collection={"collection_id": "inbox-1", "version": 1, "items": [{"media_asset_id": "yt-1"}]},
+        items=[status.items[0]], page=status.page, active_runs=[], recent_runs=[], artifacts_by_run={}, diagnostics_by_run={}, rejected=[],
+    )
+    assert any([button.text for button in row] == ["Скачать"] for row in build_status_keyboard(single).inline_keyboard)
+    paginated_single_visible = single.__class__(
+        channel_identity=single.channel_identity,
+        collection={
+            "collection_id": "inbox-1",
+            "version": 1,
+            "items": [{"media_asset_id": "yt-1"}, {"media_asset_id": "text-2"}],
+        },
+        items=[single.items[0]],
+        page={"page_size": 1, "has_more": True, "next_cursor": "yt-1"},
+        active_runs=[], recent_runs=[], artifacts_by_run={}, diagnostics_by_run={}, rejected=[],
+    )
+    assert all(
+        button.text not in {"Скачать", "В аудио"}
+        for row in build_status_keyboard(paginated_single_visible).inline_keyboard
+        for button in row
+    )
+    format_choice = build_status_keyboard(
+        single,
+        export_selection={"collection_id": "inbox-1", "expected_version": 1, "media_asset_id": "yt-1", "mode": "youtube"},
+    )
+    assert [[button.text for button in row] for row in format_choice.inline_keyboard[:2]] == [["Аудио"], ["Видео"]]
+    quality_choice = build_status_keyboard(
+        single,
+        export_selection={"collection_id": "inbox-1", "expected_version": 1, "media_asset_id": "yt-1", "mode": "video_quality"},
+    )
+    assert [[button.text for button in row] for row in quality_choice.inline_keyboard[:2]] == [["1080p", "720p"], ["480p"]]
+
+
+def test_export_task_surface_owns_its_separate_message_address() -> None:
+    api = FakeFinalApiClient()
+    gateway = TelegramInboxGateway(api)
+    gateway.resolve_channel_account(channel_identity=channel_identity())
+    surface = gateway.upsert_export_task_surface(
+        channel_identity=channel_identity(),
+        export_job={"export_job_id": "job-1"},
+        address={"kind": "telegram_message", "chat_id": 10, "message_id": 20},
+        display_state={"export_status": "queued"},
+    )
+
+    assert surface["address_fingerprint"] == "telegram:10:20"
+
+
+def test_create_export_job_keeps_current_collection_intact() -> None:
+    api = FakeFinalApiClient()
+    api.items = [
+        {
+            "media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT",
+            "origin": {"origin_ref": "https://youtu.be/example"}, "metadata": {},
+        }
+    ]
+    api.collection["items"] = [{"media_asset_id": "yt-1", "position": 0}]
+    requests: list[dict[str, Any]] = []
+
+    jobs_by_key: dict[str, dict[str, Any]] = {}
+
+    def create_export_job(**kwargs: Any) -> dict[str, Any]:
+        requests.append(kwargs)
+        key = str(kwargs["idempotency_key"])
+        return jobs_by_key.setdefault(
+            key,
+            {"export_job_id": f"job-{len(jobs_by_key) + 1}", "status": "queued"},
+        )
+
+    api.create_export_job = create_export_job  # type: ignore[attr-defined]
+    gateway = TelegramInboxGateway(api)
+    job = gateway.create_export_job(
+        channel_identity=channel_identity(), collection_id="inbox-1",
+        media_asset_id="yt-1", operation="youtube_video", variant={"video_quality": "720p"}, action_id="callback-1",
+    )
+
+    assert job["export_job_id"] == "job-1"
+    assert api.collection["items"] == [{"media_asset_id": "yt-1", "position": 0}]
+    assert requests[0]["delivery_channel"] == "telegram"
+    assert requests[0]["idempotency_key"] == "telegram:export-action:callback-1"
+
+    duplicate = gateway.create_export_job(
+        channel_identity=channel_identity(), collection_id="inbox-1",
+        media_asset_id="yt-1", operation="youtube_video", variant={"video_quality": "720p"}, action_id="callback-1",
+    )
+    repeated_after_delivery = gateway.create_export_job(
+        channel_identity=channel_identity(), collection_id="inbox-1",
+        media_asset_id="yt-1", operation="youtube_video", variant={"video_quality": "720p"}, action_id="callback-2",
+    )
+
+    assert duplicate["export_job_id"] == "job-1"
+    assert repeated_after_delivery["export_job_id"] == "job-2"
+    assert [request["idempotency_key"] for request in requests] == [
+        "telegram:export-action:callback-1",
+        "telegram:export-action:callback-1",
+        "telegram:export-action:callback-2",
+    ]
+
+
+def test_create_export_job_ignores_unrelated_collection_version_changes() -> None:
+    api = FakeFinalApiClient()
+    api.items = [
+        {
+            "media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT",
+            "origin": {"origin_ref": "https://youtu.be/example"}, "metadata": {},
+        },
+        {"media_asset_id": "text-2", "kind": "text", "status": "ready", "display_name": "note", "metadata": {}},
+    ]
+    api.collection.update({
+        "version": 2,
+        "items": [
+            {"media_asset_id": "yt-1", "position": 0},
+            {"media_asset_id": "text-2", "position": 1},
+        ],
+    })
+    requests: list[dict[str, Any]] = []
+    api.create_export_job = lambda **kwargs: requests.append(kwargs) or {  # type: ignore[attr-defined]
+        "export_job_id": "job-1",
+        "status": "queued",
+    }
+
+    job = TelegramInboxGateway(api).create_export_job(
+        channel_identity=channel_identity(), collection_id="inbox-1",
+        media_asset_id="yt-1", operation="youtube_audio", variant={"audio_bitrate_kbps": 192}, action_id="callback-new",
+    )
+
+    assert job["export_job_id"] == "job-1"
+    assert requests[0]["media_asset_id"] == "yt-1"
+
+
+@pytest.mark.parametrize("case", ["removed", "inaccessible"])
+def test_create_export_job_rejects_removed_or_inaccessible_asset(case: str) -> None:
+    api = FakeFinalApiClient()
+    api.items = [
+        {
+            "media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT",
+            "origin": {"origin_ref": "https://youtu.be/example"}, "metadata": {},
+        }
+    ] if case == "removed" else []
+    api.collection["items"] = [] if case == "removed" else [{"media_asset_id": "yt-1", "position": 0}]
+    api.create_export_job = lambda **_: pytest.fail("export API must not be called")  # type: ignore[attr-defined]
+
+    with pytest.raises(RuntimeError, match="slot_not_visible"):
+        TelegramInboxGateway(api).create_export_job(
+            channel_identity=channel_identity(), collection_id="inbox-1",
+            media_asset_id="yt-1", operation="youtube_audio", variant={"audio_bitrate_kbps": 192}, action_id="callback-stale",
+        )
 
 
 def test_main_card_hides_historical_result_without_focused_run() -> None:

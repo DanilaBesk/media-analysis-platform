@@ -1547,6 +1547,404 @@
           }
         }
       }
+    },
+    "/v1/collections/{collection_id}/processing-runs": {
+      "post": {
+        "operationId": "createCollectionProcessingRun",
+        "summary": "Atomically seal selected collection items, create a processing run, and detach the captured membership.",
+        "parameters": [
+          {"$ref": "#/components/parameters/CollectionId"},
+          {"$ref": "#/components/parameters/IdempotencyKey"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/collection.schema.json#/$defs/createProcessingRunRequest"}}}
+        },
+        "responses": {
+          "201": {
+            "description": "The immutable selection and queued analysis run were created atomically.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/collection.schema.json#/$defs/processingRunResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/media-assets/{media_asset_id}/exports": {
+      "post": {
+        "operationId": "createExportJob",
+        "summary": "Create an idempotent one-material export job using a semantic variant.",
+        "parameters": [
+          {"$ref": "#/components/parameters/MediaAssetId"},
+          {"$ref": "#/components/parameters/IdempotencyKey"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/createExportJobRequest"}}}
+        },
+        "responses": {
+          "201": {
+            "description": "Export job created or replayed.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/media-assets/{media_asset_id}/refresh-metadata": {
+      "post": {
+        "operationId": "refreshMediaAssetMetadata",
+        "summary": "Idempotently enqueue account-scoped YouTube metadata refresh without blocking ingestion.",
+        "parameters": [
+          {"$ref": "#/components/parameters/MediaAssetId"},
+          {"$ref": "#/components/parameters/IdempotencyKey"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/metadata-enrichment.schema.json#/$defs/refreshMetadataRequest"}}}
+        },
+        "responses": {
+          "202": {
+            "description": "Metadata enrichment queued or idempotently replayed.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/metadata-enrichment.schema.json#/$defs/metadataEnrichmentResponse"}}}
+          },
+          "404": {"$ref": "#/components/responses/ErrorEnvelope"},
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs": {
+      "get": {
+        "operationId": "listExportJobs",
+        "summary": "List export jobs scoped to one channel account.",
+        "parameters": [
+          {"$ref": "#/components/parameters/ChannelAccountId"},
+          {"$ref": "#/components/parameters/PageCursor"},
+          {"$ref": "#/components/parameters/PageSize"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Export job page.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobListResponse"}}}
+          }
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}": {
+      "get": {
+        "operationId": "getExportJob",
+        "summary": "Read one channel-account-scoped export job.",
+        "parameters": [
+          {"$ref": "#/components/parameters/ChannelAccountId"},
+          {"$ref": "#/components/parameters/ExportJobId"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Export job state.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "404": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/cancel": {
+      "post": {
+        "operationId": "cancelExportJob",
+        "summary": "Cancel queued work immediately or request cooperative active cancellation.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/cancelExportJobRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Updated export job.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/retry": {
+      "post": {
+        "operationId": "retryExportJob",
+        "summary": "Explicitly retry a failed or canceled export with a new generation.",
+        "parameters": [
+          {"$ref": "#/components/parameters/ExportJobId"},
+          {"$ref": "#/components/parameters/IdempotencyKey"}
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/retryExportJobRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Requeued export job.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/deliveries/claim": {
+      "post": {
+        "operationId": "claimExportDelivery",
+        "summary": "Claim an export delivery using a finite fenced lease.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/claimExportDeliveryRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery claim and attempt fence.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportDeliveryClaim"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/deliveries/ack": {
+      "post": {
+        "operationId": "acknowledgeExportDelivery",
+        "summary": "Acknowledge successful adapter delivery through the current fence.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/mutateExportDeliveryRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery acknowledged and its retention pin released.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/deliveries/fail": {
+      "post": {
+        "operationId": "failExportDelivery",
+        "summary": "Record retryable or terminal adapter delivery failure through the current fence.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/failExportDeliveryRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Updated delivery state.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/download": {
+      "get": {
+        "operationId": "resolveExportDownload",
+        "summary": "Resolve short-lived account-scoped output access without acknowledging delivery.",
+        "parameters": [
+          {"$ref": "#/components/parameters/ChannelAccountId"},
+          {"$ref": "#/components/parameters/ExportJobId"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Short-lived attachment access.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportDownloadResponse"}}}
+          },
+          "404": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/internal/v1/export-jobs/queue": {
+      "get": {
+        "operationId": "listQueuedExportJobs",
+        "summary": "List currently claimable export jobs.",
+        "parameters": [{"$ref": "#/components/parameters/PageSize"}],
+        "responses": {
+          "200": {
+            "description": "Claimable export queue.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportQueueResponse"}}}
+          }
+        }
+      }
+    },
+    "/internal/v1/export-jobs/{export_job_id}/claim": {
+      "post": {
+        "operationId": "claimExportJob",
+        "summary": "Acquire a new export attempt and lease fence.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportClaimRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Claimed export job and source access.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportClaimResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/internal/v1/export-jobs/{export_job_id}/progress": {
+      "post": {
+        "operationId": "recordExportProgress",
+        "summary": "Record progress and extend the current fenced export lease.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportProgressRequest"}}}
+        },
+        "responses": {
+          "202": {"description": "Progress accepted."},
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/internal/v1/export-jobs/{export_job_id}/cancel-check": {
+      "get": {
+        "operationId": "checkExportCancelState",
+        "summary": "Read cancellation state through the current attempt fence.",
+        "parameters": [
+          {"$ref": "#/components/parameters/ExportJobId"},
+          {"$ref": "#/components/parameters/LeaseOwner"},
+          {"$ref": "#/components/parameters/AttemptToken"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Current cancellation state.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportCancelCheckResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/internal/v1/export-jobs/{export_job_id}/finalize": {
+      "post": {
+        "operationId": "finalizeExportJob",
+        "summary": "Fenced export finalization with output lineage or safe diagnostics.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportFinalizeRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Terminal export state.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportJobResponse"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/internal/v1/export-jobs/{export_job_id}/download-access": {
+      "get": {
+        "operationId": "resolveInternalExportDownloadAccess",
+        "summary": "Resolve private service-to-service access to a succeeded export output.",
+        "parameters": [
+          {"$ref": "#/components/parameters/ChannelAccountId"},
+          {"$ref": "#/components/parameters/ExportJobId"}
+        ],
+        "responses": {
+          "200": {
+            "description": "Short-lived private attachment access for an authenticated adapter.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportDownloadResponse"}}}
+          },
+          "404": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/internal/v1/export-jobs/reclaim": {
+      "post": {
+        "operationId": "reclaimExportJobs",
+        "summary": "Requeue expired export leases or fail exhausted jobs.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportReclaimRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Reclaim summary.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/internal/export-control.schema.json#/$defs/exportReclaimResponse"}}}
+          }
+        }
+      }
+    },
+    "/internal/v1/metadata-enrichment-jobs/queue": {
+      "get": {
+        "operationId": "listQueuedMetadataEnrichments",
+        "summary": "List due YouTube metadata enrichments from the independent API-owned queue.",
+        "parameters": [{"$ref": "#/components/parameters/PageSize"}],
+        "responses": {"200": {"description": "Claimable metadata enrichment queue.", "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/queueResponse"}}}}}
+      }
+    },
+    "/internal/v1/metadata-enrichment-jobs/{enrichment_id}/claim": {
+      "post": {
+        "operationId": "claimMetadataEnrichment",
+        "summary": "Acquire a fenced metadata enrichment attempt and finite lease.",
+        "parameters": [{"$ref": "#/components/parameters/EnrichmentId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/claimRequest"}}}},
+        "responses": {"200": {"description": "Claim and canonical provider input.", "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/claimResponse"}}}}, "409": {"$ref": "#/components/responses/ErrorEnvelope"}}
+      }
+    },
+    "/internal/v1/metadata-enrichment-jobs/{enrichment_id}/progress": {
+      "post": {
+        "operationId": "recordMetadataEnrichmentProgress",
+        "summary": "Record progress and heartbeat while preserving the claimed lease duration.",
+        "parameters": [{"$ref": "#/components/parameters/EnrichmentId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/progressRequest"}}}},
+        "responses": {"204": {"description": "Progress accepted."}, "409": {"$ref": "#/components/responses/ErrorEnvelope"}}
+      }
+    },
+    "/internal/v1/metadata-enrichment-jobs/{enrichment_id}/finalize": {
+      "post": {
+        "operationId": "finalizeMetadataEnrichment",
+        "summary": "Fenced finalize with bounded provider metadata or delayed retry.",
+        "parameters": [{"$ref": "#/components/parameters/EnrichmentId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/finalizeRequest"}}}},
+        "responses": {"200": {"description": "Updated metadata enrichment state.", "content": {"application/json": {"schema": {"$ref": "../schemas/http/metadata-enrichment.schema.json#/$defs/metadataEnrichmentResponse"}}}}, "409": {"$ref": "#/components/responses/ErrorEnvelope"}}
+      }
+    },
+    "/internal/v1/metadata-enrichment-jobs/reclaim": {
+      "post": {
+        "operationId": "reclaimMetadataEnrichments",
+        "summary": "Requeue expired metadata leases with backoff or fail exhausted jobs.",
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/reclaimRequest"}}}},
+        "responses": {"200": {"description": "Reclaim summary.", "content": {"application/json": {"schema": {"$ref": "../schemas/internal/metadata-enrichment-control.schema.json#/$defs/reclaimResponse"}}}}}
+      }
+    },
+    "/internal/v1/retention/sweep": {
+      "post": {
+        "operationId": "sweepRetainedObjects",
+        "summary": "Claim and process a bounded batch of retention-eligible objects.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/internal/retention-control.schema.json#/$defs/retentionSweepRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Retention sweep summary and fenced claims.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/internal/retention-control.schema.json#/$defs/retentionSweepResponse"}}}
+          }
+        }
+      }
+    },
+    "/internal/v1/retention/reconcile": {
+      "post": {
+        "operationId": "reconcileRetainedObjects",
+        "summary": "Reconcile stale publication, missing bodies, managed orphans, and delete claims.",
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/internal/retention-control.schema.json#/$defs/retentionReconcileRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Retention reconciliation summary.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/internal/retention-control.schema.json#/$defs/retentionReconcileResponse"}}}
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1631,6 +2029,14 @@
           "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
         }
       },
+      "EnrichmentId": {
+        "name": "enrichment_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
       "SelectionSnapshotId": {
         "name": "selection_snapshot_id",
         "in": "path",
@@ -1645,6 +2051,34 @@
         "required": true,
         "schema": {
           "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "ExportJobId": {
+        "name": "export_job_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "../schemas/common/enums.schema.json#/$defs/uuid"
+        }
+      },
+      "LeaseOwner": {
+        "name": "lease_owner",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "AttemptToken": {
+        "name": "attempt_token",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 160
         }
       }
     },
@@ -1699,6 +2133,12 @@
       },
       "ArtifactSubject": {
         "$ref": "../schemas/http/artifact.schema.json#/$defs/artifactSubject"
+      },
+      "ExportJob": {
+        "$ref": "../schemas/http/export-job.schema.json#/$defs/exportJob"
+      },
+      "ExportDelivery": {
+        "$ref": "../schemas/http/export-job.schema.json#/$defs/exportDelivery"
       }
     }
   }

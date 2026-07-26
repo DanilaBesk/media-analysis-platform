@@ -5,6 +5,12 @@ interface ImportMetaEnv {
   readonly VITE_WS_URL?: string;
 }
 
+interface Window {
+  __WEB_UI_RUNTIME__?: {
+    channelAccountId?: string;
+  };
+}
+
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }

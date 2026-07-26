@@ -4,6 +4,7 @@ import {
   ArtifactsRouteShell,
   CollectionsRouteShell,
   DiagnosticsRouteShell,
+  ExportsRouteShell,
   InboxRouteShell,
   MediaAssetDetailRouteShell,
   RouteNotFoundShell,
@@ -45,6 +46,10 @@ export function createWebUiRoutes(runtime: WebUiRuntime): RouteObject[] {
         {
           path: "collections",
           element: <CollectionsRouteShell />,
+        },
+        {
+          path: "exports",
+          element: <ExportsRouteShell />,
         },
         {
           path: "runs",

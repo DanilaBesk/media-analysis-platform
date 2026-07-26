@@ -5,9 +5,10 @@
   "type": "module",
   "packageManager": "pnpm@10.27.0",
   "scripts": {
-    "dev": "vite",
+    "dev": "pnpm build && node src/serve-local.mjs",
+    "dev:vite": "vite",
     "build": "vite build",
-    "test": "vitest run",
+    "test": "NODE_ENV=test vitest run",
     "coverage": "vitest run --coverage"
   },
   "dependencies": {

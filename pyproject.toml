@@ -24,6 +24,8 @@ pythonpath = [
   "workers/common/src",
   "workers/transcription/src",
   "workers/agent-runner/src",
+  "workers/media-export/src",
+  "workers/metadata-enrichment/src",
   "apps/telegram-bot/src",
 ]
 testpaths = [
@@ -31,6 +33,8 @@ testpaths = [
   "workers/common/tests",
   "workers/transcription/tests",
   "workers/agent-runner/tests",
+  "workers/media-export/tests",
+  "workers/metadata-enrichment/tests",
   "apps/telegram-bot/tests",
 ]
 addopts = [

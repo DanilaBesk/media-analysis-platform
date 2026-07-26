@@ -12,8 +12,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Literal
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, BinaryIO, Literal
 from urllib.parse import urlparse
 
 from telegram_adapter.api_client import TelegramApiClient
@@ -30,6 +31,9 @@ SUPPORTED_URL_SCHEMES = {"http", "https"}
 CURRENT_MATERIALS_PANEL = "current_materials_panel"
 ANALYSIS_TASK_SURFACE = "analysis_task_surface"
 RESULT_ARTIFACT_SURFACE = "result_artifact_surface"
+EXPORT_TASK_SURFACE = "export_task_surface"
+ACTIVE_EXPORT_STATUSES = {"queued", "claimed", "running", "cancel_requested"}
+TERMINAL_EXPORT_STATUSES = {"succeeded", "failed", "canceled", "expired"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +44,8 @@ class TelegramFileInput:
     file_name: str | None = None
     content_type: str | None = None
     content: bytes | None = None
+    local_path: Path | None = None
+    file_handle: BinaryIO | None = None
     size_bytes: int | None = None
     duration_seconds: int | None = None
     caption: str | None = None
@@ -66,6 +72,8 @@ class InboxStatus:
     artifacts_by_run: dict[str, list[JsonObject]]
     diagnostics_by_run: dict[str, list[JsonObject]]
     rejected: list[IngressRecord]
+    active_exports: list[JsonObject] = field(default_factory=list)
+    recent_exports: list[JsonObject] = field(default_factory=list)
 
 
 class TelegramInboxGateway:
@@ -144,7 +152,7 @@ class TelegramInboxGateway:
     def add_file(self, *, channel_identity: JsonObject, file_input: TelegramFileInput) -> IngressRecord:
         if not file_input.file_id.strip():
             return IngressRecord(status="rejected", label=file_input.file_name or file_input.kind, reason="missing_file_id")
-        if file_input.content is None:
+        if file_input.content is None and file_input.local_path is None and file_input.file_handle is None:
             return IngressRecord(
                 status="rejected",
                 label=file_input.file_name or file_input.kind,
@@ -156,6 +164,8 @@ class TelegramInboxGateway:
             channel_account_id=channel_account_id,
             kind=file_input.kind,
             content=file_input.content,
+            file_path=file_input.local_path,
+            file_handle=file_input.file_handle,
             file_name=file_input.file_name or _default_upload_filename(file_input.kind, file_input.content_type),
             content_type=file_input.content_type,
             display_name=display_name,
@@ -267,6 +277,11 @@ class TelegramInboxGateway:
                     page_size=3,
                 ).get("items", [])
             )
+        export_page = getattr(self.api_client, "list_export_jobs", lambda **_: {"items": []})(
+            channel_account_id=channel_account_id,
+            page_size=10,
+        )
+        recent_exports = [job for job in export_page.get("items", []) if isinstance(job, dict)]
         return InboxStatus(
             channel_identity=channel_identity,
             collection=collection,
@@ -277,7 +292,90 @@ class TelegramInboxGateway:
             artifacts_by_run=artifacts_by_run,
             diagnostics_by_run=diagnostics_by_run,
             rejected=list(rejected or []),
+            active_exports=[job for job in recent_exports if str(job.get("status") or "") in ACTIVE_EXPORT_STATUSES],
+            recent_exports=recent_exports,
         )
+
+    def create_export_job(
+        self,
+        *,
+        channel_identity: JsonObject,
+        collection_id: str,
+        media_asset_id: str,
+        operation: str,
+        variant: JsonObject,
+        action_id: str,
+    ) -> JsonObject:
+        channel_account_id = self._channel_account_id(channel_identity)
+        collection = self.api_client.get_inbox_collection(channel_account_id=channel_account_id)
+        if str(collection.get("collection_id") or "") != collection_id:
+            raise RuntimeError("slot_not_visible")
+        item = self._collection_item_media_asset(
+            channel_account_id=channel_account_id,
+            collection_item=next(
+                (item for item in collection.get("items", []) if str(item.get("media_asset_id") or "") == media_asset_id),
+                {},
+            ),
+        )
+        if item is None or not _export_operation_allowed(item, operation):
+            raise RuntimeError("slot_not_visible")
+        return self.api_client.create_export_job(
+            channel_account_id=channel_account_id,
+            media_asset_id=media_asset_id,
+            operation=operation,
+            variant=variant,
+            delivery_channel="telegram",
+            idempotency_key=f"telegram:export-action:{action_id}",
+        )
+
+    def get_export_job(self, *, channel_identity: JsonObject, export_job_id: str) -> JsonObject:
+        return self.api_client.get_export_job(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+        )
+
+    def claim_export_delivery(self, *, channel_identity: JsonObject, export_job_id: str, lease_owner: str) -> JsonObject:
+        return self.api_client.claim_export_delivery(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+            lease_owner=lease_owner,
+        )
+
+    def acknowledge_export_delivery(
+        self, *, channel_identity: JsonObject, export_job_id: str, claim: JsonObject
+    ) -> JsonObject:
+        delivery = claim["delivery"]
+        return self.api_client.acknowledge_export_delivery(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+            export_delivery_id=str(delivery["export_delivery_id"]),
+            lease_owner=str(claim["lease_owner"]),
+            attempt_token=str(claim["attempt_token"]),
+        )
+
+    def fail_export_delivery(
+        self, *, channel_identity: JsonObject, export_job_id: str, claim: JsonObject, failure_code: str
+    ) -> JsonObject:
+        delivery = claim["delivery"]
+        return self.api_client.fail_export_delivery(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+            export_delivery_id=str(delivery["export_delivery_id"]),
+            lease_owner=str(claim["lease_owner"]),
+            attempt_token=str(claim["attempt_token"]),
+            failure_code=failure_code,
+            retryable=True,
+        )
+
+    def get_export_download(self, *, channel_identity: JsonObject, export_job_id: str) -> JsonObject:
+        return self.api_client.get_export_download(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+        )
+
+    def get_internal_export_download(self, *, channel_identity: JsonObject, export_job_id: str) -> JsonObject:
+        self._channel_account_id(channel_identity)
+        return self.api_client.get_internal_export_download_access(export_job_id=export_job_id)
 
     def _active_runs_with_latest_events(self, channel_account_id: str, active_runs: list[JsonObject]) -> list[JsonObject]:
         enriched: list[JsonObject] = []
@@ -434,6 +532,37 @@ class TelegramInboxGateway:
             ],
             option_snapshot={"channel": "telegram", "surface": "current_materials"},
             created_via_channel_account_id=channel_account_id,
+        )
+
+    def start_collection_processing_run(
+        self,
+        *,
+        channel_identity: JsonObject,
+        collection_id: str,
+        expected_version: int,
+        run_type: str = "transcription",
+    ) -> JsonObject:
+        collection = self._get_verified_inbox_collection(
+            channel_identity=channel_identity,
+            collection_id=collection_id,
+            expected_version=expected_version,
+        )
+        item_ids = [
+            str(item["media_asset_id"])
+            for item in collection.get("items", [])
+            if item.get("media_asset_id")
+        ]
+        if not item_ids:
+            raise RuntimeError("inbox_empty")
+        channel_account_id = self._channel_account_id(channel_identity)
+        return self.api_client.start_collection_processing_run(
+            channel_account_id=channel_account_id,
+            collection_id=str(collection["collection_id"]),
+            expected_version=int(collection["version"]),
+            items=[{"media_asset_id": media_asset_id, "position": index} for index, media_asset_id in enumerate(item_ids)],
+            run_type=run_type,
+            option_snapshot={"channel": "telegram", "surface": "current_materials"},
+            delivery={"strategy": "polling"},
         )
 
     def find_reusable_transcript_for_collection(
@@ -599,6 +728,32 @@ class TelegramInboxGateway:
             subjects=[_surface_subject("analysis_run", analysis_run_id, "primary")],
             idempotency_key=f"telegram:surface:analysis-run:{analysis_run_id}",
         )
+
+    def upsert_export_task_surface(
+        self, *, channel_identity: JsonObject, export_job: JsonObject, address: JsonObject, display_state: JsonObject
+    ) -> JsonObject:
+        account = self.resolve_channel_account(channel_identity=channel_identity)
+        export_job_id = str(export_job["export_job_id"])
+        return self.api_client.upsert_channel_surface(
+            channel_account_id=str(account["channel_account_id"]),
+            surface_type=EXPORT_TASK_SURFACE,
+            surface_key=_export_task_surface_key(export_job_id),
+            address=address,
+            address_fingerprint=_telegram_address_fingerprint(address),
+            display_state=display_state,
+            subjects=[_surface_subject("export_job", export_job_id, "primary")],
+            idempotency_key=f"telegram:surface:export-job:{export_job_id}",
+        )
+
+    def find_export_task_surface(self, *, channel_identity: JsonObject, export_job_id: str) -> JsonObject | None:
+        if not export_job_id.strip():
+            return None
+        account = self.resolve_channel_account(channel_identity=channel_identity)
+        page = self.api_client.list_channel_surfaces(
+            channel_account_id=str(account["channel_account_id"]), subject_type="export_job", subject_id=export_job_id,
+            active_only=True, page_size=10,
+        )
+        return next((surface for surface in page.get("items") or [] if surface.get("surface_type") == EXPORT_TASK_SURFACE), None)
 
     def find_analysis_task_surface(
         self,
@@ -984,6 +1139,26 @@ def _current_materials_surface_key(channel_identity: JsonObject) -> str:
 
 def _analysis_task_surface_key(analysis_run_id: str) -> str:
     return f"analysis_run:{analysis_run_id}"
+
+
+def _export_task_surface_key(export_job_id: str) -> str:
+    return f"export_job:{export_job_id}"
+
+
+def _export_operation_allowed(item: JsonObject, operation: str) -> bool:
+    if str(item.get("status") or "") not in {"ready", "available"}:
+        return False
+    kind = str(item.get("kind") or "")
+    if operation in {"youtube_audio", "youtube_video"}:
+        origin = item.get("origin")
+        url = str(origin.get("origin_ref") or "") if isinstance(origin, dict) else ""
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        return kind == "url" and (host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"))
+    return operation == "video_to_audio" and kind == "video"
+
+
+def _export_variant_key(variant: JsonObject) -> str:
+    return ":".join(f"{key}={variant[key]}" for key in sorted(variant))
 
 
 def _result_artifact_surface_key(artifact_id: str) -> str:

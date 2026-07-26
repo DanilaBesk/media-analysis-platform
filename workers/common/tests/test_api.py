@@ -730,6 +730,34 @@ def test_selection_item_materialization_marks_missing_object_key_as_unsupported(
     assert descriptor.is_object_backed is False
 
 
+def test_selection_item_materialization_uses_canonical_snapshot_locator_after_alias_cleanup() -> None:
+    payload = _selection_item(origin_type="object", kind="audio")
+    payload["origin_snapshot"]["object_ref"] = "sources/legacy/removed-alias"
+    payload["storage_snapshot"].update(
+        {
+            "stored_object_id": "77777777-7777-4777-8777-777777777777",
+            "bucket": "sources",
+            "object_key": "sources/uploads/canonical/1/source",
+        }
+    )
+    item = ClaimedAnalysisRunStep.from_payload(
+        _claim_response(
+            selection_snapshot={
+                "selection_snapshot_id": SNAPSHOT_ID,
+                "items": [payload],
+                "option_snapshot": {},
+                "sealed_at": "2026-05-10T12:00:00Z",
+            }
+        )
+    ).selection_snapshot.items[0]
+
+    descriptor = SelectionItemMaterialization.from_selection_item(item)
+
+    assert descriptor.source_id == "77777777-7777-4777-8777-777777777777"
+    assert descriptor.object_key == "sources/uploads/canonical/1/source"
+    assert descriptor.materialization_kind == "object"
+
+
 def test_ordered_input_request_access_and_helper_branches_cover_edge_paths() -> None:
     ordered_input = api_module.OrderedWorkerInput.from_payload(
         {

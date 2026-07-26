@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +181,178 @@ func TestTargetRuntimeServiceResolveChannelAccountReturnsPersistedConflictID(t *
 	}
 	if account.ChannelAccountID != "persisted-channel-account" {
 		t.Fatalf("resolved channel account id = %q, want persisted conflict id", account.ChannelAccountID)
+	}
+}
+
+func TestFinalizeExportJobRejectsStaleAttemptBeforeObjectPromotion(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{exportJob: targetstore.ExportJobRecord{
+		ID: "export-1", ChannelAccountID: "channel-account-1", MediaAssetID: "media-1",
+		Operation: "youtube_audio", DeliveryChannel: "telegram", Status: "running",
+		Version: 2, RetryGeneration: 0, AttemptNo: 2, AttemptToken: "current-attempt",
+		LeaseOwner: "worker-current", MaxAttempts: 3, VariantJSON: []byte(`{"audio_bitrate_kbps":192}`),
+		ProgressJSON: []byte(`{}`), CreatedAt: now.Add(-time.Minute),
+	}}
+	objects := &fakeTargetObjectStore{}
+	service := NewTargetRuntimeService(
+		store,
+		WithTargetObjectStore(objects),
+		WithTargetClock(func() time.Time { return now }),
+	)
+
+	_, err := service.FinalizeExportJob(context.Background(), TargetFinalizeExportJobRequest{
+		ExportJobID: "export-1", LeaseOwner: "worker-stale", AttemptToken: "stale-attempt",
+		Outcome: "succeeded", Output: &TargetExportPublication{
+			ContentType: "audio/mp4", Filename: "result.m4a", SizeBytes: 5,
+			SHA256:     "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b",
+			StagingKey: "transient/staging/export-1/stale-attempt/result.m4a",
+		},
+	})
+	if !errors.Is(err, storage.ErrExportJobConflict) {
+		t.Fatalf("FinalizeExportJob() error = %v, want export conflict", err)
+	}
+	if len(objects.promotions) != 0 {
+		t.Fatalf("stale attempt promoted objects: %#v", objects.promotions)
+	}
+}
+
+func TestReconcileRetentionRepairsPublicationsMarksMissingAndDeletesManagedOrphans(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	publishing := targetstore.StoredObjectRecord{
+		ID: "publishing-1", Bucket: storage.SourcesBucket,
+		ObjectKey: "sources/uploads/publishing-1/1/source", StagingKey: "staging/uploads/attempt-1",
+		Generation: 1, SizeBytes: 5, Checksum: "sha256:publish", StorageStatus: "publishing", CreatedAt: now.Add(-2 * time.Hour),
+	}
+	missing := targetstore.StoredObjectRecord{
+		ID: "missing-1", Bucket: storage.SourcesBucket,
+		ObjectKey: "sources/uploads/missing-1/1/source", Generation: 1,
+		SizeBytes: 7, StorageStatus: "available", CreatedAt: now.Add(-2 * time.Hour),
+	}
+	legacy := targetstore.StoredObjectRecord{
+		ID: "legacy-1", Bucket: storage.SourcesBucket,
+		ObjectKey: "sources/uploads/legacy-1/1/source", Generation: 1,
+		SizeBytes: 9, StorageStatus: "available", CreatedAt: now.Add(-2 * time.Hour),
+	}
+	store := &fakeTargetRuntimeStore{reconcileObjects: []targetstore.StoredObjectRecord{publishing, missing, legacy}}
+	objects := &fakeTargetObjectStore{
+		objects: map[string]storage.ManagedObjectInfo{
+			storage.SourcesBucket + "/" + publishing.ObjectKey:               {SizeBytes: publishing.SizeBytes, Metadata: map[string]string{"sha256": "publish"}},
+			storage.SourcesBucket + "/" + legacy.ObjectKey:                   {SizeBytes: legacy.SizeBytes},
+			storage.ArtifactsBucket + "/transient/exports/orphan/result.m4a": {SizeBytes: 11},
+		},
+		listEntries: []storage.ManagedObjectEntry{{
+			Bucket: storage.ArtifactsBucket, ObjectKey: "transient/exports/orphan/result.m4a",
+			SizeBytes: 11, LastModified: now.Add(-2 * time.Hour),
+		}},
+	}
+	service := NewTargetRuntimeService(
+		store,
+		WithTargetObjectStore(objects),
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetObjectOrphanGrace(time.Hour),
+	)
+
+	result, err := service.ReconcileRetention(context.Background(), TargetRetentionReconcileRequest{BatchSize: 10})
+	if err != nil {
+		t.Fatalf("ReconcileRetention() error = %v", err)
+	}
+	if result.PublicationsReconciled != 1 || result.ObjectsMarkedMissing != 1 || result.OrphansDeleted != 1 {
+		t.Fatalf("ReconcileRetention() result = %#v", result)
+	}
+	if len(store.completedPublications) != 1 || store.completedPublications[0] != publishing.ID {
+		t.Fatalf("completed publications = %#v", store.completedPublications)
+	}
+	if len(store.markedMissing) != 1 || store.markedMissing[0] != missing.ID {
+		t.Fatalf("marked missing = %#v", store.markedMissing)
+	}
+	if _, exists := objects.objects[storage.ArtifactsBucket+"/transient/exports/orphan/result.m4a"]; exists {
+		t.Fatal("managed orphan was not deleted")
+	}
+}
+
+func TestReconcileRetentionDryRunDoesNotMutateObjectsOrCursors(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
+	record := targetstore.StoredObjectRecord{
+		ID: "missing-1", Bucket: storage.SourcesBucket,
+		ObjectKey: "sources/uploads/missing-1/1/source", Generation: 1,
+		SizeBytes: 7, StorageStatus: "available", CreatedAt: now.Add(-2 * time.Hour),
+	}
+	store := &fakeTargetRuntimeStore{
+		reconcileObjects: []targetstore.StoredObjectRecord{record},
+		reconcileCursors: map[string]string{"stored_objects": "before"},
+	}
+	objects := &fakeTargetObjectStore{
+		objects: map[string]storage.ManagedObjectInfo{
+			storage.ArtifactsBucket + "/transient/exports/orphan/result.m4a": {SizeBytes: 11},
+		},
+		listEntries: []storage.ManagedObjectEntry{{
+			Bucket: storage.ArtifactsBucket, ObjectKey: "transient/exports/orphan/result.m4a",
+			SizeBytes: 11, LastModified: now.Add(-2 * time.Hour),
+		}},
+	}
+	service := NewTargetRuntimeService(
+		store,
+		WithTargetObjectStore(objects),
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetObjectOrphanGrace(time.Hour),
+	)
+
+	result, err := service.ReconcileRetention(context.Background(), TargetRetentionReconcileRequest{BatchSize: 10, DryRun: true})
+	if err != nil {
+		t.Fatalf("ReconcileRetention() error = %v", err)
+	}
+	if result.ObjectsMarkedMissing != 1 || result.OrphansDeleted != 1 {
+		t.Fatalf("ReconcileRetention() result = %#v", result)
+	}
+	if len(store.markedMissing) != 0 {
+		t.Fatalf("dry run marked objects missing: %#v", store.markedMissing)
+	}
+	if store.reconcileCursors["stored_objects"] != "before" || len(store.reconcileCursors) != 1 {
+		t.Fatalf("dry run mutated cursors: %#v", store.reconcileCursors)
+	}
+	if _, exists := objects.objects[storage.ArtifactsBucket+"/transient/exports/orphan/result.m4a"]; !exists {
+		t.Fatal("dry run deleted managed orphan")
+	}
+}
+
+func TestReconcileRetentionAdvancesAcrossDatabaseAndPrefixPages(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 14, 0, 0, 0, time.UTC)
+	records := []targetstore.StoredObjectRecord{
+		{ID: "00000000-0000-0000-0000-000000000001", Bucket: storage.SourcesBucket, ObjectKey: "sources/uploads/1/1/source", Generation: 1, SizeBytes: 1, Checksum: "sha256:one", StorageStatus: "available"},
+		{ID: "00000000-0000-0000-0000-000000000002", Bucket: storage.SourcesBucket, ObjectKey: "sources/uploads/2/1/source", Generation: 1, SizeBytes: 2, Checksum: "sha256:two", StorageStatus: "available"},
+		{ID: "00000000-0000-0000-0000-000000000003", Bucket: storage.SourcesBucket, ObjectKey: "sources/uploads/3/1/source", Generation: 1, SizeBytes: 3, Checksum: "sha256:three", StorageStatus: "available"},
+	}
+	store := &fakeTargetRuntimeStore{reconcileObjects: records}
+	objects := &fakeTargetObjectStore{
+		objects: map[string]storage.ManagedObjectInfo{
+			storage.SourcesBucket + "/" + records[0].ObjectKey: {SizeBytes: 1, Metadata: map[string]string{"sha256": "one"}},
+			storage.SourcesBucket + "/" + records[1].ObjectKey: {SizeBytes: 2, Metadata: map[string]string{"sha256": "two"}},
+			storage.SourcesBucket + "/staging/uploads/a":       {SizeBytes: 1},
+			storage.SourcesBucket + "/staging/uploads/b":       {SizeBytes: 1},
+		},
+		listEntries: []storage.ManagedObjectEntry{
+			{Bucket: storage.SourcesBucket, ObjectKey: "staging/uploads/a", LastModified: now.Add(-2 * time.Hour)},
+			{Bucket: storage.SourcesBucket, ObjectKey: "staging/uploads/b", LastModified: now.Add(-2 * time.Hour)},
+		},
+	}
+	service := NewTargetRuntimeService(store, WithTargetObjectStore(objects), WithTargetClock(func() time.Time { return now }), WithTargetObjectOrphanGrace(time.Hour))
+	for range 3 {
+		if _, err := service.ReconcileRetention(context.Background(), TargetRetentionReconcileRequest{BatchSize: 1}); err != nil {
+			t.Fatalf("ReconcileRetention() error = %v", err)
+		}
+	}
+	if len(store.markedMissing) != 1 || store.markedMissing[0] != records[2].ID {
+		t.Fatalf("database cursor did not reach final row: %#v", store.markedMissing)
+	}
+	if _, exists := objects.objects[storage.SourcesBucket+"/staging/uploads/a"]; exists {
+		t.Fatal("first orphan page was not deleted")
+	}
+	if _, exists := objects.objects[storage.SourcesBucket+"/staging/uploads/b"]; exists {
+		t.Fatal("second orphan page was starved")
 	}
 }
 
@@ -1692,8 +1866,8 @@ func TestTargetRuntimeServiceMapsAndPropagatesTargetStoreFailures(t *testing.T) 
 			wantErr: storage.ErrSelectionSnapshotNotFound,
 		},
 		{
-			name:  "create run propagates snapshot item failure",
-			store: &fakeTargetRuntimeStore{failMethod: "ListSelectionSnapshotItems", failErr: boom},
+			name:  "create run propagates scoped snapshot failure",
+			store: &fakeTargetRuntimeStore{failMethod: "GetSelectionSnapshot", failErr: boom},
 			run: func(s *TargetRuntimeService) error {
 				_, err := s.CreateAnalysisRun(context.Background(), TargetCreateAnalysisRunRequest{SelectionSnapshotID: "snapshot-1"})
 				return err
@@ -2276,6 +2450,45 @@ func TestTargetRuntimeServiceRequiresStoreForAllOperations(t *testing.T) {
 	}
 }
 
+func TestTargetRuntimeServiceStartsProcessingWithOneAtomicStoreMutation(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{}
+	service := NewTargetRuntimeService(store,
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetIDGenerator(sequenceTargetIDs("snapshot-atomic", "snapshot-item-1", "run-atomic", "step-atomic", "step-input-atomic", "event-atomic")),
+	)
+
+	result, err := service.StartCollectionProcessingRun(context.Background(), TargetStartProcessingRunRequest{
+		ChannelAccountID: "channel-account-1",
+		CollectionID:     "inbox-1",
+		ExpectedVersion:  7,
+		Items: []TargetSelectionSnapshotItemRequest{{
+			MediaAssetID: "media-asset-1",
+			Position:     0,
+		}},
+		RunType:        "transcription",
+		IdempotencyKey: "telegram:process:1",
+	})
+
+	if err != nil {
+		t.Fatalf("StartCollectionProcessingRun() error = %v", err)
+	}
+	if result.AnalysisRun.AnalysisRunID != "run-atomic" || result.SelectionSnapshot.SelectionSnapshotID != "snapshot-atomic" {
+		t.Fatalf("processing result = %#v", result)
+	}
+	if result.CollectionVersion != 8 || len(result.DetachedMediaAssetIDs) != 1 || result.DetachedMediaAssetIDs[0] != "media-asset-1" {
+		t.Fatalf("processing detach result = %#v", result)
+	}
+	params := store.processingRunParams
+	if params.ExpectedVersion != 7 || params.CollectionID != "inbox-1" || params.Graph.Run.SelectionSnapshot != "snapshot-atomic" {
+		t.Fatalf("atomic store params = %#v", params)
+	}
+	if len(params.SnapshotItems) != 1 || len(params.Graph.StepInputs) != 1 || params.Graph.StepInputs[0].SelectionSnapshotItemID != params.SnapshotItems[0].ID {
+		t.Fatalf("atomic graph lineage = %#v", params)
+	}
+}
+
 type fakeTargetRuntimeStore struct {
 	channelAccount         targetstore.ChannelAccountRecord
 	operation              targetstore.OperationRequestRecord
@@ -2286,6 +2499,7 @@ type fakeTargetRuntimeStore struct {
 	selectionSnapshotItems []targetstore.SelectionSnapshotItemRecord
 	snapshotItems          []targetstore.SelectionSnapshotItemRecord
 	analysisRunGraph       targetstore.AnalysisRunGraph
+	processingRunParams    targetstore.CreateProcessingRunParams
 	getAnalysisRunErr      error
 	checkStepErr           error
 	progressCalls          int
@@ -2308,6 +2522,12 @@ type fakeTargetRuntimeStore struct {
 	failMethod             string
 	failErr                error
 	claimUnclaimed         bool
+	exportJob              targetstore.ExportJobRecord
+	finalizeExportParams   targetstore.FinalizeExportJobParams
+	reconcileObjects       []targetstore.StoredObjectRecord
+	completedPublications  []string
+	markedMissing          []string
+	reconcileCursors       map[string]string
 }
 
 type fakeReusableTranscript struct {
@@ -2448,6 +2668,65 @@ func (s *fakeTargetRuntimeStore) GetStoredObject(_ context.Context, storedObject
 	}, nil
 }
 
+func (s *fakeTargetRuntimeStore) FindStoredObjectByDigest(context.Context, string, string) (targetstore.StoredObjectRecord, error) {
+	return targetstore.StoredObjectRecord{}, sql.ErrNoRows
+}
+
+func (s *fakeTargetRuntimeStore) PrepareStoredObjectPublication(_ context.Context, candidate targetstore.StoredObjectRecord) (targetstore.PrepareStoredObjectPublicationResult, error) {
+	return targetstore.PrepareStoredObjectPublicationResult{StoredObject: candidate, Publisher: true}, nil
+}
+
+func (s *fakeTargetRuntimeStore) FindStoredObjectByLocation(context.Context, string, string) (targetstore.StoredObjectRecord, error) {
+	return targetstore.StoredObjectRecord{}, sql.ErrNoRows
+}
+
+func (s *fakeTargetRuntimeStore) ListStoredObjectsForReconcile(_ context.Context, afterID string, limit int) ([]targetstore.StoredObjectRecord, error) {
+	start := 0
+	if afterID != "" {
+		for index, object := range s.reconcileObjects {
+			if object.ID == afterID {
+				start = index + 1
+				break
+			}
+		}
+	}
+	end := start + limit
+	if end > len(s.reconcileObjects) {
+		end = len(s.reconcileObjects)
+	}
+	return append([]targetstore.StoredObjectRecord(nil), s.reconcileObjects[start:end]...), nil
+}
+
+func (s *fakeTargetRuntimeStore) CompleteStoredObjectPublication(_ context.Context, storedObjectID string, _ int, _ string, _ time.Time) error {
+	s.completedPublications = append(s.completedPublications, storedObjectID)
+	return nil
+}
+
+func (s *fakeTargetRuntimeStore) MarkStoredObjectMissing(_ context.Context, storedObjectID string, _ int, _ time.Time) error {
+	s.markedMissing = append(s.markedMissing, storedObjectID)
+	return nil
+}
+
+func (s *fakeTargetRuntimeStore) ClaimObjectDeleteFence(context.Context, string, string, string, time.Time, time.Time) (bool, error) {
+	return true, nil
+}
+
+func (s *fakeTargetRuntimeStore) ReleaseObjectDeleteFence(context.Context, string, string, string) error {
+	return nil
+}
+
+func (s *fakeTargetRuntimeStore) GetReconcileCursor(_ context.Context, name string) (string, error) {
+	return s.reconcileCursors[name], nil
+}
+
+func (s *fakeTargetRuntimeStore) SetReconcileCursor(_ context.Context, name, cursor string, _ time.Time) error {
+	if s.reconcileCursors == nil {
+		s.reconcileCursors = make(map[string]string)
+	}
+	s.reconcileCursors[name] = cursor
+	return nil
+}
+
 func (s *fakeTargetRuntimeStore) DeleteMediaAsset(_ context.Context, channelAccountID, mediaAssetID string, deletedAt time.Time) (targetstore.MediaAssetRecord, error) {
 	if err := s.fail("DeleteMediaAsset"); err != nil {
 		return targetstore.MediaAssetRecord{}, err
@@ -2577,6 +2856,17 @@ func (s *fakeTargetRuntimeStore) CreateSelectionSnapshot(_ context.Context, snap
 	s.selectionSnapshot = snapshot
 	s.selectionSnapshotItems = append([]targetstore.SelectionSnapshotItemRecord(nil), items...)
 	return nil
+}
+
+func (s *fakeTargetRuntimeStore) CreateProcessingRun(_ context.Context, params targetstore.CreateProcessingRunParams) (targetstore.CreateProcessingRunResult, error) {
+	if err := s.fail("CreateProcessingRun"); err != nil {
+		return targetstore.CreateProcessingRunResult{}, err
+	}
+	s.processingRunParams = params
+	return targetstore.CreateProcessingRunResult{
+		Snapshot: params.Snapshot, SnapshotItems: params.SnapshotItems, Run: params.Graph.Run,
+		DetachedAssetIDs: params.CapturedAssetIDs, CollectionVersion: params.ExpectedVersion + 1,
+	}, nil
 }
 
 func (s *fakeTargetRuntimeStore) GetSelectionSnapshot(_ context.Context, channelAccountID, selectionSnapshotID string) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, error) {
@@ -3005,6 +3295,74 @@ func (s *fakeTargetRuntimeStore) ListChannelSurfaceEvents(_ context.Context, sur
 	}}, nil
 }
 
+func (s *fakeTargetRuntimeStore) CreateExportJob(_ context.Context, params targetstore.CreateExportJobParams) (targetstore.ExportJobRecord, error) {
+	return params.Job, nil
+}
+func (s *fakeTargetRuntimeStore) GetExportJob(_ context.Context, channelAccountID, exportJobID string) (targetstore.ExportJobRecord, error) {
+	if s.exportJob.ID != "" {
+		return s.exportJob, nil
+	}
+	return targetstore.ExportJobRecord{ID: exportJobID, ChannelAccountID: channelAccountID, MediaAssetID: "media-1", Operation: "youtube_audio", DeliveryChannel: "telegram", VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), Status: "queued", Version: 1, MaxAttempts: 3, ProgressJSON: []byte(`{"stage":"queued"}`), CreatedAt: time.Now()}, nil
+}
+func (s *fakeTargetRuntimeStore) GetExportJobByID(_ context.Context, exportJobID string) (targetstore.ExportJobRecord, error) {
+	return s.GetExportJob(context.Background(), "channel-account-1", exportJobID)
+}
+func (s *fakeTargetRuntimeStore) ListExportJobs(_ context.Context, channelAccountID, _ string, _ int) ([]targetstore.ExportJobRecord, error) {
+	job, _ := s.GetExportJob(context.Background(), channelAccountID, "export-1")
+	return []targetstore.ExportJobRecord{job}, nil
+}
+func (s *fakeTargetRuntimeStore) ListExportJobQueue(_ context.Context, _ int) ([]targetstore.ExportJobRecord, error) {
+	job, _ := s.GetExportJob(context.Background(), "channel-account-1", "export-1")
+	return []targetstore.ExportJobRecord{job}, nil
+}
+func (s *fakeTargetRuntimeStore) ClaimExportJob(_ context.Context, params targetstore.ClaimExportJobParams) (targetstore.ExportJobRecord, bool, error) {
+	job, _ := s.GetExportJob(context.Background(), "channel-account-1", params.ExportJobID)
+	job.Status, job.LeaseOwner, job.AttemptToken = "claimed", params.LeaseOwner, params.AttemptToken
+	job.LeaseExpiresAt = &params.LeaseExpiresAt
+	return job, true, nil
+}
+func (s *fakeTargetRuntimeStore) RecordExportJobProgress(context.Context, targetstore.RecordExportJobProgressParams) error {
+	return nil
+}
+func (s *fakeTargetRuntimeStore) RequestExportJobCancel(_ context.Context, channelAccountID, exportJobID string, requestedAt time.Time) (targetstore.ExportJobRecord, error) {
+	job, _ := s.GetExportJob(context.Background(), channelAccountID, exportJobID)
+	job.Status, job.CancelRequestedAt = "cancel_requested", &requestedAt
+	return job, nil
+}
+func (s *fakeTargetRuntimeStore) RetryExportJob(_ context.Context, channelAccountID, exportJobID, _ string, _ targetstore.StoredObjectPinRecord, _ time.Time) (targetstore.ExportJobRecord, error) {
+	return s.GetExportJob(context.Background(), channelAccountID, exportJobID)
+}
+func (s *fakeTargetRuntimeStore) FinalizeExportJob(_ context.Context, params targetstore.FinalizeExportJobParams) (targetstore.ExportJobRecord, error) {
+	s.finalizeExportParams = params
+	job, _ := s.GetExportJob(context.Background(), "channel-account-1", params.ExportJobID)
+	job.Status, job.OutputStoredObjectID = params.Status, params.Output.ID
+	return job, nil
+}
+func (s *fakeTargetRuntimeStore) ListExportDeliveries(context.Context, string, string) ([]targetstore.ExportDeliveryRecord, error) {
+	return []targetstore.ExportDeliveryRecord{}, nil
+}
+func (s *fakeTargetRuntimeStore) ClaimExportDelivery(context.Context, targetstore.ClaimExportDeliveryParams) (targetstore.ExportDeliveryRecord, bool, error) {
+	return targetstore.ExportDeliveryRecord{}, false, nil
+}
+func (s *fakeTargetRuntimeStore) FinalizeExportDelivery(context.Context, targetstore.FinalizeExportDeliveryParams) (targetstore.ExportDeliveryRecord, error) {
+	return targetstore.ExportDeliveryRecord{}, nil
+}
+func (s *fakeTargetRuntimeStore) ReclaimExportJobs(context.Context, time.Time, int) (targetstore.ExportJobReclaimResult, error) {
+	return targetstore.ExportJobReclaimResult{}, nil
+}
+func (s *fakeTargetRuntimeStore) ReclaimExportDeliveries(context.Context, time.Time, int) (int64, error) {
+	return 0, nil
+}
+func (s *fakeTargetRuntimeStore) ClaimRetentionDeletes(context.Context, string, string, time.Time, time.Time, int) ([]targetstore.RetentionDeleteClaimRecord, error) {
+	return []targetstore.RetentionDeleteClaimRecord{}, nil
+}
+func (s *fakeTargetRuntimeStore) CompleteRetentionDelete(context.Context, string, int, string, string, time.Time) error {
+	return nil
+}
+func (s *fakeTargetRuntimeStore) FailRetentionDelete(context.Context, string, int, string, string, time.Time) error {
+	return nil
+}
+
 func sequenceTargetIDs(ids ...string) func() string {
 	next := 0
 	return func() string {
@@ -3018,8 +3376,11 @@ func sequenceTargetIDs(ids ...string) func() string {
 }
 
 type fakeTargetObjectStore struct {
-	puts []fakeTargetObjectPut
-	err  error
+	puts        []fakeTargetObjectPut
+	promotions  [][3]string
+	objects     map[string]storage.ManagedObjectInfo
+	listEntries []storage.ManagedObjectEntry
+	err         error
 }
 
 type fakeTargetObjectPut struct {
@@ -3044,4 +3405,54 @@ func (f *fakeTargetObjectStore) PutObject(_ context.Context, bucket, objectKey, 
 
 func (f *fakeTargetObjectStore) PresignGetObject(_ context.Context, bucket, objectKey string, _ time.Duration) (string, time.Time, error) {
 	return "http://object-store/" + bucket + "/" + objectKey, time.Time{}, nil
+}
+
+func (f *fakeTargetObjectStore) PutObjectStream(_ context.Context, bucket, objectKey, contentType string, _ io.Reader, sizeBytes int64, metadata map[string]string) error {
+	if f.objects == nil {
+		f.objects = make(map[string]storage.ManagedObjectInfo)
+	}
+	f.objects[bucket+"/"+objectKey] = storage.ManagedObjectInfo{SizeBytes: sizeBytes, ContentType: contentType, Metadata: metadata}
+	return f.err
+}
+
+func (f *fakeTargetObjectStore) PromoteObject(_ context.Context, bucket, stagingKey, objectKey string, metadata map[string]string) error {
+	f.promotions = append(f.promotions, [3]string{bucket, stagingKey, objectKey})
+	if f.err != nil {
+		return f.err
+	}
+	if f.objects != nil {
+		promoted := f.objects[bucket+"/"+stagingKey]
+		if len(metadata) > 0 {
+			promoted.Metadata = metadata
+		}
+		f.objects[bucket+"/"+objectKey] = promoted
+		delete(f.objects, bucket+"/"+stagingKey)
+	}
+	return nil
+}
+
+func (f *fakeTargetObjectStore) StatObject(_ context.Context, bucket, objectKey string) (storage.ManagedObjectInfo, error) {
+	info, ok := f.objects[bucket+"/"+objectKey]
+	if !ok {
+		return storage.ManagedObjectInfo{}, storage.ErrObjectNotFound
+	}
+	return info, nil
+}
+
+func (f *fakeTargetObjectStore) DeleteObject(_ context.Context, bucket, objectKey string) error {
+	delete(f.objects, bucket+"/"+objectKey)
+	return f.err
+}
+
+func (f *fakeTargetObjectStore) ListObjects(_ context.Context, bucket, prefix, startAfter string, limit int) ([]storage.ManagedObjectEntry, error) {
+	entries := make([]storage.ManagedObjectEntry, 0, limit)
+	for _, entry := range f.listEntries {
+		if entry.Bucket == bucket && strings.HasPrefix(entry.ObjectKey, prefix) && entry.ObjectKey > startAfter {
+			entries = append(entries, entry)
+			if len(entries) >= limit {
+				break
+			}
+		}
+	}
+	return entries, f.err
 }

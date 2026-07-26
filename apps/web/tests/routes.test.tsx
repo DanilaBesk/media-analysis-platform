@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createWebUiRoutes } from "../src/app/routes";
 import type { WebUiRuntime } from "../src/app/runtime";
@@ -14,7 +14,11 @@ const routerFuture = {
   v7_skipActionErrorRevalidation: true,
 } as const;
 const routerProviderFuture = { v7_startTransition: true } as const;
-const channelAccountId = "web-console";
+const channelAccountId = "66666666-6666-4666-8666-666666666666";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function secondMediaAsset() {
   return mediaAsset({
@@ -184,12 +188,35 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
     }),
     getMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
     addMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ media_asset_id: "media-2", display_name: "Fresh note" })),
+    uploadMediaAsset: vi.fn().mockResolvedValue(mediaAsset({ media_asset_id: "media-upload", display_name: "sample.wav" })),
     removeMediaAsset: vi.fn().mockResolvedValue(
       mediaAsset({
         status: "deleted",
         deleted_at: softDeletedAt,
       }),
     ),
+    createExportJob: vi.fn().mockResolvedValue({
+      export_job_id: "export-2",
+      channel_account_id: channelAccountId,
+      media_asset_id: "media-2",
+      operation: "video_to_audio",
+      variant: { audio_bitrate_kbps: 128 },
+      status: "queued",
+      version: 1,
+      retry_generation: 0,
+      attempt_no: 0,
+      max_attempts: 3,
+      progress: { stage: "queued" },
+      created_at: "2026-05-10T00:00:00Z",
+    }),
+    listExportJobs: vi.fn().mockResolvedValue({
+      items: [],
+      page: { page_size: 50, has_more: false },
+    }),
+    getExportJob: vi.fn(),
+    cancelExportJob: vi.fn(),
+    retryExportJob: vi.fn(),
+    resolveExportDownload: vi.fn(),
     getInboxCollection: vi.fn().mockResolvedValue(collection({ kind: "inbox", name: "Inbox" })),
     listCollections: vi.fn().mockResolvedValue({
       items: [collection()],
@@ -338,6 +365,7 @@ function makeRuntime(overrides: Partial<WebUiApiClient> = {}) {
     env: {
       apiBaseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
+      channelAccountId,
     },
     apiClient,
   };
@@ -360,9 +388,10 @@ describe("createWebUiRoutes", () => {
 
     expect(await screen.findByRole("heading", { name: "Материалы" })).toBeVisible();
     const primaryNav = within(screen.getByRole("navigation", { name: "Основная навигация" }));
-    expect(primaryNav.getAllByRole("link")).toHaveLength(5);
+    expect(primaryNav.getAllByRole("link")).toHaveLength(6);
     expect(primaryNav.getByRole("link", { name: "Материалы" })).toHaveAttribute("href", "/");
     expect(primaryNav.getByRole("link", { name: "Группы" })).toHaveAttribute("href", "/collections");
+    expect(primaryNav.getByRole("link", { name: "Экспорт" })).toHaveAttribute("href", "/exports");
     expect(primaryNav.getByRole("link", { name: "Подборка" })).toHaveAttribute("href", "/runs");
     expect(primaryNav.getByRole("link", { name: "Результаты" })).toHaveAttribute("href", "/artifacts");
     expect(primaryNav.getByRole("link", { name: "Проверки" })).toHaveAttribute("href", "/diagnostics");
@@ -394,6 +423,165 @@ describe("createWebUiRoutes", () => {
       expect(runtime.apiClient.removeMediaAsset).toHaveBeenCalledWith(channelAccountId, "media-1");
     });
     expect(await within(runtime.container).findByText("Удалено: Call note")).toBeVisible();
+  });
+
+  it("keeps export actions separate from processing and creates the selected YouTube variant", async () => {
+    const youtube = mediaAsset({
+      media_asset_id: "youtube-1",
+      kind: "url",
+      display_name: "YouTube interview",
+      origin: { origin_type: "url", url: "https://www.youtube.com/watch?v=abc" },
+    });
+    const runtime = renderRoute("/exports?media_asset_id=youtube-1", {
+      listMediaAssets: vi.fn().mockResolvedValue({ items: [youtube, secondMediaAsset()], page: { page_size: 50, has_more: false } }),
+    });
+
+    expect(await screen.findByRole("heading", { name: "Скачать или конвертировать" })).toBeVisible();
+    expect(screen.getByText("Экспорт не меняет текущие материалы и не запускает обработку.")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Видео" }));
+    fireEvent.change(screen.getByLabelText("Качество видео"), { target: { value: "1080p" } });
+    fireEvent.click(screen.getByRole("button", { name: "Скачать" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.createExportJob).toHaveBeenCalledWith(
+        channelAccountId,
+        "youtube-1",
+        expect.objectContaining({
+          operation: "youtube_video",
+          variant: { video_quality: "1080p" },
+          deliveryChannel: "web",
+        }),
+      );
+    });
+  });
+
+  it("offers contextual export links for YouTube and uploaded video materials", async () => {
+    const youtube = mediaAsset({
+      media_asset_id: "youtube-1",
+      kind: "url",
+      display_name: "YouTube interview",
+      origin: { origin_type: "url", url: "https://youtu.be/abc" },
+    });
+    const video = mediaAsset({
+      media_asset_id: "video-1",
+      kind: "video",
+      display_name: "Uploaded recording",
+      origin: { origin_type: "object", object_ref: "web-local://recording.mp4", content_type: "video/mp4" },
+    });
+    renderRoute("/", {
+      listMediaAssets: vi.fn().mockResolvedValue({ items: [youtube, video], page: { page_size: 50, has_more: false } }),
+    });
+
+    expect(await screen.findByRole("link", { name: "Скачать" })).toHaveAttribute("href", "/exports?media_asset_id=youtube-1");
+    expect(screen.getByRole("link", { name: "В аудио" })).toHaveAttribute("href", "/exports?media_asset_id=video-1");
+  });
+
+  it("shows export progress and provides cancel, retry, and download controls", async () => {
+    const video = mediaAsset({
+      media_asset_id: "video-1",
+      kind: "video",
+      display_name: "Uploaded recording",
+      origin: { origin_type: "object", object_ref: "web-local://recording.mp4", content_type: "video/mp4" },
+    });
+    const exportJob = (overrides = {}) => ({
+      export_job_id: "export-1",
+      channel_account_id: channelAccountId,
+      media_asset_id: "video-1",
+      operation: "video_to_audio",
+      variant: { audio_bitrate_kbps: 128 },
+      status: "running",
+      version: 1,
+      retry_generation: 0,
+      attempt_no: 1,
+      max_attempts: 3,
+      progress: { stage: "converting", percent: 40, message: "Конвертируем" },
+      created_at: "2026-05-10T00:00:00Z",
+      ...overrides,
+    });
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    const runtime = renderRoute("/exports", {
+      listMediaAssets: vi.fn().mockResolvedValue({ items: [video], page: { page_size: 50, has_more: false } }),
+      listExportJobs: vi.fn().mockResolvedValue({
+        items: [exportJob(), exportJob({ export_job_id: "export-2", status: "failed" }), exportJob({ export_job_id: "export-3", status: "succeeded" })],
+        page: { page_size: 50, has_more: false },
+      }),
+      cancelExportJob: vi.fn().mockResolvedValue(exportJob({ status: "cancel_requested" })),
+      retryExportJob: vi.fn().mockResolvedValue(exportJob({ export_job_id: "export-2", status: "queued", retry_generation: 1 })),
+      resolveExportDownload: vi.fn().mockResolvedValue({ url: "https://minio.local/recording.mp3" }),
+    });
+
+    expect((await screen.findAllByText("40% · Конвертируем")).length).toBe(3);
+    fireEvent.click(screen.getByRole("button", { name: "Отменить" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.cancelExportJob).toHaveBeenCalledWith(channelAccountId, "export-1");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    await waitFor(() => {
+      expect(runtime.apiClient.retryExportJob).toHaveBeenCalledWith(channelAccountId, "export-2", expect.any(String));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Скачать файл" }));
+
+    await waitFor(() => {
+      expect(runtime.apiClient.resolveExportDownload).toHaveBeenCalledWith(channelAccountId, "export-3");
+    });
+    expect(open).toHaveBeenCalledWith("https://minio.local/recording.mp3", "_blank", "noopener,noreferrer");
+    open.mockRestore();
+  });
+
+  it("tracks a created export from queued to succeeded without a reload", async () => {
+    const video = mediaAsset({
+      media_asset_id: "video-1",
+      kind: "video",
+      display_name: "Uploaded recording",
+      origin: { origin_type: "object", object_ref: "s3://media/recording.mp4", content_type: "video/mp4" },
+    });
+    const exportJob = (status: "queued" | "running" | "succeeded", version: number) => ({
+      export_job_id: "export-created",
+      channel_account_id: channelAccountId,
+      media_asset_id: "video-1",
+      operation: "video_to_audio" as const,
+      variant: { audio_bitrate_kbps: 128 as const },
+      status,
+      version,
+      retry_generation: 0,
+      attempt_no: status === "queued" ? 0 : 1,
+      max_attempts: 3,
+      progress: status === "queued"
+        ? { stage: "queued" }
+        : status === "running"
+          ? { stage: "converting", percent: 50 }
+          : { stage: "publishing", percent: 100 },
+      output: status === "succeeded"
+        ? { content_type: "audio/mpeg", filename: "recording.mp3", size_bytes: 1024, sha256: "sha256" }
+        : undefined,
+      created_at: "2026-05-10T00:00:00Z",
+    });
+    const runtime = renderRoute("/exports?media_asset_id=video-1", {
+      listMediaAssets: vi.fn().mockResolvedValue({ items: [video], page: { page_size: 50, has_more: false } }),
+      createExportJob: vi.fn().mockResolvedValue(exportJob("queued", 1)),
+      getExportJob: vi.fn()
+        .mockResolvedValueOnce(exportJob("running", 2))
+        .mockResolvedValueOnce(exportJob("succeeded", 3)),
+    });
+
+    expect(await screen.findByRole("heading", { name: "Скачать или конвертировать" })).toBeVisible();
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Конвертировать в аудио" }));
+    });
+    expect(screen.getByText("В очереди")).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(runtime.apiClient.getExportJob).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("В работе")).toBeVisible();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(runtime.apiClient.getExportJob).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Скачать файл" })).toBeVisible();
   });
 
   it("shows the retained soft-delete outcome on the media detail surface", async () => {
@@ -894,25 +1082,19 @@ describe("createWebUiRoutes", () => {
     expect(await screen.findByText("Выберите файл.")).toBeVisible();
 
     const fileInput = screen.getByLabelText("Файл");
+    const file = new File(["voice"], "sample.wav", { type: "audio/wav", lastModified: 1700000000000 });
     fireEvent.change(fileInput, {
       target: {
-        files: [new File(["voice"], "sample.wav", { type: "audio/wav", lastModified: 1700000000000 })],
+        files: [file],
       },
     });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaAsset).toHaveBeenCalledWith(
+      expect(runtime.apiClient.uploadMediaAsset).toHaveBeenCalledWith(
         channelAccountId,
-        expect.objectContaining({
-          kind: "audio",
-          displayName: "sample.wav",
-          origin: expect.objectContaining({
-            origin_type: "object",
-            original_filename: "sample.wav",
-            content_type: "audio/wav",
-            size_bytes: 5,
-          }),
-        }),
+        file,
+        "audio",
+        "sample.wav",
       );
     });
   });
@@ -1324,10 +1506,12 @@ describe("createWebUiRoutes", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
+      expect(runtime.apiClient.uploadMediaAsset).toHaveBeenNthCalledWith(
         1,
         channelAccountId,
-        expect.objectContaining({ kind: "video", displayName: "clip.mp4" }),
+        expect.any(File),
+        "video",
+        "clip.mp4",
       );
     });
     await waitFor(() => {
@@ -1339,10 +1523,12 @@ describe("createWebUiRoutes", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
+      expect(runtime.apiClient.uploadMediaAsset).toHaveBeenNthCalledWith(
         2,
         channelAccountId,
-        expect.objectContaining({ kind: "image", displayName: "cover.png" }),
+        expect.any(File),
+        "image",
+        "cover.png",
       );
     });
     await waitFor(() => {
@@ -1355,10 +1541,12 @@ describe("createWebUiRoutes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Добавить" }));
 
     await waitFor(() => {
-      expect(runtime.apiClient.addMediaAsset).toHaveBeenNthCalledWith(
+      expect(runtime.apiClient.uploadMediaAsset).toHaveBeenNthCalledWith(
         3,
         channelAccountId,
-        expect.objectContaining({ kind: "file", displayName: "blob.bin" }),
+        expect.any(File),
+        "document",
+        "blob.bin",
       );
     });
   });

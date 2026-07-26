@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/export-job.schema.json",
+  "title": "ExportJobContracts",
+  "$defs": {
+    "semanticVariant": {
+      "type": "object",
+      "properties": {
+        "audio_bitrate_kbps": {
+          "type": "integer",
+          "enum": [64, 96, 128, 192, 256, 320]
+        },
+        "video_quality": {
+          "type": "string",
+          "enum": ["360p", "480p", "720p", "1080p"]
+        }
+      },
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": false
+    },
+    "createExportJobRequest": {
+      "type": "object",
+      "required": ["channel_account_id", "operation", "variant"],
+      "properties": {
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "operation": {
+          "$ref": "../common/enums.schema.json#/$defs/exportOperation"
+        },
+        "variant": {
+          "$ref": "#/$defs/semanticVariant"
+        },
+        "delivery_channel": {
+          "$ref": "../common/enums.schema.json#/$defs/exportDeliveryChannel"
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"operation": {"const": "youtube_video"}}},
+          "then": {"properties": {"variant": {"required": ["video_quality"]}}}
+        },
+        {
+          "if": {"properties": {"operation": {"enum": ["youtube_audio", "video_to_audio"]}}},
+          "then": {"properties": {"variant": {"required": ["audio_bitrate_kbps"]}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "exportProgress": {
+      "type": "object",
+      "required": ["stage"],
+      "properties": {
+        "stage": {"type": "string", "minLength": 1, "maxLength": 80},
+        "percent": {"type": "number", "minimum": 0, "maximum": 100},
+        "bytes_processed": {"type": "integer", "minimum": 0},
+        "message": {"type": "string", "maxLength": 500}
+      },
+      "additionalProperties": false
+    },
+    "exportOutput": {
+      "type": "object",
+      "required": ["content_type", "filename", "size_bytes", "sha256"],
+      "properties": {
+        "content_type": {"type": "string", "minLength": 1},
+        "filename": {"type": "string", "minLength": 1, "maxLength": 255},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "exportDelivery": {
+      "type": "object",
+      "required": [
+        "export_delivery_id", "export_job_id", "channel_account_id", "channel",
+        "status", "version", "attempt_no", "max_attempts", "expires_at", "created_at"
+      ],
+      "properties": {
+        "export_delivery_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "export_job_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "channel": {"$ref": "../common/enums.schema.json#/$defs/exportDeliveryChannel"},
+        "status": {"$ref": "../common/enums.schema.json#/$defs/exportDeliveryStatus"},
+        "version": {"$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"},
+        "attempt_no": {"type": "integer", "minimum": 0},
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "lease_expires_at": {"type": ["string", "null"], "format": "date-time"},
+		"next_attempt_at": {"type": ["string", "null"], "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"},
+        "delivered_at": {"type": ["string", "null"], "format": "date-time"},
+        "failure_code": {"type": ["string", "null"], "maxLength": 120},
+        "created_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "exportJob": {
+      "type": "object",
+      "required": [
+        "export_job_id", "channel_account_id", "media_asset_id", "operation", "variant",
+        "status", "version", "retry_generation", "attempt_no", "max_attempts", "progress",
+        "deliveries", "created_at"
+      ],
+      "properties": {
+        "export_job_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "media_asset_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "operation": {"$ref": "../common/enums.schema.json#/$defs/exportOperation"},
+        "variant": {"$ref": "#/$defs/semanticVariant"},
+        "status": {"$ref": "../common/enums.schema.json#/$defs/exportJobStatus"},
+        "version": {"$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"},
+        "retry_generation": {"type": "integer", "minimum": 0},
+        "attempt_no": {"type": "integer", "minimum": 0},
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "progress": {"$ref": "#/$defs/exportProgress"},
+        "output": {"oneOf": [{"$ref": "#/$defs/exportOutput"}, {"type": "null"}]},
+        "diagnostic": {"oneOf": [{"$ref": "./diagnostic.schema.json#/$defs/diagnostic"}, {"type": "null"}]},
+        "deliveries": {"type": "array", "items": {"$ref": "#/$defs/exportDelivery"}},
+        "created_at": {"type": "string", "format": "date-time"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "completed_at": {"type": ["string", "null"], "format": "date-time"},
+        "cancel_requested_at": {"type": ["string", "null"], "format": "date-time"},
+        "canceled_at": {"type": ["string", "null"], "format": "date-time"},
+        "expires_at": {"type": ["string", "null"], "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "exportJobResponse": {
+      "type": "object",
+      "required": ["export_job"],
+      "properties": {"export_job": {"$ref": "#/$defs/exportJob"}},
+      "additionalProperties": false
+    },
+    "exportJobListResponse": {
+      "allOf": [
+        {"$ref": "../common/pagination.schema.json#/$defs/paginatedResponse"},
+        {"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/exportJob"}}}}
+      ]
+    },
+    "cancelExportJobRequest": {
+      "type": "object",
+      "required": ["channel_account_id"],
+      "properties": {
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"}
+      },
+      "additionalProperties": false
+    },
+    "retryExportJobRequest": {
+      "$ref": "#/$defs/cancelExportJobRequest"
+    },
+    "claimExportDeliveryRequest": {
+      "type": "object",
+      "required": ["channel_account_id", "channel", "lease_owner"],
+      "properties": {
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "channel": {"$ref": "../common/enums.schema.json#/$defs/exportDeliveryChannel"},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "lease_seconds": {"type": "integer", "minimum": 1, "maximum": 900}
+      },
+      "additionalProperties": false
+    },
+    "exportDeliveryClaim": {
+      "type": "object",
+      "required": ["delivery", "attempt_token", "lease_owner", "lease_expires_at"],
+      "properties": {
+        "delivery": {"$ref": "#/$defs/exportDelivery"},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "lease_expires_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "mutateExportDeliveryRequest": {
+      "type": "object",
+      "required": ["channel_account_id", "export_delivery_id", "lease_owner", "attempt_token"],
+      "properties": {
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "export_delivery_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160}
+      },
+      "additionalProperties": false
+    },
+    "failExportDeliveryRequest": {
+      "type": "object",
+      "required": [
+        "channel_account_id", "export_delivery_id", "lease_owner", "attempt_token",
+        "failure_code", "retryable"
+      ],
+      "properties": {
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "export_delivery_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "failure_code": {"type": "string", "minLength": 1, "maxLength": 120},
+        "retryable": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "exportDownloadResponse": {
+      "type": "object",
+      "required": ["export_job_id", "filename", "content_type", "size_bytes", "url", "expires_at"],
+      "properties": {
+        "export_job_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "filename": {"type": "string", "minLength": 1, "maxLength": 255},
+        "content_type": {"type": "string", "minLength": 1},
+        "size_bytes": {"type": "integer", "minimum": 1},
+        "url": {"type": "string", "format": "uri"},
+        "expires_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

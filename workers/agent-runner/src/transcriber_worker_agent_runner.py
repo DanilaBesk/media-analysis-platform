@@ -1126,7 +1126,11 @@ def _resolve_artifact(artifact_id: str) -> Mapping[str, object]:
     if not api_base_url:
         raise AgentHarnessExecutionFailed("API_BASE_URL is required to materialize claude-code input artifacts")
     url = f"{api_base_url.rstrip('/')}/internal/v1/artifacts/{artifact_id}/download-access"
-    http_request = urlrequest.Request(url=url, headers={"Accept": "application/json"}, method="GET")
+    headers = {"Accept": "application/json"}
+    internal_token = _optional_str(os.environ.get("PLATFORM_INTERNAL_TOKEN"))
+    if internal_token:
+        headers["X-Platform-Internal-Token"] = internal_token
+    http_request = urlrequest.Request(url=url, headers=headers, method="GET")
     try:
         with urlrequest.urlopen(http_request, timeout=_ARTIFACT_RESOLVE_TIMEOUT_SECONDS) as response:
             body = response.read()

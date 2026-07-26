@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 import runpy
 import sys
+import tempfile
 from types import SimpleNamespace
 from typing import Any
 import warnings
@@ -123,6 +124,17 @@ class FakeFinalApiClient:
         return media_asset
 
     def upload_media_asset(self, **kwargs) -> dict[str, Any]:
+        content = kwargs.get("content")
+        local_path = kwargs.get("file_path")
+        file_handle = kwargs.get("file_handle")
+        if isinstance(content, bytes):
+            size_bytes = len(content)
+        elif file_handle is not None:
+            file_handle.seek(0, 2)
+            size_bytes = file_handle.tell()
+            file_handle.seek(0)
+        else:
+            size_bytes = Path(str(local_path)).stat().st_size
         media_asset = {
             "media_asset_id": f"media-{len(self.items) + 1}",
             "kind": kwargs["kind"],
@@ -133,7 +145,7 @@ class FakeFinalApiClient:
                 "origin_ref": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
                 "object_ref": f"sources/{kwargs['kind']}/{len(self.items) + 1}-{kwargs.get('file_name') or 'upload.bin'}",
                 "content_type": kwargs.get("content_type"),
-                "size_bytes": len(kwargs["content"]),
+                "size_bytes": size_bytes,
             },
             "metadata": kwargs.get("metadata") or {},
         }
@@ -185,6 +197,28 @@ class FakeFinalApiClient:
         }
         self.runs.append(run)
         return run
+
+    def start_collection_processing_run(self, **kwargs) -> dict[str, Any]:
+        selection = self.create_selection_snapshot(
+            channel_account_id=kwargs["channel_account_id"],
+            source_collection_id=kwargs["collection_id"],
+            items=kwargs["items"],
+            option_snapshot=kwargs.get("option_snapshot"),
+        )
+        run = self.create_analysis_run(
+            channel_account_id=kwargs["channel_account_id"],
+            selection_snapshot_id=selection["selection_snapshot_id"],
+            run_type=kwargs["run_type"],
+        )
+        captured = {str(item["media_asset_id"]) for item in kwargs["items"]}
+        self.collection["items"] = [item for item in self.collection["items"] if str(item["media_asset_id"]) not in captured]
+        self.collection["version"] += 1
+        return {
+            "selection_snapshot": selection,
+            "analysis_run": run,
+            "detached_media_asset_ids": sorted(captured),
+            "collection_version": self.collection["version"],
+        }
 
     def list_analysis_runs(self, **kwargs) -> dict[str, Any]:
         return {"items": list(self.runs), "page": {"page_size": 10, "has_more": False}}
@@ -382,7 +416,15 @@ class FakeBot:
         self.download_calls.append(file_path)
         destination.write(self.file_bytes.get(file_path, b""))
 
-    async def edit_message_text(self, text: str, *, chat_id: int, message_id: int, reply_markup: Any) -> None:
+    async def edit_message_text(
+        self,
+        text: str,
+        *,
+        chat_id: int,
+        message_id: int,
+        reply_markup: Any,
+        **kwargs: Any,
+    ) -> None:
         scoped_error = self.edit_errors.get((chat_id, message_id))
         if scoped_error is not None:
             raise scoped_error
@@ -394,6 +436,7 @@ class FakeBot:
                 "chat_id": chat_id,
                 "message_id": message_id,
                 "reply_markup": reply_markup,
+                **kwargs,
             }
         )
 
@@ -471,6 +514,7 @@ class FakeCallback:
         message: FakeMessage | None,
         from_user_id: int | None = 7,
     ) -> None:
+        self.id = f"callback-{id(self)}"
         self.data = data
         self.message = message
         self.from_user = SimpleNamespace(id=from_user_id) if from_user_id is not None else None
@@ -677,7 +721,7 @@ def test_run_builds_adapter_dependencies_and_uses_default_api_url(monkeypatch: p
         return settings
 
     class FakeApiClient:
-        def __init__(self, base_url: str) -> None:
+        def __init__(self, base_url: str, **kwargs: Any) -> None:
             captured["api_base_url"] = base_url
 
     class FakeGateway:
@@ -836,6 +880,7 @@ async def test_handle_any_message_reports_rejections_and_handler_errors(caplog: 
     await app._handle_any_message(accepted_message)
 
     assert accepted_message.answers[0]["text"].startswith("Обработка\nМатериалов: 1\nТекст: «Keep text»")
+    assert accepted_message.answers[0]["link_preview_options"].is_disabled is True
     assert "Отклонено: ftp://bad.example/file" in accepted_message.answers[0]["text"]
     assert app.status_message_ids[(10, 7)] == 9001
 
@@ -945,7 +990,7 @@ async def test_handle_any_message_reports_too_large_telegram_file_as_unsupported
 
 
 @pytest.mark.asyncio
-async def test_download_message_files_hydrates_content_and_rejects_empty_download() -> None:
+async def test_download_message_files_uses_anonymous_disk_stream_and_rejects_empty_download() -> None:
     photo = SimpleNamespace(file_id="photo-1", file_unique_id="photo-u", file_size=10)
     good_bot = FakeBot(file_bytes={"remote/photo-1": b"photo-bytes"})
     _, _, app = make_app(bot=good_bot)
@@ -954,7 +999,11 @@ async def test_download_message_files_hydrates_content_and_rejects_empty_downloa
     files = await app._download_message_files(message)
 
     assert files[0].kind == "photo"
-    assert files[0].content == b"photo-bytes"
+    assert files[0].content is None
+    assert files[0].local_path is None
+    assert files[0].file_handle is not None
+    assert files[0].file_handle.read() == b"photo-bytes"
+    files[0].file_handle.close()
     assert good_bot.get_file_calls == ["photo-1"]
     assert good_bot.download_calls == ["remote/photo-1"]
 
@@ -962,6 +1011,239 @@ async def test_download_message_files_hydrates_content_and_rejects_empty_downloa
     _, _, empty_app = make_app(bot=empty_bot)
     with pytest.raises(RuntimeError, match="telegram_file_download_failed"):
         await empty_app._download_message_files(message)
+
+
+@pytest.mark.asyncio
+async def test_file_ingest_uses_anonymous_temp_stream_and_closes_it_after_upload() -> None:
+    bot = FakeBot(file_bytes={"remote/video-1": b"v" * 1024 * 1024})
+    api, _, app = make_app(bot=bot)
+    message = FakeMessage(
+        video=SimpleNamespace(
+            file_id="video-1", file_unique_id="video-u", file_name="large.mp4", mime_type="video/mp4",
+            file_size=1024 * 1024, duration=10,
+        ),
+    )
+
+    await app._handle_any_message(message)
+
+    request = api.upload_requests[-1]
+    assert request["content"] is None
+    assert request["file_path"] is None
+    assert request["file_handle"].closed
+
+
+@pytest.mark.asyncio
+async def test_export_delivery_claims_then_acks_and_records_send_failures() -> None:
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.acks: list[dict[str, Any]] = []
+            self.failures: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **kwargs: Any) -> dict[str, Any]:
+            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            return {}
+
+        def fail_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.failures.append(kwargs)
+            return {}
+
+    gateway = ExportGateway()
+    bot = FakeBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    delivered_files: list[Any] = []
+
+    def export_file(_url: str, _size: int) -> Any:
+        handle = tempfile.TemporaryFile(mode="w+b")
+        handle.write(b"export-bytes")
+        handle.seek(0)
+        delivered_files.append(handle)
+        return handle
+
+    app._download_artifact_file = export_file  # type: ignore[method-assign]
+
+    await app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+
+    assert len(bot.send_document_calls) == 1
+    assert gateway.acks[0]["export_job_id"] == "job-1"
+    assert delivered_files[0].closed
+    failing_gateway = ExportGateway()
+    failing_app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), failing_gateway, bot=FakeBot(send_document_errors={10: RuntimeError("send failed")}))  # type: ignore[arg-type]
+    failing_files: list[Any] = []
+
+    def failing_export_file(_url: str, _size: int) -> Any:
+        handle = tempfile.TemporaryFile(mode="w+b")
+        handle.write(b"export-bytes")
+        handle.seek(0)
+        failing_files.append(handle)
+        return handle
+
+    failing_app._download_artifact_file = failing_export_file  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="send failed"):
+        await failing_app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+    assert failing_gateway.failures[0]["failure_code"] == "telegram_delivery_failed"
+    assert failing_files[0].closed
+
+
+@pytest.mark.asyncio
+async def test_export_watcher_retries_delivery_before_finishing_surface() -> None:
+    _, gateway, app = make_app()
+    delivery_attempts = 0
+    finished: list[str] = []
+
+    gateway.get_export_job = lambda **_kwargs: {"export_job_id": "job-1", "status": "succeeded"}  # type: ignore[method-assign]
+
+    async def deliver(**_kwargs: Any) -> None:
+        nonlocal delivery_attempts
+        delivery_attempts += 1
+        if delivery_attempts == 1:
+            raise RuntimeError("temporary Telegram failure")
+
+    app._deliver_export_result = deliver  # type: ignore[method-assign]
+    app._try_finish_export_task_surface = lambda **kwargs: finished.append(str(kwargs["export_job_id"]))  # type: ignore[method-assign]
+    app._sleep = lambda _seconds: asyncio.sleep(0)  # type: ignore[assignment]
+    app.run_status_follow_attempts = 1
+    app.export_status_follow_attempts = 2
+
+    await app._track_export_status_until_terminal(
+        channel_identity=channel_identity(),
+        export_job_id="job-1",
+        chat_id=10,
+        surface=None,
+    )
+
+    assert delivery_attempts == 2
+    assert finished == ["job-1"]
+
+
+@pytest.mark.asyncio
+async def test_export_watcher_outlives_analysis_polling_budget() -> None:
+    _, gateway, app = make_app()
+    polls = 0
+    delivered: list[str] = []
+
+    def get_export_job(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal polls
+        polls += 1
+        return {"export_job_id": "job-slow", "status": "succeeded" if polls == 122 else "running"}
+
+    gateway.get_export_job = get_export_job  # type: ignore[method-assign]
+    app._deliver_export_result = lambda **_kwargs: asyncio.sleep(0)  # type: ignore[method-assign]
+    app._try_finish_export_task_surface = lambda **kwargs: delivered.append(str(kwargs["export_job_id"]))  # type: ignore[method-assign]
+    app._sleep = lambda _seconds: asyncio.sleep(0)  # type: ignore[assignment]
+    app.run_status_follow_attempts = 120
+    app.export_status_follow_attempts = 122
+
+    await app._track_export_status_until_terminal(
+        channel_identity=channel_identity(), export_job_id="job-slow", chat_id=10, surface=None,
+    )
+
+    assert polls == 122
+    assert delivered == ["job-slow"]
+
+
+@pytest.mark.asyncio
+async def test_export_watcher_finishes_the_latest_persisted_surface_handle() -> None:
+    _, gateway, app = make_app()
+    initial_surface = {"channel_surface_id": "surface-1", "version": 1, "lifecycle_status": "active"}
+    latest_surface = {"channel_surface_id": "surface-1", "version": 2, "lifecycle_status": "active"}
+    finished: list[dict[str, Any] | None] = []
+    gateway.get_export_job = lambda **_kwargs: {"export_job_id": "job-1", "status": "succeeded"}  # type: ignore[method-assign]
+
+    async def refresh(**_kwargs: Any) -> dict[str, Any]:
+        return latest_surface
+
+    app._refresh_export_task_status = refresh  # type: ignore[method-assign]
+    app._deliver_export_result = lambda **_kwargs: asyncio.sleep(0)  # type: ignore[method-assign]
+    app._try_finish_export_task_surface = lambda **kwargs: finished.append(kwargs.get("surface"))  # type: ignore[method-assign]
+
+    await app._track_export_status_until_terminal(
+        channel_identity=channel_identity(),
+        export_job_id="job-1",
+        chat_id=10,
+        surface=initial_surface,
+    )
+
+    assert finished == [latest_surface]
+
+
+@pytest.mark.asyncio
+async def test_export_callback_survives_unrelated_collection_change_and_anchors_separate_task() -> None:
+    api, gateway, app = make_app()
+    api.items = [
+        {
+            "media_asset_id": "video-1",
+            "kind": "video",
+            "status": "ready",
+            "display_name": "clip.mp4",
+            "origin": {"origin_type": "upload", "origin_ref": "sources/video/clip.mp4"},
+            "metadata": {},
+        }
+    ]
+    api.collection["items"] = [{"media_asset_id": "video-1", "position": 0}]
+    api.create_export_job = lambda **_kwargs: {"export_job_id": "job-1", "status": "queued"}  # type: ignore[attr-defined]
+    scheduled: list[dict[str, Any]] = []
+    app._schedule_export_status_tracking = lambda **kwargs: scheduled.append(kwargs)  # type: ignore[method-assign]
+    message = FakeMessage(message_id=101)
+    callback = FakeCallback(
+        data=_callback_payload(
+            "ea",
+            _encode_callback_token("inbox-1"),
+            _encode_callback_version(1),
+            _encode_callback_token("video-1"),
+        ),
+        message=message,
+    )
+
+    api.items.append({"media_asset_id": "text-2", "kind": "text", "status": "ready", "display_name": "later"})
+    api.collection["items"].append({"media_asset_id": "text-2", "position": 1})
+    api.collection["version"] = 2
+
+    await app._handle_status_callback(callback)
+
+    current_surface = next(surface for surface in api.channel_surfaces if surface["surface_type"] == "current_materials_panel")
+    export_surface = next(surface for surface in api.channel_surfaces if surface["surface_type"] == "export_task_surface")
+    assert current_surface["address"] == {"chat_id": 10, "message_id": 101}
+    assert export_surface["address"] == {"chat_id": 10, "message_id": 9003}
+    assert export_surface["address_fingerprint"] == "telegram:10:9003"
+    assert scheduled[0]["surface"] is export_surface
+    assert app.bot.send_message_calls[0]["text"].startswith("Экспорт")
+
+    await app._handle_status_callback(callback)
+
+    assert len(app.bot.send_message_calls) == 1
+    assert scheduled[-1]["surface"] is export_surface
+
+
+@pytest.mark.asyncio
+async def test_export_surface_recovery_reanchors_legacy_shared_panel_address() -> None:
+    api, gateway, app = make_app()
+    status = status_for(gateway)
+    current_surface = gateway.upsert_current_materials_surface(
+        channel_identity=channel_identity(),
+        address={"kind": "telegram_message", "chat_id": 10, "message_id": 5001},
+        display_state=_status_surface_display_state(status, _PageState()),
+    )
+    export_surface = gateway.upsert_export_task_surface(
+        channel_identity=channel_identity(),
+        export_job={"export_job_id": "job-1", "status": "running"},
+        address={"kind": "telegram_message", "chat_id": 10, "message_id": 5001},
+        display_state={"export_job_id": "job-1", "export_status": "running"},
+    )
+    gateway.get_export_job = lambda **_kwargs: {"export_job_id": "job-1", "status": "running"}  # type: ignore[method-assign]
+    scheduled: list[dict[str, Any]] = []
+    app._schedule_export_status_tracking = lambda **kwargs: scheduled.append(kwargs)  # type: ignore[method-assign]
+
+    await app._recover_export_task_surface(channel_identity=channel_identity(), surface=export_surface)
+
+    assert current_surface["address"] == {"kind": "telegram_message", "chat_id": 10, "message_id": 5001}
+    assert scheduled[0]["surface"]["address"] == {"chat_id": 10, "message_id": 9003}
+    assert scheduled[0]["surface"]["address_fingerprint"] == "telegram:10:9003"
 
 
 @pytest.mark.asyncio
@@ -1024,6 +1306,7 @@ async def test_send_or_edit_status_can_force_fresh_reply_for_new_inbound_message
     assert edit_bot.edit_calls == []
     assert app.status_message_ids[(10, 7)] == 9001
     assert "fresh inbound item" in message.answers[0]["text"]
+    assert message.answers[0]["link_preview_options"].is_disabled is True
 
 
 @pytest.mark.asyncio
@@ -1044,6 +1327,7 @@ async def test_inbound_message_burst_reuses_one_current_materials_card() -> None
     assert len(bot.edit_calls) == 19
     assert bot.edit_calls[-1]["message_id"] == app.status_message_ids[(10, 7)]
     assert "Материалов: 20" in bot.edit_calls[-1]["text"]
+    assert bot.edit_calls[-1]["link_preview_options"].is_disabled is True
     active_current_surfaces = [
         surface
         for surface in api.channel_surfaces
@@ -2101,7 +2385,7 @@ async def test_refresh_callback_tolerates_message_not_modified() -> None:
 
 
 @pytest.mark.asyncio
-async def test_result_callback_sends_transcript_and_clears_collection_after_success() -> None:
+async def test_result_callback_sends_transcript_and_preserves_current_collection_after_success() -> None:
     api, gateway, app = make_app()
     gateway.add_text(channel_identity=channel_identity(), text="one")
     gateway.add_text(channel_identity=channel_identity(), text="two")
@@ -2159,10 +2443,10 @@ async def test_result_callback_sends_transcript_and_clears_collection_after_succ
     assert base_message.answers == []
     assert base_message.documents[-1]["document"].filename == "transcript.txt"
     assert base_message.documents[-1]["document"].data == b"manual transcript"
-    assert api.collection["items"] == []
-    assert api.items == []
-    assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
-    assert "Материалов: 0" in app.bot.send_message_calls[-1]["text"]
+    assert [item["media_asset_id"] for item in api.collection["items"]] == ["media-1", "media-2"]
+    assert [item["media_asset_id"] for item in api.items] == ["media-1", "media-2"]
+    assert api.remove_requests == []
+    assert "Материалов: 2" in app.bot.send_message_calls[-1]["text"]
     assert app.status_message_ids[(10, 7)] == 9003
     assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 101}]
 
@@ -2440,7 +2724,7 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
 
     assert materials_callback.answers[-1]["text"] == "Открыт список материалов"
     assert app.page_states[(10, 7)].screen == "materials"
-    assert base_message.edits[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
+    assert base_message.edits[-1]["text"].startswith("Материалы\nМатериалов: 0\nСписок пока пуст.")
 
     tick.set()
     await asyncio.sleep(0)
@@ -2448,7 +2732,7 @@ async def test_run_watcher_keeps_materials_screen_stable_during_active_run() -> 
 
     assert app.run_watch_tasks == {}
     assert app.page_states[(10, 7)].screen == "materials"
-    assert app.bot.edit_calls[-1]["text"].startswith("Материалы\nМатериалов: 2\n1. Текст: «one»")
+    assert app.bot.edit_calls[-1]["text"].startswith("Материалы\nМатериалов: 0\nСписок пока пуст.")
 
 
 @pytest.mark.asyncio
@@ -2458,6 +2742,7 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
     status = status_for(gateway)
     base_message = FakeMessage()
     original_start_analysis = gateway.start_analysis
+    original_start_processing = api.start_collection_processing_run
 
     def terminal_start_analysis(**kwargs: Any) -> dict[str, Any]:
         run = original_start_analysis(**kwargs)
@@ -2465,6 +2750,14 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
         return run
 
     gateway.start_analysis = terminal_start_analysis  # type: ignore[method-assign]
+
+    def terminal_start_processing(**kwargs: Any) -> dict[str, Any]:
+        processing = original_start_processing(**kwargs)
+        api.runs[-1]["status"] = "succeeded"
+        processing["analysis_run"]["status"] = "succeeded"
+        return processing
+
+    api.start_collection_processing_run = terminal_start_processing  # type: ignore[method-assign]
     collection_id = str(status.collection["collection_id"])
     collection_version = int(status.collection["version"])
     app._set_page_state((10, 7), status, current_cursor=None, previous_cursors=[], selection=None, screen="main")
@@ -2483,10 +2776,12 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
     assert api.runs[-1]["selection_snapshot_id"] == "selection-1"
     assert app.run_watch_tasks == {}
 
+    gateway.add_text(channel_identity=channel_identity(), text="legacy selection")
+    legacy_status = status_for(gateway)
     selection = gateway.create_selection_snapshot(
         channel_identity=channel_identity(),
         collection_id=collection_id,
-        expected_version=collection_version,
+        expected_version=int(legacy_status.collection["version"]),
     )
     selection_callback = FakeCallback(
         data=_callback_payload("rn", _encode_callback_token(str(selection["selection_snapshot_id"]))),
@@ -2501,7 +2796,7 @@ async def test_collection_and_selection_snapshot_callbacks_start_terminal_runs()
 
 
 @pytest.mark.asyncio
-async def test_duplicate_uploaded_media_reuses_ready_transcript_without_new_run() -> None:
+async def test_duplicate_uploaded_media_defers_reuse_to_atomic_api_planning() -> None:
     api, gateway, app = make_app()
     media_asset = api.upload_media_asset(
         channel_account_id="channel-account-1",
@@ -2577,35 +2872,14 @@ async def test_duplicate_uploaded_media_reuses_ready_transcript_without_new_run(
     )
     await app._handle_status_callback(callback)
 
-    assert len(api.runs) == 1
-    assert api.reusable_transcript_requests == [
-        {
-            "channel_account_id": "channel-account-1",
-            "stored_object_id": "stored-source-1",
-            "checksum": "sha256:source",
-        }
-    ]
-    assert callback.answers[-1] == {"text": "Транскрипт отправлен файлом", "show_alert": False}
-    assert base_message.documents[-1]["document"].data == b"cached transcript"
-    assert api.internal_artifact_download_access_requests == ["artifact-reused"]
+    assert len(api.runs) == 2
+    assert api.reusable_transcript_requests == []
+    assert callback.answers[-1] == {"text": "Обработка запущена", "show_alert": False}
+    assert base_message.documents == []
+    assert api.internal_artifact_download_access_requests == []
     assert api.collection["items"] == []
-    result_surface = next(surface for surface in api.channel_surfaces if surface["surface_key"] == "artifact:artifact-reused")
-    assert result_surface["address"] == {"chat_id": 10, "message_id": 9002}
-    assert app.bot.send_message_calls[-1]["chat_id"] == 10
-    assert "Материалов: 0" in app.bot.send_message_calls[-1]["text"]
-    assert app.status_message_ids[(10, 7)] == 9003
-    assert app.bot.delete_message_calls == [{"chat_id": 10, "message_id": 101}]
-    current_surface = next(
-        surface
-        for surface in api.channel_surfaces
-        if surface["surface_type"] == "current_materials_panel" and surface["lifecycle_status"] == "active"
-    )
-    assert current_surface["address"] == {"chat_id": 10, "message_id": 9003}
-    assert [
-        surface
-        for surface in api.channel_surfaces
-        if surface["surface_type"] == "analysis_task_surface" and surface["lifecycle_status"] == "active"
-    ] == []
+    for task in app.run_watch_tasks.values():
+        task.cancel()
 
 
 @pytest.mark.asyncio
@@ -2716,8 +2990,8 @@ async def test_run_watcher_auto_delivers_transcript_file_and_hides_result_button
     assert api.internal_artifact_download_access_requests == ["artifact-1"]
     assert api.get_artifact_requests == []
     assert api.collection["items"] == []
-    assert api.items == []
-    assert [request["media_asset_id"] for request in api.remove_requests] == ["media-1", "media-2"]
+    assert len(api.items) == 2
+    assert api.remove_requests == []
     assert "Результат" not in [
         button.text
         for row in app.bot.send_message_calls[-1]["reply_markup"].inline_keyboard
@@ -2735,11 +3009,25 @@ async def test_run_watcher_continues_after_status_edit_retry_after_and_delivers_
             super().__init__()
             self._raised_retry_after = False
 
-        async def edit_message_text(self, text: str, *, chat_id: int, message_id: int, reply_markup: Any) -> None:
+        async def edit_message_text(
+            self,
+            text: str,
+            *,
+            chat_id: int,
+            message_id: int,
+            reply_markup: Any,
+            **kwargs: Any,
+        ) -> None:
             if not self._raised_retry_after:
                 self._raised_retry_after = True
                 raise telegram_retry_after("editMessageText", 132)
-            await super().edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup)
+            await super().edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=reply_markup,
+                **kwargs,
+            )
 
     api, gateway, app = make_app(page_size=1, bot=RetryAfterOnceBot())
     gateway.add_text(channel_identity=channel_identity(), text="one")
@@ -2878,7 +3166,7 @@ async def test_run_watcher_supersedes_task_surface_when_auto_delivery_chat_is_un
     assert api.supersede_surface_requests[-1]["reason"] == "telegram_address_unreachable"
     assert api.supersede_surface_requests[-1]["metadata"]["operation"] == "send_document"
     assert active_result_surfaces == []
-    assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
+    assert api.collection["items"] == []
     assert api.remove_requests == []
 
 
@@ -2926,9 +3214,9 @@ async def test_run_watcher_failed_run_preserves_local_inbox() -> None:
 
     assert app.run_watch_tasks == {}
     assert app.bot.send_message_calls == []
-    assert api.collection["items"] == [{"media_asset_id": "media-1", "position": 0}]
+    assert api.collection["items"] == []
     assert api.remove_requests == []
-    assert "Материалов: 1" in app.bot.edit_calls[-1]["text"]
+    assert "Материалов: 0" in app.bot.edit_calls[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -3505,3 +3793,31 @@ def test_download_artifact_bytes_reads_content_and_rejects_empty(monkeypatch: py
 
     with pytest.raises(RuntimeError, match="artifact_download_failed"):
         app._download_artifact_bytes("http://download.test/empty.txt")
+
+
+def test_download_artifact_file_streams_to_anonymous_disk_and_fences_size(monkeypatch: pytest.MonkeyPatch) -> None:
+    class StreamingResponse:
+        def __init__(self, chunks: list[bytes]) -> None:
+            self.chunks = iter(chunks)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return next(self.chunks, b"")
+
+    _, _, app = make_app()
+    monkeypatch.setattr("telegram_adapter.bot.urlopen", lambda _url, timeout: StreamingResponse([b"large-", b"export"]))
+    handle = app._download_artifact_file("http://minio/export", 12)
+    try:
+        assert handle.read() == b"large-export"
+        assert not hasattr(handle, "name") or isinstance(handle.name, int)
+    finally:
+        handle.close()
+
+    monkeypatch.setattr("telegram_adapter.bot.urlopen", lambda _url, timeout: StreamingResponse([b"too-large"]))
+    with pytest.raises(RuntimeError, match="artifact_download_size_mismatch"):
+        app._download_artifact_file("http://minio/export", 3)

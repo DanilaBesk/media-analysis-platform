@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/http/metadata-enrichment.schema.json",
+  "title": "MetadataEnrichmentContracts",
+  "$defs": {
+    "providerMetadata": {
+      "type": "object",
+      "required": ["provider", "title", "thumbnail_url", "duration_seconds"],
+      "properties": {
+        "provider": {"const": "youtube"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "thumbnail_url": {"type": ["string", "null"], "format": "uri", "maxLength": 2048},
+        "duration_seconds": {"type": "integer", "minimum": 0, "maximum": 2678400}
+      },
+      "additionalProperties": false
+    },
+    "refreshMetadataRequest": {
+      "type": "object",
+      "required": ["channel_account_id"],
+      "properties": {
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"}
+      },
+      "additionalProperties": false
+    },
+    "metadataEnrichment": {
+      "type": "object",
+      "required": ["enrichment_id", "media_asset_id", "channel_account_id", "provider", "canonical_url", "status", "attempt_no", "max_attempts", "created_at"],
+      "properties": {
+        "enrichment_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "media_asset_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "provider": {"const": "youtube"},
+        "canonical_url": {"type": "string", "format": "uri", "pattern": "^https://www\\.youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}$"},
+        "status": {"type": "string", "enum": ["queued", "claimed", "running", "retry_wait", "succeeded", "failed"]},
+        "attempt_no": {"type": "integer", "minimum": 0},
+        "max_attempts": {"type": "integer", "minimum": 1},
+        "progress": {"type": "object"},
+        "next_attempt_at": {"type": ["string", "null"], "format": "date-time"},
+        "error_code": {"type": ["string", "null"], "maxLength": 120},
+        "created_at": {"type": "string", "format": "date-time"},
+        "started_at": {"type": ["string", "null"], "format": "date-time"},
+        "completed_at": {"type": ["string", "null"], "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "metadataEnrichmentResponse": {
+      "type": "object",
+      "required": ["enrichment"],
+      "properties": {"enrichment": {"$ref": "#/$defs/metadataEnrichment"}},
+      "additionalProperties": false
+    }
+  }
+}

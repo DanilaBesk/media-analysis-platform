@@ -187,7 +187,7 @@ Rules:
 
 - This card is created immediately after `Обработать`.
 - The task snapshot is immutable.
-- The current selection is cleared after the task is created successfully.
+- The captured selection membership is detached after the task is created successfully; result delivery does not clear later live inbox items.
 - The current selection card is rendered again after this card.
 
 ## Card: Processing Running
@@ -450,7 +450,7 @@ Scope:
 
 - current selection card copy and buttons;
 - separate processing task card;
-- clear current selection after successful run creation;
+- detach captured selection membership after successful run creation while preserving later live inbox items;
 - watcher edits task cards;
 - result file sent as a separate document message;
 - current selection card shows recent 3 task summaries;

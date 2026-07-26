@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://media-analysis.local/contracts/schemas/internal/metadata-enrichment-control.schema.json",
+  "title": "InternalMetadataEnrichmentControl",
+  "$defs": {
+    "queueResponse": {
+      "type": "object",
+      "required": ["items", "page", "page_size"],
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "../http/metadata-enrichment.schema.json#/$defs/metadataEnrichment"}},
+        "page": {"const": 1},
+        "page_size": {"type": "integer", "minimum": 1, "maximum": 1000}
+      },
+      "additionalProperties": false
+    },
+    "claimRequest": {
+      "type": "object",
+      "required": ["lease_owner"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "lease_seconds": {"type": "integer", "minimum": 1, "maximum": 900}
+      },
+      "additionalProperties": false
+    },
+    "claimResponse": {
+      "type": "object",
+      "required": ["enrichment", "attempt_token", "lease_owner", "lease_expires_at"],
+      "properties": {
+        "enrichment": {"$ref": "../http/metadata-enrichment.schema.json#/$defs/metadataEnrichment"},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "lease_expires_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "progressRequest": {
+      "type": "object",
+      "required": ["lease_owner", "attempt_token", "progress"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "progress": {"type": "object", "maxProperties": 32}
+      },
+      "additionalProperties": false
+    },
+    "finalizeRequest": {
+      "type": "object",
+      "required": ["lease_owner", "attempt_token", "outcome"],
+      "properties": {
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "outcome": {"type": "string", "enum": ["succeeded", "failed"]},
+        "title": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "thumbnail_url": {"type": "string", "format": "uri", "maxLength": 2048},
+        "duration_seconds": {"type": "integer", "minimum": 0, "maximum": 2678400},
+        "error_code": {"type": "string", "minLength": 1, "maxLength": 120},
+        "error_message": {"type": "string", "maxLength": 1000},
+        "retryable": {"type": "boolean"}
+      },
+      "allOf": [
+        {"if": {"properties": {"outcome": {"const": "succeeded"}}}, "then": {"required": ["title"]}},
+        {"if": {"properties": {"outcome": {"const": "failed"}}}, "then": {"required": ["error_code"]}}
+      ],
+      "additionalProperties": false
+    },
+    "reclaimRequest": {
+      "type": "object",
+      "required": ["batch_size"],
+      "properties": {"batch_size": {"type": "integer", "minimum": 1, "maximum": 1000}},
+      "additionalProperties": false
+    },
+    "reclaimResponse": {
+      "type": "object",
+      "required": ["examined", "requeued", "failed"],
+      "properties": {
+        "examined": {"type": "integer", "minimum": 0},
+        "requeued": {"type": "integer", "minimum": 0},
+        "failed": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  }
+}

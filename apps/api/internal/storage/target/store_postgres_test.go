@@ -20,6 +20,8 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 	db := openTargetPostgresTestDB(t, ctx)
 	applyTargetMigration(t, ctx, db)
 	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	applyMetadataEnrichmentMigration(t, ctx, db)
 	assertTargetSchemaState(t, ctx, db)
 
 	store, err := NewStore(db)
@@ -107,6 +109,110 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 		assertSQLCount(t, ctx, db, `SELECT count(*) FROM operation_requests WHERE channel_account_id=$1 AND operation_type=$2 AND idempotency_key=$3`, 1, seed.ChannelAccount.ID, "media_asset.create", "target-fixture:create-media")
 	})
 
+	t.Run("identical export outputs reuse canonical content identity", func(t *testing.T) {
+		firstExpiresAt := now.Add(time.Hour)
+		secondExpiresAt := now.Add(2 * time.Hour)
+		first := StoredObjectRecord{
+			ID: "00000000-0000-4000-8000-000000000270", ChannelAccountID: seed.ChannelAccount.ID,
+			Bucket: "artifacts", ObjectKey: "transient/exports/first/result.m4a", Generation: 1,
+			GenerationPublishedAt: now, ContentType: "audio/mp4", SizeBytes: 128,
+			ChecksumAlgorithm: "sha256", Checksum: "sha256:identical-export-output",
+			StorageStatus: "available", RetentionState: "expires_scheduled", HoldState: "none",
+			CreatedAt: now, ExpiresAt: &firstExpiresAt,
+		}
+		second := first
+		second.ID = "00000000-0000-4000-8000-000000000271"
+		second.ObjectKey = "transient/exports/second/result.m4a"
+		second.CreatedAt = now.Add(time.Minute)
+		second.ExpiresAt = &secondExpiresAt
+
+		var registeredFirst, registeredSecond StoredObjectRecord
+		if err := store.withTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			registeredFirst, err = registerExportOutput(ctx, tx, first)
+			return err
+		}); err != nil {
+			t.Fatalf("register first export output: %v", err)
+		}
+		if err := store.withTx(ctx, func(tx *sql.Tx) error {
+			var err error
+			registeredSecond, err = registerExportOutput(ctx, tx, second)
+			return err
+		}); err != nil {
+			t.Fatalf("register duplicate export output: %v", err)
+		}
+		if registeredFirst.ID != first.ID || registeredSecond.ID != first.ID || registeredSecond.ObjectKey != first.ObjectKey {
+			t.Fatalf("registered outputs = %#v / %#v", registeredFirst, registeredSecond)
+		}
+		if registeredSecond.ExpiresAt == nil || !registeredSecond.ExpiresAt.Equal(*second.ExpiresAt) {
+			t.Fatalf("duplicate output expiry = %v, want %v", registeredSecond.ExpiresAt, second.ExpiresAt)
+		}
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE channel_account_id=$1 AND checksum=$2`, 1, seed.ChannelAccount.ID, first.Checksum)
+	})
+
+	t.Run("concurrent identical export outputs converge on the canonical row", func(t *testing.T) {
+		firstExpiresAt := now.Add(3 * time.Hour)
+		secondExpiresAt := now.Add(4 * time.Hour)
+		first := StoredObjectRecord{
+			ID: "00000000-0000-4000-8000-000000000272", ChannelAccountID: seed.ChannelAccount.ID,
+			Bucket: "artifacts", ObjectKey: "transient/exports/concurrent-first/result.m4a", Generation: 1,
+			GenerationPublishedAt: now, ContentType: "audio/mp4", SizeBytes: 256,
+			ChecksumAlgorithm: "sha256", Checksum: "sha256:concurrent-identical-export-output",
+			StorageStatus: "available", RetentionState: "expires_scheduled", HoldState: "none",
+			CreatedAt: now, ExpiresAt: &firstExpiresAt,
+		}
+		second := first
+		second.ID = "00000000-0000-4000-8000-000000000273"
+		second.ObjectKey = "transient/exports/concurrent-second/result.m4a"
+		second.CreatedAt = now.Add(time.Minute)
+		second.ExpiresAt = &secondExpiresAt
+
+		firstTx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatalf("begin first output transaction: %v", err)
+		}
+		registeredFirst, err := registerExportOutput(ctx, firstTx, first)
+		if err != nil {
+			_ = firstTx.Rollback()
+			t.Fatalf("register first concurrent output: %v", err)
+		}
+
+		type concurrentResult struct {
+			output StoredObjectRecord
+			err    error
+		}
+		result := make(chan concurrentResult, 1)
+		go func() {
+			secondTx, beginErr := db.BeginTx(ctx, nil)
+			if beginErr != nil {
+				result <- concurrentResult{err: beginErr}
+				return
+			}
+			registered, registerErr := registerExportOutput(ctx, secondTx, second)
+			if registerErr == nil {
+				registerErr = secondTx.Commit()
+			} else {
+				_ = secondTx.Rollback()
+			}
+			result <- concurrentResult{output: registered, err: registerErr}
+		}()
+
+		if err := firstTx.Commit(); err != nil {
+			t.Fatalf("commit first output transaction: %v", err)
+		}
+		concurrent := <-result
+		if concurrent.err != nil {
+			t.Fatalf("register concurrent duplicate output: %v", concurrent.err)
+		}
+		if registeredFirst.ID != first.ID || concurrent.output.ID != first.ID {
+			t.Fatalf("concurrent canonical outputs = %#v / %#v", registeredFirst, concurrent.output)
+		}
+		if concurrent.output.ExpiresAt == nil || !concurrent.output.ExpiresAt.Equal(secondExpiresAt) {
+			t.Fatalf("concurrent canonical expiry = %v, want %v", concurrent.output.ExpiresAt, secondExpiresAt)
+		}
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE channel_account_id=$1 AND checksum=$2`, 1, seed.ChannelAccount.ID, first.Checksum)
+	})
+
 	t.Run("media assets are channel scoped and deleted assets leave lists", func(t *testing.T) {
 		createTargetTestMediaAsset(t, ctx, store, targetMediaFixture{
 			channelID:    seed.ChannelAccount.ID,
@@ -167,6 +273,122 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 		}
 	})
 
+	t.Run("metadata enrichment is atomic fenced and snapshot immutable", func(t *testing.T) {
+		assetID := "00000000-0000-4000-8000-000000000260"
+		itemID := "00000000-0000-4000-8000-000000000261"
+		enrichmentID := "00000000-0000-4000-8000-000000000262"
+		snapshotID := "00000000-0000-4000-8000-000000000263"
+		snapshotItemID := "00000000-0000-4000-8000-000000000264"
+		canonicalURL := "https://www.youtube.com/watch?v=abc123DEF_-"
+		if err := store.CreateMediaAssetWithInbox(ctx, CreateMediaAssetWithInboxParams{
+			MediaAsset: MediaAssetRecord{
+				ID: assetID, ChannelAccountID: targetTestTelegramChannelID, OriginType: "url",
+				OriginRef: canonicalURL, Kind: "video", DisplayName: "YouTube: abc123DEF_-",
+				Status: "available", MetadataJSON: []byte(`{"source":"telegram"}`), CreatedAt: now, UpdatedAt: now,
+			},
+			InboxCollection: CollectionRecord{
+				ID: targetTestTelegramInboxID, ChannelAccountID: targetTestTelegramChannelID,
+				Kind: "inbox", Name: "Inbox", Status: "active", Version: 1, CreatedAt: now, UpdatedAt: now,
+			},
+			CollectionItem: CollectionItemRecord{
+				ID: itemID, CollectionID: targetTestTelegramInboxID, MediaAssetID: assetID,
+				AddedViaChannel: targetTestTelegramChannelID, AddedAt: now,
+			},
+			Enrichment: MetadataEnrichmentRecord{
+				ID: enrichmentID, MediaAssetID: assetID, ChannelAccountID: targetTestTelegramChannelID,
+				Provider: "youtube", CanonicalURL: canonicalURL, Status: "queued", Version: 1,
+				IdempotencyKey: "initial:" + assetID, MaxAttempts: 3,
+				ProgressJSON: []byte(`{"stage":"queued"}`), CreatedAt: now,
+			},
+		}); err != nil {
+			t.Fatalf("CreateMediaAssetWithInbox(metadata enrichment) error = %v", err)
+		}
+		queue, err := store.ListMetadataEnrichmentQueue(ctx, now, 20)
+		if err != nil || len(queue) != 1 || queue[0].ID != enrichmentID {
+			t.Fatalf("ListMetadataEnrichmentQueue()=%#v err=%v", queue, err)
+		}
+		claimAt := now.Add(time.Minute)
+		claimed, ok, err := store.ClaimMetadataEnrichment(ctx, ClaimMetadataEnrichmentParams{
+			EnrichmentID: enrichmentID, LeaseOwner: "metadata-worker-1", AttemptToken: "attempt-token-current",
+			ClaimedAt: claimAt, LeaseExpiresAt: claimAt.Add(2 * time.Minute),
+		})
+		if err != nil || !ok || claimed.AttemptNo != 1 {
+			t.Fatalf("ClaimMetadataEnrichment()=%#v ok=%v err=%v", claimed, ok, err)
+		}
+		heartbeatAt := claimAt.Add(30 * time.Second)
+		if err := store.RecordMetadataEnrichmentProgress(ctx, RecordMetadataEnrichmentProgressParams{
+			EnrichmentID: enrichmentID, LeaseOwner: "metadata-worker-1", AttemptToken: "attempt-token-current",
+			ProgressJSON: []byte(`{"stage":"fetching","percent":50}`), HeartbeatAt: heartbeatAt,
+		}); err != nil {
+			t.Fatalf("RecordMetadataEnrichmentProgress() error = %v", err)
+		}
+		afterHeartbeat, err := store.GetMetadataEnrichmentByID(ctx, enrichmentID)
+		if err != nil || afterHeartbeat.LeaseExpiresAt == nil || !afterHeartbeat.LeaseExpiresAt.Equal(heartbeatAt.Add(2*time.Minute)) {
+			t.Fatalf("heartbeat lease=%#v err=%v", afterHeartbeat.LeaseExpiresAt, err)
+		}
+		if err := store.RecordMetadataEnrichmentProgress(ctx, RecordMetadataEnrichmentProgressParams{
+			EnrichmentID: enrichmentID, LeaseOwner: "metadata-worker-1", AttemptToken: "stale-attempt-token",
+			ProgressJSON: []byte(`{"stage":"stale"}`), HeartbeatAt: heartbeatAt,
+		}); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("stale progress error=%v, want sql.ErrNoRows", err)
+		}
+		if err := store.CreateSelectionSnapshot(ctx, SelectionSnapshotRecord{
+			ID: snapshotID, ChannelAccountID: targetTestTelegramChannelID, Status: "sealed",
+			OptionSnapshotJSON: []byte(`{}`), DiagnosticsJSON: []byte(`[]`), CreatedAt: now, SealedAt: now,
+		}, []SelectionSnapshotItemRecord{{
+			ID: snapshotItemID, SelectionSnapshotID: snapshotID, MediaAssetID: assetID,
+			Kind: "video", DisplayName: "YouTube: abc123DEF_-", OriginSnapshotJSON: []byte(`{"origin_type":"url"}`),
+			StorageSnapshotJSON: []byte(`{}`), MetadataJSON: []byte(`{"source":"telegram"}`),
+			StatusAtSelection: "available",
+		}}); err != nil {
+			t.Fatalf("CreateSelectionSnapshot(metadata fixture) error = %v", err)
+		}
+		finalized, err := store.FinalizeMetadataEnrichment(ctx, FinalizeMetadataEnrichmentParams{
+			EnrichmentID: enrichmentID, LeaseOwner: "metadata-worker-1", AttemptToken: "attempt-token-current",
+			Status: "succeeded", DisplayName: "Bounded title",
+			ProviderMetadataJSON: []byte(`{"provider":"youtube","title":"Bounded title","thumbnail_url":"https://i.ytimg.com/demo.jpg","duration_seconds":42}`),
+			CompletedAt:          heartbeatAt.Add(time.Minute),
+		})
+		if err != nil || finalized.Status != "succeeded" {
+			t.Fatalf("FinalizeMetadataEnrichment()=%#v err=%v", finalized, err)
+		}
+		asset, err := store.GetMediaAsset(ctx, targetTestTelegramChannelID, assetID)
+		if err != nil || asset.DisplayName != "Bounded title" || !strings.Contains(string(asset.MetadataJSON), `"provider_metadata"`) {
+			t.Fatalf("enriched media asset=%#v err=%v", asset, err)
+		}
+		_, snapshotItems, err := store.GetSelectionSnapshot(ctx, targetTestTelegramChannelID, snapshotID)
+		if err != nil || len(snapshotItems) != 1 || snapshotItems[0].DisplayName != "YouTube: abc123DEF_-" || strings.Contains(string(snapshotItems[0].MetadataJSON), "provider_metadata") {
+			t.Fatalf("sealed snapshot changed after enrichment: %#v err=%v", snapshotItems, err)
+		}
+		if _, err := store.FinalizeMetadataEnrichment(ctx, FinalizeMetadataEnrichmentParams{
+			EnrichmentID: enrichmentID, LeaseOwner: "metadata-worker-1", AttemptToken: "attempt-token-current",
+			Status: "succeeded", DisplayName: "stale overwrite", ProviderMetadataJSON: []byte(`{}`),
+			CompletedAt: heartbeatAt.Add(time.Minute),
+		}); !errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("stale finalize error=%v, want sql.ErrNoRows", err)
+		}
+
+		retryID := "00000000-0000-4000-8000-000000000265"
+		if _, err := store.CreateMetadataEnrichment(ctx, MetadataEnrichmentRecord{
+			ID: retryID, MediaAssetID: assetID, ChannelAccountID: targetTestTelegramChannelID,
+			Provider: "youtube", CanonicalURL: canonicalURL, Status: "queued", Version: 1,
+			IdempotencyKey: "refresh:reclaim", MaxAttempts: 3, ProgressJSON: []byte(`{}`), CreatedAt: now,
+		}); err != nil {
+			t.Fatalf("CreateMetadataEnrichment(reclaim) error = %v", err)
+		}
+		expiresAt := now.Add(2 * time.Minute)
+		if _, ok, err := store.ClaimMetadataEnrichment(ctx, ClaimMetadataEnrichmentParams{
+			EnrichmentID: retryID, LeaseOwner: "metadata-worker-2", AttemptToken: "attempt-token-expired",
+			ClaimedAt: now.Add(time.Minute), LeaseExpiresAt: expiresAt,
+		}); err != nil || !ok {
+			t.Fatalf("claim reclaim fixture ok=%v err=%v", ok, err)
+		}
+		reclaimed, err := store.ReclaimMetadataEnrichments(ctx, expiresAt.Add(time.Second), 10)
+		if err != nil || reclaimed.Examined != 1 || reclaimed.Requeued != 1 || reclaimed.Failed != 0 {
+			t.Fatalf("ReclaimMetadataEnrichments()=%#v err=%v", reclaimed, err)
+		}
+	})
+
 	t.Run("collections use optimistic versions and reject duplicate active positions", func(t *testing.T) {
 		collection := CollectionRecord{
 			ID:               targetTestCollectionID,
@@ -219,6 +441,46 @@ func TestTargetStorePostgresContracts(t *testing.T) {
 			UpdatedAt: now.Add(5 * time.Second),
 		}); err == nil {
 			t.Fatalf("UpdateCollectionItems(duplicate positions) error = nil, want constraint failure")
+		}
+	})
+
+	t.Run("processing run idempotency replays the sealed run and rejects mismatched payload", func(t *testing.T) {
+		const collectionID = "00000000-0000-4000-8000-000000001100"
+		const assetID = "00000000-0000-4000-8000-000000001105"
+		if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (
+id, channel_account_id, origin_type, origin_ref, kind, display_name, status, metadata, created_at, updated_at
+) VALUES ($1,$2,'telegram_file','processing-replay-file','voice','voice.ogg','available','{}',$3,$3)`, assetID, targetTestTelegramChannelID, now); err != nil {
+			t.Fatalf("seed processing replay asset: %v", err)
+		}
+		must(t, store.CreateCollection(ctx, CollectionRecord{
+			ID: collectionID, ChannelAccountID: targetTestTelegramChannelID, Kind: "user",
+			Name: "Processing replay", Status: "active", Version: 1, CreatedAt: now, UpdatedAt: now,
+		}, []CollectionItemRecord{{
+			ID: "00000000-0000-4000-8000-000000001101", CollectionID: collectionID,
+			MediaAssetID: assetID, Position: 0, AddedViaChannel: targetTestTelegramChannelID, AddedAt: now,
+		}}), "create processing replay collection")
+		first := processingRunReplayParams(now, collectionID, assetID, "00000000-0000-4000-8000-000000001102", "00000000-0000-4000-8000-000000001103", "00000000-0000-4000-8000-000000001104", "transcription")
+		created, err := store.CreateProcessingRun(ctx, first)
+		if err != nil {
+			t.Fatalf("CreateProcessingRun(first) error = %v", err)
+		}
+		if created.Replayed || created.Run.ID != first.Graph.Run.ID || created.Snapshot.ID != first.Snapshot.ID || created.CollectionVersion != 2 {
+			t.Fatalf("created processing run = %#v", created)
+		}
+
+		replay := processingRunReplayParams(now.Add(time.Second), collectionID, assetID, "00000000-0000-4000-8000-000000001112", "00000000-0000-4000-8000-000000001113", "00000000-0000-4000-8000-000000001114", "transcription")
+		replayed, err := store.CreateProcessingRun(ctx, replay)
+		if err != nil {
+			t.Fatalf("CreateProcessingRun(replay) error = %v", err)
+		}
+		if !replayed.Replayed || replayed.Run.ID != first.Graph.Run.ID || replayed.Snapshot.ID != first.Snapshot.ID || replayed.CollectionVersion != 2 {
+			t.Fatalf("replayed processing run = %#v", replayed)
+		}
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM analysis_runs WHERE channel_account_id=$1 AND idempotency_key=$2`, 1, targetTestTelegramChannelID, "telegram:process:replay")
+
+		mismatch := processingRunReplayParams(now.Add(2*time.Second), collectionID, assetID, "00000000-0000-4000-8000-000000001122", "00000000-0000-4000-8000-000000001123", "00000000-0000-4000-8000-000000001124", "report")
+		if _, err := store.CreateProcessingRun(ctx, mismatch); !errors.Is(err, ErrProcessingRunIdempotencyConflict) {
+			t.Fatalf("CreateProcessingRun(mismatch) error = %v, want %v", err, ErrProcessingRunIdempotencyConflict)
 		}
 	})
 
@@ -843,6 +1105,497 @@ VALUES ($1, 'diagnostic', $2, 'primary', $3)`, surface.ID, targetTestDiagnosticI
 	})
 }
 
+func TestYouTubeMetadataBackfillPostgresContracts(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	applyMetadataEnrichmentMigration(t, ctx, db)
+
+	const accountID = "10000000-0000-4000-8000-000000000001"
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_accounts (id, channel, external_account_ref, status)
+VALUES ($1, 'telegram', 'backfill-test', 'active')`, accountID); err != nil {
+		t.Fatalf("seed metadata backfill account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status) VALUES
+	('10000000-0000-4000-8000-000000000011', $1, 'url', 'https://www.youtube.com/watch?v=roEzqWv7HpI&list=RDMM', 'url', 'old watch URL', 'available'),
+	('10000000-0000-4000-8000-000000000012', $1, 'url', 'https://youtu.be/goXKlOozyx8?t=2', 'url', 'old short URL', 'available'),
+	('10000000-0000-4000-8000-000000000013', $1, 'url', 'https://www.youtube.com/channel/not-a-video', 'url', 'channel URL', 'available'),
+	('10000000-0000-4000-8000-000000000014', $1, 'url', 'https://m.youtube.com/shorts/dQw4w9WgXcQ?feature=share', 'url', 'old Shorts URL', 'available')`, accountID); err != nil {
+		t.Fatalf("seed metadata backfill fixtures: %v", err)
+	}
+
+	applyNamedTargetMigration(t, ctx, db, "0004_backfill_youtube_metadata_enrichment.sql")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs`, 3)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs WHERE canonical_url IN (
+	'https://www.youtube.com/watch?v=roEzqWv7HpI', 'https://www.youtube.com/watch?v=goXKlOozyx8',
+	'https://www.youtube.com/watch?v=dQw4w9WgXcQ')`, 3)
+
+	if _, err := db.ExecContext(ctx, `UPDATE metadata_enrichment_jobs
+SET canonical_url='https://www.youtube.com/watch?v=roEzqWv7HpI&list=RDMM'
+WHERE media_asset_id='10000000-0000-4000-8000-000000000011'`); err != nil {
+		t.Fatalf("seed metadata repair URL: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO metadata_enrichment_jobs (
+    id, media_asset_id, channel_account_id, provider, canonical_url, idempotency_key
+) VALUES (
+    '10000000-0000-4000-8000-000000000099',
+    '10000000-0000-4000-8000-000000000013',
+    $1,
+    'youtube',
+    'https://www.youtube.com/channel/not-a-video',
+    'youtube-metadata-enrichment:backfill:invalid'
+    )`, accountID); err != nil {
+		t.Fatalf("seed metadata repair fixtures: %v", err)
+	}
+
+	applyNamedTargetMigration(t, ctx, db, "0005_repair_youtube_metadata_backfill_urls.sql")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE media_asset_id='10000000-0000-4000-8000-000000000011'
+  AND canonical_url='https://www.youtube.com/watch?v=roEzqWv7HpI'`, 1)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+	WHERE media_asset_id='10000000-0000-4000-8000-000000000013'
+	  AND status='failed' AND error_code='provider_url_invalid'`, 1)
+
+	if _, err := db.ExecContext(ctx, `UPDATE metadata_enrichment_jobs
+SET canonical_url='https://m.youtube.com/shorts/dQw4w9WgXcQ?feature=share',
+    status='failed', error_code='provider_url_invalid', error_message='legacy failure', completed_at=now()
+WHERE media_asset_id='10000000-0000-4000-8000-000000000014'`); err != nil {
+		t.Fatalf("seed historically failed Shorts backfill: %v", err)
+	}
+	applyNamedTargetMigration(t, ctx, db, "0006_requeue_youtube_shorts_backfill.sql")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE media_asset_id='10000000-0000-4000-8000-000000000014'
+  AND canonical_url='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+  AND status='queued' AND error_code IS NULL AND completed_at IS NULL`, 1)
+}
+
+func TestYouTubeShortsForwardRepairPostgresContracts(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	applyMetadataEnrichmentMigration(t, ctx, db)
+
+	const accountID = "20000000-0000-4000-8000-000000000001"
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_accounts (id, channel, external_account_ref, status)
+VALUES ($1, 'telegram', 'shorts-forward-repair', 'active')`, accountID); err != nil {
+		t.Fatalf("seed Shorts repair account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status) VALUES
+('20000000-0000-4000-8000-000000000011', $1, 'url', 'https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share', 'url', 'omitted by historical 0004', 'available'),
+('20000000-0000-4000-8000-000000000012', $1, 'url', 'https://m.youtube.com/shorts/goXKlOozyx8', 'url', 'failed historical backfill', 'available')`, accountID); err != nil {
+		t.Fatalf("seed historical Shorts assets: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO metadata_enrichment_jobs (
+    id, media_asset_id, channel_account_id, provider, canonical_url, status, version,
+    idempotency_key, attempt_no, max_attempts, error_code, error_message, completed_at
+) VALUES (
+    '20000000-0000-4000-8000-000000000021',
+    '20000000-0000-4000-8000-000000000012', $1, 'youtube',
+    'https://m.youtube.com/shorts/goXKlOozyx8', 'failed', 2,
+    'youtube-metadata-enrichment:backfill:20000000-0000-4000-8000-000000000012',
+    1, 3, 'provider_url_invalid', 'legacy failure', now()
+), (
+    '20000000-0000-4000-8000-000000000022',
+    '20000000-0000-4000-8000-000000000012', $1, 'youtube',
+    'https://www.youtube.com/watch?v=goXKlOozyx8', 'queued', 1,
+    'youtube-metadata-enrichment:refresh:20000000-0000-4000-8000-000000000012',
+    0, 3, NULL, NULL, NULL
+)`, accountID); err != nil {
+		t.Fatalf("seed historical and active Shorts jobs: %v", err)
+	}
+
+	applyNamedTargetMigration(t, ctx, db, "0006_requeue_youtube_shorts_backfill.sql")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE media_asset_id='20000000-0000-4000-8000-000000000011'
+  AND canonical_url='https://www.youtube.com/watch?v=dQw4w9WgXcQ'
+  AND status='queued'`, 1)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE id='20000000-0000-4000-8000-000000000021'
+  AND status='failed' AND error_code='provider_url_invalid'`, 1)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE id='20000000-0000-4000-8000-000000000022' AND status='queued'`, 1)
+}
+
+func TestFinalizeExportDeliveryRejectsExpiredLeasePostgres(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	const accountID = "20000000-0000-4000-8000-000000000001"
+	const assetID = "20000000-0000-4000-8000-000000000002"
+	const jobID = "20000000-0000-4000-8000-000000000003"
+	const deliveryID = "20000000-0000-4000-8000-000000000004"
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	seedStatements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO channel_accounts (id, channel, external_account_ref, status) VALUES ($1,'telegram','expired-delivery','active')`, []any{accountID}},
+		{`INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status) VALUES ($1,$2,'url','https://youtu.be/example','url','Example','available')`, []any{assetID, accountID}},
+		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version, max_attempts, progress) VALUES ($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}')`, []any{jobID, accountID, assetID}},
+		{`INSERT INTO export_deliveries (id, export_job_id, channel_account_id, channel, status, version, attempt_no, attempt_token, lease_owner, lease_expires_at, max_attempts, expires_at) VALUES ($1,$2,$3,'telegram','claimed',2,1,'attempt-token-current','telegram-adapter',$4,5,$5)`, []any{deliveryID, jobID, accountID, now.Add(time.Minute), now.Add(time.Hour)}},
+	}
+	for _, seed := range seedStatements {
+		if _, err := db.ExecContext(ctx, seed.query, seed.args...); err != nil {
+			t.Fatalf("seed expired delivery: %v", err)
+		}
+	}
+	if _, err := store.FinalizeExportDelivery(ctx, FinalizeExportDeliveryParams{
+		ExportJobID: jobID, ChannelAccountID: accountID, ExportDeliveryID: deliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-current",
+		Status: "delivered", FinalizedAt: now.Add(time.Minute + time.Second),
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("FinalizeExportDelivery(expired lease) error = %v, want sql.ErrNoRows", err)
+	}
+	var status string
+	if err := db.QueryRowContext(ctx, `SELECT status FROM export_deliveries WHERE id=$1`, deliveryID).Scan(&status); err != nil {
+		t.Fatalf("read delivery status: %v", err)
+	}
+	if status != "claimed" {
+		t.Fatalf("delivery status = %q, want claimed", status)
+	}
+}
+
+func TestGovernedMediaMigrationRewritesHistoricalSnapshotAliases(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+
+	accountID := "10000000-0000-4000-8000-000000000001"
+	canonicalID := "10000000-0000-4000-8000-000000000002"
+	aliasID := "10000000-0000-4000-8000-000000000003"
+	assetID := "10000000-0000-4000-8000-000000000004"
+	snapshotID := "10000000-0000-4000-8000-000000000005"
+	itemID := "10000000-0000-4000-8000-000000000006"
+	canonicalAssetID := "10000000-0000-4000-8000-000000000007"
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_accounts (id, channel, external_account_ref, status) VALUES ($1, 'telegram', 'migration-alias-test', 'active')`, accountID); err != nil {
+		t.Fatalf("seed pre-migration account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO stored_objects (id, bucket, object_key, content_type, size_bytes, checksum, storage_status, created_at)
+VALUES
+  ($1, 'sources', 'legacy/canonical', 'video/mp4', 12, 'sha256:same-body', 'available', now() - interval '2 hours'),
+  ($2, 'sources', 'legacy/alias', 'video/mp4', 12, 'sha256:same-body', 'available', now() - interval '1 hour')`, canonicalID, aliasID); err != nil {
+		t.Fatalf("seed pre-migration stored objects: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (id, channel_account_id, stored_object_id, origin_type, origin_ref, kind, display_name, status)
+VALUES
+  ($1, $2, $3, 'upload', 'legacy/alias', 'video', 'Historical video', 'available'),
+  ($4, $2, $5, 'upload', 'legacy/canonical', 'video', 'Canonical video', 'available')`,
+		assetID, accountID, aliasID, canonicalAssetID, canonicalID); err != nil {
+		t.Fatalf("seed pre-migration asset: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO selection_snapshots (id, channel_account_id, status) VALUES ($1, $2, 'sealed')`, snapshotID, accountID); err != nil {
+		t.Fatalf("seed pre-migration snapshot: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO selection_snapshot_items (
+  id, selection_snapshot_id, position, media_asset_id, kind, display_name,
+  origin_snapshot, storage_snapshot, metadata_snapshot, status_at_selection, diagnostics
+)
+VALUES ($1, $2, 0, $3, 'video', 'Historical video', '{}', jsonb_build_object('stored_object_id', $4::text), '{}', 'available', '[]')`,
+		itemID, snapshotID, assetID, aliasID); err != nil {
+		t.Fatalf("seed pre-migration snapshot item: %v", err)
+	}
+
+	applyGovernedMediaMigration(t, ctx, db)
+
+	var snapshotStoredObjectID, assetStoredObjectID string
+	if err := db.QueryRowContext(ctx, `SELECT storage_snapshot->>'stored_object_id' FROM selection_snapshot_items WHERE id=$1`, itemID).Scan(&snapshotStoredObjectID); err != nil {
+		t.Fatalf("read migrated snapshot: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT stored_object_id::text FROM media_assets WHERE id=$1`, assetID).Scan(&assetStoredObjectID); err != nil {
+		t.Fatalf("read migrated asset: %v", err)
+	}
+	if snapshotStoredObjectID != canonicalID || assetStoredObjectID != canonicalID {
+		t.Fatalf("migrated identities snapshot=%q asset=%q want=%q", snapshotStoredObjectID, assetStoredObjectID, canonicalID)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1`, 0, aliasID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_aliases WHERE alias_id=$1 AND canonical_stored_object_id=$2`, 1, aliasID, canonicalID)
+}
+
+func TestStoredObjectPublicationRefreshesAvailableRetention(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	channelID := "00000000-0000-4000-8000-000000006101"
+	_, err = store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+		ID: channelID, Channel: "telegram", ExternalAccountRef: "publication-retention-refresh",
+		Status: "active", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertChannelAccount() error = %v", err)
+	}
+	firstExpiry := now.Add(time.Hour)
+	candidate := StoredObjectRecord{
+		ID: "00000000-0000-4000-8000-000000006102", ChannelAccountID: channelID,
+		Bucket: "sources", ObjectKey: "sources/uploads/retention/1/source", StagingKey: "staging/uploads/retention-1",
+		Generation: 1, GenerationPublishedAt: now, ContentType: "video/mp4", SizeBytes: 5,
+		ChecksumAlgorithm: "sha256", Checksum: "sha256:retention-refresh", StorageStatus: "publishing",
+		RetentionState: "active", HoldState: "none", CreatedAt: now, ExpiresAt: &firstExpiry,
+	}
+	first, err := store.PrepareStoredObjectPublication(ctx, candidate)
+	if err != nil || !first.Publisher {
+		t.Fatalf("first publication = %#v err=%v", first, err)
+	}
+	if err := store.CompleteStoredObjectPublication(ctx, candidate.ID, 1, candidate.StagingKey, now.Add(time.Second)); err != nil {
+		t.Fatalf("complete first publication: %v", err)
+	}
+
+	secondExpiry := now.Add(7 * 24 * time.Hour)
+	candidate.ID = "00000000-0000-4000-8000-000000006103"
+	candidate.ObjectKey = "sources/uploads/retention/2/source"
+	candidate.StagingKey = "staging/uploads/retention-2"
+	candidate.ExpiresAt = &secondExpiry
+	second, err := store.PrepareStoredObjectPublication(ctx, candidate)
+	if err != nil || second.Publisher {
+		t.Fatalf("deduplicated publication = %#v err=%v", second, err)
+	}
+	if second.StoredObject.ID != first.StoredObject.ID || second.StoredObject.ExpiresAt == nil || !second.StoredObject.ExpiresAt.Equal(secondExpiry) {
+		t.Fatalf("deduplicated publication retention = %#v", second.StoredObject)
+	}
+}
+
+func TestExportJobReclaimReleasesTerminalSourcePin(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	now := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	channelID := "00000000-0000-4000-8000-000000007001"
+	inboxID := "00000000-0000-4000-8000-000000007002"
+	storedID := "00000000-0000-4000-8000-000000007003"
+	assetID := "00000000-0000-4000-8000-000000007004"
+	itemID := "00000000-0000-4000-8000-000000007005"
+	jobID := "00000000-0000-4000-8000-000000007006"
+	pinID := "00000000-0000-4000-8000-000000007007"
+	_, err = store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+		ID: channelID, Channel: "telegram", ExternalAccountRef: "export-reclaim",
+		Status: "active", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertChannelAccount() error = %v", err)
+	}
+	createTargetTestMediaAsset(t, ctx, store, targetMediaFixture{
+		channelID: channelID, inboxID: inboxID, storedID: storedID, assetID: assetID,
+		itemID: itemID, bucket: "sources", objectKey: "sources/reclaim/source",
+		kind: "video", displayName: "reclaim.mp4", originType: "upload",
+		originRef: "sources/reclaim/source", checksum: "sha256:reclaim", createdAt: now,
+	})
+	_, err = store.CreateExportJob(ctx, CreateExportJobParams{
+		Job: ExportJobRecord{
+			ID: jobID, ChannelAccountID: channelID, MediaAssetID: assetID,
+			Operation: "video_to_audio", DeliveryChannel: "telegram", Status: "queued",
+			Version: 1, MaxAttempts: 2, CreatedAt: now,
+		},
+		SourcePin: StoredObjectPinRecord{
+			ID: pinID, StoredObjectID: storedID, OwnerType: "export_job",
+			OwnerID: jobID, Purpose: "source", CreatedAt: now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateExportJob() error = %v", err)
+	}
+
+	firstLease := now.Add(time.Minute)
+	if _, claimed, err := store.ClaimExportJob(ctx, ClaimExportJobParams{
+		ExportJobID: jobID, LeaseOwner: "worker-a", AttemptToken: "attempt-a",
+		ClaimedAt: now, LeaseExpiresAt: firstLease,
+	}); err != nil || !claimed {
+		t.Fatalf("first ClaimExportJob() claimed=%v err=%v", claimed, err)
+	}
+	first, err := store.ReclaimExportJobs(ctx, firstLease, 100)
+	if err != nil {
+		t.Fatalf("first ReclaimExportJobs() error = %v", err)
+	}
+	if first.Examined != 1 || first.Requeued != 1 || first.Failed != 0 {
+		t.Fatalf("first reclaim = %#v", first)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_pins WHERE id=$1 AND released_at IS NULL`, 1, pinID)
+
+	secondLease := now.Add(2 * time.Minute)
+	if _, claimed, err := store.ClaimExportJob(ctx, ClaimExportJobParams{
+		ExportJobID: jobID, LeaseOwner: "worker-b", AttemptToken: "attempt-b",
+		ClaimedAt: firstLease, LeaseExpiresAt: secondLease,
+	}); err != nil || !claimed {
+		t.Fatalf("second ClaimExportJob() claimed=%v err=%v", claimed, err)
+	}
+	second, err := store.ReclaimExportJobs(ctx, secondLease, 100)
+	if err != nil {
+		t.Fatalf("second ReclaimExportJobs() error = %v", err)
+	}
+	if second.Examined != 1 || second.Requeued != 0 || second.Failed != 1 {
+		t.Fatalf("second reclaim = %#v", second)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_pins WHERE id=$1 AND released_at IS NOT NULL`, 1, pinID)
+}
+
+func TestStoredObjectPublicationUsesImmutableGenerationKeysAndDeleteFence(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
+	channelID := "00000000-0000-4000-8000-000000006001"
+	storedID := "00000000-0000-4000-8000-000000006002"
+	_, err = store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+		ID: channelID, Channel: "telegram", ExternalAccountRef: "publication-generation",
+		Status: "active", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("UpsertChannelAccount() error = %v", err)
+	}
+	candidate := StoredObjectRecord{
+		ID: storedID, ChannelAccountID: channelID, Bucket: "sources",
+		ObjectKey: "sources/uploads/" + storedID + "/1/source", StagingKey: "staging/uploads/attempt-1",
+		Generation: 1, GenerationPublishedAt: now, ContentType: "video/mp4",
+		SizeBytes: 5, ChecksumAlgorithm: "sha256", Checksum: "sha256:generation",
+		StorageStatus: "publishing", RetentionState: "active", HoldState: "none", CreatedAt: now,
+	}
+	first, err := store.PrepareStoredObjectPublication(ctx, candidate)
+	if err != nil || !first.Publisher || first.StoredObject.Generation != 1 {
+		t.Fatalf("first PrepareStoredObjectPublication() = %#v err=%v", first, err)
+	}
+	if err := store.CompleteStoredObjectPublication(ctx, storedID, 1, candidate.StagingKey, now.Add(time.Second)); err != nil {
+		t.Fatalf("CompleteStoredObjectPublication() error = %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='deleted', retention_state='expired', deleted_at=$2
+WHERE id=$1`, storedID, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("seed deleted generation: %v", err)
+	}
+
+	candidate.StagingKey = "staging/uploads/attempt-2"
+	candidate.GenerationPublishedAt = now.Add(3 * time.Second)
+	second, err := store.PrepareStoredObjectPublication(ctx, candidate)
+	if err != nil || !second.Publisher {
+		t.Fatalf("second PrepareStoredObjectPublication() = %#v err=%v", second, err)
+	}
+	if second.StoredObject.Generation != 2 || second.StoredObject.ObjectKey != "sources/uploads/"+storedID+"/2/source" {
+		t.Fatalf("second generation object = %#v", second.StoredObject)
+	}
+	leaseExpiresAt := now.Add(10 * time.Minute)
+	if _, err := db.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='delete_scheduled', retention_state='expires_scheduled',
+    delete_owner='sweeper', delete_token='delete-token-123456', delete_lease_expires_at=$2
+WHERE id=$1`, storedID, leaseExpiresAt); err != nil {
+		t.Fatalf("seed delete claim: %v", err)
+	}
+	if err := store.CompleteRetentionDelete(ctx, storedID, 1, "sweeper", "delete-token-123456", now.Add(4*time.Second)); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("stale generation delete error = %v, want sql.ErrNoRows", err)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1 AND generation=2 AND storage_status='delete_scheduled'`, 1, storedID)
+	if err := store.CompleteRetentionDelete(ctx, storedID, 2, "sweeper", "delete-token-123456", now.Add(5*time.Second)); err != nil {
+		t.Fatalf("current generation delete error = %v", err)
+	}
+}
+
+func TestGovernedMediaMigrationUpgradesLegacyDuplicates(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+
+	now := time.Date(2026, 7, 26, 8, 0, 0, 0, time.UTC)
+	channelID := "00000000-0000-4000-8000-000000008001"
+	canonicalID := "00000000-0000-4000-8000-000000008002"
+	duplicateID := "00000000-0000-4000-8000-000000008003"
+	assetID := "00000000-0000-4000-8000-000000008004"
+	unscopedID := "00000000-0000-4000-8000-000000008005"
+	canonicalAssetID := "00000000-0000-4000-8000-000000008006"
+	snapshotID := "00000000-0000-4000-8000-000000008007"
+	snapshotItemID := "00000000-0000-4000-8000-000000008008"
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO channel_accounts (id, channel, external_account_ref, created_at, updated_at)
+VALUES ($1,'telegram','migration-test',$2,$2)`, channelID, now); err != nil {
+		t.Fatalf("seed legacy migration account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO stored_objects (id,bucket,object_key,size_bytes,checksum,storage_status,retention_state,created_at,expires_at)
+VALUES ($1,'sources','sources/legacy/a',5,'sha256:same','available','active',$4::timestamptz,$4::timestamptz + interval '1 day'),
+       ($2,'sources','sources/legacy/b',5,'sha256:same','available','held',$4::timestamptz + interval '1 second',NULL),
+       ($3,'sources','sources/legacy/orphan',7,'sha256:orphan','available','active',$4::timestamptz,NULL)`,
+		canonicalID, duplicateID, unscopedID, now); err != nil {
+		t.Fatalf("seed legacy migration objects: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO media_assets (id,channel_account_id,stored_object_id,origin_type,kind,display_name,created_at,updated_at)
+VALUES ($1,$2,$3,'upload','video','legacy.mp4',$5,$5),
+       ($4,$2,$6,'upload','video','canonical.mp4',$5,$5)`,
+		assetID, channelID, duplicateID, canonicalAssetID, now, canonicalID); err != nil {
+		t.Fatalf("seed legacy migration state: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO selection_snapshots (id,channel_account_id,status,created_at,sealed_at)
+VALUES ($1,$2,'sealed',$3,$3)`, snapshotID, channelID, now); err != nil {
+		t.Fatalf("seed sealed legacy snapshot: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO selection_snapshot_items (
+    id,selection_snapshot_id,position,media_asset_id,kind,display_name,
+    origin_snapshot,storage_snapshot,status_at_selection
+)
+VALUES (
+    $2,$1,0,$3,'video','legacy.mp4',
+    jsonb_build_object('origin_type','telegram_file','object_ref','sources/legacy/b'),
+    jsonb_build_object(
+        'stored_object_id',$4::text,'bucket','sources','object_key','sources/legacy/b',
+        'checksum','sha256:same','size_bytes',5,'content_type','video/mp4'
+    ),
+    'available'
+)`, snapshotID, snapshotItemID, assetID, duplicateID); err != nil {
+		t.Fatalf("seed sealed legacy snapshot: %v", err)
+	}
+
+	applyGovernedMediaMigration(t, ctx, db)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE channel_account_id=$1 AND checksum='sha256:same' AND size_bytes=5`, 1, channelID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM media_assets WHERE id=$1 AND stored_object_id=$2`, 1, assetID, canonicalID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_aliases WHERE alias_id=$1 AND canonical_stored_object_id=$2`, 1, duplicateID, canonicalID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1 AND storage_status='delete_scheduled'`, 1, unscopedID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1 AND hold_state='held' AND retention_state='held'`, 1, canonicalID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1 AND generation_published_at=$2`, 1, canonicalID, now.Add(time.Second))
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1 AND expires_at IS NULL`, 1, canonicalID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM selection_snapshot_items
+WHERE id=$1
+  AND storage_snapshot->>'stored_object_id'=$2
+  AND storage_snapshot->>'bucket'='sources'
+  AND storage_snapshot->>'object_key'='sources/legacy/a'`, 1, snapshotItemID, canonicalID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1`, 0, duplicateID)
+
+	if _, err := db.ExecContext(ctx, `UPDATE selection_snapshot_items
+SET storage_snapshot=storage_snapshot || jsonb_build_object(
+	'stored_object_id',$2::text,'bucket','legacy-stale','object_key','sources/legacy/b'
+)
+WHERE id=$1`, snapshotItemID, canonicalID); err != nil {
+		t.Fatalf("seed historically partial alias repair: %v", err)
+	}
+	applyNamedTargetMigration(t, ctx, db, "0007_repair_snapshot_alias_locators.sql")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM selection_snapshot_items
+WHERE id=$1
+  AND storage_snapshot->>'stored_object_id'=$2
+  AND storage_snapshot->>'object_key'='sources/legacy/a'`, 1, snapshotItemID, canonicalID)
+}
+
 type targetMediaFixture struct {
 	channelID    string
 	inboxID      string
@@ -970,6 +1723,42 @@ func applyTargetMigration(t *testing.T, ctx context.Context, db *sql.DB) {
 	}
 }
 
+func applyGovernedMediaMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "migrations", "0002_governed_media_export_retention.sql"))
+	if err != nil {
+		t.Fatalf("read governed media migration: %v", err)
+	}
+	up := strings.Split(string(body), "-- +goose Down")[0]
+	if _, err := db.ExecContext(ctx, "SET client_min_messages TO warning;\n"+up); err != nil {
+		t.Fatalf("apply governed media migration: %v", err)
+	}
+}
+
+func applyMetadataEnrichmentMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "migrations", "0003_youtube_metadata_enrichment.sql"))
+	if err != nil {
+		t.Fatalf("read metadata enrichment migration: %v", err)
+	}
+	up := strings.Split(string(body), "-- +goose Down")[0]
+	if _, err := db.ExecContext(ctx, "SET client_min_messages TO warning;\n"+up); err != nil {
+		t.Fatalf("apply metadata enrichment migration: %v", err)
+	}
+}
+
+func applyNamedTargetMigration(t *testing.T, ctx context.Context, db *sql.DB, filename string) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "migrations", filename))
+	if err != nil {
+		t.Fatalf("read migration %s: %v", filename, err)
+	}
+	up := strings.Split(string(body), "-- +goose Down")[0]
+	if _, err := db.ExecContext(ctx, "SET client_min_messages TO warning;\n"+up); err != nil {
+		t.Fatalf("apply migration %s: %v", filename, err)
+	}
+}
+
 func assertTargetSchemaState(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	required := []string{
@@ -991,6 +1780,11 @@ func assertTargetSchemaState(t *testing.T, ctx context.Context, db *sql.DB) {
 		"channel_surfaces",
 		"channel_surface_subjects",
 		"channel_surface_events",
+		"stored_object_aliases",
+		"stored_object_pins",
+		"export_jobs",
+		"metadata_enrichment_jobs",
+		"export_deliveries",
 	}
 	for _, table := range required {
 		assertSQLBool(t, ctx, db, fmt.Sprintf("SELECT to_regclass('public.%s') IS NOT NULL", table), true)
@@ -1027,6 +1821,39 @@ func must(t *testing.T, err error, label string) {
 	t.Helper()
 	if err != nil {
 		t.Fatalf("%s: %v", label, err)
+	}
+}
+
+func processingRunReplayParams(createdAt time.Time, collectionID, assetID, snapshotID, snapshotItemID, runID, runType string) CreateProcessingRunParams {
+	eventID := runID[:len(runID)-1] + "4"
+	snapshot := SelectionSnapshotRecord{
+		ID: snapshotID, ChannelAccountID: targetTestTelegramChannelID,
+		SourceCollectionID: collectionID, Status: "sealed",
+		OptionSnapshotJSON: []byte(`{"language":"ru"}`), DiagnosticsJSON: []byte(`[]`),
+		CreatedViaChannel: targetTestTelegramChannelID, CreatedAt: createdAt, SealedAt: createdAt,
+	}
+	items := []SelectionSnapshotItemRecord{{
+		ID: snapshotItemID, SelectionSnapshotID: snapshotID, Position: 0,
+		MediaAssetID: assetID, Kind: "voice", DisplayName: "voice.ogg",
+		OriginSnapshotJSON: []byte(`{"origin_type":"telegram_file"}`), StorageSnapshotJSON: []byte(`{}`),
+		MetadataJSON: []byte(`{}`), StatusAtSelection: "available", DiagnosticsJSON: []byte(`[]`),
+	}}
+	graph := AnalysisRunGraph{
+		Run: AnalysisRunRecord{
+			ID: runID, ChannelAccountID: targetTestTelegramChannelID, SelectionSnapshot: snapshotID,
+			RunType: runType, Status: "queued", Version: 1, IdempotencyKey: "telegram:process:replay",
+			ParamsJSON: []byte(`{"language":"ru"}`), DeliveryJSON: []byte(`{"strategy":"polling"}`),
+			EvidenceGateState: "not_required", CreatedViaChannel: targetTestTelegramChannelID, CreatedAt: createdAt,
+		},
+		Event: AnalysisRunEventRecord{
+			ID: eventID, AnalysisRunID: runID, EventType: "analysis_run.created", Version: 1,
+			Status: "queued", PayloadJSON: []byte(`{"collection_membership":"detached_at_launch"}`), CreatedAt: createdAt,
+		},
+	}
+	return CreateProcessingRunParams{
+		ChannelAccountID: targetTestTelegramChannelID, CollectionID: collectionID,
+		ExpectedVersion: 1, CapturedAssetIDs: []string{assetID}, DetachedAt: createdAt,
+		Snapshot: snapshot, SnapshotItems: items, Graph: graph,
 	}
 }
 

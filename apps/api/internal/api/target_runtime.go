@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,8 +36,37 @@ type TargetStateStore interface {
 	ListMediaAssets(ctx context.Context, channelAccountID string, limit int) ([]targetstore.MediaAssetRecord, error)
 	GetMediaAsset(ctx context.Context, channelAccountID, mediaAssetID string) (targetstore.MediaAssetRecord, error)
 	GetStoredObject(ctx context.Context, storedObjectID string) (targetstore.StoredObjectRecord, error)
+	FindStoredObjectByDigest(ctx context.Context, channelAccountID, checksum string) (targetstore.StoredObjectRecord, error)
+	PrepareStoredObjectPublication(ctx context.Context, candidate targetstore.StoredObjectRecord) (targetstore.PrepareStoredObjectPublicationResult, error)
+	FindStoredObjectByLocation(ctx context.Context, bucket, objectKey string) (targetstore.StoredObjectRecord, error)
+	ListStoredObjectsForReconcile(ctx context.Context, afterID string, limit int) ([]targetstore.StoredObjectRecord, error)
+	CompleteStoredObjectPublication(ctx context.Context, storedObjectID string, generation int, stagingKey string, publishedAt time.Time) error
+	MarkStoredObjectMissing(ctx context.Context, storedObjectID string, generation int, markedAt time.Time) error
+	ClaimObjectDeleteFence(ctx context.Context, bucket, objectKey, token string, now, leaseExpiresAt time.Time) (bool, error)
+	ReleaseObjectDeleteFence(ctx context.Context, bucket, objectKey, token string) error
+	GetReconcileCursor(ctx context.Context, name string) (string, error)
+	SetReconcileCursor(ctx context.Context, name, cursor string, updatedAt time.Time) error
 	DeleteMediaAsset(ctx context.Context, channelAccountID, mediaAssetID string, deletedAt time.Time) (targetstore.MediaAssetRecord, error)
+	CreateExportJob(ctx context.Context, params targetstore.CreateExportJobParams) (targetstore.ExportJobRecord, error)
+	GetExportJob(ctx context.Context, channelAccountID, exportJobID string) (targetstore.ExportJobRecord, error)
+	GetExportJobByID(ctx context.Context, exportJobID string) (targetstore.ExportJobRecord, error)
+	ListExportJobs(ctx context.Context, channelAccountID, status string, limit int) ([]targetstore.ExportJobRecord, error)
+	ListExportJobQueue(ctx context.Context, limit int) ([]targetstore.ExportJobRecord, error)
+	ClaimExportJob(ctx context.Context, params targetstore.ClaimExportJobParams) (targetstore.ExportJobRecord, bool, error)
+	RecordExportJobProgress(ctx context.Context, params targetstore.RecordExportJobProgressParams) error
+	RequestExportJobCancel(ctx context.Context, channelAccountID, exportJobID string, requestedAt time.Time) (targetstore.ExportJobRecord, error)
+	RetryExportJob(ctx context.Context, channelAccountID, exportJobID, idempotencyKey string, pin targetstore.StoredObjectPinRecord, retriedAt time.Time) (targetstore.ExportJobRecord, error)
+	FinalizeExportJob(ctx context.Context, params targetstore.FinalizeExportJobParams) (targetstore.ExportJobRecord, error)
+	ListExportDeliveries(ctx context.Context, channelAccountID, exportJobID string) ([]targetstore.ExportDeliveryRecord, error)
+	ClaimExportDelivery(ctx context.Context, params targetstore.ClaimExportDeliveryParams) (targetstore.ExportDeliveryRecord, bool, error)
+	FinalizeExportDelivery(ctx context.Context, params targetstore.FinalizeExportDeliveryParams) (targetstore.ExportDeliveryRecord, error)
+	ReclaimExportJobs(ctx context.Context, now time.Time, limit int) (targetstore.ExportJobReclaimResult, error)
+	ReclaimExportDeliveries(ctx context.Context, now time.Time, limit int) (int64, error)
+	ClaimRetentionDeletes(ctx context.Context, owner, token string, now, leaseExpiresAt time.Time, limit int) ([]targetstore.RetentionDeleteClaimRecord, error)
+	CompleteRetentionDelete(ctx context.Context, storedObjectID string, generation int, owner, token string, deletedAt time.Time) error
+	FailRetentionDelete(ctx context.Context, storedObjectID string, generation int, owner, token string, failedAt time.Time) error
 	CreateSelectionSnapshot(ctx context.Context, snapshot targetstore.SelectionSnapshotRecord, items []targetstore.SelectionSnapshotItemRecord) error
+	CreateProcessingRun(ctx context.Context, params targetstore.CreateProcessingRunParams) (targetstore.CreateProcessingRunResult, error)
 	GetSelectionSnapshot(ctx context.Context, channelAccountID, selectionSnapshotID string) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, error)
 	ListSelectionSnapshotItems(ctx context.Context, selectionSnapshotID string) ([]targetstore.SelectionSnapshotItemRecord, error)
 	CreateAnalysisRunGraph(ctx context.Context, graph targetstore.AnalysisRunGraph) error
@@ -69,8 +100,14 @@ type TargetRuntimeService struct {
 	objects                     storage.ObjectStore
 	artifactPublicDownloadTTL   time.Duration
 	artifactInternalDownloadTTL time.Duration
+	mediaObjectRetentionDays    int
+	objectOrphanGrace           time.Duration
+	exportDeliveryTTL           time.Duration
+	exportWebAccessTTL          time.Duration
+	exportDeliveryMaxAttempts   int
 	now                         func() time.Time
 	nextID                      func() string
+	reconcileMu                 sync.Mutex
 }
 
 type internalObjectPresigner interface {
@@ -101,11 +138,41 @@ func WithTargetObjectStore(objects storage.ObjectStore) TargetRuntimeOption {
 	}
 }
 
+func WithTargetMediaLifecycle(retentionDays int, deliveryTTL, webAccessTTL time.Duration, deliveryMaxAttempts int) TargetRuntimeOption {
+	return func(s *TargetRuntimeService) {
+		if retentionDays > 0 {
+			s.mediaObjectRetentionDays = retentionDays
+		}
+		if deliveryTTL > 0 {
+			s.exportDeliveryTTL = deliveryTTL
+		}
+		if webAccessTTL > 0 {
+			s.exportWebAccessTTL = webAccessTTL
+		}
+		if deliveryMaxAttempts > 0 {
+			s.exportDeliveryMaxAttempts = deliveryMaxAttempts
+		}
+	}
+}
+
+func WithTargetObjectOrphanGrace(grace time.Duration) TargetRuntimeOption {
+	return func(s *TargetRuntimeService) {
+		if grace > 0 {
+			s.objectOrphanGrace = grace
+		}
+	}
+}
+
 func NewTargetRuntimeService(store TargetStateStore, opts ...TargetRuntimeOption) *TargetRuntimeService {
 	service := &TargetRuntimeService{
 		store:                       store,
 		artifactPublicDownloadTTL:   15 * time.Minute,
 		artifactInternalDownloadTTL: 15 * time.Minute,
+		mediaObjectRetentionDays:    7,
+		objectOrphanGrace:           time.Hour,
+		exportDeliveryTTL:           24 * time.Hour,
+		exportWebAccessTTL:          24 * time.Hour,
+		exportDeliveryMaxAttempts:   5,
 		now:                         func() time.Time { return time.Now().UTC() },
 		nextID:                      uuid.NewString,
 	}
@@ -187,6 +254,18 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 	}
 	now := s.now()
 	originRef := firstNonEmpty(req.Origin.OriginRef, req.Origin.ObjectRef)
+	canonicalYouTubeURL, enrichYouTube, err := canonicalYouTubeURLForEnrichment(req.Origin.OriginType, originRef)
+	if err != nil {
+		return TargetMediaAsset{}, err
+	}
+	if enrichYouTube {
+		originRef = canonicalYouTubeURL
+		req.Origin.OriginRef = canonicalYouTubeURL
+		req.Origin.ObjectRef = canonicalYouTubeURL
+		if strings.TrimSpace(req.DisplayName) == "" {
+			req.DisplayName = "YouTube: " + strings.TrimPrefix(canonicalYouTubeURL, "https://www.youtube.com/watch?v=")
+		}
+	}
 	operationID := ""
 	if req.IdempotencyKey != "" {
 		operationID = s.nextID()
@@ -250,17 +329,23 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 			AddedAt:         now,
 		},
 	}
+	if enrichYouTube {
+		params.Enrichment = targetstore.MetadataEnrichmentRecord{
+			ID: s.nextID(), MediaAssetID: assetID, ChannelAccountID: req.ChannelAccountID,
+			Provider: "youtube", CanonicalURL: canonicalYouTubeURL, Status: "queued", Version: 1,
+			IdempotencyKey: "initial:" + assetID, MaxAttempts: 3,
+			ProgressJSON: []byte(`{"stage":"queued","percent":0}`), CreatedAt: now,
+		}
+	}
 	if req.Origin.StoredObjectID != "" {
+		expiresAt := now.Add(time.Duration(s.mediaObjectRetentionDays) * 24 * time.Hour)
 		params.StoredObject = targetstore.StoredObjectRecord{
-			ID:             req.Origin.StoredObjectID,
-			Bucket:         "sources",
-			ObjectKey:      originRef,
-			ContentType:    req.Origin.ContentType,
-			SizeBytes:      req.Origin.SizeBytes,
-			Checksum:       req.Origin.Checksum,
-			StorageStatus:  "available",
-			RetentionState: "active",
-			CreatedAt:      now,
+			ID: req.Origin.StoredObjectID, ChannelAccountID: req.ChannelAccountID,
+			Bucket: "sources", ObjectKey: originRef, Generation: 1,
+			GenerationPublishedAt: now, ContentType: req.Origin.ContentType,
+			SizeBytes: req.Origin.SizeBytes, ChecksumAlgorithm: "sha256",
+			Checksum: req.Origin.Checksum, StagingKey: req.Origin.StagingKey, StorageStatus: "available",
+			RetentionState: "active", HoldState: "none", CreatedAt: now, ExpiresAt: &expiresAt,
 		}
 	}
 	if err := s.persistUploadBody(ctx, &req, &params); err != nil {
@@ -280,6 +365,105 @@ func (s *TargetRuntimeService) CreateMediaAsset(ctx context.Context, req TargetC
 		CreatedAt:        now,
 		UpdatedAt:        now,
 	}, nil
+}
+
+func (s *TargetRuntimeService) UploadMediaAsset(ctx context.Context, req TargetUploadMediaAssetRequest) (TargetMediaAsset, error) {
+	objects, ok := s.objects.(storage.ManagedObjectStore)
+	if !ok {
+		return TargetMediaAsset{}, storage.ContractViolationf("managed object store is required for streaming uploads")
+	}
+	if req.Reader == nil || strings.TrimSpace(req.Metadata.ChannelAccountID) == "" {
+		return TargetMediaAsset{}, storage.ContractViolationf("upload reader and channel_account_id are required")
+	}
+	filename := strings.TrimSpace(req.Filename)
+	if filename == "" {
+		filename = "upload.bin"
+	}
+	contentType := strings.TrimSpace(req.ContentType)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	stagingKey := path.Join("staging/uploads", uuid.NewString())
+	hasher := sha256.New()
+	counter := &countingReader{reader: io.TeeReader(req.Reader, hasher)}
+	if err := objects.PutObjectStream(ctx, storage.SourcesBucket, stagingKey, contentType, counter, -1, nil); err != nil {
+		return TargetMediaAsset{}, fmt.Errorf("%w: stream upload to staging: %v", storage.ErrStorageUnavailable, err)
+	}
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = objects.DeleteObject(cleanupCtx, storage.SourcesBucket, stagingKey)
+	}()
+	if counter.bytes == 0 {
+		return TargetMediaAsset{}, storage.ContractViolationf("upload body is empty")
+	}
+	checksum := fmt.Sprintf("sha256:%x", hasher.Sum(nil))
+	storedObjectID := targetUploadStoredObjectID(req.Metadata.ChannelAccountID, "", checksum, counter.bytes)
+	objectKey := path.Join("sources/uploads", storedObjectID, "1", "source")
+	now := s.now()
+	expiresAt := now.Add(time.Duration(s.mediaObjectRetentionDays) * 24 * time.Hour)
+	prepared, err := s.store.PrepareStoredObjectPublication(ctx, targetstore.StoredObjectRecord{
+		ID: storedObjectID, ChannelAccountID: req.Metadata.ChannelAccountID,
+		Bucket: storage.SourcesBucket, ObjectKey: objectKey, StagingKey: stagingKey,
+		Generation: 1, GenerationPublishedAt: now, ContentType: contentType,
+		SizeBytes: counter.bytes, ChecksumAlgorithm: "sha256", Checksum: checksum,
+		StorageStatus: "publishing", RetentionState: "active", HoldState: "none",
+		CreatedAt: now, ExpiresAt: &expiresAt,
+	})
+	if err != nil {
+		return TargetMediaAsset{}, err
+	}
+	storedObjectID, objectKey = prepared.StoredObject.ID, prepared.StoredObject.ObjectKey
+	if !prepared.Publisher {
+		if prepared.StoredObject.SizeBytes != counter.bytes {
+			return TargetMediaAsset{}, storage.ContractViolationf("checksum collision has a different size")
+		}
+		if prepared.StoredObject.StorageStatus == "available" {
+			return s.CreateMediaAsset(ctx, TargetCreateMediaAssetRequest{
+				ChannelAccountID: req.Metadata.ChannelAccountID,
+				Origin: TargetMediaAssetOrigin{
+					OriginType: "upload", OriginRef: objectKey, ObjectRef: objectKey,
+					OriginalFilename: filename, StoredObjectID: storedObjectID,
+					ContentType: contentType, SizeBytes: counter.bytes, Checksum: checksum,
+				},
+				Kind: req.Metadata.Kind, DisplayName: firstNonEmpty(req.Metadata.DisplayName, filename),
+				CollectionID: req.Metadata.CollectionID, Metadata: req.Metadata.Metadata,
+				IdempotencyKey: req.Metadata.IdempotencyKey,
+			})
+		}
+		return TargetMediaAsset{}, storage.ErrStoredObjectUnavailable
+	}
+	sha := strings.TrimPrefix(checksum, "sha256:")
+	if err := objects.PromoteObject(ctx, storage.SourcesBucket, stagingKey, objectKey, map[string]string{"sha256": sha}); err != nil {
+		return TargetMediaAsset{}, fmt.Errorf("%w: publish upload: %v", storage.ErrStorageUnavailable, err)
+	}
+	published, err := objects.StatObject(ctx, storage.SourcesBucket, objectKey)
+	if err != nil || published.SizeBytes != counter.bytes || !metadataSHA256Matches(published.Metadata, sha) {
+		return TargetMediaAsset{}, fmt.Errorf("%w: verify published upload", storage.ErrStorageUnavailable)
+	}
+	return s.CreateMediaAsset(ctx, TargetCreateMediaAssetRequest{
+		ChannelAccountID: req.Metadata.ChannelAccountID,
+		Origin: TargetMediaAssetOrigin{
+			OriginType: "upload", OriginRef: objectKey, ObjectRef: objectKey,
+			OriginalFilename: filename, StoredObjectID: storedObjectID,
+			ContentType: contentType, SizeBytes: counter.bytes, Checksum: checksum,
+			StagingKey: stagingKey,
+		},
+		Kind: req.Metadata.Kind, DisplayName: firstNonEmpty(req.Metadata.DisplayName, filename),
+		CollectionID: req.Metadata.CollectionID, Metadata: req.Metadata.Metadata,
+		IdempotencyKey: req.Metadata.IdempotencyKey,
+	})
+}
+
+type countingReader struct {
+	reader io.Reader
+	bytes  int64
+}
+
+func (r *countingReader) Read(buffer []byte) (int, error) {
+	read, err := r.reader.Read(buffer)
+	r.bytes += int64(read)
+	return read, err
 }
 
 func (s *TargetRuntimeService) persistUploadBody(ctx context.Context, req *TargetCreateMediaAssetRequest, params *targetstore.CreateMediaAssetWithInboxParams) error {
@@ -309,19 +493,40 @@ func (s *TargetRuntimeService) persistUploadBody(ctx context.Context, req *Targe
 	} else if strings.TrimSpace(req.Origin.Checksum) != checksum {
 		return fmt.Errorf("%w: checksum does not match uploaded body", storage.ErrContractViolation)
 	}
+	existing, err := s.store.FindStoredObjectByDigest(ctx, req.ChannelAccountID, req.Origin.Checksum)
+	if err == nil {
+		if existing.SizeBytes != req.Origin.SizeBytes {
+			return fmt.Errorf("%w: checksum collision has a different size", storage.ErrContractViolation)
+		}
+		switch existing.StorageStatus {
+		case "available":
+			req.Origin.StoredObjectID = existing.ID
+			req.Origin.OriginRef = existing.ObjectKey
+			req.Origin.ObjectRef = existing.ObjectKey
+			params.StoredObject = existing
+			params.MediaAsset.StoredObjectID = existing.ID
+			params.MediaAsset.OriginRef = existing.ObjectKey
+			return nil
+		case "deleted", "missing":
+			req.Origin.StoredObjectID = existing.ID
+			objectKey = existing.ObjectKey
+		case "publishing", "delete_scheduled":
+			return storage.ErrStoredObjectUnavailable
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
 	if err := s.objects.PutObject(ctx, storage.SourcesBucket, objectKey, contentType, req.Origin.UploadBody); err != nil {
 		return fmt.Errorf("%w: persist target upload object: %v", storage.ErrStorageUnavailable, err)
 	}
+	expiresAt := params.MediaAsset.CreatedAt.Add(time.Duration(s.mediaObjectRetentionDays) * 24 * time.Hour)
 	params.StoredObject = targetstore.StoredObjectRecord{
-		ID:             req.Origin.StoredObjectID,
-		Bucket:         storage.SourcesBucket,
-		ObjectKey:      objectKey,
-		ContentType:    contentType,
-		SizeBytes:      req.Origin.SizeBytes,
-		Checksum:       req.Origin.Checksum,
-		StorageStatus:  "available",
-		RetentionState: "active",
-		CreatedAt:      params.MediaAsset.CreatedAt,
+		ID: req.Origin.StoredObjectID, ChannelAccountID: req.ChannelAccountID,
+		Bucket: storage.SourcesBucket, ObjectKey: objectKey, Generation: 1,
+		GenerationPublishedAt: params.MediaAsset.CreatedAt, ContentType: contentType,
+		SizeBytes: req.Origin.SizeBytes, ChecksumAlgorithm: "sha256", Checksum: req.Origin.Checksum,
+		StorageStatus: "available", RetentionState: "active", HoldState: "none",
+		CreatedAt: params.MediaAsset.CreatedAt, ExpiresAt: &expiresAt,
 	}
 	params.MediaAsset.StoredObjectID = req.Origin.StoredObjectID
 	params.MediaAsset.OriginRef = objectKey
@@ -530,54 +735,15 @@ func (s *TargetRuntimeService) CreateSelectionSnapshot(ctx context.Context, req 
 		return TargetSelectionSnapshot{}, fmt.Errorf("target storage is required")
 	}
 	now := s.now()
-	snapshotID := s.nextID()
-	snapshot := targetstore.SelectionSnapshotRecord{
-		ID:                 snapshotID,
-		ChannelAccountID:   req.ChannelAccountID,
-		SourceCollectionID: req.SourceCollectionID,
-		Status:             "sealed",
-		OptionSnapshotJSON: jsonOrObject(req.OptionSnapshot),
-		DiagnosticsJSON:    []byte(`[]`),
-		CreatedViaChannel:  req.CreatedViaChannel,
-		CreatedAt:          now,
-		SealedAt:           now,
-	}
-	items := make([]targetstore.SelectionSnapshotItemRecord, 0, len(req.Items))
-	dtoItems := make([]TargetSelectionSnapshotItem, 0, len(req.Items))
-	for _, item := range req.Items {
-		itemID := s.nextID()
-		asset, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, item.MediaAssetID)
-		if err != nil {
-			return TargetSelectionSnapshot{}, err
-		}
-		var storedObject targetstore.StoredObjectRecord
-		if asset.StoredObjectID != "" {
-			storedObject, err = s.store.GetStoredObject(ctx, asset.StoredObjectID)
-			if err != nil {
-				return TargetSelectionSnapshot{}, err
-			}
-		}
-		record := targetstore.SelectionSnapshotItemRecord{
-			ID:                  itemID,
-			SelectionSnapshotID: snapshotID,
-			Position:            item.Position,
-			MediaAssetID:        item.MediaAssetID,
-			Kind:                asset.Kind,
-			DisplayName:         asset.DisplayName,
-			StatusAtSelection:   asset.Status,
-			OriginSnapshotJSON:  mustJSON(targetOriginSnapshotPayload(asset, storedObject)),
-			StorageSnapshotJSON: mustJSON(targetStorageSnapshotPayload(storedObject)),
-			MetadataJSON:        jsonOrObject(asset.MetadataJSON),
-			DiagnosticsJSON:     []byte(`[]`),
-		}
-		items = append(items, record)
-		dtoItems = append(dtoItems, targetSelectionSnapshotItemFromRecord(record))
+	snapshot, items, dtoItems, err := s.buildSelectionSnapshot(ctx, req, now)
+	if err != nil {
+		return TargetSelectionSnapshot{}, err
 	}
 	if err := s.store.CreateSelectionSnapshot(ctx, snapshot, items); err != nil {
 		return TargetSelectionSnapshot{}, err
 	}
 	return TargetSelectionSnapshot{
-		SelectionSnapshotID: snapshotID,
+		SelectionSnapshotID: snapshot.ID,
 		ChannelAccountID:    req.ChannelAccountID,
 		SourceCollectionID:  req.SourceCollectionID,
 		Status:              "sealed",
@@ -587,6 +753,162 @@ func (s *TargetRuntimeService) CreateSelectionSnapshot(ctx context.Context, req 
 		CreatedAt:           now,
 		SealedAt:            now,
 	}, nil
+}
+
+func (s *TargetRuntimeService) StartCollectionProcessingRun(ctx context.Context, req TargetStartProcessingRunRequest) (TargetProcessingRun, error) {
+	if s.store == nil {
+		return TargetProcessingRun{}, fmt.Errorf("target storage is required")
+	}
+	if len(req.Items) == 0 {
+		return TargetProcessingRun{}, storage.ErrContractViolation
+	}
+	now := s.now()
+	snapshot, snapshotItems, _, err := s.buildSelectionSnapshot(ctx, TargetCreateSelectionSnapshotRequest{
+		ChannelAccountID:   req.ChannelAccountID,
+		SourceCollectionID: req.CollectionID,
+		Items:              req.Items,
+		OptionSnapshot:     req.OptionSnapshot,
+		CreatedViaChannel:  req.CreatedViaChannelID,
+		IdempotencyKey:     req.IdempotencyKey,
+	}, now)
+	if err != nil {
+		return TargetProcessingRun{}, err
+	}
+	plannedInputs, err := s.planSelectionInputs(ctx, req.ChannelAccountID, snapshotItems)
+	if err != nil {
+		return TargetProcessingRun{}, err
+	}
+	runID := s.nextID()
+	steps, inputs := s.planAnalysisRunSteps(runID, req.RunType, plannedInputs, now)
+	graph := targetstore.AnalysisRunGraph{
+		Run: targetstore.AnalysisRunRecord{
+			ID:                runID,
+			ChannelAccountID:  req.ChannelAccountID,
+			SelectionSnapshot: snapshot.ID,
+			RunType:           req.RunType,
+			Status:            "queued",
+			Version:           1,
+			IdempotencyKey:    req.IdempotencyKey,
+			ParamsJSON:        jsonOrObject(req.Params),
+			DeliveryJSON:      jsonOrDefaultRaw(req.Delivery, `{"strategy":"polling"}`),
+			EvidenceGateState: "not_required",
+			CreatedViaChannel: req.CreatedViaChannelID,
+			CreatedAt:         now,
+		},
+		Steps:      steps,
+		StepInputs: inputs,
+		Event: targetstore.AnalysisRunEventRecord{
+			ID:            s.nextID(),
+			AnalysisRunID: runID,
+			EventType:     "analysis_run.created",
+			Version:       1,
+			Status:        "queued",
+			PayloadJSON:   []byte(`{"collection_membership":"detached_at_launch"}`),
+			CreatedAt:     now,
+		},
+	}
+	capturedIDs := make([]string, 0, len(req.Items))
+	for _, item := range req.Items {
+		capturedIDs = append(capturedIDs, item.MediaAssetID)
+	}
+	sourcePins := make([]targetstore.StoredObjectPinRecord, 0)
+	seenStoredObjects := map[string]struct{}{}
+	for _, item := range snapshotItems {
+		storedObjectID := accessString(jsonObject(item.StorageSnapshotJSON), "stored_object_id")
+		if storedObjectID == "" {
+			continue
+		}
+		if _, exists := seenStoredObjects[storedObjectID]; exists {
+			continue
+		}
+		seenStoredObjects[storedObjectID] = struct{}{}
+		sourcePins = append(sourcePins, targetstore.StoredObjectPinRecord{
+			ID: s.nextID(), StoredObjectID: storedObjectID, OwnerType: "analysis_run",
+			OwnerID: runID, Purpose: "source", CreatedAt: now,
+		})
+	}
+	created, err := s.store.CreateProcessingRun(ctx, targetstore.CreateProcessingRunParams{
+		ChannelAccountID: req.ChannelAccountID,
+		CollectionID:     req.CollectionID,
+		ExpectedVersion:  req.ExpectedVersion,
+		CapturedAssetIDs: capturedIDs,
+		DetachedAt:       now,
+		Snapshot:         snapshot,
+		SnapshotItems:    snapshotItems,
+		Graph:            graph,
+		SourcePins:       sourcePins,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetProcessingRun{}, storage.ErrCollectionVersionConflict
+	} else if errors.Is(err, targetstore.ErrProcessingRunIdempotencyConflict) {
+		return TargetProcessingRun{}, storage.ErrProcessingRunConflict
+	} else if err != nil {
+		return TargetProcessingRun{}, err
+	}
+	canonicalSteps := steps
+	if created.Replayed {
+		canonicalSteps = nil
+	}
+	dtoSteps := make([]TargetAnalysisRunStep, 0, len(canonicalSteps))
+	for _, step := range canonicalSteps {
+		dtoSteps = append(dtoSteps, targetAnalysisRunStepFromRecord(step))
+	}
+	return TargetProcessingRun{
+		SelectionSnapshot: targetSelectionSnapshotFromRecord(created.Snapshot, created.SnapshotItems),
+		AnalysisRun: TargetAnalysisRun{
+			AnalysisRunID:       created.Run.ID,
+			ChannelAccountID:    created.Run.ChannelAccountID,
+			SelectionSnapshotID: created.Run.SelectionSnapshot,
+			RunType:             created.Run.RunType,
+			Status:              created.Run.Status,
+			Version:             created.Run.Version,
+			Params:              created.Run.ParamsJSON,
+			Delivery:            created.Run.DeliveryJSON,
+			EvidenceGateState:   created.Run.EvidenceGateState,
+			Steps:               dtoSteps,
+			CreatedAt:           created.Run.CreatedAt,
+			StartedAt:           created.Run.StartedAt,
+			CompletedAt:         created.Run.CompletedAt,
+			CancelRequestedAt:   created.Run.CancelRequestedAt,
+			CanceledAt:          created.Run.CanceledAt,
+			ExpiresAt:           created.Run.ExpiresAt,
+		},
+		DetachedMediaAssetIDs: created.DetachedAssetIDs,
+		CollectionVersion:     created.CollectionVersion,
+	}, nil
+}
+
+func (s *TargetRuntimeService) buildSelectionSnapshot(ctx context.Context, req TargetCreateSelectionSnapshotRequest, now time.Time) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, []TargetSelectionSnapshotItem, error) {
+	snapshotID := s.nextID()
+	snapshot := targetstore.SelectionSnapshotRecord{
+		ID: snapshotID, ChannelAccountID: req.ChannelAccountID, SourceCollectionID: req.SourceCollectionID,
+		Status: "sealed", OptionSnapshotJSON: jsonOrObject(req.OptionSnapshot), DiagnosticsJSON: []byte(`[]`),
+		CreatedViaChannel: req.CreatedViaChannel, CreatedAt: now, SealedAt: now,
+	}
+	items := make([]targetstore.SelectionSnapshotItemRecord, 0, len(req.Items))
+	dtoItems := make([]TargetSelectionSnapshotItem, 0, len(req.Items))
+	for _, item := range req.Items {
+		asset, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, item.MediaAssetID)
+		if err != nil {
+			return targetstore.SelectionSnapshotRecord{}, nil, nil, err
+		}
+		var storedObject targetstore.StoredObjectRecord
+		if asset.StoredObjectID != "" {
+			storedObject, err = s.store.GetStoredObject(ctx, asset.StoredObjectID)
+			if err != nil {
+				return targetstore.SelectionSnapshotRecord{}, nil, nil, err
+			}
+		}
+		record := targetstore.SelectionSnapshotItemRecord{
+			ID: s.nextID(), SelectionSnapshotID: snapshotID, Position: item.Position, MediaAssetID: item.MediaAssetID,
+			Kind: asset.Kind, DisplayName: asset.DisplayName, StatusAtSelection: asset.Status,
+			OriginSnapshotJSON: mustJSON(targetOriginSnapshotPayload(asset, storedObject)), StorageSnapshotJSON: mustJSON(targetStorageSnapshotPayload(storedObject)),
+			MetadataJSON: jsonOrObject(asset.MetadataJSON), DiagnosticsJSON: []byte(`[]`),
+		}
+		items = append(items, record)
+		dtoItems = append(dtoItems, targetSelectionSnapshotItemFromRecord(record))
+	}
+	return snapshot, items, dtoItems, nil
 }
 
 func (s *TargetRuntimeService) GetSelectionSnapshot(ctx context.Context, req TargetGetSelectionSnapshotRequest) (TargetSelectionSnapshot, error) {
@@ -608,7 +930,10 @@ func (s *TargetRuntimeService) CreateAnalysisRun(ctx context.Context, req Target
 		return TargetAnalysisRun{}, fmt.Errorf("target storage is required")
 	}
 	now := s.now()
-	snapshotItems, err := s.store.ListSelectionSnapshotItems(ctx, req.SelectionSnapshotID)
+	_, snapshotItems, err := s.store.GetSelectionSnapshot(ctx, req.ChannelAccountID, req.SelectionSnapshotID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetAnalysisRun{}, storage.ErrSelectionSnapshotNotFound
+	}
 	if err != nil {
 		return TargetAnalysisRun{}, err
 	}
@@ -619,6 +944,7 @@ func (s *TargetRuntimeService) CreateAnalysisRun(ctx context.Context, req Target
 	}
 	steps, inputs := s.planAnalysisRunSteps(runID, req.RunType, plannedInputs, now)
 	eventID := s.nextID()
+	sourcePins := analysisRunSourcePins(runID, snapshotItems, now)
 	graph := targetstore.AnalysisRunGraph{
 		Run: targetstore.AnalysisRunRecord{
 			ID:                runID,
@@ -636,6 +962,7 @@ func (s *TargetRuntimeService) CreateAnalysisRun(ctx context.Context, req Target
 		},
 		Steps:      steps,
 		StepInputs: inputs,
+		SourcePins: sourcePins,
 		Event: targetstore.AnalysisRunEventRecord{
 			ID:            eventID,
 			AnalysisRunID: runID,
@@ -666,6 +993,30 @@ func (s *TargetRuntimeService) CreateAnalysisRun(ctx context.Context, req Target
 		Steps:               dtoSteps,
 		CreatedAt:           now,
 	}, nil
+}
+
+func analysisRunSourcePins(runID string, items []targetstore.SelectionSnapshotItemRecord, createdAt time.Time) []targetstore.StoredObjectPinRecord {
+	seen := make(map[string]struct{}, len(items))
+	pins := make([]targetstore.StoredObjectPinRecord, 0, len(items))
+	for _, item := range items {
+		storedObjectID, _ := selectionSnapshotItemStoredObjectIdentity(item)
+		if storedObjectID == "" {
+			continue
+		}
+		if _, duplicate := seen[storedObjectID]; duplicate {
+			continue
+		}
+		seen[storedObjectID] = struct{}{}
+		pins = append(pins, targetstore.StoredObjectPinRecord{
+			ID:             stableTargetID("analysis-run-source-pin:" + runID + ":" + storedObjectID),
+			StoredObjectID: storedObjectID,
+			OwnerType:      "analysis_run",
+			OwnerID:        runID,
+			Purpose:        "source",
+			CreatedAt:      createdAt,
+		})
+	}
+	return pins
 }
 
 type plannedSelectionInput struct {
@@ -1403,6 +1754,7 @@ func (s *TargetRuntimeService) FinalizeAnalysisRunStep(ctx context.Context, anal
 		RunStatus:         runStatus,
 		Message:           req.Message,
 		FinalizedAt:       now,
+		RetentionDays:     s.mediaObjectRetentionDays,
 		Event: targetstore.AnalysisRunEventRecord{
 			ID:            s.nextID(),
 			AnalysisRunID: analysisRunID,
@@ -1723,6 +2075,11 @@ func targetChannelAccountFromRecord(record targetstore.ChannelAccountRecord) Tar
 }
 
 func targetMediaAssetFromRecord(record targetstore.MediaAssetRecord) TargetMediaAsset {
+	var providerMetadata json.RawMessage
+	var metadataObject map[string]json.RawMessage
+	if json.Unmarshal(record.MetadataJSON, &metadataObject) == nil {
+		providerMetadata = metadataObject["provider_metadata"]
+	}
 	return TargetMediaAsset{
 		MediaAssetID:     record.ID,
 		ChannelAccountID: record.ChannelAccountID,
@@ -1732,13 +2089,14 @@ func targetMediaAssetFromRecord(record targetstore.MediaAssetRecord) TargetMedia
 			ObjectRef:      record.OriginRef,
 			StoredObjectID: record.StoredObjectID,
 		},
-		Kind:        record.Kind,
-		DisplayName: record.DisplayName,
-		Status:      record.Status,
-		Metadata:    record.MetadataJSON,
-		CreatedAt:   record.CreatedAt,
-		UpdatedAt:   record.UpdatedAt,
-		DeletedAt:   record.DeletedAt,
+		Kind:             record.Kind,
+		DisplayName:      record.DisplayName,
+		Status:           record.Status,
+		Metadata:         record.MetadataJSON,
+		ProviderMetadata: providerMetadata,
+		CreatedAt:        record.CreatedAt,
+		UpdatedAt:        record.UpdatedAt,
+		DeletedAt:        record.DeletedAt,
 	}
 }
 

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Protocol
 
 from transcriber_workers_common.api import AnalysisRunControlClient, InternalApiConfig
+from transcriber_workers_common.workspace import reap_abandoned_workspaces
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ class WorkerRuntimeConfig:
     analysis_run_id: str | None = None
     max_idle_polls: int | None = None
     max_processed_runs: int | None = None
+    workspace_orphan_grace_seconds: float = 1800.0
+    workspace_absolute_ttl_seconds: float = 86400.0
 
     def __post_init__(self) -> None:
         _require(self.worker_kind in _WORKER_KINDS, "invalid worker_kind")
@@ -78,6 +81,8 @@ class WorkerRuntimeConfig:
             _require(self.max_idle_polls >= 0, "max_idle_polls must be non-negative")
         if self.max_processed_runs is not None:
             _require(self.max_processed_runs > 0, "max_processed_runs must be positive")
+        _require(self.workspace_orphan_grace_seconds > 0, "workspace orphan grace must be positive")
+        _require(self.workspace_absolute_ttl_seconds > 0, "workspace absolute ttl must be positive")
 
     @classmethod
     def from_env(
@@ -90,9 +95,11 @@ class WorkerRuntimeConfig:
     ) -> "WorkerRuntimeConfig":
         values = os.environ if env is None else env
         api_base_url = values.get("API_BASE_URL", "http://api:8080").strip() or "http://api:8080"
+        internal_token = values.get("PLATFORM_INTERNAL_TOKEN", "").strip()
+        api_headers = {"X-Platform-Internal-Token": internal_token} if internal_token else {}
         timeout_seconds = _parse_positive_float(values.get("INTERNAL_API_TIMEOUT_SECONDS"), 30.0)
         return cls(
-            api_config=InternalApiConfig(base_url=api_base_url, timeout_seconds=timeout_seconds),
+            api_config=InternalApiConfig(base_url=api_base_url, timeout_seconds=timeout_seconds, headers=api_headers),
             worker_kind=worker_kind,
             step_kind=step_kind,
             run_type=run_type,
@@ -101,6 +108,10 @@ class WorkerRuntimeConfig:
             analysis_run_id=_optional_env(values.get("WORKER_ANALYSIS_RUN_ID")),
             max_idle_polls=_parse_optional_non_negative_int(values.get("WORKER_MAX_IDLE_POLLS")),
             max_processed_runs=_parse_optional_positive_int(values.get("WORKER_MAX_PROCESSED_RUNS")),
+            workspace_orphan_grace_seconds=60.0
+            * _parse_positive_float(values.get("WORKSPACE_ORPHAN_GRACE_MINUTES"), 30.0),
+            workspace_absolute_ttl_seconds=3600.0
+            * _parse_positive_float(values.get("WORKSPACE_ABSOLUTE_TTL_HOURS"), 24.0),
         )
 
 
@@ -139,6 +150,7 @@ def run_worker_loop(
     idle_polls = 0
 
     config.workspace_root.mkdir(parents=True, exist_ok=True)
+    _reap_workspaces(config)
     _LOGGER.info(
         "%s worker_kind=%s step_kind=%s run_type=%s workspace_root=%s",
         _LOG_MARKER_RUN_WORKER_LOOP,
@@ -156,6 +168,7 @@ def run_worker_loop(
         return WorkerLoopResult(processed_runs=processed_runs, failed_runs=failed_runs, idle_polls=idle_polls)
 
     while True:
+        _reap_workspaces(config)
         try:
             queued_runs = client.list_queued_runs(
                 status="queued",
@@ -224,6 +237,16 @@ def _run_one_analysis_run(analysis_run_id: str, run_analysis_run: AnalysisRunRun
 
 def _suppresses_worker_traceback(exc: BaseException) -> bool:
     return getattr(exc, "suppress_worker_traceback", False) is True
+
+
+def _reap_workspaces(config: WorkerRuntimeConfig) -> None:
+    removed = reap_abandoned_workspaces(
+        config.workspace_root,
+        orphan_grace_seconds=config.workspace_orphan_grace_seconds,
+        absolute_ttl_seconds=config.workspace_absolute_ttl_seconds,
+    )
+    if removed:
+        _LOGGER.info("%s reaped_abandoned_workspaces count=%d", _LOG_MARKER_RUN_WORKER_LOOP, len(removed))
 
 
 def _should_stop(config: WorkerRuntimeConfig, *, processed_runs: int, idle_polls: int) -> bool:

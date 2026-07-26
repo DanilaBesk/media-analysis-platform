@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	defaultBindAddr          = "0.0.0.0:8080"
+	defaultBindAddr          = "127.0.0.1:8080"
 	defaultMaxUploadBytes    = 1 << 30
 	defaultReadHeaderTimeout = 5 * time.Second
 	defaultReadTimeout       = 15 * time.Minute
@@ -31,13 +31,22 @@ const (
 )
 
 type runtimeConfig struct {
-	postgresDSN         string
-	minioEndpoint       string
-	minioPublicEndpoint string
-	minioAccessKey      string
-	minioSecretKey      string
-	bindAddr            string
-	maxUploadBytes      int64
+	postgresDSN               string
+	minioEndpoint             string
+	minioPublicEndpoint       string
+	minioAccessKey            string
+	minioSecretKey            string
+	bindAddr                  string
+	maxUploadBytes            int64
+	internalToken             string
+	mediaRetentionDays        int
+	retentionSweepInterval    time.Duration
+	retentionBatchSize        int
+	retentionClaimDuration    time.Duration
+	objectOrphanGrace         time.Duration
+	exportDeliveryTTL         time.Duration
+	exportWebAccessTTL        time.Duration
+	exportDeliveryMaxAttempts int
 }
 
 func main() {
@@ -85,7 +94,18 @@ func run(ctx context.Context) error {
 	}
 
 	websocketHub := ws.NewHub()
-	deps, err := api.NewRuntimeDependenciesWithTargetObjectStore(targetStateStore, objectStore, websocketHub)
+	deps, err := api.NewRuntimeDependenciesWithTargetObjectStore(
+		targetStateStore,
+		objectStore,
+		websocketHub,
+		api.WithTargetMediaLifecycle(
+			cfg.mediaRetentionDays,
+			cfg.exportDeliveryTTL,
+			cfg.exportWebAccessTTL,
+			cfg.exportDeliveryMaxAttempts,
+		),
+		api.WithTargetObjectOrphanGrace(cfg.objectOrphanGrace),
+	)
 	if err != nil {
 		return err
 	}
@@ -94,7 +114,10 @@ func run(ctx context.Context) error {
 		deps,
 		api.WithLogger(logger),
 		api.WithMaxRequestBytes(cfg.maxUploadBytes),
+		api.WithStrictLocalRequests(true),
+		api.WithInternalToken(cfg.internalToken),
 	)
+	go runRetentionLoop(ctx, deps.Target, cfg, logger)
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 
@@ -117,13 +140,22 @@ func run(ctx context.Context) error {
 
 func loadRuntimeConfig() (runtimeConfig, error) {
 	cfg := runtimeConfig{
-		postgresDSN:         strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
-		minioEndpoint:       strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")),
-		minioPublicEndpoint: strings.TrimSpace(os.Getenv("MINIO_PUBLIC_ENDPOINT")),
-		minioAccessKey:      strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")),
-		minioSecretKey:      strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")),
-		bindAddr:            strings.TrimSpace(os.Getenv("API_BIND_ADDR")),
-		maxUploadBytes:      defaultMaxUploadBytes,
+		postgresDSN:               strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
+		minioEndpoint:             strings.TrimSpace(os.Getenv("MINIO_ENDPOINT")),
+		minioPublicEndpoint:       strings.TrimSpace(os.Getenv("MINIO_PUBLIC_ENDPOINT")),
+		minioAccessKey:            strings.TrimSpace(os.Getenv("MINIO_ACCESS_KEY")),
+		minioSecretKey:            strings.TrimSpace(os.Getenv("MINIO_SECRET_KEY")),
+		bindAddr:                  strings.TrimSpace(os.Getenv("API_BIND_ADDR")),
+		maxUploadBytes:            defaultMaxUploadBytes,
+		internalToken:             strings.TrimSpace(os.Getenv("PLATFORM_INTERNAL_TOKEN")),
+		mediaRetentionDays:        7,
+		retentionSweepInterval:    5 * time.Minute,
+		retentionBatchSize:        100,
+		retentionClaimDuration:    2 * time.Minute,
+		objectOrphanGrace:         time.Hour,
+		exportDeliveryTTL:         24 * time.Hour,
+		exportWebAccessTTL:        24 * time.Hour,
+		exportDeliveryMaxAttempts: 5,
 	}
 	if cfg.bindAddr == "" {
 		cfg.bindAddr = defaultBindAddr
@@ -139,6 +171,7 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		{name: "MINIO_ENDPOINT", value: cfg.minioEndpoint},
 		{name: "MINIO_ACCESS_KEY", value: cfg.minioAccessKey},
 		{name: "MINIO_SECRET_KEY", value: cfg.minioSecretKey},
+		{name: "PLATFORM_INTERNAL_TOKEN", value: cfg.internalToken},
 	} {
 		if field.value == "" {
 			return runtimeConfig{}, fmt.Errorf("%s is required", field.name)
@@ -152,7 +185,122 @@ func loadRuntimeConfig() (runtimeConfig, error) {
 		}
 		cfg.maxUploadBytes = parsed
 	}
+	var parseErr error
+	if cfg.mediaRetentionDays, parseErr = positiveIntEnv("MEDIA_OBJECT_RETENTION_DAYS", cfg.mediaRetentionDays); parseErr != nil {
+		return runtimeConfig{}, parseErr
+	}
+	if sweepSeconds, err := positiveIntEnv("RETENTION_SWEEP_INTERVAL_SECONDS", int(cfg.retentionSweepInterval/time.Second)); err != nil {
+		return runtimeConfig{}, err
+	} else {
+		cfg.retentionSweepInterval = time.Duration(sweepSeconds) * time.Second
+	}
+	if cfg.retentionBatchSize, parseErr = positiveIntEnv("RETENTION_BATCH_SIZE", cfg.retentionBatchSize); parseErr != nil {
+		return runtimeConfig{}, parseErr
+	}
+	if claimSeconds, err := positiveIntEnv("RETENTION_CLAIM_SECONDS", int(cfg.retentionClaimDuration/time.Second)); err != nil {
+		return runtimeConfig{}, err
+	} else {
+		cfg.retentionClaimDuration = time.Duration(claimSeconds) * time.Second
+	}
+	if graceMinutes, err := positiveIntEnv("OBJECT_ORPHAN_GRACE_MINUTES", int(cfg.objectOrphanGrace/time.Minute)); err != nil {
+		return runtimeConfig{}, err
+	} else {
+		cfg.objectOrphanGrace = time.Duration(graceMinutes) * time.Minute
+	}
+	if deliveryHours, err := positiveIntEnv("EXPORT_DELIVERY_TTL_HOURS", int(cfg.exportDeliveryTTL/time.Hour)); err != nil {
+		return runtimeConfig{}, err
+	} else {
+		cfg.exportDeliveryTTL = time.Duration(deliveryHours) * time.Hour
+	}
+	if webHours, err := positiveIntEnv("EXPORT_WEB_ACCESS_TTL_HOURS", int(cfg.exportWebAccessTTL/time.Hour)); err != nil {
+		return runtimeConfig{}, err
+	} else {
+		cfg.exportWebAccessTTL = time.Duration(webHours) * time.Hour
+	}
+	if cfg.exportDeliveryMaxAttempts, parseErr = positiveIntEnv("EXPORT_DELIVERY_MAX_ATTEMPTS", cfg.exportDeliveryMaxAttempts); parseErr != nil {
+		return runtimeConfig{}, parseErr
+	}
 	return cfg, nil
+}
+
+func positiveIntEnv(name string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return value, nil
+}
+
+func runRetentionLoop(ctx context.Context, target api.TargetService, cfg runtimeConfig, logger *log.Logger) {
+	ticker := time.NewTicker(cfg.retentionSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runRetentionCycle(ctx, target, cfg, logger)
+		}
+	}
+}
+
+func runRetentionCycle(ctx context.Context, target api.TargetService, cfg runtimeConfig, logger *log.Logger) {
+	if metadata, ok := target.(interface {
+		ReclaimMetadataEnrichments(context.Context, int) (api.TargetMetadataEnrichmentReclaimResult, error)
+	}); ok {
+		reclaimed, err := metadata.ReclaimMetadataEnrichments(ctx, cfg.retentionBatchSize)
+		if err != nil {
+			logger.Printf("metadata_enrichment_lease_reclaim_failed error=%v", err)
+		} else if reclaimed.Examined > 0 {
+			logger.Printf(
+				"metadata_enrichment_lease_reclaimed examined=%d requeued=%d failed=%d",
+				reclaimed.Examined,
+				reclaimed.Requeued,
+				reclaimed.Failed,
+			)
+		}
+	}
+	reclaimedExports, err := target.ReclaimExportJobs(ctx, api.TargetExportReclaimRequest{BatchSize: cfg.retentionBatchSize})
+	if err != nil {
+		logger.Printf("export_lease_reclaim_failed error=%v", err)
+	} else if reclaimedExports.Examined > 0 {
+		logger.Printf(
+			"export_lease_reclaimed examined=%d requeued=%d failed=%d",
+			reclaimedExports.Examined,
+			reclaimedExports.Requeued,
+			reclaimedExports.Failed,
+		)
+	}
+	reconciled, err := target.ReconcileRetention(ctx, api.TargetRetentionReconcileRequest{BatchSize: cfg.retentionBatchSize})
+	if err != nil {
+		logger.Printf("retention_reconcile_failed error=%v", err)
+	} else if reconciled.OrphansDeleted > 0 || reconciled.PublicationsReconciled > 0 || reconciled.ObjectsMarkedMissing > 0 {
+		logger.Printf(
+			"retention_reconciled_orphan examined=%d deleted=%d publications=%d missing=%d",
+			reconciled.Examined,
+			reconciled.OrphansDeleted,
+			reconciled.PublicationsReconciled,
+			reconciled.ObjectsMarkedMissing,
+		)
+		if reconciled.ObjectsMarkedMissing > 0 {
+			logger.Printf("stored_object_missing count=%d examined=%d", reconciled.ObjectsMarkedMissing, reconciled.Examined)
+		}
+	}
+	result, err := target.SweepRetention(ctx, api.TargetRetentionSweepRequest{
+		BatchSize: cfg.retentionBatchSize, DeletionOwner: "api-retention",
+		ClaimSeconds: int(cfg.retentionClaimDuration / time.Second),
+	})
+	if err != nil {
+		logger.Printf("retention_delete_failed error=%v", err)
+		return
+	}
+	if result.Claimed > 0 {
+		logger.Printf("retention_claimed claimed=%d deleted=%d failed=%d", result.Claimed, result.Deleted, result.Failed)
+	}
 }
 
 func ensureSchema(ctx context.Context, db *sql.DB) error {

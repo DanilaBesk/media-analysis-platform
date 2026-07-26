@@ -201,6 +201,23 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 		t.Fatalf("remove collection item request = %#v", target.removeCollectionItemReq)
 	}
 
+	processingRun := httptest.NewRecorder()
+	processingRequest := jsonRequest(http.MethodPost, "/v1/collections/collection-1/processing-runs", map[string]any{
+		"channel_account_id": "channel-account-1",
+		"expected_version":   4,
+		"items":              []map[string]any{{"media_asset_id": "media-asset-1", "position": 0}},
+		"run_type":           "transcription",
+	})
+	processingRequest.Header.Set("Idempotency-Key", "telegram:process:1")
+	mux.ServeHTTP(processingRun, processingRequest)
+	assertTargetStatus(t, processingRun, http.StatusCreated)
+	if target.startProcessingRunReq.CollectionID != "collection-1" || target.startProcessingRunReq.ExpectedVersion != 4 || target.startProcessingRunReq.IdempotencyKey != "telegram:process:1" {
+		t.Fatalf("start processing run request = %#v", target.startProcessingRunReq)
+	}
+	if !strings.Contains(processingRun.Body.String(), `"detached_media_asset_ids":["media-asset-1"]`) {
+		t.Fatalf("start processing run response = %s", processingRun.Body.String())
+	}
+
 	createSnapshot := httptest.NewRecorder()
 	mux.ServeHTTP(createSnapshot, jsonRequest(http.MethodPost, "/v1/selection-snapshots", map[string]any{
 		"channel_account_id":   "channel-account-1",
@@ -1035,6 +1052,7 @@ type fakeTargetService struct {
 	updateCollectionReq      TargetUpdateCollectionRequest
 	updateCollectionItemsReq TargetUpdateCollectionItemsRequest
 	removeCollectionItemReq  TargetRemoveCollectionItemRequest
+	startProcessingRunReq    TargetStartProcessingRunRequest
 	selectionSnapshotReq     TargetCreateSelectionSnapshotRequest
 	getSelectionSnapshotReq  TargetGetSelectionSnapshotRequest
 	analysisRunReq           TargetCreateAnalysisRunRequest
@@ -1136,6 +1154,28 @@ func (f *fakeTargetService) CreateMediaAsset(_ context.Context, req TargetCreate
 		CreatedAt:        f.now,
 		UpdatedAt:        f.now,
 	}, nil
+}
+
+func (f *fakeTargetService) UploadMediaAsset(ctx context.Context, req TargetUploadMediaAssetRequest) (TargetMediaAsset, error) {
+	body, err := io.ReadAll(req.Reader)
+	if err != nil {
+		return TargetMediaAsset{}, err
+	}
+	sum := sha256.Sum256(body)
+	checksum := fmt.Sprintf("sha256:%x", sum[:])
+	storedObjectID := targetUploadStoredObjectID(req.Metadata.ChannelAccountID, req.Filename, checksum, int64(len(body)))
+	objectRef := "sources/uploads/" + storedObjectID + "/source"
+	return f.CreateMediaAsset(ctx, TargetCreateMediaAssetRequest{
+		ChannelAccountID: req.Metadata.ChannelAccountID,
+		Origin: TargetMediaAssetOrigin{
+			OriginType: "upload", OriginRef: objectRef, ObjectRef: objectRef,
+			OriginalFilename: req.Filename, StoredObjectID: storedObjectID,
+			ContentType: req.ContentType, SizeBytes: int64(len(body)), Checksum: checksum, UploadBody: body,
+		},
+		Kind: req.Metadata.Kind, DisplayName: firstNonEmpty(req.Metadata.DisplayName, req.Filename),
+		CollectionID: req.Metadata.CollectionID, Metadata: req.Metadata.Metadata,
+		IdempotencyKey: req.Metadata.IdempotencyKey,
+	})
 }
 
 func (f *fakeTargetService) ListMediaAssets(_ context.Context, req TargetListMediaAssetsRequest) (TargetMediaAssetPage, error) {
@@ -1278,6 +1318,19 @@ func (f *fakeTargetService) RemoveCollectionItem(_ context.Context, req TargetRe
 		collection.Items = nil
 	}
 	return collection, nil
+}
+
+func (f *fakeTargetService) StartCollectionProcessingRun(_ context.Context, req TargetStartProcessingRunRequest) (TargetProcessingRun, error) {
+	f.startProcessingRunReq = req
+	if f.err != nil {
+		return TargetProcessingRun{}, f.err
+	}
+	return TargetProcessingRun{
+		SelectionSnapshot:     TargetSelectionSnapshot{SelectionSnapshotID: "snapshot-atomic", ChannelAccountID: req.ChannelAccountID, SourceCollectionID: req.CollectionID, Status: "sealed", Items: []TargetSelectionSnapshotItem{}, Diagnostics: []TargetDiagnostic{}, CreatedAt: f.now, SealedAt: f.now},
+		AnalysisRun:           TargetAnalysisRun{AnalysisRunID: "run-atomic", ChannelAccountID: req.ChannelAccountID, SelectionSnapshotID: "snapshot-atomic", RunType: req.RunType, Status: "queued", Version: 1, CreatedAt: f.now},
+		DetachedMediaAssetIDs: []string{req.Items[0].MediaAssetID},
+		CollectionVersion:     req.ExpectedVersion + 1,
+	}, nil
 }
 
 func (f *fakeTargetService) CreateSelectionSnapshot(_ context.Context, req TargetCreateSelectionSnapshotRequest) (TargetSelectionSnapshot, error) {
@@ -1866,4 +1919,54 @@ func (f *fakeTargetService) ListChannelSurfaceEvents(_ context.Context, req Targ
 		Page:     1,
 		PageSize: req.PageSize,
 	}, nil
+}
+
+func (f *fakeTargetService) CreateExportJob(_ context.Context, req TargetCreateExportJobRequest) (TargetExportJob, error) {
+	return TargetExportJob{ExportJobID: "export-1", ChannelAccountID: req.ChannelAccountID, MediaAssetID: req.MediaAssetID, Operation: req.Operation, Variant: req.Variant, Status: "queued", Version: 1, Progress: []byte(`{"stage":"queued"}`), Deliveries: []TargetExportDelivery{}, CreatedAt: time.Now()}, nil
+}
+func (f *fakeTargetService) ListExportJobs(context.Context, TargetListExportJobsRequest) (TargetExportJobPage, error) {
+	return TargetExportJobPage{Items: []TargetExportJob{}, Page: 1, PageSize: 20}, nil
+}
+func (f *fakeTargetService) GetExportJob(context.Context, TargetGetExportJobRequest) (TargetExportJob, error) {
+	return TargetExportJob{ExportJobID: "export-1", Deliveries: []TargetExportDelivery{}}, nil
+}
+func (f *fakeTargetService) CancelExportJob(context.Context, TargetExportJobMutationRequest) (TargetExportJob, error) {
+	return TargetExportJob{ExportJobID: "export-1", Status: "cancel_requested", Deliveries: []TargetExportDelivery{}}, nil
+}
+func (f *fakeTargetService) RetryExportJob(context.Context, TargetExportJobMutationRequest) (TargetExportJob, error) {
+	return TargetExportJob{ExportJobID: "export-1", Status: "queued", Deliveries: []TargetExportDelivery{}}, nil
+}
+func (f *fakeTargetService) ClaimExportDelivery(context.Context, TargetClaimExportDeliveryRequest) (TargetExportDeliveryClaim, error) {
+	return TargetExportDeliveryClaim{}, nil
+}
+func (f *fakeTargetService) FinalizeExportDelivery(context.Context, TargetFinalizeExportDeliveryRequest) (TargetExportDelivery, error) {
+	return TargetExportDelivery{}, nil
+}
+func (f *fakeTargetService) ResolveExportDownload(context.Context, TargetGetExportJobRequest) (TargetExportDownload, error) {
+	return TargetExportDownload{}, nil
+}
+func (f *fakeTargetService) ListExportJobQueue(context.Context, TargetExportQueueRequest) (TargetExportJobPage, error) {
+	return TargetExportJobPage{Items: []TargetExportJob{}, Page: 1, PageSize: 20}, nil
+}
+func (f *fakeTargetService) ClaimExportJob(context.Context, TargetClaimExportJobRequest) (TargetExportJobClaim, error) {
+	return TargetExportJobClaim{}, nil
+}
+func (f *fakeTargetService) CheckExportJobCancel(context.Context, TargetExportAttemptRequest) (TargetExportCancelState, error) {
+	return TargetExportCancelState{}, nil
+}
+func (f *fakeTargetService) RecordExportJobProgress(context.Context, TargetRecordExportProgressRequest) error {
+	return nil
+}
+func (f *fakeTargetService) FinalizeExportJob(context.Context, TargetFinalizeExportJobRequest) (TargetExportJob, error) {
+	return TargetExportJob{ExportJobID: "export-1", Deliveries: []TargetExportDelivery{}}, nil
+}
+func (f *fakeTargetService) ReclaimExportJobs(context.Context, TargetExportReclaimRequest) (TargetExportReclaimResult, error) {
+	return TargetExportReclaimResult{}, nil
+}
+func (f *fakeTargetService) SweepRetention(context.Context, TargetRetentionSweepRequest) (TargetRetentionSweepResult, error) {
+	return TargetRetentionSweepResult{Claims: []TargetRetentionClaim{}}, nil
+}
+
+func (f *fakeTargetService) ReconcileRetention(context.Context, TargetRetentionReconcileRequest) (TargetRetentionReconcileResult, error) {
+	return TargetRetentionReconcileResult{}, nil
 }

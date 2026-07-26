@@ -14,13 +14,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import tempfile
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from io import BytesIO
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import unquote, urlparse
 from urllib.request import urlopen
 from uuid import UUID
@@ -42,7 +42,15 @@ from aiogram.exceptions import (
     TelegramUnauthorizedError,
 )
 from aiogram.filters import Command
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    LinkPreviewOptions,
+    Message,
+    InputFile,
+)
 
 from telegram_adapter.api_client import TelegramApiClientError
 from telegram_adapter.errors import (
@@ -57,10 +65,12 @@ from telegram_adapter.gateway import (
     ACTIVE_RUN_STATUSES,
     CANCELABLE_RUN_STATUSES,
     CURRENT_MATERIALS_PANEL,
+    EXPORT_TASK_SURFACE,
     InboxStatus,
     IngressRecord,
     RESULT_ARTIFACT_SURFACE,
     TERMINAL_RUN_STATUSES,
+    TERMINAL_EXPORT_STATUSES,
     TelegramFileInput,
     TelegramInboxGateway,
 )
@@ -74,6 +84,18 @@ _LOG_MARKER_TELEGRAM_HANDLER_ERROR = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGR
 _LOG_MARKER_TELEGRAM_SURFACE_FAILURE = "[TelegramAdapter][bot][BLOCK_HANDLE_TELEGRAM_SURFACE_FAILURE]"
 _LOG_MARKER_TELEGRAM_POLLING_STATE = "[TelegramAdapter][bot][BLOCK_TRACK_TELEGRAM_POLLING_STATE]"
 _AUTO_DELIVER_RUN_STATUSES = {"succeeded", "partially_succeeded"}
+_BUFFER_LINK_PREVIEW_OPTIONS = LinkPreviewOptions(is_disabled=True)
+_MAX_EXPORT_DELIVERY_BYTES = 2 * 1024 * 1024 * 1024
+
+
+class _TemporaryInputFile(InputFile):
+    def __init__(self, handle: BinaryIO, *, filename: str) -> None:
+        super().__init__(filename=filename)
+        self.handle = handle
+
+    async def read(self, _bot: Bot):
+        while chunk := await asyncio.to_thread(self.handle.read, self.chunk_size):
+            yield chunk
 
 
 @dataclass(slots=True)
@@ -139,8 +161,11 @@ class TelegramInboxApp:
         self.run_status_poll_attempts = 3
         self.run_status_poll_delay_seconds = 0.2
         self.run_status_follow_attempts = 120
+        self.export_status_follow_attempts = 3600
         self.run_status_follow_delay_seconds = 2.0
         self.run_watch_tasks: dict[tuple[int, int | None], asyncio.Task[None]] = {}
+        self.export_watch_tasks: dict[str, asyncio.Task[None]] = {}
+        self.export_selections: dict[tuple[int, int | None], JsonObject] = {}
         self.inbound_status_burst_until: dict[tuple[int, int | None], float] = {}
         self.inbound_status_burst_window_seconds = 5.0
         self._monotonic = time.monotonic
@@ -195,10 +220,12 @@ class TelegramInboxApp:
             return
         channel_identity = self._channel_identity_from_message(message)
         pending_status_sent = False
+        files: list[TelegramFileInput] = []
         try:
             pending_status_sent = await self._send_pending_file_ingest_status(message, _message_files(message))
             files = await self._download_message_files(message)
-            records = self.gateway.add_message_inputs(
+            records = await asyncio.to_thread(
+                self.gateway.add_message_inputs,
                 channel_identity=channel_identity,
                 text=_message_text(message),
                 files=files,
@@ -209,23 +236,34 @@ class TelegramInboxApp:
             _log_handler_exception("message_ingest", exc, normalized=normalized, message=message)
             await self._answer_message_error(message, normalized)
             return
-        await self._send_or_edit_status(
-            message,
-            rejected=[record for record in records if record.status == "rejected"],
-            post_ingest_records=records,
-            fresh_for_inbound_burst=not pending_status_sent,
-        )
+        finally:
+            for file_input in files:
+                _close_file_input(file_input)
+        await self._send_or_edit_status(message, rejected=[record for record in records if record.status == "rejected"], post_ingest_records=records, fresh_for_inbound_burst=not pending_status_sent)
 
     async def _download_message_files(self, message: Message) -> list[TelegramFileInput]:
         hydrated: list[TelegramFileInput] = []
-        for file_input in _message_files(message):
-            telegram_file = await self.bot.get_file(file_input.file_id)
-            buffer = BytesIO()
-            await self.bot.download_file(telegram_file.file_path, destination=buffer)
-            content = buffer.getvalue()
-            if not content:
-                raise RuntimeError("telegram_file_download_failed")
-            hydrated.append(replace(file_input, content=content))
+        try:
+            for file_input in _message_files(message):
+                telegram_file = await self.bot.get_file(file_input.file_id)
+                destination = tempfile.TemporaryFile(prefix="telegram-upload-", suffix=".tmp")
+                try:
+                    await self.bot.download_file(telegram_file.file_path, destination=destination)
+                    destination.flush()
+                    destination.seek(0, 2)
+                    size_bytes = destination.tell()
+                    destination.seek(0)
+                except Exception:
+                    destination.close()
+                    raise
+                if size_bytes <= 0:
+                    destination.close()
+                    raise RuntimeError("telegram_file_download_failed")
+                hydrated.append(replace(file_input, file_handle=destination, size_bytes=size_bytes))
+        except Exception:
+            for file_input in hydrated:
+                _close_file_input(file_input)
+            raise
         return hydrated
 
     async def _send_pending_file_ingest_status(
@@ -251,6 +289,7 @@ class TelegramInboxApp:
                         chat_id=message.chat.id,
                         message_id=previous_message_id,
                         reply_markup=None,
+                        link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
                     )
                     self.status_message_ids[key] = previous_message_id
                     return True
@@ -261,7 +300,7 @@ class TelegramInboxApp:
                     self.status_message_ids.pop(key, None)
                 except Exception:
                     self.status_message_ids.pop(key, None)
-            sent = await message.answer(text)
+            sent = await message.answer(text, link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS)
             self.status_message_ids[key] = sent.message_id
             return True
 
@@ -295,6 +334,7 @@ class TelegramInboxApp:
                 await callback.answer("Состояние обновлено")
                 return
             if action == "mt":
+                self.export_selections.pop(key, None)
                 status = self.gateway.restore_status(channel_identity=channel_identity)
                 self._set_page_state(
                     key,
@@ -309,6 +349,7 @@ class TelegramInboxApp:
                 await callback.answer("Открыт список материалов")
                 return
             if action == "mn":
+                self.export_selections.pop(key, None)
                 status = self.gateway.restore_status(channel_identity=channel_identity)
                 self._set_page_state(
                     key,
@@ -386,6 +427,101 @@ class TelegramInboxApp:
                 )
                 await self._edit_callback_status(callback, status)
                 await callback.answer("Материал убран")
+                return
+            if action == "ex":
+                collection_id = _decode_callback_token(tokens[0])
+                expected_version = _decode_callback_version(tokens[1])
+                media_asset_id = _decode_callback_token(tokens[2])
+                status = self.gateway.restore_status(
+                    channel_identity=channel_identity,
+                    cursor=page_state.current_cursor if page_state else None,
+                )
+                item = next((item for item in status.items if str(item.get("media_asset_id") or "") == media_asset_id), None)
+                if item is None or not _is_youtube_export_item(item):
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
+                self.export_selections[key] = {
+                    "collection_id": collection_id,
+                    "expected_version": expected_version,
+                    "media_asset_id": media_asset_id,
+                    "mode": "youtube",
+                }
+                await self._edit_callback_status(callback, status, prefix="Скачать с YouTube\nВыбери формат.\n\n")
+                await callback.answer("Выбери формат")
+                return
+            if action in {"ea", "eq"}:
+                collection_id = _decode_callback_token(tokens[0])
+                _decode_callback_version(tokens[1])
+                media_asset_id = _decode_callback_token(tokens[2])
+                if action == "ea":
+                    operation, variant = "video_to_audio", {"audio_bitrate_kbps": 192}
+                else:
+                    quality = _decode_callback_token(tokens[3])
+                    operation, variant = "youtube_video", {"video_quality": quality}
+                job = self.gateway.create_export_job(
+                    channel_identity=channel_identity,
+                    collection_id=collection_id,
+                    media_asset_id=media_asset_id,
+                    operation=operation,
+                    variant=variant,
+                    action_id=str(callback.id),
+                )
+                self.export_selections.pop(key, None)
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=page_state.current_cursor if page_state else None)
+                self._set_page_state(
+                    key, status, current_cursor=page_state.current_cursor if page_state else None,
+                    previous_cursors=page_state.previous_cursors if page_state else [], selection=None,
+                    screen=page_state.screen if page_state else "main", focused_run_id=page_state.focused_run_id if page_state else None,
+                )
+                surface = await self._anchor_export_task_surface(
+                    channel_identity=channel_identity,
+                    export_job=job,
+                    chat_id=callback.message.chat.id,
+                )
+                self._schedule_export_status_tracking(
+                    channel_identity=channel_identity, export_job_id=str(job["export_job_id"]), chat_id=callback.message.chat.id,
+                    surface=surface,
+                )
+                await self._edit_callback_status(callback, status, prefix="Экспорт запущен.\n\n")
+                await callback.answer("Экспорт запущен")
+                return
+            if action == "ey":
+                selection = self.export_selections.get(key)
+                if selection is None:
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
+                media_asset_id = str(selection["media_asset_id"])
+                job = self.gateway.create_export_job(
+                    channel_identity=channel_identity,
+                    collection_id=str(selection["collection_id"]),
+                    media_asset_id=media_asset_id,
+                    operation="youtube_audio",
+                    variant={"audio_bitrate_kbps": 192},
+                    action_id=str(callback.id),
+                )
+                self.export_selections.pop(key, None)
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=page_state.current_cursor if page_state else None)
+                surface = await self._anchor_export_task_surface(
+                    channel_identity=channel_identity,
+                    export_job=job,
+                    chat_id=callback.message.chat.id,
+                )
+                self._schedule_export_status_tracking(
+                    channel_identity=channel_identity, export_job_id=str(job["export_job_id"]), chat_id=callback.message.chat.id,
+                    surface=surface,
+                )
+                await self._edit_callback_status(callback, status, prefix="Экспорт запущен.\n\n")
+                await callback.answer("Экспорт аудио запущен")
+                return
+            if action == "ev":
+                selection = self.export_selections.get(key)
+                if selection is None or selection.get("mode") != "youtube":
+                    await self._answer_callback_error(callback, TelegramUserErrorCode.STALE_ACTION)
+                    return
+                selection["mode"] = "video_quality"
+                status = self.gateway.restore_status(channel_identity=channel_identity, cursor=page_state.current_cursor if page_state else None)
+                await self._edit_callback_status(callback, status, prefix="Скачать видео с YouTube\nВыбери качество.\n\n")
+                await callback.answer("Выбери качество")
                 return
             if action == "cl":
                 collection_id = _decode_callback_token(tokens[0])
@@ -600,13 +736,6 @@ class TelegramInboxApp:
                 )
                 cursor = page_state.current_cursor if page_state else None
                 status = self.gateway.restore_status(channel_identity=channel_identity, cursor=cursor)
-                if not result_delivery.show_alert and status.collection is not None:
-                    status = self.gateway.clear_collection(
-                        channel_identity=channel_identity,
-                        collection_id=str(status.collection["collection_id"]),
-                        expected_version=int(status.collection["version"]),
-                        cursor=cursor,
-                    )
                 self._set_page_state(
                     key,
                     status,
@@ -769,6 +898,7 @@ class TelegramInboxApp:
                     chat_id=message.chat.id,
                     message_id=previous_message_id,
                     reply_markup=markup,
+                    link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
                 )
                 self.status_message_ids[key] = previous_message_id
                 self._try_persist_current_materials_surface(
@@ -809,7 +939,11 @@ class TelegramInboxApp:
                         metadata={"chat_id": message.chat.id, "message_id": previous_message_id},
                     )
                 self.status_message_ids.pop(key, None)
-        sent = await message.answer(text, reply_markup=markup)
+        sent = await message.answer(
+            text,
+            reply_markup=markup,
+            link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
+        )
         self.status_message_ids[key] = sent.message_id
         self._try_persist_current_materials_surface(
             channel_identity=channel_identity,
@@ -912,35 +1046,12 @@ class TelegramInboxApp:
         collection_id: str,
         expected_version: int,
     ) -> tuple[InboxStatus, str, str, str | None, str | None, bool]:
-        reusable = self.gateway.find_reusable_transcript_for_collection(
+        processing = self.gateway.start_collection_processing_run(
             channel_identity=channel_identity,
             collection_id=collection_id,
             expected_version=expected_version,
         )
-        if reusable is not None:
-            run = _reusable_transcript_run(reusable)
-            run_id = str(run.get("analysis_run_id") or reusable.get("analysis_run_id") or "")
-            status_name = str(run.get("status") or "succeeded")
-            status = self.gateway.restore_status(channel_identity=channel_identity)
-            if run_id and _analysis_run_version(status, run_id) is None:
-                status.recent_runs.insert(0, run)
-            artifact = reusable.get("artifact")
-            if run_id and isinstance(artifact, dict):
-                status.artifacts_by_run[run_id] = [artifact]
-            return (
-                status,
-                "Готовый транскрипт найден.\n\n",
-                "Готовый транскрипт найден",
-                run_id or None,
-                status_name,
-                True,
-            )
-        selection = self.gateway.create_selection_snapshot(
-            channel_identity=channel_identity,
-            collection_id=collection_id,
-            expected_version=expected_version,
-        )
-        run = self.gateway.start_analysis(channel_identity=channel_identity, selection_snapshot_id=str(selection["selection_snapshot_id"]))
+        run = processing["analysis_run"]
         status, prefix, answer_text, run_id, terminal_status = await self._resolve_run_start_status(
             channel_identity=channel_identity,
             run=run,
@@ -1003,19 +1114,8 @@ class TelegramInboxApp:
             allow_repeat_delivery=allow_repeat_delivery,
         )
         delivered = (not result_delivery.show_alert) or result_delivery.notice == "Транскрипт уже отправлен в чат."
-        if result_delivery.show_alert or status.collection is None:
-            return _AutoDeliveryResult(
-                status=status,
-                delivered=delivered,
-                result_message_id=result_delivery.message_id,
-            )
         return _AutoDeliveryResult(
-            status=self.gateway.clear_collection(
-                channel_identity=channel_identity,
-                collection_id=str(status.collection["collection_id"]),
-                expected_version=int(status.collection["version"]),
-                cursor=cursor,
-            ),
+            status=status,
             delivered=delivered,
             result_message_id=result_delivery.message_id,
         )
@@ -1154,6 +1254,220 @@ class TelegramInboxApp:
             if current is asyncio.current_task():
                 self.run_watch_tasks.pop(key, None)
 
+    def _schedule_export_status_tracking(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        chat_id: int,
+        surface: JsonObject | None,
+    ) -> None:
+        existing = self.export_watch_tasks.pop(export_job_id, None)
+        if existing is not None:
+            existing.cancel()
+        self.export_watch_tasks[export_job_id] = asyncio.create_task(
+            self._track_export_status_until_terminal(
+                channel_identity=channel_identity,
+                export_job_id=export_job_id,
+                chat_id=chat_id,
+                surface=surface,
+            )
+        )
+
+    async def _track_export_status_until_terminal(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        chat_id: int,
+        surface: JsonObject | None,
+    ) -> None:
+        try:
+            for _ in range(self.export_status_follow_attempts):
+                job = self.gateway.get_export_job(channel_identity=channel_identity, export_job_id=export_job_id)
+                job_status = str(job.get("status") or "")
+                refreshed_surface = await self._refresh_export_task_status(
+                    channel_identity=channel_identity,
+                    export_job=job,
+                    surface=surface,
+                )
+                if refreshed_surface is not None:
+                    surface = refreshed_surface
+                if job_status == "succeeded":
+                    try:
+                        await self._deliver_export_result(
+                            channel_identity=channel_identity,
+                            export_job_id=export_job_id,
+                            chat_id=chat_id,
+                        )
+                    except Exception as exc:
+                        _LOGGER.warning("export delivery attempt failed for %s: %s", export_job_id, exc)
+                        await self._sleep(self.run_status_follow_delay_seconds)
+                        continue
+                    self._try_finish_export_task_surface(
+                        channel_identity=channel_identity, export_job_id=export_job_id, surface=surface,
+                    )
+                    return
+                if job_status in TERMINAL_EXPORT_STATUSES:
+                    self._try_finish_export_task_surface(
+                        channel_identity=channel_identity, export_job_id=export_job_id, surface=surface,
+                    )
+                    return
+                await self._sleep(self.run_status_follow_delay_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _LOGGER.warning("export status tracking failed for %s: %s", export_job_id, exc)
+        finally:
+            current = self.export_watch_tasks.get(export_job_id)
+            if current is asyncio.current_task():
+                self.export_watch_tasks.pop(export_job_id, None)
+
+    async def _refresh_export_task_status(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job: JsonObject,
+        surface: JsonObject | None,
+    ) -> JsonObject | None:
+        address = _surface_address(surface) if surface is not None else None
+        if address is None:
+            return surface
+        try:
+            await self.bot.edit_message_text(
+                _render_export_task_text(export_job),
+                chat_id=address[0],
+                message_id=address[1],
+                reply_markup=None,
+                link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
+            )
+        except TelegramBadRequest as error:
+            if "message is not modified" not in str(error).lower():
+                raise
+        return self._persist_export_task_surface(
+            channel_identity=channel_identity,
+            export_job=export_job,
+            chat_id=address[0],
+            message_id=address[1],
+        )
+
+    async def _deliver_export_result(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        chat_id: int,
+    ) -> None:
+        lease_owner = f"telegram-adapter:{channel_identity['external_account_ref']}"
+        claim = self.gateway.claim_export_delivery(
+            channel_identity=channel_identity, export_job_id=export_job_id, lease_owner=lease_owner,
+        )
+        try:
+            download = self.gateway.get_internal_export_download(
+                channel_identity=channel_identity, export_job_id=export_job_id,
+            )
+            size_bytes = int(download.get("size_bytes") or 0)
+            if size_bytes <= 0 or size_bytes > _MAX_EXPORT_DELIVERY_BYTES:
+                raise RuntimeError("export_delivery_size_invalid")
+            content = await asyncio.to_thread(
+                self._download_artifact_file, str(download["url"]), size_bytes,
+            )
+            try:
+                await self.bot.send_document(
+                    chat_id=chat_id,
+                    document=_TemporaryInputFile(content, filename=str(download["filename"])),
+                    caption="Экспорт готов",
+                )
+            finally:
+                content.close()
+        except Exception as exc:
+            try:
+                self.gateway.fail_export_delivery(
+                    channel_identity=channel_identity,
+                    export_job_id=export_job_id,
+                    claim=claim,
+                    failure_code="telegram_delivery_failed",
+                )
+            except Exception as fail_exc:
+                _LOGGER.warning("export delivery failure could not be recorded for %s: %s", export_job_id, fail_exc)
+            raise exc
+        self.gateway.acknowledge_export_delivery(
+            channel_identity=channel_identity, export_job_id=export_job_id, claim=claim,
+        )
+
+    def _download_artifact_file(self, download_url: str, expected_size: int) -> BinaryIO:
+        destination = tempfile.TemporaryFile(mode="w+b")
+        total = 0
+        try:
+            with urlopen(download_url, timeout=30) as response:
+                while chunk := response.read(1024 * 1024):
+                    total += len(chunk)
+                    if total > expected_size or total > _MAX_EXPORT_DELIVERY_BYTES:
+                        raise RuntimeError("artifact_download_size_mismatch")
+                    destination.write(chunk)
+            if total != expected_size:
+                raise RuntimeError("artifact_download_size_mismatch")
+            destination.seek(0)
+            return destination
+        except Exception:
+            destination.close()
+            raise
+
+    def _persist_export_task_surface(
+        self, *, channel_identity: JsonObject, export_job: JsonObject, chat_id: int, message_id: int
+    ) -> JsonObject:
+        return self.gateway.upsert_export_task_surface(
+            channel_identity=channel_identity,
+            export_job=export_job,
+            address=_telegram_surface_address(chat_id=chat_id, message_id=message_id),
+            display_state={
+                "export_job_id": export_job.get("export_job_id"),
+                "export_status": export_job.get("status"),
+            },
+        )
+
+    async def _anchor_export_task_surface(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job: JsonObject,
+        chat_id: int,
+        force_new: bool = False,
+    ) -> JsonObject:
+        if not force_new:
+            existing = self.gateway.find_export_task_surface(
+                channel_identity=channel_identity,
+                export_job_id=str(export_job["export_job_id"]),
+            )
+            if existing is not None and _surface_address(existing) is not None:
+                return existing
+        sent = await self.bot.send_message(
+            chat_id=chat_id,
+            text=_render_export_task_text(export_job),
+            link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
+        )
+        return self._persist_export_task_surface(
+            channel_identity=channel_identity,
+            export_job=export_job,
+            chat_id=chat_id,
+            message_id=sent.message_id,
+        )
+
+    def _try_finish_export_task_surface(
+        self, *, channel_identity: JsonObject, export_job_id: str, surface: JsonObject | None = None
+    ) -> JsonObject | None:
+        active_surface = surface or self.gateway.find_export_task_surface(
+            channel_identity=channel_identity, export_job_id=export_job_id,
+        )
+        if active_surface is None or active_surface.get("lifecycle_status") != "active":
+            return None
+        return self._try_supersede_channel_surface(
+            surface=active_surface,
+            reason="export_job_terminal",
+            actor_id="telegram_adapter",
+            metadata={"export_job_id": export_job_id},
+        )
+
     async def _edit_callback_status(
         self,
         callback: CallbackQuery,
@@ -1176,7 +1490,9 @@ class TelegramInboxApp:
                     selection=state.selection,
                     screen=state.screen,
                     focused_run_id=state.focused_run_id,
+                    export_selection=self.export_selections.get(key),
                 ),
+                link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
             )
         except TelegramBadRequest as error:
             if "message is not modified" not in str(error).lower():
@@ -1211,7 +1527,9 @@ class TelegramInboxApp:
                     selection=page_state.selection,
                     screen=page_state.screen,
                     focused_run_id=page_state.focused_run_id,
+                    export_selection=None,
                 ),
+                link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
             )
         except TelegramBadRequest as error:
             if "message is not modified" not in str(error).lower():
@@ -1236,11 +1554,17 @@ class TelegramInboxApp:
             selection=state.selection,
             screen=state.screen,
             focused_run_id=state.focused_run_id,
+            export_selection=self.export_selections.get(key),
         )
         lock = self.status_update_locks.setdefault(key, asyncio.Lock())
         async with lock:
             try:
-                sent = await self.bot.send_message(chat_id=chat_id, text=text, reply_markup=markup)
+                sent = await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_markup=markup,
+                    link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
+                )
             except TelegramAPIError as error:
                 _LOGGER.warning(
                     "%s scope=terminal_result_reanchor operation=send chat_id=%s error_type=%s error=%s",
@@ -1255,6 +1579,7 @@ class TelegramInboxApp:
                         chat_id=chat_id,
                         message_id=previous_message_id,
                         reply_markup=markup,
+                        link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
                     )
                 except TelegramAPIError as edit_error:
                     _LOGGER.warning(
@@ -1317,6 +1642,7 @@ class TelegramInboxApp:
                 chat_id=chat_id,
                 message_id=message_id,
                 reply_markup=None,
+                link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
             )
         except TelegramAPIError as error:
             _LOGGER.warning(
@@ -1354,6 +1680,41 @@ class TelegramInboxApp:
             for surface in surfaces:
                 if surface.get("surface_type") == ANALYSIS_TASK_SURFACE:
                     await self._recover_analysis_task_surface(channel_identity=channel_identity, surface=surface)
+                if surface.get("surface_type") == EXPORT_TASK_SURFACE:
+                    await self._recover_export_task_surface(channel_identity=channel_identity, surface=surface)
+
+    async def _recover_export_task_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
+        export_job_id = _surface_subject_id(surface, subject_type="export_job", role="primary")
+        address = _surface_address(surface)
+        if not export_job_id or address is None:
+            return
+        job = self.gateway.get_export_job(channel_identity=channel_identity, export_job_id=export_job_id)
+        status = str(job.get("status") or "")
+        if status in TERMINAL_EXPORT_STATUSES and status != "succeeded":
+            self._try_finish_export_task_surface(
+                channel_identity=channel_identity, export_job_id=export_job_id, surface=surface,
+            )
+            return
+        current_materials = self._find_current_materials_surface_or_none(
+            channel_identity=channel_identity,
+            scope="export_task_recovery",
+        )
+        if _surface_address(current_materials) == address:
+            surface = await self._anchor_export_task_surface(
+                channel_identity=channel_identity,
+                export_job=job,
+                chat_id=address[0],
+                force_new=True,
+            )
+            address = _surface_address(surface)
+            if address is None:
+                return
+        self._schedule_export_status_tracking(
+            channel_identity=channel_identity,
+            export_job_id=export_job_id,
+            chat_id=address[0],
+            surface=surface,
+        )
 
     async def _recover_current_materials_surface(self, *, channel_identity: JsonObject, surface: JsonObject) -> None:
         address = _surface_address(surface)
@@ -1415,7 +1776,9 @@ class TelegramInboxApp:
                         selection=recovered_state.selection,
                         screen=recovered_state.screen,
                         focused_run_id=recovered_state.focused_run_id,
+                        export_selection=None,
                     ),
+                    link_preview_options=_BUFFER_LINK_PREVIEW_OPTIONS,
                 )
             except TelegramAPIError as send_error:
                 self._handle_telegram_surface_error(
@@ -1885,7 +2248,6 @@ def render_status_text(
 
     for record in status.rejected:
         lines.append(f"Отклонено: {record.label} ({rejected_reason_text(record.reason)})")
-
     active_runs_count = len(status.active_runs)
     active_run = _latest_active_run(status)
     if active_run is not None:
@@ -1897,6 +2259,13 @@ def render_status_text(
                 f"Активные задачи: {active_runs_count}; последняя: {_run_status_text(str(active_run.get('status') or 'unknown'))}"
             )
         lines.extend(_active_run_progress_lines(active_run))
+    active_export = _latest_active_export(status)
+    if active_export is not None:
+        lines.append("")
+        lines.append(f"Экспорт: {_export_status_text(str(active_export.get('status') or 'unknown'))}")
+        stage = _export_stage_text(active_export)
+        if stage:
+            lines.append(f"Этап: {stage}")
     return "\n".join(lines)
 
 
@@ -1993,6 +2362,7 @@ def build_status_keyboard(
     selection: JsonObject | None = None,
     screen: str = "main",
     focused_run_id: str | None = None,
+    export_selection: JsonObject | None = None,
 ) -> InlineKeyboardMarkup:
     del selection
     rows: list[list[InlineKeyboardButton]] = []
@@ -2000,6 +2370,10 @@ def build_status_keyboard(
     collection_version = int(status.collection.get("version") or 0) if status.collection else 0
     processing_button: InlineKeyboardButton | None = None
     focused_active_run = _active_run_for_focus(status, focused_run_id)
+    if export_selection is not None:
+        rows.extend(_export_selection_rows(export_selection))
+        rows.append([InlineKeyboardButton(text="К карточке", callback_data=_callback_payload("mn"))])
+        return InlineKeyboardMarkup(inline_keyboard=rows)
     if screen == "main":
         material_count = _material_count(status)
         if material_count and collection_id and focused_active_run is None:
@@ -2013,20 +2387,17 @@ def build_status_keyboard(
             )
         rows.append([InlineKeyboardButton(text="Материалы", callback_data=_callback_payload("mt"))])
     else:
-        remove_buttons = [
-            InlineKeyboardButton(
-                text=f"Убрать {index}",
-                callback_data=_callback_payload(
-                    "rm",
-                    _encode_callback_token(collection_id),
-                    _encode_callback_version(collection_version),
-                    _encode_callback_token(str(item["media_asset_id"])),
-                ),
+        item_rows = [
+            _material_action_row(
+                item=item,
+                index=index,
+                collection_id=collection_id,
+                collection_version=collection_version,
             )
             for index, item in enumerate(status.items, start=1)
             if item.get("media_asset_id") and collection_id
         ]
-        rows.extend([button] for button in remove_buttons)
+        rows.extend(item_rows)
         nav_row: list[InlineKeyboardButton] = []
         if can_go_back:
             nav_row.append(InlineKeyboardButton(text="Назад", callback_data=_callback_payload("pp")))
@@ -2041,23 +2412,33 @@ def build_status_keyboard(
                     InlineKeyboardButton(
                         text="Убрать последнее",
                         callback_data=_callback_payload(
-                            "rl",
-                            _encode_callback_token(collection_id),
-                            _encode_callback_version(collection_version),
+                            "rl", _encode_callback_token(collection_id), _encode_callback_version(collection_version),
                         ),
                     ),
                     InlineKeyboardButton(
                         text="Очистить видимое",
                         callback_data=_callback_payload(
-                            "cl",
-                            _encode_callback_token(collection_id),
-                            _encode_callback_version(collection_version),
+                            "cl", _encode_callback_token(collection_id), _encode_callback_version(collection_version),
                             _encode_optional_callback_token(current_cursor),
                         ),
-                    )
+                    ),
                 ]
             )
         rows.append([InlineKeyboardButton(text="К карточке", callback_data=_callback_payload("mn"))])
+    if screen == "main":
+        eligible = [item for item in status.items if _export_button_label(item) is not None]
+        collection_items = (status.collection or {}).get("items") or []
+        only_collection_item_id = str(collection_items[0].get("media_asset_id") or "") if len(collection_items) == 1 else ""
+        if (
+            len(eligible) == 1
+            and len(status.items) == 1
+            and len(collection_items) == 1
+            and not status.page.get("has_more")
+            and str(eligible[0].get("media_asset_id") or "") == only_collection_item_id
+            and collection_id
+        ):
+            item = eligible[0]
+            rows.append(_material_action_row(item=item, index=1, collection_id=collection_id, collection_version=collection_version, include_remove=False))
     if screen == "main":
         cancelable_active_run = focused_active_run or _latest_active_run(status)
         latest_result_run = _terminal_run_with_payload(status, status.artifacts_by_run, focused_run_id)
@@ -2119,6 +2500,99 @@ def _main_card_material_lines(status: InboxStatus) -> list[str]:
     if hidden_count and not any(line.startswith("+ ещё ") for line in lines):
         lines.append(f"+ ещё {hidden_count} материалов")
     return lines
+
+
+def _is_youtube_export_item(item: JsonObject) -> bool:
+    if str(item.get("status") or "") not in {"ready", "available"} or str(item.get("kind") or "") != "url":
+        return False
+    origin = item.get("origin")
+    url = str(origin.get("origin_ref") or "") if isinstance(origin, dict) else ""
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    return host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com")
+
+
+def _export_button_label(item: JsonObject) -> str | None:
+    if _is_youtube_export_item(item):
+        return "Скачать"
+    if str(item.get("status") or "") in {"ready", "available"} and str(item.get("kind") or "") == "video":
+        return "В аудио"
+    return None
+
+
+def _material_action_row(
+    *, item: JsonObject, index: int, collection_id: str, collection_version: int, include_remove: bool = True
+) -> list[InlineKeyboardButton]:
+    media_asset_id = str(item["media_asset_id"])
+    label = _export_button_label(item)
+    row: list[InlineKeyboardButton] = []
+    if label == "Скачать":
+        row.append(InlineKeyboardButton(
+            text="Скачать", callback_data=_callback_payload(
+                "ex", _encode_callback_token(collection_id), _encode_callback_version(collection_version),
+                _encode_callback_token(media_asset_id),
+            ),
+        ))
+    elif label == "В аудио":
+        row.append(InlineKeyboardButton(
+            text="В аудио", callback_data=_callback_payload(
+                "ea", _encode_callback_token(collection_id), _encode_callback_version(collection_version),
+                _encode_callback_token(media_asset_id),
+            ),
+        ))
+    if include_remove:
+        row.append(InlineKeyboardButton(
+            text="Убрать" if label else f"Убрать {index}",
+            callback_data=_callback_payload(
+                "rm", _encode_callback_token(collection_id), _encode_callback_version(collection_version),
+                _encode_callback_token(media_asset_id),
+            ),
+        ))
+    return row
+
+
+def _export_selection_rows(selection: JsonObject) -> list[list[InlineKeyboardButton]]:
+    if selection.get("mode") == "youtube":
+        return [
+            [InlineKeyboardButton(text="Аудио", callback_data=_callback_payload("ey"))],
+            [InlineKeyboardButton(text="Видео", callback_data=_callback_payload("ev"))],
+        ]
+    collection_id = _encode_callback_token(str(selection["collection_id"]))
+    version = _encode_callback_version(int(selection["expected_version"]))
+    media_asset_id = _encode_callback_token(str(selection["media_asset_id"]))
+    return [
+        [
+            InlineKeyboardButton(text="1080p", callback_data=_callback_payload("eq", collection_id, version, media_asset_id, _encode_callback_token("1080p"))),
+            InlineKeyboardButton(text="720p", callback_data=_callback_payload("eq", collection_id, version, media_asset_id, _encode_callback_token("720p"))),
+        ],
+        [InlineKeyboardButton(text="480p", callback_data=_callback_payload("eq", collection_id, version, media_asset_id, _encode_callback_token("480p")))],
+    ]
+
+
+def _latest_active_export(status: InboxStatus) -> JsonObject | None:
+    return status.active_exports[0] if status.active_exports else None
+
+
+def _export_status_text(status: str) -> str:
+    return {
+        "queued": "в очереди", "claimed": "получен воркером", "running": "в работе", "cancel_requested": "отмена запрошена",
+        "succeeded": "готов", "failed": "ошибка", "canceled": "отменён", "expired": "истёк",
+    }.get(status, status)
+
+
+def _export_stage_text(job: JsonObject) -> str:
+    progress = job.get("progress")
+    if not isinstance(progress, dict):
+        return ""
+    stage = str(progress.get("stage") or "")
+    return {"queued": "ожидает очереди", "resolving": "получаем источник", "exporting": "готовим файл", "delivering": "отправляем в Telegram"}.get(stage, stage)
+
+
+def _render_export_task_text(job: JsonObject) -> str:
+    lines = ["Экспорт", f"Статус: {_export_status_text(str(job.get('status') or 'unknown'))}"]
+    stage = _export_stage_text(job)
+    if stage:
+        lines.append(f"Этап: {stage}")
+    return "\n".join(lines)
 
 
 def _materials_screen_lines(status: InboxStatus) -> list[str]:
@@ -2296,6 +2770,13 @@ def _chat_type(chat: Any) -> str:
     value = getattr(chat, "type", "private")
     enum_value = getattr(value, "value", None)
     return str(enum_value or value or "private")
+
+
+def _close_file_input(file_input: TelegramFileInput) -> None:
+    if file_input.file_handle is not None:
+        file_input.file_handle.close()
+    if file_input.local_path is not None:
+        file_input.local_path.unlink(missing_ok=True)
 
 
 def _message_files(message: Message) -> Iterable[TelegramFileInput]:

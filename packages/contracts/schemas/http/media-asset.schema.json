@@ -87,6 +87,12 @@
         }
       ]
     },
+	"createMediaAssetOrigin": {
+	  "oneOf": [
+		{"$ref": "#/$defs/textOrigin"},
+		{"$ref": "#/$defs/urlOrigin"}
+	  ]
+	},
     "storedObject": {
       "type": "object",
       "required": [
@@ -169,7 +175,7 @@
           "$ref": "../common/enums.schema.json#/$defs/mediaKind"
         },
         "origin": {
-          "$ref": "#/$defs/mediaAssetOrigin"
+		  "$ref": "#/$defs/createMediaAssetOrigin"
         },
         "collection_id": {
           "$ref": "../common/enums.schema.json#/$defs/uuid"
@@ -180,6 +186,9 @@
         },
         "metadata": {
           "type": "object"
+        },
+        "provider_metadata": {
+          "$ref": "./metadata-enrichment.schema.json#/$defs/providerMetadata"
         },
         "retention": {
           "$ref": "../common/pagination.schema.json#/$defs/retentionMetadata"

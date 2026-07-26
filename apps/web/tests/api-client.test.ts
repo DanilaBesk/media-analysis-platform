@@ -116,7 +116,7 @@ describe("createWebUiApiClient", () => {
         JSON.stringify({
           channel_account_id: "web-console",
           kind: "text",
-          origin: { origin_type: "text", text: "Meeting note" },
+          origin: { origin_type: "text", origin_ref: "Meeting note" },
           collection_id: undefined,
           display_name: "Note",
         }),
@@ -154,7 +154,7 @@ describe("createWebUiApiClient", () => {
           kind: "text",
           status: "ready",
           display_name: "Note",
-          origin: { origin_type: "text", text: "Meeting note" },
+          origin: { origin_type: "text", origin_ref: "Meeting note" },
           retention: { state: "active" },
           created_at: "2026-05-10T00:00:00Z",
           updated_at: "2026-05-10T00:00:00Z",
@@ -182,11 +182,99 @@ describe("createWebUiApiClient", () => {
         body: JSON.stringify({
           channel_account_id: "web-console",
           kind: "text",
-          origin: { origin_type: "text", text: "Meeting note" },
+          origin: { origin_type: "text", origin_ref: "Meeting note" },
           display_name: "Note",
         }),
       }),
     );
+  });
+
+  it("maps URL convenience fields to the strict media origin wire contract", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        media_asset: {
+          media_asset_id: "media-url",
+          channel_account_id: channelAccountId,
+          kind: "url",
+          status: "ready",
+          display_name: "Video",
+          origin: { origin_type: "url", origin_ref: "https://www.youtube.com/watch?v=jNQXAC9IVRw" },
+          retention: { state: "active" },
+          created_at: "2026-05-10T00:00:00Z",
+          updated_at: "2026-05-10T00:00:00Z",
+        },
+      }, 201),
+    );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080/api",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+
+    await client.addMediaAsset(channelAccountId, {
+      kind: "url",
+      displayName: "Video",
+      origin: {
+        origin_type: "url",
+        url: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+        origin_ref: "https://www.youtube.com/watch?v=jNQXAC9IVRw",
+      },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      new URL("v1/media-assets", "http://localhost:8080/api/"),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          channel_account_id: channelAccountId,
+          kind: "url",
+          origin: { origin_type: "url", origin_ref: "https://www.youtube.com/watch?v=jNQXAC9IVRw" },
+          display_name: "Video",
+        }),
+      }),
+    );
+  });
+
+  it("uploads file bytes through the streaming multipart endpoint", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        media_asset: {
+          media_asset_id: "media-upload",
+          channel_account_id: channelAccountId,
+          kind: "video",
+          status: "available",
+          display_name: "clip.mp4",
+          origin: { origin_type: "upload", stored_object_id: "object-1" },
+        },
+      }, 201),
+    );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+    const file = new File(["video-bytes"], "clip.mp4", { type: "video/mp4" });
+
+    await expect(client.uploadMediaAsset(channelAccountId, file, "video", "Clip"))
+      .resolves.toMatchObject({ media_asset_id: "media-upload" });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    const form = init?.body as FormData;
+    expect(String(fetchImpl.mock.calls[0][0])).toBe("http://localhost:8080/v1/media-assets/upload");
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toEqual({ Accept: "application/json" });
+    expect(JSON.parse(String(form.get("metadata")))).toEqual({
+      channel_account_id: channelAccountId,
+      kind: "video",
+      display_name: "Clip",
+    });
+    const uploadedFile = form.get("file");
+    expect(uploadedFile).toBeInstanceOf(File);
+    expect(uploadedFile).toMatchObject({
+      name: "clip.mp4",
+      type: "video/mp4",
+      size: file.size,
+    });
   });
 
   it("creates a selection and queues an analysis run from that selection", async () => {
@@ -290,6 +378,77 @@ describe("createWebUiApiClient", () => {
       "http://localhost:8080/root/v1/artifacts/artifact-1?channel_account_id=web-console",
       "http://localhost:8080/root/v1/diagnostics?channel_account_id=web-console&page_size=50&subject_type=analysis_run&subject_id=run-1&severity=warning",
     ]);
+  });
+
+  it("uses the public export job endpoints with scoped download access", async () => {
+    const job = {
+      export_job_id: "export-1",
+      channel_account_id: "web-console",
+      media_asset_id: "media-1",
+      operation: "youtube_video",
+      variant: { video_quality: "1080p" },
+      status: "queued",
+      version: 1,
+      retry_generation: 0,
+      attempt_no: 0,
+      max_attempts: 3,
+      progress: { stage: "queued" },
+      created_at: "2026-05-18T00:00:00Z",
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ export_job: job }, 201))
+      .mockResolvedValueOnce(jsonResponse({ items: [job], page: { page_size: 50, has_more: false } }))
+      .mockResolvedValueOnce(jsonResponse({ export_job: { ...job, status: "cancel_requested" } }))
+      .mockResolvedValueOnce(jsonResponse({ export_job: { ...job, status: "queued", retry_generation: 1 } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          export_job_id: "export-1",
+          filename: "video.mp4",
+          content_type: "video/mp4",
+          size_bytes: 512,
+          url: "https://minio.local/video.mp4",
+          expires_at: "2026-05-18T01:00:00Z",
+        }),
+      );
+    const client = createWebUiApiClient({
+      baseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      fetchImpl,
+    });
+
+    await client.createExportJob(channelAccountId, "media-1", {
+      operation: "youtube_video",
+      variant: { video_quality: "1080p" },
+      deliveryChannel: "web",
+      idempotencyKey: "export-create-1",
+    });
+    await client.listExportJobs(channelAccountId, { pageSize: 50 });
+    await client.cancelExportJob(channelAccountId, "export-1");
+    await client.retryExportJob(channelAccountId, "export-1", "export-retry-1");
+    await expect(client.resolveExportDownload(channelAccountId, "export-1")).resolves.toMatchObject({ filename: "video.mp4" });
+
+    expect(fetchImpl.mock.calls.map((call) => [String(call[0]), (call[1] as RequestInit | undefined)?.body])).toEqual([
+      [
+        "http://localhost:8080/v1/media-assets/media-1/exports",
+        JSON.stringify({
+          channel_account_id: "web-console",
+          operation: "youtube_video",
+          variant: { video_quality: "1080p" },
+          delivery_channel: "web",
+        }),
+      ],
+      ["http://localhost:8080/v1/export-jobs?channel_account_id=web-console&page_size=50", undefined],
+      ["http://localhost:8080/v1/export-jobs/export-1/cancel", JSON.stringify({ channel_account_id: "web-console" })],
+      ["http://localhost:8080/v1/export-jobs/export-1/retry", JSON.stringify({ channel_account_id: "web-console" })],
+      ["http://localhost:8080/v1/export-jobs/export-1/download?channel_account_id=web-console", undefined],
+    ]);
+    expect((fetchImpl.mock.calls[0][1] as RequestInit).headers).toEqual(
+      expect.objectContaining({ "Idempotency-Key": "export-create-1" }),
+    );
+    expect((fetchImpl.mock.calls[3][1] as RequestInit).headers).toEqual(
+      expect.objectContaining({ "Idempotency-Key": "export-retry-1" }),
+    );
   });
 
   it("preserves run event stream transport and reconciliation checks", () => {
@@ -817,7 +976,7 @@ describe("createWebUiApiClient", () => {
           body: JSON.stringify({
             channel_account_id: "web-console",
             kind: "text",
-            origin: { origin_type: "text", text: "Meeting note" },
+            origin: { origin_type: "text", origin_ref: "Meeting note" },
           }),
         }),
       ],

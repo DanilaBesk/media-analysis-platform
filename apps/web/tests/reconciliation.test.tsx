@@ -82,6 +82,7 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
     env: {
       apiBaseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
+      channelAccountId: "77777777-7777-4777-8777-777777777777",
     },
     apiClient: {
       listMediaAssets: vi.fn().mockResolvedValue({
@@ -90,7 +91,14 @@ function renderDetail(overrides: Partial<WebUiRuntime["apiClient"]>) {
       }),
       getMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
       addMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
+      uploadMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
       removeMediaAsset: vi.fn().mockResolvedValue(mediaAsset()),
+      createExportJob: vi.fn(),
+      listExportJobs: vi.fn().mockResolvedValue({ items: [], page: { page_size: 50, has_more: false } }),
+      getExportJob: vi.fn(),
+      cancelExportJob: vi.fn(),
+      retryExportJob: vi.fn(),
+      resolveExportDownload: vi.fn(),
       getInboxCollection: vi.fn(),
       listCollections: vi.fn(),
       getCollection: vi.fn(),

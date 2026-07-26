@@ -55,16 +55,16 @@ def test_build_runner_delegates_to_run_transcription(monkeypatch, tmp_path: Path
     )("run-1")
 
     assert result == "ok"
-    assert calls == [
-        {
-            "analysis_run_id": "run-1",
-            "workspace_root": tmp_path / "runtime",
-            "api_client": api_client,
-            "source_store": object_store,
-            "artifact_store": object_store,
-            "transcriber": transcriber,
-        }
-    ]
+    assert calls[0]["analysis_run_id"] == "run-1"
+    attempt_root = calls[0]["workspace_root"]
+    assert isinstance(attempt_root, Path)
+    assert attempt_root.parent == (tmp_path / "runtime").resolve()
+    assert attempt_root.name.startswith("run-1--")
+    assert not attempt_root.exists()
+    assert calls[0]["api_client"] is api_client
+    assert calls[0]["source_store"] is object_store
+    assert calls[0]["artifact_store"] is object_store
+    assert calls[0]["transcriber"] is transcriber
 
 
 def test_build_runner_keeps_selection_runs_on_transcription_worker(monkeypatch, tmp_path: Path) -> None:
@@ -94,16 +94,11 @@ def test_build_runner_keeps_selection_runs_on_transcription_worker(monkeypatch, 
     )("run-1")
 
     assert result == "ok"
-    assert calls == [
-        {
-            "analysis_run_id": "run-1",
-            "workspace_root": tmp_path / "runtime",
-            "api_client": api_client,
-            "source_store": object_store,
-            "artifact_store": object_store,
-            "transcriber": transcriber,
-        }
-    ]
+    assert calls[0]["analysis_run_id"] == "run-1"
+    attempt_root = calls[0]["workspace_root"]
+    assert isinstance(attempt_root, Path)
+    assert attempt_root.parent == (tmp_path / "runtime").resolve()
+    assert not attempt_root.exists()
 
 
 def test_launcher_has_no_hidden_worker_dependency_path_bootstrap() -> None:

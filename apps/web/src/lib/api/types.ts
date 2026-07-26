@@ -39,6 +39,17 @@ export type ArtifactKind =
   | "preview";
 export type ArtifactStatus = "pending" | "available" | "failed" | "expired" | "deleted";
 export type DiagnosticSeverity = "info" | "warning" | "error";
+export type ExportOperation = "youtube_audio" | "youtube_video" | "video_to_audio";
+export type ExportJobStatus =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "cancel_requested"
+  | "succeeded"
+  | "failed"
+  | "canceled"
+  | "expired";
+export type ExportDeliveryChannel = "web" | "telegram";
 export type DiagnosticSubjectType =
   | "media_asset"
   | "stored_object"
@@ -95,6 +106,10 @@ export interface MediaAssetSummary {
   status: MediaAssetStatus;
   display_name: string;
   origin: MediaAssetOrigin;
+  // API-owned enrichment is intentionally open-ended while providers evolve.
+  metadata?: Record<string, unknown> | null;
+  provider_metadata?: Record<string, unknown> | null;
+  enrichment?: Record<string, unknown> | null;
   diagnostics_count?: number;
   created_at: string;
   updated_at: string;
@@ -276,10 +291,66 @@ export interface ObservabilitySnapshot {
   generated_at: string;
 }
 
+export interface ExportVariant {
+  audio_bitrate_kbps?: 64 | 96 | 128 | 192 | 256 | 320;
+  video_quality?: "360p" | "480p" | "720p" | "1080p";
+}
+
+export interface ExportProgress {
+  stage: string;
+  percent?: number;
+  bytes_processed?: number;
+  message?: string;
+}
+
+export interface ExportOutput {
+  content_type: string;
+  filename: string;
+  size_bytes: number;
+  sha256: string;
+}
+
+export interface ExportJob {
+  export_job_id: string;
+  channel_account_id: ChannelAccountId;
+  media_asset_id: string;
+  operation: ExportOperation;
+  variant: ExportVariant;
+  status: ExportJobStatus;
+  version: number;
+  retry_generation: number;
+  attempt_no: number;
+  max_attempts: number;
+  progress: ExportProgress;
+  output?: ExportOutput | null;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  cancel_requested_at?: string | null;
+  canceled_at?: string | null;
+  expires_at?: string | null;
+}
+
+export interface ExportDownload {
+  export_job_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  url: string;
+  expires_at: string;
+}
+
 export interface AddMediaAssetInput {
   kind: MediaKind;
   displayName: string;
   origin: MediaAssetOrigin;
+}
+
+export interface CreateExportJobInput {
+  operation: ExportOperation;
+  variant: ExportVariant;
+  deliveryChannel?: ExportDeliveryChannel;
+  idempotencyKey?: string;
 }
 
 export interface CollectionInput {

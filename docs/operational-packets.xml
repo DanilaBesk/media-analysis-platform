@@ -170,7 +170,7 @@ Later E2E tasks must consume these cases instead of inventing ad hoc audio sampl
   </ExecutionPacket>
 
   <ExecutionPacket packet-id="media-b8s.2.2-copper-asr-telegram-voice-delivery-e2e" module="M-COVERAGE,M-INFRA,M-TELEGRAM-ADAPTER,M-WORKER-TRANSCRIPTION,M-COPPER-ASR" phase="CopperAsrCoverage" verification-ref="EV-ASR-RUNTIME,EV-WORKERS,EV-ADAPTERS,EV-RUNTIME,EV-COVERAGE-MATRIX,EV-GRACE">
-    <purpose>Prove the live Telegram voice-to-transcript flow over API-owned state and CopperASR, including result delivery surface recording, duplicate prevention, and inbox clearing.</purpose>
+    <purpose>Historical packet: prove the live Telegram voice-to-transcript flow over API-owned state and CopperASR. Its delivery-time inbox clearing expectation is superseded by media-859r launch-time captured-membership detachment.</purpose>
     <depends-on>media-b8s.2.1</depends-on>
     <write-scope>
       <file-1>infra/scripts/copper-asr-telegram-e2e.py</file-1>
@@ -181,8 +181,8 @@ Later E2E tasks must consume these cases instead of inventing ad hoc audio sampl
     </write-scope>
     <contract-excerpt><![CDATA[
 Telegram is a thin adapter over channel_account-scoped API state.
-The live Telegram harness consumes the short_voice fixture as a voice upload, then proves inbox collection materialization, current_materials_panel and analysis_task_surface records, selection_snapshot and analysis_run_step creation, CopperASR transcript plus run policy artifacts, run_manifest provider=copperasr, result_artifact_surface recording, duplicate-delivery prevention, and successful inbox collection clearing.
-The harness must fail on missing transcript bytes, backend_unavailable diagnostics, missing result surface, old Whisper wording in run_manifest, or uncleared inbox membership after delivery.
+The live Telegram harness consumes the short_voice fixture as a voice upload, then proves inbox collection materialization, current_materials_panel and analysis_task_surface records, selection_snapshot and analysis_run_step creation, CopperASR transcript plus run policy artifacts, run_manifest provider=copperasr, result_artifact_surface recording, and duplicate-delivery prevention. The old delivery-time inbox clearing rule is superseded by media-859r: current proof must cover captured membership detachment at launch and preservation of later inbox membership after delivery.
+The harness must fail on missing transcript bytes, backend_unavailable diagnostics, missing result surface, old Whisper wording in run_manifest, captured membership still present after launch, or later inbox membership missing after delivery.
     ]]></contract-excerpt>
     <verification>
       <check>uv run pytest packages/contracts/tests/test_target_fixtures.py -q</check>
@@ -1368,7 +1368,7 @@ Channel surfaces enforce a single active surface per channel_account/channel/add
   </HotfixPacket>
 
   <HotfixPacket packet-id="media-uyc-telegram-focused-result" module="M-TELEGRAM-ADAPTER" phase="RuntimeBugfix" verification-ref="EV-ADAPTERS">
-    <purpose>Scope Telegram result and diagnostics buttons to the current analysis_run focus and clear active collection membership after successful result delivery.</purpose>
+    <purpose>Historical packet: scope Telegram result and diagnostics buttons to the current analysis_run focus. Its delivery-time clear behavior is superseded by media-859r atomic processing launch.</purpose>
     <write-scope>
       <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
       <file-2>apps/telegram-bot/tests/test_gateway.py</file-2>
@@ -1377,11 +1377,11 @@ Channel surfaces enforce a single active surface per channel_account/channel/add
       <file-5>docs/operational-packets.xml</file-5>
     </write-scope>
     <contract-excerpt><![CDATA[
-Telegram main-card result and diagnostics buttons are shown only for the analysis_run launched from the current card focus. Successful manual or automatic result delivery clears active inbox or collection membership through the collection mutation API and preserves immutable historical selections, runs, artifacts, and diagnostics.
+Telegram main-card result and diagnostics buttons are shown only for the analysis_run launched from the current card focus. The historical clear-after-delivery rule is superseded: processing launch now detaches captured membership atomically, and successful or failed delivery never clears later live inbox membership.
     ]]></contract-excerpt>
     <verification>
       <check>Focused gateway regressions prove historical terminal runs do not create generic result buttons and focused terminal runs produce callbacks for their own analysis_run_id.</check>
-      <check>Focused runtime regression proves manual result delivery sends the transcript and clears the active collection membership.</check>
+      <check>Focused runtime regression proves manual result delivery sends the transcript and preserves the current collection membership.</check>
     </verification>
   </HotfixPacket>
   <HotfixPacket id="media-pyj-telegram-transcription-result-auto-document-delivery" status="completed" bead="media-pyj">
@@ -1395,11 +1395,11 @@ Telegram main-card result and diagnostics buttons are shown only for the analysi
       <file-6>docs/operational-packets.xml</file-6>
     </write-scope>
     <contract-excerpt><![CDATA[
-Successful Telegram transcription results are auto-delivered as document messages. The status card records result_artifact_surface delivery for duplicate prevention, clears active inbox membership after successful delivery, and does not keep the normal Result button visible after the automatic success path. Failed delivery must not create a result surface or clear inbox membership.
+Successful Telegram transcription results are auto-delivered as document messages. The status card records result_artifact_surface delivery for duplicate prevention, while captured membership is detached at processing launch and delivery never clears later live inbox membership. The normal Result button is not kept visible after the automatic success path. Failed delivery must not create a result surface or clear inbox membership.
     ]]></contract-excerpt>
     <verification>
       <check>Focused runtime regressions prove short transcripts use send_document/answer_document rather than inline text messages.</check>
-      <check>Focused watcher regression proves successful auto-delivery clears inbox membership and hides the Result button.</check>
+      <check>Focused watcher regression proves successful auto-delivery preserves later inbox membership and hides the Result button.</check>
       <check>Focused failure regression proves failed document delivery supersedes the task surface, creates no result surface, and preserves inbox membership.</check>
     </verification>
   </HotfixPacket>
@@ -1578,4 +1578,41 @@ Object-backed document inputs with a text/* media type are textual materials, no
       <check>Full repository tests and GRACE XML parsing pass.</check>
     </verification>
   </HotfixPacket>
+  <ExecutionPacket id="governed-media-export-retention" status="in_progress" bead="media-859r">
+    <purpose>Implement content-addressed media storage, configurable physical retention, bounded worker scratch, remote metadata enrichment, and one-material export actions without changing the existing combined processing workflow.</purpose>
+    <write-scope>
+      <file-1>docs/architecture/media-export-retention-contract.md</file-1>
+      <file-2>docs/requirements.xml</file-2>
+      <file-3>docs/technology.xml</file-3>
+      <file-4>docs/development-plan.xml</file-4>
+      <file-5>docs/verification-plan.xml</file-5>
+      <file-6>docs/knowledge-graph.xml</file-6>
+      <file-7>docs/operational-packets.xml</file-7>
+      <file-8>apps/api</file-8>
+      <file-9>workers/common</file-9>
+      <file-10>workers/transcription</file-10>
+      <file-11>workers/agent-runner</file-11>
+      <file-12>workers/media-export</file-12>
+      <file-13>apps/telegram-bot</file-13>
+      <file-14>apps/web</file-14>
+      <file-15>packages/contracts</file-15>
+      <file-16>infra</file-16>
+      <file-17>.env.example</file-17>
+      <file-18>workers/metadata-enrichment</file-18>
+      <file-19>pyproject.toml</file-19>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+All inbound material remains mode-free and accumulates in the current inbox. Uploaded bytes are durable content-addressed sources; YouTube remains a durable reference whose current media is resolved into bounded scratch. One-material export_job lifecycle is independent from analysis_run and collection lifecycle. MEDIA_OBJECT_RETENTION_DAYS defaults to 7. API-owned retention physically expires eligible bytes while preserving immutable history, and worker workspaces are removed after every terminal attempt.
+This packet supersedes older Telegram delivery-time inbox clearing: processing launch atomically detaches only captured membership, and terminal delivery never mutates the live inbox.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Independent intent, feasibility, verification, security, and data/ops reviewers approve the GRACE contract and final implementation diff.</check>
+      <check>Focused schema/storage/API tests prove SHA-256 plus size identity, staged publication crash cuts, atomic YouTube enrichment enqueue, enrichment owner/token claim-progress-finalize-reclaim with lease-preserving heartbeats and bounded backoff, immutable snapshot preservation, atomic seal-run-detach, channel isolation, object pins, export/delivery owner-token leases, physical deletion, idempotent retries, and bidirectional reconciliation.</check>
+      <check>Worker tests prove attempt-unique finally cleanup, periodic lease-aware reaping, resource limits, stale-worker rejection, output publication crash recovery, and cleanup diagnostics without terminal-state rewrite.</check>
+      <check>Telegram and Web tests prove contextual actions, single-item shortcut rules, enrichment rendering, progress, cancellation/retry, fenced delivery, scoped download access, and no export collection mutation.</check>
+      <check>The isolated `infra/scripts/media-export-retention-e2e.py` proof creates a fresh UUID-scoped Compose project, selects the API and media-export worker plus their dependencies without selecting the metadata-enrichment worker, proves uploaded-source MinIO byte reuse, uploaded-video export and delivery, restart recovery, workspace cleanup, isolated physical source deletion, preserved history, and non-destructive reconciliation, then removes only that project's volumes.</check>
+      <check>Focused schema/API/worker/UI tests plus a separate live Compose metadata-enrichment smoke prove current YouTube title resolution, fenced metadata finalization, and enriched-title rendering without provider source-byte persistence. The isolated export/retention E2E is not evidence for this flow.</check>
+      <check>Full repository tests, builds, compose smoke, GRACE XML parsing, Beads closure, commit, and push pass.</check>
+    </verification>
+  </ExecutionPacket>
 </OperationalPackets>

@@ -1,6 +1,6 @@
 <KnowledgeGraph VERSION="1.0.0">
   <Project NAME="media-analysis-platform">
-    <keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, artifact, diagnostic, channel_account, channel_surface, operation_request, telegram, web, mcp</keywords>
+    <keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, export_job, artifact, diagnostic, retention, channel_account, channel_surface, operation_request, telegram, web, mcp</keywords>
     <annotation>Canonical GRACE graph for the single-user channel-aware media analysis target architecture.</annotation>
 
     <M-TARGET-ARCHITECTURE NAME="TargetArchitecture" TYPE="PLANNING" STATUS="completed" OWNER="media-7f3">
@@ -10,7 +10,8 @@
       <verification-ref>EV-TARGET-ARCHITECTURE</verification-ref>
       <annotations>
         <contract-singleUserChannelAwareTarget PATH="docs/architecture/single-user-channel-aware-target-architecture.md" PURPOSE="Defines the target single-user, channel-aware architecture and supersedes older migration-era names when conflicts appear." />
-        <target-product-domain PURPOSE="media_assets, stored_objects, collections, selection_snapshots, analysis_runs, artifacts, artifact_subjects, diagnostics, and retention are API-owned product state." />
+        <target-product-domain PURPOSE="media_assets, stored_objects, collections, selection_snapshots, analysis_runs, export_jobs, artifacts, artifact_subjects, diagnostics, and retention are API-owned product state." />
+        <contract-mediaExportRetention PATH="docs/architecture/media-export-retention-contract.md" PURPOSE="Defines uploaded-source identity, remote-reference enrichment, export lifecycle, transient delivery, worker scratch cleanup, and configurable physical retention." />
         <target-execution-domain PURPOSE="analysis_run_steps, analysis_run_step_inputs, prerequisite planning, and worker internal APIs coordinate execution behind analysis_run." />
         <target-channel-domain PURPOSE="channel_accounts, channel_surfaces, channel_surface_subjects, and channel_surface_events persist external presentation and recovery state without mutating product lifecycle." />
         <target-operations-domain PURPOSE="operation_requests records idempotency and accepted mutation attempts for safe retries." />
@@ -26,6 +27,7 @@
       <verification-ref>EV-CONTRACTS</verification-ref>
       <annotations>
         <export-mediaAssetSchemas PURPOSE="Define media_asset create, read, list, delete, stored_object/origin metadata, status, retention, and diagnostics envelopes." />
+        <export-metadataEnrichmentSchemas PURPOSE="Define account-scoped refresh and fenced internal YouTube metadata queue contracts with bounded provider metadata." />
         <export-collectionSchemas PURPOSE="Define inbox, collection, collection item, version conflict, archive, restore, and membership mutation envelopes." />
         <export-selectionSnapshotSchemas PURPOSE="Define immutable selection snapshots, option snapshots, validation diagnostics, and sealed status." />
         <export-analysisRunSchemas PURPOSE="Define analysis_run creation, status, event, cancel, artifact summary, diagnostics summary, and idempotency envelopes." />
@@ -88,6 +90,7 @@
         <table-operationRequests PURPOSE="Store idempotency and accepted mutation attempts for safe retries." />
         <table-storedObjects PURPOSE="Store object body and origin metadata." />
         <table-mediaAssets PURPOSE="Store durable channel-account-scoped media_asset records." />
+        <table-metadataEnrichmentJobs PURPOSE="Store independent idempotent YouTube metadata queue state, attempt fences, leases, retry backoff, and terminal evidence." />
         <table-collections PURPOSE="Store inbox and named collection metadata with optimistic versions." />
         <table-collectionItems PURPOSE="Store ordered collection membership." />
         <table-selectionSnapshots PURPOSE="Store immutable item and option snapshots." />

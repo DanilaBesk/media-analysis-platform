@@ -50,7 +50,11 @@ def test_build_runner_delegates_to_run_agent_harness(monkeypatch, tmp_path: Path
 
     assert result == "ok"
     assert calls[0]["analysis_run_id"] == "run-1"
-    assert calls[0]["workspace_root"] == tmp_path / "runtime"
+    attempt_root = calls[0]["workspace_root"]
+    assert isinstance(attempt_root, Path)
+    assert attempt_root.parent == (tmp_path / "runtime").resolve()
+    assert attempt_root.name.startswith("run-1--")
+    assert not attempt_root.exists()
     assert calls[0]["api_client"] is api_client
     assert calls[0]["artifact_store"] is object_store
     assert calls[0]["harness_registry"].__class__.__name__ == "DefaultAgentHarnessRegistry"

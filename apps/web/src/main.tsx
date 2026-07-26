@@ -28,7 +28,7 @@ import { resolveWebUiRuntimeEnv } from "./app/runtime";
 import { createWebUiApiClient } from "./lib/api/client";
 
 // START_BLOCK_BLOCK_BOOTSTRAP_APP_RUNTIME
-const runtimeEnv = resolveWebUiRuntimeEnv(import.meta.env);
+const runtimeEnv = resolveWebUiRuntimeEnv(import.meta.env, window.__WEB_UI_RUNTIME__);
 const runtime = {
   env: runtimeEnv,
   apiClient: createWebUiApiClient({

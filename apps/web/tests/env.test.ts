@@ -29,10 +29,11 @@ describe("resolveWebUiRuntimeEnv", () => {
       resolveWebUiRuntimeEnv({
         VITE_API_BASE_URL: undefined,
         VITE_WS_URL: undefined,
-      }),
+      }, { channelAccountId: "11111111-1111-4111-8111-111111111111" }),
     ).toEqual({
       apiBaseUrl: "http://localhost:8080",
       wsUrl: "ws://localhost:8080/v1/ws",
+      channelAccountId: "11111111-1111-4111-8111-111111111111",
     });
   });
   // END_BLOCK_BLOCK_VERIFY_DEFAULT_ENV_CONTRACT
@@ -43,10 +44,27 @@ describe("resolveWebUiRuntimeEnv", () => {
       resolveWebUiRuntimeEnv({
         VITE_API_BASE_URL: " https://api.example.test ",
         VITE_WS_URL: " wss://ws.example.test/live ",
-      }),
+      }, { channelAccountId: "22222222-2222-4222-8222-222222222222" }),
     ).toEqual({
       apiBaseUrl: "https://api.example.test",
       wsUrl: "wss://ws.example.test/live",
+      channelAccountId: "22222222-2222-4222-8222-222222222222",
+    });
+  });
+
+  it("requires a server-injected UUID and exposes no other runtime fields", () => {
+    expect(() => resolveWebUiRuntimeEnv({ VITE_API_BASE_URL: undefined, VITE_WS_URL: undefined }, {})).toThrow(
+      "Web UI runtime configuration requires a valid channelAccountId UUID.",
+    );
+    expect(
+      resolveWebUiRuntimeEnv(
+        { VITE_API_BASE_URL: undefined, VITE_WS_URL: undefined },
+        { channelAccountId: "33333333-3333-4333-8333-333333333333", PLATFORM_INTERNAL_TOKEN: "not-consumed" } as never,
+      ),
+    ).toEqual({
+      apiBaseUrl: "http://localhost:8080",
+      wsUrl: "ws://localhost:8080/v1/ws",
+      channelAccountId: "33333333-3333-4333-8333-333333333333",
     });
   });
   // END_BLOCK_BLOCK_VERIFY_EXPLICIT_ENV_CONTRACT

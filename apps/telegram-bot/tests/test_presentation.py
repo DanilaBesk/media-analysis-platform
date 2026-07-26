@@ -54,6 +54,66 @@ def test_link_summary_compacts_url_for_telegram_display() -> None:
     assert render_material_summary(item, url_preview_limit=28) == "example.com/reports/2026/q2…"
 
 
+def test_youtube_link_summary_waits_for_api_owned_title_enrichment() -> None:
+    url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    item = {
+        "media_asset_id": "media-youtube",
+        "kind": "url",
+        "origin": {"origin_type": "url", "origin_ref": url},
+    }
+
+    assert render_material_summary(item) == "YouTube: загружаем название..."
+
+
+def test_youtube_link_summary_uses_top_level_succeeded_provider_title() -> None:
+    item = {
+        "media_asset_id": "media-youtube",
+        "kind": "url",
+        "origin": {"origin_type": "url", "origin_ref": "https://youtu.be/dQw4w9WgXcQ"},
+        "provider_metadata": {
+            "provider": "youtube",
+            "status": "succeeded",
+            "title": "Никогда не сдамся",
+        },
+    }
+
+    assert render_material_summary(item) == "YouTube: Никогда не сдамся"
+
+
+def test_youtube_link_summary_supports_nested_enrichment_and_ignores_malformed_values() -> None:
+    item = {
+        "media_asset_id": "media-youtube",
+        "kind": "url",
+        "origin": {"origin_type": "url", "origin_ref": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+        "provider_metadata": "not-an-object",
+        "metadata": {
+            "enrichment": {
+                "provider": "youtube",
+                "status": "succeeded",
+                "video_title": "Видео из API",
+            },
+        },
+    }
+
+    assert render_material_summary(item) == "YouTube: Видео из API"
+
+
+def test_youtube_link_summary_does_not_show_title_before_enrichment_succeeds() -> None:
+    item = {
+        "kind": "url",
+        "origin": {"origin_type": "url", "origin_ref": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+        "metadata": {
+            "provider_metadata": {
+                "provider": "youtube",
+                "status": "pending",
+                "title": "Старое название",
+            },
+        },
+    }
+
+    assert render_material_summary(item) == "YouTube: загружаем название..."
+
+
 def test_render_material_summary_lines_limits_items_and_adds_overflow_line() -> None:
     items = [
         {

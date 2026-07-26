@@ -10,6 +10,7 @@ const runtime: WebUiRuntime = {
   env: {
     apiBaseUrl: "http://localhost:8080",
     wsUrl: "ws://localhost:8080/v1/ws",
+    channelAccountId: "55555555-5555-4555-8555-555555555555",
   },
   apiClient: {} as never,
 };

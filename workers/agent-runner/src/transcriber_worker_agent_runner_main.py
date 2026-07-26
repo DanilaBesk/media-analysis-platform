@@ -28,6 +28,7 @@ from transcriber_worker_agent_runner import DefaultAgentHarnessRegistry, LocalAg
 from transcriber_workers_common.api import AnalysisRunControlClient
 from transcriber_workers_common.object_store import WorkerObjectStore, WorkerObjectStoreConfig
 from transcriber_workers_common.runtime import WorkerRuntimeConfig, run_worker_loop
+from transcriber_workers_common.workspace import attempt_workspace
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,15 +48,16 @@ def build_runner(
     lease_client = LocalAgentHarnessLeaseClient.from_env(env)
 
     def _runner(analysis_run_id: str) -> object:
-        return runAgentHarness(
-            analysis_run_id,
-            workspace_root=config.workspace_root,
-            api_client=api_client,
-            artifact_store=object_store,
-            harness_registry=harness_registry,
-            lease_client=lease_client,
-            step_kind=config.step_kind,
-        )
+        with attempt_workspace(config.workspace_root, analysis_run_id) as attempt_root:
+            return runAgentHarness(
+                analysis_run_id,
+                workspace_root=attempt_root,
+                api_client=api_client,
+                artifact_store=object_store,
+                harness_registry=harness_registry,
+                lease_client=lease_client,
+                step_kind=config.step_kind,
+            )
 
     return _runner
 

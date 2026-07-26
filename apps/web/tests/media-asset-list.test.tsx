@@ -45,4 +45,97 @@ describe("MediaAssetList", () => {
 
     expect(screen.getByText("Материалов пока нет.")).toBeVisible();
   });
+
+  it("keeps a pending YouTube URL out of the row while enrichment is running", () => {
+    const sourceUrl = "https://www.youtube.com/watch?v=pending-video";
+    render(
+      <MemoryRouter future={routerFuture}>
+        <MediaAssetList
+          items={[{
+            ...items[0],
+            media_asset_id: "youtube-pending",
+            kind: "url",
+            display_name: sourceUrl,
+            origin: { origin_type: "url", url: sourceUrl },
+            metadata: { provider_metadata: { provider: "youtube", status: "pending" } },
+          }]}
+          selected={new Set()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Видео YouTube" })).toBeVisible();
+    expect(screen.getByText("Метаданные YouTube загружаются")).toBeVisible();
+    expect(screen.queryByText(sourceUrl)).toBeNull();
+  });
+
+  it("uses top-level YouTube metadata before the legacy metadata envelope", () => {
+    render(
+      <MemoryRouter future={routerFuture}>
+        <MediaAssetList
+          items={[{
+            ...items[0],
+            media_asset_id: "youtube-ready",
+            kind: "url",
+            display_name: "YouTube: ready-video",
+            origin: { origin_type: "url", url: "https://youtu.be/ready-video" },
+            provider_metadata: {
+              provider: "youtube",
+              status: "succeeded",
+              title: "Public API walkthrough",
+              duration_seconds: 3723.4,
+            },
+            metadata: { provider_metadata: { provider: "youtube", title: "Older cached title", duration_seconds: "invalid" } },
+          }]}
+          selected={new Set()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Public API walkthrough" })).toBeVisible();
+    expect(screen.getByText("YouTube · 1:02:03")).toBeVisible();
+    expect(screen.queryByText("Older cached title")).toBeNull();
+  });
+
+  it("falls back to the pending label when optional provider metadata is malformed", () => {
+    render(
+      <MemoryRouter future={routerFuture}>
+        <MediaAssetList
+          items={[{
+            ...items[0],
+            media_asset_id: "youtube-malformed",
+            kind: "url",
+            display_name: "YouTube: malformed-video",
+            origin: { origin_type: "url", url: "https://youtu.be/malformed-video" },
+            provider_metadata: { provider: "youtube", title: 42, duration_seconds: "not-a-number", status: "pending" },
+          }]}
+          selected={new Set()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "YouTube: malformed-video" })).toBeVisible();
+    expect(screen.getByText("Метаданные YouTube загружаются")).toBeVisible();
+  });
+
+  it("uses an optional enrichment envelope when provider metadata is not present", () => {
+    render(
+      <MemoryRouter future={routerFuture}>
+        <MediaAssetList
+          items={[{
+            ...items[0],
+            media_asset_id: "youtube-enrichment",
+            kind: "url",
+            display_name: "YouTube: enriched-video",
+            origin: { origin_type: "url", url: "https://youtu.be/enriched-video" },
+            enrichment: { provider: "youtube", status: "succeeded", title: "Enriched title", duration_seconds: 61 },
+          }]}
+          selected={new Set()}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("link", { name: "Enriched title" })).toBeVisible();
+    expect(screen.getByText("YouTube · 1:01")).toBeVisible();
+  });
 });

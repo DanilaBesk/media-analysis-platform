@@ -17,15 +17,18 @@
 #   RecordingObjectTransport - Captures object-store requests without requiring live MinIO.
 #   test_object_store_config_from_env_preserves_minio_contract - Verifies env-backed MinIO config parsing.
 #   test_fetch_file_uses_source_bucket_and_writes_destination - Verifies source downloads and signed GET request shape.
+#   test_fetch_file_streams_each_response_chunk_into_an_attempt_file - Verifies fetches are copied incrementally before publication.
+#   test_fetch_file_removes_partial_attempt_file_when_streaming_fails - Verifies failed downloads leave no partial file.
 #   test_fetch_file_uses_artifact_bucket_for_claimed_artifact_inputs - Verifies child-worker artifact inputs are read from the artifact bucket.
 #   test_put_bytes_uses_artifact_bucket_and_content_headers - Verifies artifact uploads and signed PUT request shape.
 # END_MODULE_MAP
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping
+from typing import BinaryIO, Mapping
 from urllib import error
 
 import pytest
@@ -46,6 +49,40 @@ class RecordingObjectTransport:
     def request(self, *, method: str, url: str, headers: Mapping[str, str], body: bytes | None = None) -> bytes:
         self.calls.append({"method": method, "url": url, "headers": dict(headers), "body": body})
         return self.response
+
+    def open_stream(
+        self, *, method: str, url: str, headers: Mapping[str, str], body: bytes | None = None
+    ) -> object:
+        self.calls.append({"method": method, "url": url, "headers": dict(headers), "body": body})
+        return nullcontext(_ChunkedResponse([self.response]))
+
+
+class _ChunkedResponse:
+    def __init__(self, chunks: list[bytes], *, failure: BaseException | None = None) -> None:
+        self.chunks = list(chunks)
+        self.failure = failure
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if self.chunks:
+            return self.chunks.pop(0)
+        if self.failure is not None:
+            raise self.failure
+        return b""
+
+
+class StreamingObjectTransport(RecordingObjectTransport):
+    def __init__(self, response: _ChunkedResponse) -> None:
+        super().__init__(response=b"request-path-must-not-be-used")
+        self.response_stream = response
+        self.stream_calls: list[dict[str, object]] = []
+
+    def open_stream(
+        self, *, method: str, url: str, headers: Mapping[str, str], body: bytes | None = None
+    ) -> object:
+        self.stream_calls.append({"method": method, "url": url, "headers": dict(headers), "body": body})
+        return nullcontext(self.response_stream)
 
 
 def test_object_store_config_from_env_preserves_minio_contract() -> None:
@@ -80,6 +117,66 @@ def test_fetch_file_uses_source_bucket_and_writes_destination(tmp_path: Path) ->
     headers = transport.calls[0]["headers"]
     assert headers["X-Amz-Date"] == "20260423T120000Z"
     assert headers["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=access/20260423/us-east-1/s3/aws4_request")
+
+
+def test_fetch_file_streams_each_response_chunk_into_an_attempt_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _ChunkedResponse([b"first-", b"second-", b"third"])
+    transport = StreamingObjectTransport(response)
+    store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
+    destination = tmp_path / "inputs" / "source.mp3"
+    write_chunks: list[bytes] = []
+    original_open = Path.open
+
+    class _RecordingAttemptFile:
+        def __init__(self, file: BinaryIO) -> None:
+            self.file = file
+
+        def __enter__(self) -> "_RecordingAttemptFile":
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            self.file.close()
+
+        def write(self, chunk: bytes) -> int:
+            write_chunks.append(chunk)
+            return self.file.write(chunk)
+
+        def flush(self) -> None:
+            self.file.flush()
+
+        def seek(self, offset: int, whence: int = 0) -> int:
+            return self.file.seek(offset, whence)
+
+    def _record_attempt_open(path: Path, mode: str = "r", *args: object, **kwargs: object) -> BinaryIO | _RecordingAttemptFile:
+        file = original_open(path, mode, *args, **kwargs)
+        if path.suffix == ".part":
+            return _RecordingAttemptFile(file)
+        return file
+
+    monkeypatch.setattr(Path, "open", _record_attempt_open)
+
+    store.fetch_file(object_key="sources/run/source.mp3", destination=destination)
+
+    assert destination.read_bytes() == b"first-second-third"
+    assert write_chunks == [b"first-", b"second-", b"third"]
+    assert response.read_sizes == [1024 * 1024, 1024 * 1024, 1024 * 1024, 1024 * 1024]
+    assert transport.calls == []
+    assert transport.stream_calls[0]["method"] == "GET"
+    assert not list(destination.parent.glob("*.part"))
+
+
+def test_fetch_file_removes_partial_attempt_file_when_streaming_fails(tmp_path: Path) -> None:
+    transport = StreamingObjectTransport(_ChunkedResponse([b"partial"], failure=OSError("connection reset")))
+    store = WorkerObjectStore(_config(), transport=transport, now=_fixed_now)
+    destination = tmp_path / "inputs" / "source.mp3"
+    destination.parent.mkdir(parents=True)
+    destination.write_bytes(b"previous-complete-download")
+
+    with pytest.raises(OSError, match="connection reset"):
+        store.fetch_file(object_key="sources/run/source.mp3", destination=destination)
+
+    assert destination.read_bytes() == b"previous-complete-download"
+    assert not list(destination.parent.glob("*.part"))
 
 
 def test_fetch_file_uses_artifact_bucket_for_claimed_artifact_inputs(tmp_path: Path) -> None:

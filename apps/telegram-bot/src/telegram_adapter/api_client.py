@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, BinaryIO, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
+
+import httpx
 
 JsonObject = dict[str, Any]
 UrlopenLike = Callable[[Request], Any]
@@ -31,9 +34,17 @@ class TelegramApiClientError(RuntimeError):
 
 
 class TelegramApiClient:
-    def __init__(self, base_url: str, urlopen_impl: UrlopenLike | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        urlopen_impl: UrlopenLike | None = None,
+        internal_token: str | None = None,
+        http_client_factory: Callable[..., Any] | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.urlopen_impl = urlopen_impl or urlopen
+        self.internal_token = (internal_token or "").strip()
+        self.http_client_factory = http_client_factory or httpx.Client
 
     def create_media_asset(
         self,
@@ -66,7 +77,9 @@ class TelegramApiClient:
         *,
         channel_account_id: str,
         kind: str,
-        content: bytes,
+        content: bytes | None = None,
+        file_path: Path | None = None,
+        file_handle: BinaryIO | None = None,
         file_name: str,
         content_type: str | None = None,
         display_name: str | None = None,
@@ -86,6 +99,22 @@ class TelegramApiClient:
             payload["metadata"] = metadata
         if idempotency_key:
             payload["idempotency_key"] = idempotency_key
+        if file_path is not None:
+            return self._upload_media_asset_from_path(
+                payload=payload,
+                file_path=file_path,
+                file_name=file_name,
+                content_type=content_type,
+            )
+        if file_handle is not None:
+            return self._upload_media_asset_from_stream(
+                payload=payload,
+                file_handle=file_handle,
+                file_name=file_name,
+                content_type=content_type,
+            )
+        if content is None:
+            raise ValueError("content, file_path, or file_handle is required")
         boundary = f"codex-{uuid.uuid4().hex}"
         body = _encode_multipart_form(
             boundary=boundary,
@@ -106,6 +135,58 @@ class TelegramApiClient:
             ),
             "media_asset",
         )
+
+    def _upload_media_asset_from_path(
+        self,
+        *,
+        payload: JsonObject,
+        file_path: Path,
+        file_name: str,
+        content_type: str | None,
+    ) -> JsonObject:
+        with file_path.open("rb") as file_handle:
+            return self._upload_media_asset_from_stream(
+                payload=payload,
+                file_handle=file_handle,
+                file_name=file_name,
+                content_type=content_type,
+            )
+
+    def _upload_media_asset_from_stream(
+        self,
+        *,
+        payload: JsonObject,
+        file_handle: BinaryIO,
+        file_name: str,
+        content_type: str | None,
+    ) -> JsonObject:
+        headers = {"Accept": "application/json"}
+        if self.internal_token:
+            headers["X-Platform-Internal-Token"] = self.internal_token
+        try:
+            file_handle.seek(0)
+            with self.http_client_factory(timeout=60.0) as client:
+                response = client.post(
+                    f"{self.base_url}/v1/media-assets/upload",
+                    data={"metadata": json.dumps(payload)},
+                    files={"file": (file_name, file_handle, content_type or "application/octet-stream")},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return self._extract(response.json(), "media_asset")
+        except httpx.HTTPStatusError as exc:
+            error_body = _httpx_error_body(exc.response)
+            error = error_body.get("error", {}) if isinstance(error_body, dict) else {}
+            raise TelegramApiClientError(
+                path="/v1/media-assets/upload",
+                status=exc.response.status_code,
+                message=error.get("message", f"API request failed with status {exc.response.status_code}"),
+                code=error.get("code"),
+            ) from exc
+        except (httpx.HTTPError, OSError) as exc:
+            raise TelegramApiClientError(
+                path="/v1/media-assets/upload", status=0, message="Backend is unavailable", code="backend_unavailable",
+            ) from exc
 
     def list_media_assets(
         self,
@@ -171,6 +252,38 @@ class TelegramApiClient:
         return self._extract(
             self._request_json("/v1/selection-snapshots", method="POST", json_body=payload),
             "selection_snapshot",
+        )
+
+    def start_collection_processing_run(
+        self,
+        *,
+        channel_account_id: str,
+        collection_id: str,
+        expected_version: int,
+        items: list[JsonObject],
+        run_type: str = "transcription",
+        option_snapshot: JsonObject | None = None,
+        params: JsonObject | None = None,
+        delivery: JsonObject | None = None,
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
+        payload: JsonObject = {
+            "channel_account_id": channel_account_id,
+            "expected_version": expected_version,
+            "items": items,
+            "run_type": run_type,
+            "option_snapshot": option_snapshot or {"channel": "telegram", "surface": "current_materials"},
+            "delivery": delivery or {"strategy": "polling"},
+            "created_via_channel_id": channel_account_id,
+        }
+        if params:
+            payload["params"] = params
+        if idempotency_key:
+            payload["idempotency_key"] = idempotency_key
+        return self._request_json(
+            f"/v1/collections/{collection_id}/processing-runs",
+            method="POST",
+            json_body=payload,
         )
 
     def create_analysis_run(
@@ -251,6 +364,116 @@ class TelegramApiClient:
             json_body={"channel_account_id": channel_account_id, "message": message},
         )
         return self._extract(payload, "analysis_run")
+
+    def create_export_job(
+        self,
+        *,
+        channel_account_id: str,
+        media_asset_id: str,
+        operation: str,
+        variant: JsonObject,
+        delivery_channel: str = "telegram",
+        idempotency_key: str | None = None,
+    ) -> JsonObject:
+        headers: dict[str, str] = {}
+        if idempotency_key:
+            headers["Idempotency-Key"] = idempotency_key
+        return self._extract(
+            self._request_json(
+                f"/v1/media-assets/{media_asset_id}/exports",
+                method="POST",
+                json_body={
+                    "channel_account_id": channel_account_id,
+                    "operation": operation,
+                    "variant": variant,
+                    "delivery_channel": delivery_channel,
+                },
+                extra_headers=headers,
+            ),
+            "export_job",
+        )
+
+    def list_export_jobs(self, *, channel_account_id: str, page_size: int = 20) -> JsonObject:
+        params = _channel_account_query(channel_account_id)
+        params["page_size"] = str(page_size)
+        return self._request_json(f"/v1/export-jobs?{urlencode(params)}")
+
+    def get_export_job(self, *, channel_account_id: str, export_job_id: str) -> JsonObject:
+        return self._extract(
+            self._request_json(f"/v1/export-jobs/{export_job_id}?{urlencode(_channel_account_query(channel_account_id))}"),
+            "export_job",
+        )
+
+    def claim_export_delivery(
+        self,
+        *,
+        channel_account_id: str,
+        export_job_id: str,
+        lease_owner: str,
+        lease_seconds: int = 120,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/export-jobs/{export_job_id}/deliveries/claim",
+            method="POST",
+            json_body={
+                "channel_account_id": channel_account_id,
+                "channel": "telegram",
+                "lease_owner": lease_owner,
+                "lease_seconds": lease_seconds,
+            },
+        )
+
+    def acknowledge_export_delivery(
+        self,
+        *,
+        channel_account_id: str,
+        export_job_id: str,
+        export_delivery_id: str,
+        lease_owner: str,
+        attempt_token: str,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/export-jobs/{export_job_id}/deliveries/ack",
+            method="POST",
+            json_body={
+                "channel_account_id": channel_account_id,
+                "export_delivery_id": export_delivery_id,
+                "lease_owner": lease_owner,
+                "attempt_token": attempt_token,
+            },
+        )
+
+    def fail_export_delivery(
+        self,
+        *,
+        channel_account_id: str,
+        export_job_id: str,
+        export_delivery_id: str,
+        lease_owner: str,
+        attempt_token: str,
+        failure_code: str,
+        retryable: bool = True,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/export-jobs/{export_job_id}/deliveries/fail",
+            method="POST",
+            json_body={
+                "channel_account_id": channel_account_id,
+                "export_delivery_id": export_delivery_id,
+                "lease_owner": lease_owner,
+                "attempt_token": attempt_token,
+                "failure_code": failure_code,
+                "retryable": retryable,
+            },
+        )
+
+    def get_export_download(self, *, channel_account_id: str, export_job_id: str) -> JsonObject:
+        return self._request_json(
+            f"/v1/export-jobs/{export_job_id}/download?{urlencode(_channel_account_query(channel_account_id))}"
+        )
+
+    def get_internal_export_download_access(self, *, export_job_id: str) -> JsonObject:
+        return self._request_json(f"/internal/v1/export-jobs/{export_job_id}/download-access")
 
     def list_artifacts(
         self,
@@ -444,11 +667,14 @@ class TelegramApiClient:
         *,
         method: str = "GET",
         json_body: JsonObject | None = None,
+        extra_headers: dict[str, str] | None = None,
     ) -> JsonObject:
         body = json.dumps(json_body).encode("utf-8") if json_body is not None else None
         headers = {"Accept": "application/json"}
         if body is not None:
             headers["Content-Type"] = "application/json"
+        if extra_headers:
+            headers.update(extra_headers)
         return self._request(path, method=method, body=body, headers=headers)
 
     def _request(
@@ -459,10 +685,13 @@ class TelegramApiClient:
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> JsonObject:
+        request_headers = dict(headers or {})
+        if self.internal_token:
+            request_headers["X-Platform-Internal-Token"] = self.internal_token
         request = Request(
             urljoin(f"{self.base_url}/", path.lstrip("/")),
             data=body,
-            headers=headers or {},
+            headers=request_headers,
             method=method,
         )
         try:
@@ -501,6 +730,14 @@ class TelegramApiClient:
 
 def _channel_account_query(channel_account_id: str) -> dict[str, str]:
     return {"channel_account_id": str(channel_account_id)}
+
+
+def _httpx_error_body(response: httpx.Response) -> JsonObject:
+    try:
+        payload = response.json()
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _encode_multipart_form(

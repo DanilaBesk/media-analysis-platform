@@ -8,8 +8,8 @@ x-runtime-infra-depends: &runtime-infra-depends
   minio-init:
     condition: service_completed_successfully
 
-x-platform-no-proxy: &platform-no-proxy "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,telegram-bot-api,mcp-server,0.250.250.0/24,fd07:b51a:cc66:f0::/64,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
-x-platform-no-proxy-httpx-safe: &platform-no-proxy-httpx-safe "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,web,telegram-bot,telegram-bot-api,mcp-server,0.250.250.0/24,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
+x-platform-no-proxy: &platform-no-proxy "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,worker-media-export,worker-metadata-enrichment,web,telegram-bot,telegram-bot-api,mcp-server,0.250.250.0/24,fd07:b51a:cc66:f0::/64,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
+x-platform-no-proxy-httpx-safe: &platform-no-proxy-httpx-safe "localhost,127.0.0.1,127.0.0.0/8,::1,postgres,redis,minio,minio-init,api,copper-asr,worker-transcription,worker-agent-runner,worker-media-export,worker-metadata-enrichment,web,telegram-bot,telegram-bot-api,mcp-server,0.250.250.0/24,192.168.194.0/24,192.168.215.0/24,*.orb.internal,*.orb.local,vm.orb.internal,services.orb.internal,services2.orb.internal,proxyproxy.orb.internal,gateway.orb.internal,gateway.docker.internal,host.internal,host.orb.internal,host.docker.internal,host.lima.internal,docker.orb.internal,docker.orb.local,k8s.orb.local,docker.for.mac.localhost,docker.for.mac.host.internal"
 x-platform-minio-public-endpoint: &platform-minio-public-endpoint "${MINIO_PUBLIC_ENDPOINT:-http://localhost:${MINIO_HOST_PORT:-19100}}"
 
 services:
@@ -74,8 +74,8 @@ services:
     networks:
       - platform
     ports:
-      - "${MINIO_HOST_PORT:-19100}:9000"
-      - "${MINIO_CONSOLE_HOST_PORT:-19101}:9001"
+      - "127.0.0.1:${MINIO_HOST_PORT:-19100}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-19101}:9001"
     volumes:
       - minio-data:/data
     healthcheck:
@@ -125,7 +125,7 @@ services:
     networks:
       - platform
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
     volumes:
       - ..:/workspace
       - api-go-build-cache:/root/.cache/go-build
@@ -134,7 +134,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - "curl -fsS 'http://127.0.0.1:8080/internal/v1/channel-accounts?page_size=1' >/dev/null"
+        - "curl -fsS -H 'X-Platform-Internal-Token: '$$PLATFORM_INTERNAL_TOKEN 'http://127.0.0.1:8080/internal/v1/channel-accounts?page_size=1' >/dev/null"
       interval: 10s
       timeout: 5s
       retries: 12
@@ -255,10 +255,92 @@ services:
       - agent-runner-runtime:/tmp/runtime
       - retained-log-volume:/var/log/platform
 
+  worker-media-export:
+    build:
+      context: ..
+      dockerfile: workers/media-export/Dockerfile
+    image: media-analysis-worker-media-export:local
+    restart: unless-stopped
+    cpus: ${MEDIA_EXPORT_LOCAL_CPUS:-2.0}
+    environment:
+      PYTHONPATH: /workspace/workers/media-export/src:/workspace/workers/common/src
+      UV_PROJECT_ENVIRONMENT: /tmp/uv-project-env
+      NO_PROXY: *platform-no-proxy-httpx-safe
+      no_proxy: *platform-no-proxy-httpx-safe
+    env_file:
+      - ./env/shared.env.example
+      - ./env/worker-media-export.env.example
+    depends_on:
+      <<: *runtime-infra-depends
+      api:
+        condition: service_healthy
+    working_dir: /workspace
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace
+      - python
+      - -m
+      - transcriber_worker_media_export_main
+    networks:
+      - platform
+    volumes:
+      - ..:/workspace
+      - media-export-runtime:/tmp/runtime
+      - retained-log-volume:/var/log/platform
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "command -v ffmpeg >/dev/null && command -v ffprobe >/dev/null && command -v yt-dlp >/dev/null && uv run --project /workspace --no-sync python -c 'from transcriber_worker_media_export import MediaExportWorkerConfig, MinioExportObjectStore; MediaExportWorkerConfig.from_env(); MinioExportObjectStore.from_env()'"
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 2m
+
+  worker-metadata-enrichment:
+    build:
+      context: ..
+      dockerfile: workers/metadata-enrichment/Dockerfile
+    image: media-analysis-worker-metadata-enrichment:local
+    restart: unless-stopped
+    cpus: ${METADATA_ENRICHMENT_LOCAL_CPUS:-0.5}
+    environment:
+      PYTHONPATH: /workspace/workers/metadata-enrichment/src
+      HOME: /tmp/metadata-enrichment-home
+      NO_PROXY: *platform-no-proxy
+      no_proxy: *platform-no-proxy
+    env_file:
+      - ./env/shared.env.example
+      - ./env/worker-metadata-enrichment.env.example
+    depends_on:
+      <<: *runtime-infra-depends
+      api:
+        condition: service_healthy
+    working_dir: /workspace
+    command:
+      - /usr/local/bin/python
+      - -m
+      - transcriber_worker_metadata_enrichment_main
+    networks:
+      - platform
+    volumes:
+      - ..:/workspace:ro
+      - retained-log-volume:/var/log/platform
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "command -v yt-dlp >/dev/null && python -c 'from transcriber_worker_metadata_enrichment import MetadataEnrichmentWorkerConfig; MetadataEnrichmentWorkerConfig.from_env()'"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   web:
     image: node:22-alpine
     restart: unless-stopped
     env_file:
+      - ./env/shared.env.example
       - ./env/web.env.example
     depends_on:
       api:
@@ -268,13 +350,14 @@ services:
       - node
       - /workspace/apps/web/src/serve-dist.mjs
     environment:
+      API_INTERNAL_BASE_URL: http://api:8080
       PORT: "3201"
       NO_PROXY: *platform-no-proxy
       no_proxy: *platform-no-proxy
     networks:
       - platform
     ports:
-      - "${WEB_HOST_PORT:-3201}:3201"
+      - "127.0.0.1:${WEB_HOST_PORT:-3201}:3201"
     volumes:
       - ..:/workspace
       - retained-log-volume:/var/log/platform
@@ -295,7 +378,7 @@ services:
     networks:
       - platform
     ports:
-      - "${TELEGRAM_BOT_API_HOST_PORT:-18081}:8081"
+      - "127.0.0.1:${TELEGRAM_BOT_API_HOST_PORT:-18081}:8081"
     volumes:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
       - retained-log-volume:/var/log/platform
@@ -326,6 +409,7 @@ services:
       NO_PROXY: *platform-no-proxy-httpx-safe
       no_proxy: *platform-no-proxy-httpx-safe
     env_file:
+      - ./env/shared.env.example
       - ./env/telegram-bot.env.example
       - path: ../.env
         required: false
@@ -383,5 +467,6 @@ volumes:
   api-go-mod-cache:
   telegram-bot-api-data:
   agent-runner-runtime:
+  media-export-runtime:
   telegram-bot-runtime:
   retained-log-volume:

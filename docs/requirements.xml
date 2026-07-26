@@ -17,7 +17,7 @@
     <rule>The product currently has one human user. Do not introduce owners, workspaces, workspace members, or team authorization until a real multi-user requirement exists.</rule>
     <rule>Channel identity is modeled through channel_accounts and channel_surfaces; channels can store presentation and recovery state but cannot own product lifecycle.</rule>
     <rule>The target vocabulary is media_asset, stored_object, collection, inbox, selection_snapshot, selection_snapshot_item, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, channel_surface, and operation_request.</rule>
-    <rule>The current local database is disposable for the target rebuild. Implementations may delete, recreate, truncate, or rebuild current schema/data and must not spend effort preserving or backfilling existing local rows unless a future production-data requirement is approved.</rule>
+    <rule>The current local database is disposable for the target rebuild. Implementations may delete, recreate, truncate, or rebuild current schema/data and must not generally spend effort preserving or backfilling existing local rows. The governed media rollout has one explicit narrow exception: enqueue metadata-only enrichment for existing supported YouTube URL assets after canonicalizing a single video id; this exception does not preserve or copy provider media bytes.</rule>
     <rule>Removed implementation-era product names may appear only as historical deletion evidence or negative regression checks. Active contracts, code paths, user flows, and new documentation use the target vocabulary only.</rule>
     <rule>If any older GRACE section conflicts with the target architecture document, the target architecture document wins until the corresponding migration packet rewrites the older section.</rule>
   </TargetArchitectureReset>
@@ -33,6 +33,8 @@
     <term name="analysis_run_step_input">An internal execution input declaration that says which selection_snapshot_item or artifact a worker step may read.</term>
     <term name="artifact">A durable result or diagnostic object produced by analysis_run execution and resolved through API-governed access rules.</term>
     <term name="artifact_subject">A lineage link from an artifact to the run, step, selection snapshot, selected item, media asset, or diagnostic it represents.</term>
+    <term name="export_job">A fenced one-media operation for download or conversion, independent from collection and analysis_run lifecycle.</term>
+    <term name="object_pin">A transactional protected reference that prevents an available stored_object from being scheduled for physical deletion while work or delivery needs it.</term>
   </CanonicalVocabulary>
 
   <ModelChain>
@@ -40,6 +42,8 @@
     <rule>Adapters create and manage media_asset and collection state before execution; they do not expose transient submission modes as the product model.</rule>
     <rule>analysis_run creation always references a selection snapshot, never mutable collection contents directly.</rule>
     <rule>Later edits to the inbox or any collection never mutate an existing selection or analysis_run.</rule>
+    <rule>Telegram processing launch atomically seals the exact selected membership, creates the run graph, acquires object pins, and removes only captured collection items; terminal delivery never clears the later live inbox.</rule>
+    <rule>media_asset -&gt; export_job -&gt; transient delivery object is an independent one-material chain and never mutates collection membership.</rule>
   </ModelChain>
 
   <AccessScope>
@@ -87,12 +91,44 @@
       <status>expired</status>
       <status>deleted</status>
     </artifact>
+    <export-job>
+      <status>queued</status>
+      <status>claimed</status>
+      <status>running</status>
+      <status>cancel_requested</status>
+      <status>succeeded</status>
+      <status>failed</status>
+      <status>canceled</status>
+      <status>expired</status>
+    </export-job>
+    <export-delivery>
+      <status>pending</status>
+      <status>claimed</status>
+      <status>delivered</status>
+      <status>failed</status>
+      <status>expired</status>
+    </export-delivery>
+    <stored-object-storage>
+      <status>publishing</status>
+      <status>available</status>
+      <status>delete_scheduled</status>
+      <status>deleted</status>
+      <status>missing</status>
+    </stored-object-storage>
   </LifecycleStatuses>
 
   <FunctionalRequirements>
     <Requirement id="REQ-MEDIA-001">
       <Action>Create media_asset records from Telegram, Web, MCP, and server-side import callers through one API-owned ingestion boundary.</Action>
       <AcceptanceCriteria>Supported inputs include text, URL, generic file, photo/image, audio/voice, and video/document; each accepted item records channel_account access scope, stored_object or origin metadata, content hash when available, size, MIME type, adapter origin, creation time, validation status, retention policy, and diagnostics pointer.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-MEDIA-IDENTITY-001">
+      <Action>Separate user-visible material occurrences from physical byte identity.</Action>
+      <AcceptanceCriteria>Uploads stream to managed staging while SHA-256 and byte size are computed. Physical identity is unique by channel_account_id, sha256, and size_bytes independent of filename; publication, concurrent losing-upload cleanup, digest collision rejection, and re-upload of an expired body are fenced and race-safe. Separate occurrences retain their own media_asset and collection membership. Liveness is derived from transactional references and pins, not an independently maintained refcount.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-REMOTE-METADATA-001">
+      <Action>Enrich supported remote references without persisting remote source media.</Action>
+      <AcceptanceCriteria>YouTube URL ingestion remains immediate and atomically creates one idempotent API-owned metadata_enrichment_job for the allowlisted canonical URL. This queue is independent from export_jobs and analysis_runs; claims use finite owner plus attempt-token fencing, progress heartbeats preserve lease duration, retryable failures and expired leases use bounded backoff and max attempts, and stale workers cannot finalize reassigned work. Successful fenced finalization sanitizes and bounds title, thumbnail URL, and duration before updating only current media_asset display_name and metadata.provider_metadata; sealed selection snapshots remain immutable. Public refresh is channel-account-scoped, internal queue routes require the platform token, and the API performs no provider network call.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-COLLECTION-001">
       <Action>Maintain inbox and user collections independently of execution.</Action>
@@ -105,6 +141,10 @@
     <Requirement id="REQ-RUN-001">
       <Action>Create analysis_run records only from selection_snapshots.</Action>
       <AcceptanceCriteria>analysis_run creation records selection_snapshot id, channel_account scope, run type, delivery preference, initial queued status, idempotency key, evidence-gate status, diagnostics channel, planned analysis_run_steps, and analysis_run_step_inputs. Execution rows stay internal and must not become the public product surface.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-PROCESSING-LAUNCH-001">
+      <Action>Atomically launch processing from exact current collection membership.</Action>
+      <AcceptanceCriteria>One API transaction validates channel scope and expected collection version, acquires available-object pins, creates and seals the immutable snapshot, creates the run and step graph, and removes exactly captured collection-item rows. New arrivals remain live; terminal delivery never clears them. Failed or canceled work is retryable from the immutable run/snapshot and can be explicitly restored to a collection.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-RUN-PLANNING-001">
       <Action>Plan prerequisite execution inside the API before workers run.</Action>
@@ -122,6 +162,10 @@
       <Action>Cancel analysis_run records through a cooperative API-owned lifecycle.</Action>
       <AcceptanceCriteria>Canceling an unclaimed queued run terminally records canceled and stops queued tasks. Canceling a claimed run records cancel_requested, preserves the claimed task for worker observation, stops unclaimed queued tasks, exposes cancel_requested through worker cancel-check, and forces late worker finalization to resolve as canceled rather than succeeded or failed.</AcceptanceCriteria>
     </Requirement>
+    <Requirement id="REQ-EXPORT-001">
+      <Action>Create one-material export jobs independently from collection processing.</Action>
+      <AcceptanceCriteria>youtube_audio, youtube_video, and uploaded video_to_audio operations use API-owned export_job lifecycle, semantic variants, scoped idempotency, retry budget, expiring leases, per-attempt fencing tokens, progress, cooperative process-group cancellation, diagnostics, output lineage, delivery claim/ack/failure, and short-lived output objects. Telegram validates current membership of the selected media_asset without coupling the non-mutating action to an unchanged collection version, while the API enforces current channel-account scope and asset availability. Workload source pins remain non-expiring through queued/active states, release on every terminal outcome, and retry reacquires only currently available sources. Stale workers cannot mutate or finalize reassigned work. Export lifecycle never mutates collection membership or analysis_run state.</AcceptanceCriteria>
+    </Requirement>
     <Requirement id="REQ-ARTIFACT-001">
       <Action>Expose artifacts as analysis_run outputs with API-governed preview and download metadata.</Action>
       <AcceptanceCriteria>Artifacts include transcript, summary, report, extracted structured data, source manifest, execution log, and diagnostic bundles as applicable; each artifact records channel_account scope, run id, kind, content type, size, checksum, stored_object reference, visibility, retention state, preview metadata, and artifact_subject lineage where the artifact represents a selected item, step, prerequisite, or diagnostic.</AcceptanceCriteria>
@@ -132,7 +176,11 @@
     </Requirement>
     <Requirement id="REQ-RETENTION-001">
       <Action>Apply retention policies consistently across stored_objects, media_asset records, selection_snapshots, runs, artifacts, diagnostics, and deleted collection membership.</Action>
-      <AcceptanceCriteria>Retention rules define soft delete, hard delete eligibility, artifact expiry, stored object body expiry, export, and audit evidence preservation without orphaning run history.</AcceptanceCriteria>
+      <AcceptanceCriteria>Retention rules define soft delete, hard delete eligibility, artifact expiry, stored object body expiry, export, and audit evidence preservation without orphaning run history. MEDIA_OBJECT_RETENTION_DAYS is positive and defaults to seven; each storage generation expires from max(generation_published_at,last_successful_use_at), so deleted-body re-upload receives a fresh window while original created_at remains historical. Non-expiring workload pins release on every terminal outcome, success alone advances last use, retry reacquires available sources, and finite delivery pins release on acknowledgement/TTL. Pinning, active holds, and delete-scheduling use one database fence: new work can pin only available objects, an active hold always blocks scheduling, and delete_scheduled blocks access. The sweeper uses deletion owner/token/lease, bounded retry, idempotent physical deletion, and bidirectional managed-prefix reconciliation.</AcceptanceCriteria>
+    </Requirement>
+    <Requirement id="REQ-WORKSPACE-001">
+      <Action>Treat worker filesystem materialization as bounded attempt-scoped scratch space.</Action>
+      <AcceptanceCriteria>Telegram ingress uses an anonymous disk-backed transfer file that is released on close or process exit. Workers stream durable S3 object bodies into seekable attempt files in bounded chunks without first buffering the full media object in process memory, and remove a partial destination after transfer failure. Every analysis or export attempt owns a sanitized attempt-token workspace, removes it in an outer finally after success, failure, or cancellation, and a periodic heartbeat-aware reaper retries cleanup and removes abandoned or absolute-TTL workspaces. Duration, bytes, disk, time, logs, subprocess, egress, and concurrency are bounded. Cleanup failure is observable but cannot change an already terminal product result.</AcceptanceCriteria>
     </Requirement>
     <Requirement id="REQ-ADAPTER-001">
       <Action>Keep Telegram, Web, and MCP as thin adapters over the same API-owned state.</Action>
@@ -165,7 +213,7 @@
       <rule>Telegram shows background active analysis_run state separately from the current material selection. The current selection can start a new processing run unless the card is focused on an active run. Cancel actions target either the focused active run or, when there is no focus, the latest visible active run by run id plus version.</rule>
       <rule>Telegram active processing cards show user-facing material duration, current execution stage from analysis_run events, and elapsed processing time without exposing provider internals such as VAD/ASR timings or raw worker progress_stage values.</rule>
       <rule>Telegram main-card diagnostics actions are scoped to the analysis_run launched from the current card focus; historical terminal runs do not create generic result actions for a new or unstarted inbox selection, and successful processing results are auto-delivered as files instead of becoming a normal Result-button workflow.</rule>
-      <rule>After a successful Telegram result file delivery, the adapter clears only the active inbox or collection membership through the API collection mutation path; immutable selection_snapshots, analysis_runs, artifacts, and diagnostics remain historical records.</rule>
+      <rule>Telegram processing launch removes exactly the captured collection membership inside the atomic snapshot/run transaction. Successful or failed result delivery never clears or otherwise mutates the live inbox, so material accepted during execution remains available.</rule>
       <rule>Telegram may persist message mappings through the internal channel surfaces API, but the API treats those mappings as opaque channel surfaces rather than Telegram-specific domain fields.</rule>
       <rule>After accepted Telegram input, a status refresh or channel_surface persistence failure must not turn the saved inbox mutation into a user-facing backend failure; the adapter confirms the saved material and offers /inbox recovery while logging the presentation-layer failure.</rule>
       <rule>After accepted Telegram input in the same chat/user scope, the adapter must reuse the active current_materials_panel when it is editable and serialize presentation refreshes so forwarded or rapidly sent message bursts update one current materials card instead of sending one card per update.</rule>
@@ -175,6 +223,8 @@
       <rule>Telegram processing launch for one uploaded media item must query API-owned reusable transcript state by stored_object identity before creating a new run, and a matched transcript artifact is delivered as a fresh Telegram document response for the new user action when the processing result is a transcript.</rule>
       <rule>After Telegram sends a new result artifact message, the adapter must publish the current_materials_panel after that result, rebind the stable current panel surface to the new message, retire the previous processing card best-effort, and supersede the terminal analysis_task_surface; restart recovery must also supersede and retire legacy terminal task cards after preserving or recreating the current panel, and a terminal edit throttle or failure must not leave the only current control card above the result or imply that processing restarted.</rule>
       <rule>Telegram mixed selections rely on API-owned analysis_run planning for partial transcript reuse; the adapter must not decide reusable transcript subsets from Telegram file identity or mutable inbox state.</rule>
+      <rule>Telegram material rows expose Скачать plus Убрать for YouTube references and В аудио plus Убрать for uploaded video. The main card shows the same contextual shortcut only when exactly one eligible material is present; Обработать remains the primary collection action.</rule>
+      <rule>Telegram export actions create API-owned export jobs and export_task_surface state without removing collection membership, clearing the current materials card, or changing analysis_run focus.</rule>
       <rule>Telegram current materials panels, active run cards, and delivered result messages are represented as current_materials_panel, analysis_task_surface, and result_artifact_surface channel_surfaces; restart recovery may restore or recreate those surfaces but must not use them to mutate product lifecycle.</rule>
       <rule>Internal active channel_surface listing must honor subject_type and subject_id filters so current materials or task-card surfaces cannot be mistaken for delivered result artifact surfaces.</rule>
       <rule>Telegram resolves chat/user scope to channel_account and uses target public calls for media_assets, collection membership, selection_snapshots, analysis_runs, artifacts, and diagnostics.</rule>
@@ -183,6 +233,7 @@
     <Web>
       <rule>Web is a simple human-facing management surface for browsing materials, creating groups, curating the current selection, launching analysis, and reviewing results, progress, errors, and downloads.</rule>
       <rule>Web calls the target public API for media_assets, selection_snapshots, analysis_runs, artifacts, and diagnostics, but normal UI copy must avoid load-bearing internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals outside explicit admin/debug views.</rule>
+      <rule>Web renders enriched provider title, thumbnail, duration, contextual export actions, semantic quality choices, export progress, cancellation, and download access in material rows over the same API used by Telegram.</rule>
     </Web>
     <MCP>
       <rule>MCP exposes target tool calls for create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</rule>
@@ -198,6 +249,8 @@
     <gate id="GATE-ASR-RUNTIME">ASR runtime tests and docs prove CopperASR is the only active transcription backend, provider metadata is service-scoped, legacy ASR paths are absent from active runtime surfaces, and failures resolve into stable diagnostics rather than generic unavailable errors.</gate>
     <gate id="GATE-ADAPTERS">Telegram, Web, and MCP tests prove management-first flows without user-facing batch toggles or immediate execution-only assumptions; Web tests also prove normal UI copy stays human and avoids internal technical vocabulary.</gate>
     <gate id="GATE-RUNTIME">Compose or equivalent runtime proof verifies end-to-end ingestion, selection, run, artifact, diagnostics, and retention behavior.</gate>
+    <gate id="GATE-MEDIA-EXPORT-RETENTION">Focused schema, storage, API, worker, Telegram, Web, and Compose tests prove channel-scoped SHA-256 reuse, staged publication crash recovery, atomic processing launch, fenced export/delivery transitions, object pins, physical expiry, bidirectional reconciliation, attempt workspace cleanup, stable diagnostics, and object-store byte evidence across restart.</gate>
+    <gate id="GATE-MEDIA-EXPORT-DELIVERY">Telegram export delivery uses authenticated private object access and anonymous file-backed chunking, preserves the stable materials surface with a separate export task message, survives jobs longer than analysis polling, and never buffers the maximum accepted export wholly in process memory.</gate>
     <gate id="GATE-COVERAGE-MATRIX">The target coverage matrix maps every table, API operation, user flow, failure mode, deleted-surface rule, non-goal, app boundary, and data reset rule to implementation proof, automated proof, QA proof, or an explicit remaining Bead.</gate>
     <gate id="GATE-COVERAGE-INVENTORY">The coverage inventory reports native per-surface metrics where tools support them, records pass/fail-only probes separately, and fails if active target paths reintroduce removed public vocabulary or target reset migrations recreate removed tables.</gate>
   </EvidenceGates>
@@ -268,7 +321,7 @@
     <bead id="media-b8s.1.9" status="completed">Active legacy ASR runtime code, dependencies, env switches, tests, and docs are removed or reduced to historical planning/research context.</bead>
     <bead id="media-b8s.1.10" status="completed">GRACE requirements, technology, development, verification, knowledge graph, and operational packet docs are refreshed for the final CopperASR contract.</bead>
     <bead id="media-b8s.2.1" status="completed">Deterministic CopperASR E2E fixtures now cover short voice, representative long voice, corrupt audio, cancellation, and artifact download cases without private chat history.</bead>
-    <bead id="media-b8s.2.2" status="completed">Live CopperASR Telegram proof now uploads the short voice fixture as a Telegram voice, verifies inbox and channel_surface materialization, creates selection_snapshot and analysis_run_step-backed transcription, downloads transcript bytes, records result_artifact_surface delivery, prevents duplicate delivery, and clears inbox membership after success.</bead>
+    <bead id="media-b8s.2.2" status="completed">Live CopperASR Telegram proof uploads the short voice fixture as a Telegram voice, verifies inbox and channel_surface materialization, creates selection_snapshot and analysis_run_step-backed transcription, downloads transcript bytes, records result_artifact_surface delivery, and prevents duplicate delivery. Its historical delivery-time inbox clear expectation is superseded by media-859r launch-time captured-membership detachment.</bead>
     <bead id="media-b8s.2.3" status="completed">Live CopperASR API/worker proof now uploads the short voice fixture, creates a transcription run through API-owned selection_snapshot state, verifies transcript and policy artifacts, downloads artifact bytes, checks run diagnostics filtering, proves cross-channel run/artifact denial, and preserves run history after source media deletion for Web and MCP shared API surfaces.</bead>
     <bead id="media-b8s.2.4" status="completed">CopperASR failure-path coverage now proves failed corrupt-audio runs and retries emit analysis_run diagnostics plus run policy artifacts instead of transcript artifacts or generic backend-unavailable loops, cancellation reaches a terminal canceled state without orphan artifacts, and runtime concurrency/timeout knobs are asserted.</bead>
     <bead id="media-b8s.2.5" status="completed">A dedicated no-legacy ASR gate now scans active runtime, env, compose, dependency manifest, and runtime-doc surfaces and is wired into the coverage inventory and target gate.</bead>
@@ -295,7 +348,7 @@
     <item>Reintroducing old public product route vocabulary as an alias layer.</item>
     <item>Preserving grouped pre-run submission state as the user-facing collection model.</item>
     <item>Letting Telegram, Web, or MCP own durable product state independently of the API.</item>
-    <item>Preserving or backfilling current disposable local database rows during the target rebuild.</item>
+    <item>Preserving or broadly backfilling current disposable local database rows during the target rebuild beyond the explicitly approved metadata-only YouTube enrichment enqueue.</item>
     <item>Keeping a dual-backend transcription mode or hidden legacy ASR fallback in active runtime paths.</item>
   </NonGoals>
 </RequirementsAnalysis>

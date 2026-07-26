@@ -45,6 +45,7 @@ describe("main bootstrap", () => {
     resolveWebUiRuntimeEnv.mockReturnValue({
       apiBaseUrl: "http://api.example.test",
       wsUrl: "ws://events.example.test/v1/ws",
+      channelAccountId: "44444444-4444-4444-8444-444444444444",
     });
     createWebUiApiClient.mockReturnValue({ client: "api" });
     createWebUiRoutes.mockReturnValue([{ path: "/" }]);
@@ -54,7 +55,7 @@ describe("main bootstrap", () => {
   it("bootstraps runtime env, api client, routes, and root render", async () => {
     await import("../src/main");
 
-    expect(resolveWebUiRuntimeEnv).toHaveBeenCalledWith(import.meta.env);
+    expect(resolveWebUiRuntimeEnv).toHaveBeenCalledWith(import.meta.env, window.__WEB_UI_RUNTIME__);
     expect(createWebUiApiClient).toHaveBeenCalledWith({
       baseUrl: "http://api.example.test",
       wsUrl: "ws://events.example.test/v1/ws",
@@ -63,6 +64,7 @@ describe("main bootstrap", () => {
       env: {
         apiBaseUrl: "http://api.example.test",
         wsUrl: "ws://events.example.test/v1/ws",
+        channelAccountId: "44444444-4444-4444-8444-444444444444",
       },
       apiClient: { client: "api" },
     });

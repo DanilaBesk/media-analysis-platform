@@ -3,13 +3,29 @@ package target
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"time"
 )
+
+var ErrProcessingRunIdempotencyConflict = errors.New("processing_run_idempotency_conflict")
+var ErrExportJobRetryIdempotencyConflict = errors.New("export_job_retry_idempotency_conflict")
 
 type Store struct {
 	db *sql.DB
 }
+
+const storedObjectSelect = `
+SELECT id, COALESCE(channel_account_id::text,''), bucket, object_key,
+       COALESCE(staging_key,''), generation, generation_published_at,
+       COALESCE(content_type,''), size_bytes, checksum_algorithm,
+       COALESCE(checksum,''), storage_status, retention_state, hold_state,
+       last_successful_use_at, created_at, expires_at, COALESCE(delete_owner,''),
+       COALESCE(delete_token,''), delete_lease_expires_at, delete_attempts, deleted_at
+FROM stored_objects`
 
 func NewStore(db *sql.DB) (*Store, error) {
 	if db == nil {
@@ -95,8 +111,31 @@ WHERE channel_account_id=$1 AND operation_type=$2 AND idempotency_key=$3`,
 func (s *Store) CreateMediaAssetWithInbox(ctx context.Context, params CreateMediaAssetWithInboxParams) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
 		if params.StoredObject.ID != "" {
+			if params.StoredObject.ChannelAccountID == "" {
+				params.StoredObject.ChannelAccountID = params.MediaAsset.ChannelAccountID
+			}
 			if err := insertStoredObject(ctx, tx, params.StoredObject); err != nil {
 				return err
+			}
+			if params.StoredObject.StorageStatus == "available" {
+				result, err := tx.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='available', staging_key=NULL,
+    generation_published_at=$3, deleted_at=NULL,
+    delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL
+WHERE id=$1 AND (
+    storage_status='available'
+    OR (storage_status='publishing' AND staging_key=$2)
+)`, params.StoredObject.ID, params.StoredObject.StagingKey, params.StoredObject.GenerationPublishedAt)
+				if err != nil {
+					return err
+				}
+				if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+					if err != nil {
+						return err
+					}
+					return sql.ErrNoRows
+				}
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `
@@ -140,8 +179,324 @@ VALUES (
 			params.CollectionItem.ID, params.CollectionItem.CollectionID, params.CollectionItem.MediaAssetID,
 			params.CollectionItem.Position, nullString(params.CollectionItem.AddedViaChannel),
 			params.CollectionItem.AddedAt, params.CollectionItem.RemovedAt)
+		if err != nil {
+			return err
+		}
+		if params.Enrichment.ID != "" {
+			_, err = insertMetadataEnrichment(ctx, tx, params.Enrichment)
+		}
 		return err
 	})
+}
+
+const metadataEnrichmentSelect = `
+SELECT id, media_asset_id, channel_account_id, provider, canonical_url, status, version,
+       idempotency_key, attempt_no, max_attempts, COALESCE(attempt_token,''),
+       COALESCE(lease_owner,''), lease_expires_at, heartbeat_at, next_attempt_at,
+       progress, COALESCE(error_code,''), COALESCE(error_message,''), created_at,
+       started_at, completed_at
+FROM metadata_enrichment_jobs`
+
+func insertMetadataEnrichment(ctx context.Context, tx *sql.Tx, enrichment MetadataEnrichmentRecord) (MetadataEnrichmentRecord, error) {
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO metadata_enrichment_jobs (
+    id, media_asset_id, channel_account_id, provider, canonical_url, status, version,
+    idempotency_key, attempt_no, max_attempts, progress, created_at
+)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+FROM media_assets
+WHERE id=$2 AND channel_account_id=$3 AND origin_type='url'
+  AND status <> 'deleted' AND deleted_at IS NULL
+ON CONFLICT DO NOTHING`, enrichment.ID, enrichment.MediaAssetID, enrichment.ChannelAccountID,
+		withDefault(enrichment.Provider, "youtube"), enrichment.CanonicalURL,
+		withDefault(enrichment.Status, "queued"), positiveVersion(enrichment.Version),
+		enrichment.IdempotencyKey, enrichment.AttemptNo, positiveInt(enrichment.MaxAttempts),
+		jsonOrDefault(enrichment.ProgressJSON, "{}"), enrichment.CreatedAt)
+	if err != nil {
+		return MetadataEnrichmentRecord{}, err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return MetadataEnrichmentRecord{}, err
+	} else if affected == 0 {
+		row := tx.QueryRowContext(ctx, metadataEnrichmentSelect+`
+WHERE channel_account_id=$1 AND (
+    idempotency_key=$2 OR (media_asset_id=$3 AND status IN ('queued','claimed','running','retry_wait'))
+)
+ORDER BY (idempotency_key=$2) DESC, created_at DESC
+LIMIT 1`, enrichment.ChannelAccountID, enrichment.IdempotencyKey, enrichment.MediaAssetID)
+		return scanMetadataEnrichment(row)
+	}
+	return enrichment, nil
+}
+
+func (s *Store) CreateMetadataEnrichment(ctx context.Context, enrichment MetadataEnrichmentRecord) (MetadataEnrichmentRecord, error) {
+	var record MetadataEnrichmentRecord
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		record, err = insertMetadataEnrichment(ctx, tx, enrichment)
+		return err
+	})
+	return record, err
+}
+
+func (s *Store) ListMetadataEnrichmentQueue(ctx context.Context, now time.Time, limit int) ([]MetadataEnrichmentRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, metadataEnrichmentSelect+`
+WHERE status IN ('queued','retry_wait') AND attempt_no < max_attempts
+  AND (next_attempt_at IS NULL OR next_attempt_at <= $1)
+ORDER BY COALESCE(next_attempt_at, created_at), created_at
+LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	records := make([]MetadataEnrichmentRecord, 0)
+	for rows.Next() {
+		record, err := scanMetadataEnrichment(rows)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func (s *Store) GetMetadataEnrichmentByID(ctx context.Context, enrichmentID string) (MetadataEnrichmentRecord, error) {
+	return scanMetadataEnrichment(s.db.QueryRowContext(ctx, metadataEnrichmentSelect+`
+WHERE id=$1`, enrichmentID))
+}
+
+func (s *Store) ClaimMetadataEnrichment(ctx context.Context, params ClaimMetadataEnrichmentParams) (MetadataEnrichmentRecord, bool, error) {
+	record, err := scanMetadataEnrichment(s.db.QueryRowContext(ctx, `
+UPDATE metadata_enrichment_jobs
+SET status='claimed', version=version+1, attempt_no=attempt_no+1,
+    attempt_token=$2, lease_owner=$3, lease_expires_at=$4, heartbeat_at=$5,
+    next_attempt_at=NULL, started_at=COALESCE(started_at,$5),
+    progress='{"stage":"claimed"}'::jsonb, error_code=NULL, error_message=NULL
+WHERE id=$1 AND status IN ('queued','retry_wait') AND attempt_no < max_attempts
+  AND (next_attempt_at IS NULL OR next_attempt_at <= $5)
+RETURNING id, media_asset_id, channel_account_id, provider, canonical_url, status, version,
+          idempotency_key, attempt_no, max_attempts, COALESCE(attempt_token,''),
+          COALESCE(lease_owner,''), lease_expires_at, heartbeat_at, next_attempt_at,
+          progress, COALESCE(error_code,''), COALESCE(error_message,''), created_at,
+          started_at, completed_at`, params.EnrichmentID, params.AttemptToken, params.LeaseOwner,
+		params.LeaseExpiresAt, params.ClaimedAt))
+	if errors.Is(err, sql.ErrNoRows) {
+		return MetadataEnrichmentRecord{}, false, nil
+	}
+	return record, err == nil, err
+}
+
+func (s *Store) RecordMetadataEnrichmentProgress(ctx context.Context, params RecordMetadataEnrichmentProgressParams) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE metadata_enrichment_jobs
+SET status='running', version=version+1, progress=$4,
+    lease_expires_at=$5 + (lease_expires_at - heartbeat_at), heartbeat_at=$5
+WHERE id=$1 AND lease_owner=$2 AND attempt_token=$3
+  AND status IN ('claimed','running') AND lease_expires_at > $5`, params.EnrichmentID,
+		params.LeaseOwner, params.AttemptToken, jsonOrDefault(params.ProgressJSON, "{}"), params.HeartbeatAt)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		if err != nil {
+			return err
+		}
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) FinalizeMetadataEnrichment(ctx context.Context, params FinalizeMetadataEnrichmentParams) (MetadataEnrichmentRecord, error) {
+	var record MetadataEnrichmentRecord
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		row := tx.QueryRowContext(ctx, `
+UPDATE metadata_enrichment_jobs
+SET status=$4, version=version+1, progress=CASE WHEN $4='succeeded'
+        THEN '{"stage":"succeeded","percent":100}'::jsonb ELSE progress END,
+    attempt_token=NULL, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
+    next_attempt_at=$5, error_code=NULLIF($6,''), error_message=NULLIF($7,''),
+    completed_at=CASE WHEN $4 IN ('succeeded','failed') THEN $8 ELSE NULL END
+WHERE id=$1 AND lease_owner=$2 AND attempt_token=$3
+  AND status IN ('claimed','running') AND lease_expires_at > $8
+RETURNING id, media_asset_id, channel_account_id, provider, canonical_url, status, version,
+          idempotency_key, attempt_no, max_attempts, COALESCE(attempt_token,''),
+          COALESCE(lease_owner,''), lease_expires_at, heartbeat_at, next_attempt_at,
+          progress, COALESCE(error_code,''), COALESCE(error_message,''), created_at,
+          started_at, completed_at`, params.EnrichmentID, params.LeaseOwner, params.AttemptToken,
+			params.Status, params.RetryAt, params.ErrorCode, params.ErrorMessage, params.CompletedAt)
+		var err error
+		record, err = scanMetadataEnrichment(row)
+		if err != nil {
+			return err
+		}
+		if params.Status == "succeeded" {
+			result, err := tx.ExecContext(ctx, `
+UPDATE media_assets
+SET display_name=$2,
+    metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('provider_metadata',$3::jsonb),
+    updated_at=$4
+WHERE id=$1 AND channel_account_id=$5 AND status <> 'deleted' AND deleted_at IS NULL`,
+				record.MediaAssetID, params.DisplayName,
+				jsonOrDefault(params.ProviderMetadataJSON, "{}"), params.CompletedAt, record.ChannelAccountID)
+			if err != nil {
+				return err
+			}
+			if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+		return nil
+	})
+	return record, err
+}
+
+func (s *Store) ReclaimMetadataEnrichments(ctx context.Context, now time.Time, limit int) (MetadataEnrichmentReclaimResult, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+WITH stale AS (
+    SELECT id FROM metadata_enrichment_jobs
+    WHERE status IN ('claimed','running') AND lease_expires_at <= $1
+    ORDER BY lease_expires_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT $2
+), updated AS (
+    UPDATE metadata_enrichment_jobs job
+    SET status=CASE WHEN job.attempt_no >= job.max_attempts THEN 'failed' ELSE 'retry_wait' END,
+        version=job.version+1, attempt_token=NULL, lease_owner=NULL,
+        lease_expires_at=NULL, heartbeat_at=NULL,
+        next_attempt_at=CASE WHEN job.attempt_no >= job.max_attempts THEN NULL
+            ELSE $1 + make_interval(secs => LEAST(300, 5 * (1 << LEAST(job.attempt_no - 1, 6)))) END,
+        error_code='metadata_enrichment_lease_expired',
+        error_message='worker lease expired',
+        completed_at=CASE WHEN job.attempt_no >= job.max_attempts THEN $1 ELSE NULL END
+    FROM stale WHERE job.id=stale.id
+    RETURNING job.status
+)
+SELECT status, count(*) FROM updated GROUP BY status`, now, limit)
+	if err != nil {
+		return MetadataEnrichmentReclaimResult{}, err
+	}
+	defer rows.Close()
+	var result MetadataEnrichmentReclaimResult
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return MetadataEnrichmentReclaimResult{}, err
+		}
+		result.Examined += count
+		if status == "failed" {
+			result.Failed += count
+		} else {
+			result.Requeued += count
+		}
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) PrepareStoredObjectPublication(ctx context.Context, candidate StoredObjectRecord) (PrepareStoredObjectPublicationResult, error) {
+	var result PrepareStoredObjectPublicationResult
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := ensureObjectLocationsWritable(ctx, tx, candidate.Bucket, candidate.ObjectKey, candidate.StagingKey); err != nil {
+			return err
+		}
+		inserted := StoredObjectRecord{}
+		row := tx.QueryRowContext(ctx, `
+INSERT INTO stored_objects (
+    id, channel_account_id, bucket, object_key, staging_key, generation,
+    generation_published_at, content_type, size_bytes, checksum_algorithm,
+    checksum, storage_status, retention_state, hold_state, created_at, expires_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'publishing',$12,$13,$14,$15)
+ON CONFLICT (channel_account_id, checksum, size_bytes)
+WHERE channel_account_id IS NOT NULL AND checksum IS NOT NULL AND checksum <> ''
+DO NOTHING
+RETURNING id, COALESCE(channel_account_id::text,''), bucket, object_key,
+          COALESCE(staging_key,''), generation, generation_published_at,
+          COALESCE(content_type,''), size_bytes, checksum_algorithm,
+          COALESCE(checksum,''), storage_status, retention_state, hold_state,
+          last_successful_use_at, created_at, expires_at,
+          COALESCE(delete_owner,''), COALESCE(delete_token,''),
+          delete_lease_expires_at, delete_attempts, deleted_at`,
+			candidate.ID, candidate.ChannelAccountID, candidate.Bucket, candidate.ObjectKey,
+			candidate.StagingKey, positiveInt(candidate.Generation), candidate.GenerationPublishedAt,
+			nullString(candidate.ContentType), candidate.SizeBytes,
+			withDefault(candidate.ChecksumAlgorithm, "sha256"), nullString(candidate.Checksum),
+			withDefault(candidate.RetentionState, "active"), withDefault(candidate.HoldState, "none"),
+			candidate.CreatedAt, candidate.ExpiresAt)
+		if err := scanStoredObject(row, &inserted); err == nil {
+			result = PrepareStoredObjectPublicationResult{StoredObject: inserted, Publisher: true}
+			return nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+
+		var existing StoredObjectRecord
+		if err := scanStoredObject(tx.QueryRowContext(ctx, storedObjectSelect+`
+WHERE channel_account_id=$1 AND checksum=$2 AND size_bytes=$3
+FOR UPDATE`, candidate.ChannelAccountID, candidate.Checksum, candidate.SizeBytes), &existing); err != nil {
+			return err
+		}
+		if existing.StorageStatus == "deleted" || existing.StorageStatus == "missing" {
+			nextObjectKey := fmt.Sprintf("sources/uploads/%s/%d/source", existing.ID, existing.Generation+1)
+			if err := ensureObjectLocationsWritable(ctx, tx, candidate.Bucket, nextObjectKey, candidate.StagingKey); err != nil {
+				return err
+			}
+			if err := scanStoredObject(tx.QueryRowContext(ctx, `
+UPDATE stored_objects
+SET bucket=$2, object_key=$3, staging_key=$4, generation=generation+1,
+    generation_published_at=$5, content_type=$6, size_bytes=$7,
+    checksum_algorithm=$8, checksum=$9, storage_status='publishing',
+    retention_state=$10, hold_state='none', expires_at=$11,
+    delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL, deleted_at=NULL
+WHERE id=$1 AND storage_status IN ('deleted','missing')
+RETURNING id, COALESCE(channel_account_id::text,''), bucket, object_key,
+          COALESCE(staging_key,''), generation, generation_published_at,
+          COALESCE(content_type,''), size_bytes, checksum_algorithm,
+          COALESCE(checksum,''), storage_status, retention_state, hold_state,
+          last_successful_use_at, created_at, expires_at,
+          COALESCE(delete_owner,''), COALESCE(delete_token,''),
+          delete_lease_expires_at, delete_attempts, deleted_at`,
+				existing.ID, candidate.Bucket, nextObjectKey, candidate.StagingKey,
+				candidate.GenerationPublishedAt, nullString(candidate.ContentType), candidate.SizeBytes,
+				withDefault(candidate.ChecksumAlgorithm, "sha256"), nullString(candidate.Checksum),
+				withDefault(candidate.RetentionState, "active"), candidate.ExpiresAt), &existing); err != nil {
+				return err
+			}
+			result = PrepareStoredObjectPublicationResult{StoredObject: existing, Publisher: true}
+			return nil
+		}
+		if existing.StorageStatus == "available" {
+			if err := scanStoredObject(tx.QueryRowContext(ctx, `
+UPDATE stored_objects
+SET expires_at=CASE
+        WHEN expires_at IS NULL THEN NULL
+        WHEN $2::timestamptz IS NULL THEN expires_at
+        ELSE GREATEST(expires_at,$2)
+    END
+WHERE id=$1 AND storage_status='available' AND deleted_at IS NULL
+RETURNING id, COALESCE(channel_account_id::text,''), bucket, object_key,
+          COALESCE(staging_key,''), generation, generation_published_at,
+          COALESCE(content_type,''), size_bytes, checksum_algorithm,
+          COALESCE(checksum,''), storage_status, retention_state, hold_state,
+          last_successful_use_at, created_at, expires_at,
+          COALESCE(delete_owner,''), COALESCE(delete_token,''),
+          delete_lease_expires_at, delete_attempts, deleted_at`, existing.ID, candidate.ExpiresAt), &existing); err != nil {
+				return err
+			}
+		}
+		result = PrepareStoredObjectPublicationResult{StoredObject: existing, Publisher: false}
+		return nil
+	})
+	return result, err
 }
 
 func (s *Store) ListSelectionSnapshotItems(ctx context.Context, selectionSnapshotID string) ([]SelectionSnapshotItemRecord, error) {
@@ -266,25 +621,167 @@ WHERE id=$1 AND channel_account_id=$2`, mediaAssetID, channelAccountID).Scan(
 
 func (s *Store) GetStoredObject(ctx context.Context, storedObjectID string) (StoredObjectRecord, error) {
 	var object StoredObjectRecord
-	err := s.db.QueryRowContext(ctx, `
-SELECT id, bucket, object_key, COALESCE(content_type,''), size_bytes,
-       COALESCE(checksum,''), storage_status, retention_state, created_at,
-       expires_at, deleted_at
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, COALESCE(channel_account_id::text,''), bucket, object_key,
+       COALESCE(staging_key,''), generation, generation_published_at,
+       COALESCE(content_type,''), size_bytes, checksum_algorithm,
+       COALESCE(checksum,''), storage_status, retention_state, hold_state,
+       last_successful_use_at, created_at, expires_at, COALESCE(delete_owner,''),
+       COALESCE(delete_token,''), delete_lease_expires_at, delete_attempts, deleted_at
 FROM stored_objects
-WHERE id=$1`, storedObjectID).Scan(
-		&object.ID,
-		&object.Bucket,
-		&object.ObjectKey,
-		&object.ContentType,
-		&object.SizeBytes,
-		&object.Checksum,
-		&object.StorageStatus,
-		&object.RetentionState,
-		&object.CreatedAt,
-		&object.ExpiresAt,
-		&object.DeletedAt,
-	)
+WHERE id=COALESCE(
+    (SELECT canonical_stored_object_id FROM stored_object_aliases WHERE alias_id=$1),
+    $1::uuid
+)`, storedObjectID)
+	err := scanStoredObject(row, &object)
 	return object, err
+}
+
+func (s *Store) FindStoredObjectByDigest(ctx context.Context, channelAccountID, checksum string) (StoredObjectRecord, error) {
+	var object StoredObjectRecord
+	row := s.db.QueryRowContext(ctx, `
+SELECT id, COALESCE(channel_account_id::text,''), bucket, object_key,
+       COALESCE(staging_key,''), generation, generation_published_at,
+       COALESCE(content_type,''), size_bytes, checksum_algorithm,
+       COALESCE(checksum,''), storage_status, retention_state, hold_state,
+       last_successful_use_at, created_at, expires_at, COALESCE(delete_owner,''),
+       COALESCE(delete_token,''), delete_lease_expires_at, delete_attempts, deleted_at
+FROM stored_objects
+WHERE channel_account_id=$1 AND checksum=$2
+ORDER BY generation DESC
+LIMIT 1`, channelAccountID, checksum)
+	err := scanStoredObject(row, &object)
+	return object, err
+}
+
+func (s *Store) FindStoredObjectByLocation(ctx context.Context, bucket, objectKey string) (StoredObjectRecord, error) {
+	var object StoredObjectRecord
+	err := scanStoredObject(s.db.QueryRowContext(ctx, storedObjectSelect+`
+WHERE bucket=$1 AND (object_key=$2 OR staging_key=$2)
+ORDER BY CASE WHEN object_key=$2 THEN 0 ELSE 1 END
+LIMIT 1`, bucket, objectKey), &object)
+	return object, err
+}
+
+func (s *Store) ListStoredObjectsForReconcile(ctx context.Context, afterID string, limit int) ([]StoredObjectRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, storedObjectSelect+`
+WHERE storage_status IN ('publishing','available','delete_scheduled')
+  AND id > COALESCE(NULLIF($1,'')::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+ORDER BY id ASC
+LIMIT $2`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	objects := make([]StoredObjectRecord, 0, limit)
+	for rows.Next() {
+		var object StoredObjectRecord
+		if err := scanStoredObject(rows, &object); err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, rows.Err()
+}
+
+func (s *Store) CompleteStoredObjectPublication(ctx context.Context, storedObjectID string, generation int, stagingKey string, publishedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='available', staging_key=NULL, generation_published_at=$4,
+    deleted_at=NULL, delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL
+WHERE id=$1 AND generation=$2 AND storage_status='publishing' AND staging_key=$3`,
+		storedObjectID, generation, stagingKey, publishedAt)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) MarkStoredObjectMissing(ctx context.Context, storedObjectID string, generation int, markedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='missing', retention_state='expired', staging_key=NULL,
+    delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL, deleted_at=$3
+WHERE id=$1 AND generation=$2 AND storage_status IN ('publishing','available')`,
+		storedObjectID, generation, markedAt)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) ClaimObjectDeleteFence(ctx context.Context, bucket, objectKey, token string, now, leaseExpiresAt time.Time) (bool, error) {
+	claimed := false
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if err := lockObjectLocation(ctx, tx, bucket, objectKey); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM object_delete_fences WHERE bucket=$1 AND object_key=$2 AND lease_expires_at <= $3`, bucket, objectKey, now); err != nil {
+			return err
+		}
+		var referenced bool
+		if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM stored_objects
+    WHERE bucket=$1 AND (object_key=$2 OR staging_key=$2)
+      AND storage_status NOT IN ('missing','deleted')
+)`, bucket, objectKey).Scan(&referenced); err != nil {
+			return err
+		}
+		if referenced {
+			return nil
+		}
+		result, err := tx.ExecContext(ctx, `
+INSERT INTO object_delete_fences (bucket, object_key, token, lease_expires_at, created_at)
+VALUES ($1,$2,$3,$4,$5)
+ON CONFLICT (bucket, object_key) DO NOTHING`, bucket, objectKey, token, leaseExpiresAt, now)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		claimed = err == nil && rows == 1
+		return err
+	})
+	return claimed, err
+}
+
+func (s *Store) ReleaseObjectDeleteFence(ctx context.Context, bucket, objectKey, token string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM object_delete_fences WHERE bucket=$1 AND object_key=$2 AND token=$3`, bucket, objectKey, token)
+	return err
+}
+
+func (s *Store) GetReconcileCursor(ctx context.Context, name string) (string, error) {
+	var cursor string
+	err := s.db.QueryRowContext(ctx, `SELECT cursor FROM storage_reconcile_cursors WHERE name=$1`, name).Scan(&cursor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return cursor, err
+}
+
+func (s *Store) SetReconcileCursor(ctx context.Context, name, cursor string, updatedAt time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO storage_reconcile_cursors (name, cursor, updated_at)
+VALUES ($1,$2,$3)
+ON CONFLICT (name) DO UPDATE SET cursor=EXCLUDED.cursor, updated_at=EXCLUDED.updated_at`, name, cursor, updatedAt)
+	return err
 }
 
 func (s *Store) DeleteMediaAsset(ctx context.Context, channelAccountID, mediaAssetID string, deletedAt time.Time) (MediaAssetRecord, error) {
@@ -708,41 +1205,77 @@ ORDER BY ci.position ASC`, collectionID)
 
 func (s *Store) CreateSelectionSnapshot(ctx context.Context, snapshot SelectionSnapshotRecord, items []SelectionSnapshotItemRecord) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
+		return insertSelectionSnapshotTx(ctx, tx, snapshot, items)
+	})
+}
+
+func insertSelectionSnapshotTx(ctx context.Context, tx *sql.Tx, snapshot SelectionSnapshotRecord, items []SelectionSnapshotItemRecord) error {
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO selection_snapshots (
     id, channel_account_id, source_collection_id, status, option_snapshot,
     diagnostics, created_via_channel_account_id, created_at, sealed_at
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-			snapshot.ID, snapshot.ChannelAccountID, nullString(snapshot.SourceCollectionID),
-			withDefault(snapshot.Status, "sealed"), jsonOrDefault(snapshot.OptionSnapshotJSON, "{}"),
-			jsonOrDefault(snapshot.DiagnosticsJSON, "[]"), nullString(snapshot.CreatedViaChannel),
-			snapshot.CreatedAt, snapshot.SealedAt); err != nil {
-			return err
-		}
-		for _, item := range items {
-			if _, err := tx.ExecContext(ctx, `
+		snapshot.ID, snapshot.ChannelAccountID, nullString(snapshot.SourceCollectionID),
+		withDefault(snapshot.Status, "sealed"), jsonOrDefault(snapshot.OptionSnapshotJSON, "{}"),
+		jsonOrDefault(snapshot.DiagnosticsJSON, "[]"), nullString(snapshot.CreatedViaChannel),
+		snapshot.CreatedAt, snapshot.SealedAt); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO selection_snapshot_items (
     id, selection_snapshot_id, position, media_asset_id, kind, display_name,
     origin_snapshot, storage_snapshot, metadata_snapshot, status_at_selection,
     diagnostics
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-				item.ID, item.SelectionSnapshotID, item.Position, item.MediaAssetID, item.Kind,
-				item.DisplayName, jsonOrDefault(item.OriginSnapshotJSON, "{}"),
-				jsonOrDefault(item.StorageSnapshotJSON, "{}"), jsonOrDefault(item.MetadataJSON, "{}"),
-				item.StatusAtSelection, jsonOrDefault(item.DiagnosticsJSON, "[]")); err != nil {
-				return err
-			}
+			item.ID, item.SelectionSnapshotID, item.Position, item.MediaAssetID, item.Kind,
+			item.DisplayName, jsonOrDefault(item.OriginSnapshotJSON, "{}"),
+			jsonOrDefault(item.StorageSnapshotJSON, "{}"), jsonOrDefault(item.MetadataJSON, "{}"),
+			item.StatusAtSelection, jsonOrDefault(item.DiagnosticsJSON, "[]")); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func (s *Store) CreateAnalysisRunGraph(ctx context.Context, graph AnalysisRunGraph) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
-		run := graph.Run
-		if _, err := tx.ExecContext(ctx, `
+		for _, pin := range graph.SourcePins {
+			if err := lockAvailableStoredObject(ctx, tx, pin.StoredObjectID); err != nil {
+				return err
+			}
+			result, err := tx.ExecContext(ctx, `
+INSERT INTO stored_object_pins (
+    id, stored_object_id, owner_type, owner_id, purpose, expires_at, created_at, released_at
+)
+SELECT $1,$2,'analysis_run',$3,'source',NULL,$4,NULL
+FROM stored_objects so
+WHERE so.id=$2 AND so.storage_status='available' AND so.deleted_at IS NULL
+  AND EXISTS (
+      SELECT 1
+      FROM selection_snapshot_items item
+      WHERE item.selection_snapshot_id=$5
+        AND item.storage_snapshot->>'stored_object_id'=so.id::text
+  )`, pin.ID, pin.StoredObjectID, graph.Run.ID, pin.CreatedAt, graph.Run.SelectionSnapshot)
+			if err != nil {
+				return err
+			}
+			if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+		return insertAnalysisRunGraphTx(ctx, tx, graph)
+	})
+}
+
+func insertAnalysisRunGraphTx(ctx context.Context, tx *sql.Tx, graph AnalysisRunGraph) error {
+	run := graph.Run
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO analysis_runs (
     id, channel_account_id, selection_snapshot_id, run_type, status, version,
     idempotency_key, params, delivery, evidence_gate_state,
@@ -750,57 +1283,288 @@ INSERT INTO analysis_runs (
     cancel_requested_at, canceled_at, expires_at
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-			run.ID, run.ChannelAccountID, run.SelectionSnapshot, run.RunType,
-			withDefault(run.Status, "queued"), positiveVersion(run.Version), nullString(run.IdempotencyKey),
-			jsonOrDefault(run.ParamsJSON, "{}"), jsonOrDefault(run.DeliveryJSON, `{"strategy":"polling"}`),
-			withDefault(run.EvidenceGateState, "not_required"), nullString(run.CreatedViaChannel),
-			run.CreatedAt, run.StartedAt, run.CompletedAt, run.CancelRequestedAt, run.CanceledAt,
-			run.ExpiresAt); err != nil {
-			return err
-		}
-		for _, step := range graph.Steps {
-			if _, err := tx.ExecContext(ctx, `
+		run.ID, run.ChannelAccountID, run.SelectionSnapshot, run.RunType,
+		withDefault(run.Status, "queued"), positiveVersion(run.Version), nullString(run.IdempotencyKey),
+		jsonOrDefault(run.ParamsJSON, "{}"), jsonOrDefault(run.DeliveryJSON, `{"strategy":"polling"}`),
+		withDefault(run.EvidenceGateState, "not_required"), nullString(run.CreatedViaChannel),
+		run.CreatedAt, run.StartedAt, run.CompletedAt, run.CancelRequestedAt, run.CanceledAt,
+		run.ExpiresAt); err != nil {
+		return err
+	}
+	for _, step := range graph.Steps {
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO analysis_run_steps (
     id, analysis_run_id, step_kind, worker_kind, status, attempt_no,
     lease_owner, claimed_at, heartbeat_at, finalized_at, metadata, created_at
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-				step.ID, step.AnalysisRunID, step.StepKind, step.WorkerKind,
-				withDefault(step.Status, "pending"), positiveInt(step.AttemptNo),
-				nullString(step.LeaseOwner), step.ClaimedAt, step.HeartbeatAt, step.FinalizedAt,
-				jsonOrDefault(step.MetadataJSON, "{}"), step.CreatedAt); err != nil {
-				return err
-			}
+			step.ID, step.AnalysisRunID, step.StepKind, step.WorkerKind,
+			withDefault(step.Status, "pending"), positiveInt(step.AttemptNo),
+			nullString(step.LeaseOwner), step.ClaimedAt, step.HeartbeatAt, step.FinalizedAt,
+			jsonOrDefault(step.MetadataJSON, "{}"), step.CreatedAt); err != nil {
+			return err
 		}
-		for _, input := range graph.StepInputs {
-			if _, err := tx.ExecContext(ctx, `
+	}
+	for _, input := range graph.StepInputs {
+		if _, err := tx.ExecContext(ctx, `
 INSERT INTO analysis_run_step_inputs (
     id, analysis_run_step_id, input_kind, selection_snapshot_item_id, artifact_id,
     position, required, metadata, created_at
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-				input.ID, input.AnalysisRunStepID, input.InputKind,
-				nullString(input.SelectionSnapshotItemID), nullString(input.ArtifactID),
-				input.Position, input.Required, jsonOrDefault(input.MetadataJSON, "{}"),
-				input.CreatedAt); err != nil {
-				return err
-			}
+			input.ID, input.AnalysisRunStepID, input.InputKind,
+			nullString(input.SelectionSnapshotItemID), nullString(input.ArtifactID),
+			input.Position, input.Required, jsonOrDefault(input.MetadataJSON, "{}"),
+			input.CreatedAt); err != nil {
+			return err
 		}
-		event := graph.Event
-		_, err := tx.ExecContext(ctx, `
+	}
+	event := graph.Event
+	_, err := tx.ExecContext(ctx, `
 INSERT INTO analysis_run_events (
     id, analysis_run_id, event_type, version, status, payload, created_at
 )
 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-			event.ID, event.AnalysisRunID, event.EventType, event.Version,
-			nullString(event.Status), jsonOrDefault(event.PayloadJSON, "{}"), event.CreatedAt)
-		return err
+		event.ID, event.AnalysisRunID, event.EventType, event.Version,
+		nullString(event.Status), jsonOrDefault(event.PayloadJSON, "{}"), event.CreatedAt)
+	return err
+}
+
+func (s *Store) CreateProcessingRun(ctx context.Context, params CreateProcessingRunParams) (CreateProcessingRunResult, error) {
+	var createdResult CreateProcessingRunResult
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if params.Graph.Run.IdempotencyKey != "" {
+			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, params.ChannelAccountID+":processing_run:"+params.Graph.Run.IdempotencyKey); err != nil {
+				return err
+			}
+			replay, found, err := findProcessingRunReplay(ctx, tx, params)
+			if err != nil {
+				return err
+			}
+			if found {
+				createdResult = replay
+				return nil
+			}
+		}
+		var version int64
+		if err := tx.QueryRowContext(ctx, `
+SELECT version
+FROM collections
+WHERE id=$1 AND channel_account_id=$2 AND status='active' AND deleted_at IS NULL
+FOR UPDATE`, params.CollectionID, params.ChannelAccountID).Scan(&version); err != nil {
+			return err
+		}
+		if version != params.ExpectedVersion || len(params.CapturedAssetIDs) == 0 {
+			return sql.ErrNoRows
+		}
+		seen := make(map[string]struct{}, len(params.CapturedAssetIDs))
+		for _, mediaAssetID := range params.CapturedAssetIDs {
+			if _, duplicate := seen[mediaAssetID]; duplicate {
+				return sql.ErrNoRows
+			}
+			seen[mediaAssetID] = struct{}{}
+			var present bool
+			if err := tx.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM collection_items ci
+    JOIN media_assets ma ON ma.id=ci.media_asset_id
+    WHERE ci.collection_id=$1 AND ci.media_asset_id=$2 AND ci.removed_at IS NULL
+      AND ma.channel_account_id=$3 AND ma.status='available' AND ma.deleted_at IS NULL
+)`, params.CollectionID, mediaAssetID, params.ChannelAccountID).Scan(&present); err != nil {
+				return err
+			}
+			if !present {
+				return sql.ErrNoRows
+			}
+		}
+		for _, pin := range params.SourcePins {
+			if err := lockAvailableStoredObject(ctx, tx, pin.StoredObjectID); err != nil {
+				return err
+			}
+			result, err := tx.ExecContext(ctx, `
+INSERT INTO stored_object_pins (
+    id, stored_object_id, owner_type, owner_id, purpose, expires_at, created_at, released_at
+)
+SELECT $1,$2,'analysis_run',$3,'source',NULL,$4,NULL
+FROM stored_objects so
+WHERE so.id=$2 AND so.storage_status='available' AND so.deleted_at IS NULL
+  AND EXISTS (
+      SELECT 1 FROM media_assets ma
+      WHERE ma.stored_object_id=so.id AND ma.channel_account_id=$5
+        AND ma.id::text=ANY($6)
+  )`, pin.ID, pin.StoredObjectID, params.Graph.Run.ID, pin.CreatedAt,
+				params.ChannelAccountID, params.CapturedAssetIDs)
+			if err != nil {
+				return err
+			}
+			if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+		if err := insertSelectionSnapshotTx(ctx, tx, params.Snapshot, params.SnapshotItems); err != nil {
+			return err
+		}
+		if err := insertAnalysisRunGraphTx(ctx, tx, params.Graph); err != nil {
+			return err
+		}
+		for _, mediaAssetID := range params.CapturedAssetIDs {
+			result, err := tx.ExecContext(ctx, `
+UPDATE collection_items
+SET removed_at=$3
+WHERE collection_id=$1 AND media_asset_id=$2 AND removed_at IS NULL`, params.CollectionID, mediaAssetID, params.DetachedAt)
+			if err != nil {
+				return err
+			}
+			if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+		collectionUpdate, err := tx.ExecContext(ctx, `
+UPDATE collections
+SET version=version+1, updated_at=$4
+WHERE id=$1 AND channel_account_id=$2 AND version=$3`, params.CollectionID, params.ChannelAccountID, params.ExpectedVersion, params.DetachedAt)
+		if err != nil {
+			return err
+		}
+		affected, err := collectionUpdate.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return sql.ErrNoRows
+		}
+		createdResult = CreateProcessingRunResult{
+			Snapshot: params.Snapshot, SnapshotItems: append([]SelectionSnapshotItemRecord(nil), params.SnapshotItems...),
+			Run: params.Graph.Run, DetachedAssetIDs: append([]string(nil), params.CapturedAssetIDs...),
+			CollectionVersion: params.ExpectedVersion + 1,
+		}
+		return nil
 	})
+	return createdResult, err
+}
+
+func findProcessingRunReplay(ctx context.Context, tx *sql.Tx, params CreateProcessingRunParams) (CreateProcessingRunResult, bool, error) {
+	var run AnalysisRunRecord
+	err := scanAnalysisRun(tx.QueryRowContext(ctx, `
+SELECT id, COALESCE(channel_account_id::text,''), selection_snapshot_id, run_type,
+       status, version, COALESCE(idempotency_key,''), params, delivery,
+       evidence_gate_state, COALESCE(created_via_channel_account_id::text,''),
+       created_at, started_at, completed_at, cancel_requested_at, canceled_at, expires_at
+FROM analysis_runs
+WHERE channel_account_id=$1 AND idempotency_key=$2`, params.ChannelAccountID, params.Graph.Run.IdempotencyKey), &run)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CreateProcessingRunResult{}, false, nil
+	}
+	if err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	var snapshot SelectionSnapshotRecord
+	if err := tx.QueryRowContext(ctx, `
+SELECT id, COALESCE(channel_account_id::text,''), COALESCE(source_collection_id::text,''),
+       status, option_snapshot, diagnostics, COALESCE(created_via_channel_account_id::text,''),
+       created_at, sealed_at
+FROM selection_snapshots
+WHERE id=$1 AND channel_account_id=$2`, run.SelectionSnapshot, params.ChannelAccountID).Scan(
+		&snapshot.ID, &snapshot.ChannelAccountID, &snapshot.SourceCollectionID, &snapshot.Status,
+		&snapshot.OptionSnapshotJSON, &snapshot.DiagnosticsJSON, &snapshot.CreatedViaChannel,
+		&snapshot.CreatedAt, &snapshot.SealedAt,
+	); err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, selection_snapshot_id, position, COALESCE(media_asset_id::text,''), kind,
+       display_name, origin_snapshot, storage_snapshot, metadata_snapshot,
+       status_at_selection, diagnostics
+FROM selection_snapshot_items
+WHERE selection_snapshot_id=$1
+ORDER BY position ASC`, snapshot.ID)
+	if err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	defer rows.Close()
+	items := make([]SelectionSnapshotItemRecord, 0)
+	for rows.Next() {
+		var item SelectionSnapshotItemRecord
+		if err := rows.Scan(
+			&item.ID, &item.SelectionSnapshotID, &item.Position, &item.MediaAssetID,
+			&item.Kind, &item.DisplayName, &item.OriginSnapshotJSON, &item.StorageSnapshotJSON,
+			&item.MetadataJSON, &item.StatusAtSelection, &item.DiagnosticsJSON,
+		); err != nil {
+			return CreateProcessingRunResult{}, false, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	if !processingRunRequestMatches(params, run, snapshot, items) {
+		return CreateProcessingRunResult{}, false, ErrProcessingRunIdempotencyConflict
+	}
+	var collectionVersion int64
+	if err := tx.QueryRowContext(ctx, `SELECT version FROM collections WHERE id=$1 AND channel_account_id=$2`, params.CollectionID, params.ChannelAccountID).Scan(&collectionVersion); err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	detached := make([]string, 0, len(items))
+	for _, item := range items {
+		detached = append(detached, item.MediaAssetID)
+	}
+	return CreateProcessingRunResult{
+		Snapshot: snapshot, SnapshotItems: items, Run: run, DetachedAssetIDs: detached,
+		CollectionVersion: collectionVersion, Replayed: true,
+	}, true, nil
+}
+
+func processingRunRequestMatches(params CreateProcessingRunParams, run AnalysisRunRecord, snapshot SelectionSnapshotRecord, items []SelectionSnapshotItemRecord) bool {
+	if run.RunType != params.Graph.Run.RunType || run.CreatedViaChannel != params.Graph.Run.CreatedViaChannel ||
+		snapshot.SourceCollectionID != params.CollectionID || snapshot.CreatedViaChannel != params.Snapshot.CreatedViaChannel ||
+		!jsonValuesEqual(run.ParamsJSON, params.Graph.Run.ParamsJSON) ||
+		!jsonValuesEqual(run.DeliveryJSON, params.Graph.Run.DeliveryJSON) ||
+		!jsonValuesEqual(snapshot.OptionSnapshotJSON, params.Snapshot.OptionSnapshotJSON) ||
+		len(items) != len(params.SnapshotItems) {
+		return false
+	}
+	expected := append([]SelectionSnapshotItemRecord(nil), params.SnapshotItems...)
+	sort.Slice(expected, func(i, j int) bool { return expected[i].Position < expected[j].Position })
+	for index := range items {
+		if items[index].Position != expected[index].Position || items[index].MediaAssetID != expected[index].MediaAssetID {
+			return false
+		}
+	}
+	return true
+}
+
+func jsonValuesEqual(left, right []byte) bool {
+	var leftValue any
+	var rightValue any
+	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+		return false
+	}
+	return reflect.DeepEqual(leftValue, rightValue)
 }
 
 func (s *Store) ClaimAnalysisRunStep(ctx context.Context, analysisRunID, workerKind, stepKind, leaseOwner string, claimedAt time.Time) (AnalysisRunStepRecord, []AnalysisRunStepInputRecord, bool, error) {
 	var step AnalysisRunStepRecord
-	err := s.db.QueryRowContext(ctx, `
+	claimed := false
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var runStatus string
+		if err := tx.QueryRowContext(ctx, `
+SELECT status
+FROM analysis_runs
+WHERE id=$1
+FOR UPDATE`, analysisRunID).Scan(&runStatus); err != nil {
+			return err
+		}
+		if runStatus != "queued" && runStatus != "running" {
+			return nil
+		}
+		err := tx.QueryRowContext(ctx, `
 UPDATE analysis_run_steps
 SET status='claimed',
     lease_owner=$4,
@@ -813,25 +1577,34 @@ WHERE analysis_run_id=$1
 RETURNING id, analysis_run_id, step_kind, worker_kind, status, attempt_no,
           COALESCE(lease_owner,''), claimed_at, heartbeat_at, finalized_at,
           metadata, created_at`,
-		analysisRunID, workerKind, stepKind, leaseOwner, claimedAt).Scan(
-		&step.ID,
-		&step.AnalysisRunID,
-		&step.StepKind,
-		&step.WorkerKind,
-		&step.Status,
-		&step.AttemptNo,
-		&step.LeaseOwner,
-		&step.ClaimedAt,
-		&step.HeartbeatAt,
-		&step.FinalizedAt,
-		&step.MetadataJSON,
-		&step.CreatedAt,
-	)
-	if err == sql.ErrNoRows {
-		return AnalysisRunStepRecord{}, nil, false, nil
-	}
+			analysisRunID, workerKind, stepKind, leaseOwner, claimedAt).Scan(
+			&step.ID,
+			&step.AnalysisRunID,
+			&step.StepKind,
+			&step.WorkerKind,
+			&step.Status,
+			&step.AttemptNo,
+			&step.LeaseOwner,
+			&step.ClaimedAt,
+			&step.HeartbeatAt,
+			&step.FinalizedAt,
+			&step.MetadataJSON,
+			&step.CreatedAt,
+		)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		claimed = true
+		return nil
+	})
 	if err != nil {
 		return AnalysisRunStepRecord{}, nil, false, err
+	}
+	if !claimed {
+		return AnalysisRunStepRecord{}, nil, false, nil
 	}
 	inputs, err := s.listAnalysisRunStepInputs(ctx, step.ID)
 	if err != nil {
@@ -1271,20 +2044,41 @@ ORDER BY position ASC`, stepID)
 func (s *Store) RequestAnalysisRunCancel(ctx context.Context, channelAccountID, analysisRunID string, event AnalysisRunEventRecord, requestedAt time.Time) (AnalysisRunRecord, error) {
 	var run AnalysisRunRecord
 	if err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var currentStatus string
+		var hasActiveStep bool
+		if err := tx.QueryRowContext(ctx, `
+SELECT r.status,
+       EXISTS (
+           SELECT 1
+           FROM analysis_run_steps step
+           WHERE step.analysis_run_id=r.id
+             AND step.status IN ('claimed','running')
+       )
+FROM analysis_runs r
+WHERE r.id=$1 AND r.channel_account_id=$2
+FOR UPDATE`, analysisRunID, channelAccountID).Scan(&currentStatus, &hasActiveStep); err != nil {
+			return err
+		}
+		terminal := currentStatus == "succeeded" || currentStatus == "failed" || currentStatus == "partially_succeeded" || currentStatus == "canceled" || currentStatus == "expired"
+		nextStatus := "cancel_requested"
+		if terminal {
+			nextStatus = currentStatus
+		} else if !hasActiveStep {
+			nextStatus = "canceled"
+		}
 		err := tx.QueryRowContext(ctx, `
 UPDATE analysis_runs
-SET status=CASE
-        WHEN status IN ('succeeded', 'failed', 'partially_succeeded', 'canceled', 'expired') THEN status
-        ELSE 'cancel_requested'
-    END,
-    cancel_requested_at=COALESCE(cancel_requested_at, $3),
+SET status=$3,
+    cancel_requested_at=COALESCE(cancel_requested_at, $4),
+    canceled_at=CASE WHEN $3='canceled' THEN COALESCE(canceled_at,$4) ELSE canceled_at END,
+    completed_at=CASE WHEN $3='canceled' THEN COALESCE(completed_at,$4) ELSE completed_at END,
     version=version+1
 WHERE id=$1 AND channel_account_id=$2
 RETURNING id, COALESCE(channel_account_id::text,''), selection_snapshot_id, run_type,
           status, version, COALESCE(idempotency_key,''), params, delivery,
           evidence_gate_state, COALESCE(created_via_channel_account_id::text,''),
           created_at, started_at, completed_at, cancel_requested_at, canceled_at, expires_at`,
-			analysisRunID, channelAccountID, requestedAt).Scan(
+			analysisRunID, channelAccountID, nextStatus, requestedAt).Scan(
 			&run.ID,
 			&run.ChannelAccountID,
 			&run.SelectionSnapshot,
@@ -1306,7 +2100,27 @@ RETURNING id, COALESCE(channel_account_id::text,''), selection_snapshot_id, run_
 		if err != nil {
 			return err
 		}
+		if !terminal {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE analysis_run_steps
+SET status='canceled', finalized_at=COALESCE(finalized_at,$2), heartbeat_at=COALESCE(heartbeat_at,$2)
+WHERE analysis_run_id=$1 AND status IN ('pending','queued')`, analysisRunID, requestedAt); err != nil {
+				return err
+			}
+		}
+		if nextStatus == "canceled" {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE stored_object_pins
+SET released_at=COALESCE(released_at,$2)
+WHERE owner_type='analysis_run' AND owner_id=$1 AND purpose='source'`, analysisRunID, requestedAt); err != nil {
+				return err
+			}
+		}
 		event.Version = run.Version
+		event.Status = run.Status
+		if nextStatus == "canceled" {
+			event.EventType = "analysis_run.canceled"
+		}
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO analysis_run_events (
     id, analysis_run_id, event_type, version, status, payload, created_at
@@ -1504,6 +2318,25 @@ RETURNING id, COALESCE(channel_account_id::text,''), selection_snapshot_id, run_
 		if err != nil {
 			return err
 		}
+		if runStatus == "succeeded" && params.RetentionDays > 0 {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE stored_objects so
+SET last_successful_use_at=GREATEST(COALESCE(so.last_successful_use_at,$2),$2),
+    expires_at=GREATEST(so.generation_published_at,$2) + make_interval(days => $3)
+FROM stored_object_pins pin
+WHERE pin.owner_type='analysis_run' AND pin.owner_id=$1
+  AND pin.purpose='source' AND pin.stored_object_id=so.id`,
+				params.AnalysisRunID, params.FinalizedAt, params.RetentionDays); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE stored_object_pins
+SET released_at=COALESCE(released_at,$2)
+WHERE owner_type='analysis_run' AND owner_id=$1 AND purpose='source'`,
+			params.AnalysisRunID, params.FinalizedAt); err != nil {
+			return err
+		}
 		event := params.Event
 		event.Version = run.Version
 		event.Status = run.Status
@@ -1523,7 +2356,16 @@ VALUES ($1,$2,$3,$4,$5,$6,$7)`,
 
 func (s *Store) RecordArtifacts(ctx context.Context, storedObjects []StoredObjectRecord, artifacts []ArtifactRecord, subjects []ArtifactSubjectRecord) error {
 	return s.withTx(ctx, func(tx *sql.Tx) error {
+		objectChannels := make(map[string]string, len(artifacts))
+		for _, artifact := range artifacts {
+			if artifact.StoredObjectID != "" && artifact.ChannelAccountID != "" {
+				objectChannels[artifact.StoredObjectID] = artifact.ChannelAccountID
+			}
+		}
 		for _, object := range storedObjects {
+			if object.ChannelAccountID == "" {
+				object.ChannelAccountID = objectChannels[object.ID]
+			}
 			if err := insertStoredObject(ctx, tx, object); err != nil {
 				return err
 			}
@@ -1858,6 +2700,858 @@ LIMIT $2`, surfaceID, limit)
 	return events, nil
 }
 
+func (s *Store) CreateExportJob(ctx context.Context, params CreateExportJobParams) (ExportJobRecord, error) {
+	job := params.Job
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if params.SourcePin.ID != "" {
+			if err := lockAvailableStoredObject(ctx, tx, params.SourcePin.StoredObjectID); err != nil {
+				return err
+			}
+		}
+		result, err := tx.ExecContext(ctx, `
+INSERT INTO export_jobs (
+    id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+    idempotency_key, retry_generation, attempt_no, attempt_token, lease_owner,
+    lease_expires_at, heartbeat_at, max_attempts, progress, output_stored_object_id,
+    diagnostic_id, created_at, started_at, completed_at, cancel_requested_at,
+    canceled_at, expires_at
+)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
+FROM media_assets
+WHERE id=$3 AND channel_account_id=$2 AND status='available' AND deleted_at IS NULL
+ON CONFLICT (channel_account_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+			job.ID, job.ChannelAccountID, job.MediaAssetID, job.Operation,
+			withDefault(job.DeliveryChannel, "telegram"), jsonOrDefault(job.VariantJSON, "{}"), withDefault(job.Status, "queued"),
+			positiveVersion(job.Version), nullString(job.IdempotencyKey), job.RetryGeneration,
+			job.AttemptNo, nullString(job.AttemptToken), nullString(job.LeaseOwner),
+			job.LeaseExpiresAt, job.HeartbeatAt, positiveInt(job.MaxAttempts),
+			jsonOrDefault(job.ProgressJSON, "{}"), nullString(job.OutputStoredObjectID),
+			nullString(job.DiagnosticID), job.CreatedAt, job.StartedAt, job.CompletedAt,
+			job.CancelRequestedAt, job.CanceledAt, job.ExpiresAt)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			if job.IdempotencyKey == "" {
+				return sql.ErrNoRows
+			}
+			row := tx.QueryRowContext(ctx, exportJobSelect+`
+WHERE channel_account_id=$1 AND idempotency_key=$2`, job.ChannelAccountID, job.IdempotencyKey)
+			return scanExportJob(row, &job)
+		}
+		if params.SourcePin.ID != "" {
+			pinResult, err := tx.ExecContext(ctx, `
+INSERT INTO stored_object_pins (
+    id, stored_object_id, owner_type, owner_id, purpose, expires_at, created_at, released_at
+)
+SELECT $1,$2,$3,$4,$5,$6,$7,$8
+FROM stored_objects
+WHERE id=$2 AND storage_status='available' AND deleted_at IS NULL`,
+				params.SourcePin.ID, params.SourcePin.StoredObjectID, params.SourcePin.OwnerType,
+				params.SourcePin.OwnerID, params.SourcePin.Purpose, params.SourcePin.ExpiresAt,
+				params.SourcePin.CreatedAt, params.SourcePin.ReleasedAt)
+			if err != nil {
+				return err
+			}
+			if rows, err := pinResult.RowsAffected(); err != nil || rows != 1 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+		return nil
+	})
+	return job, err
+}
+
+const exportJobSelect = `
+SELECT id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+       COALESCE(idempotency_key,''), retry_generation, attempt_no,
+       COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
+       heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
+       COALESCE(diagnostic_id::text,''), created_at, started_at, completed_at,
+       cancel_requested_at, canceled_at, expires_at
+FROM export_jobs`
+
+func (s *Store) GetExportJob(ctx context.Context, channelAccountID, exportJobID string) (ExportJobRecord, error) {
+	var job ExportJobRecord
+	err := scanExportJob(s.db.QueryRowContext(ctx, exportJobSelect+`
+WHERE id=$1 AND channel_account_id=$2`, exportJobID, channelAccountID), &job)
+	return job, err
+}
+
+func (s *Store) GetExportJobByID(ctx context.Context, exportJobID string) (ExportJobRecord, error) {
+	var job ExportJobRecord
+	err := scanExportJob(s.db.QueryRowContext(ctx, exportJobSelect+`
+WHERE id=$1`, exportJobID), &job)
+	return job, err
+}
+
+func (s *Store) ListExportJobs(ctx context.Context, channelAccountID, status string, limit int) ([]ExportJobRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, exportJobSelect+`
+WHERE channel_account_id=$1 AND ($2='' OR status=$2)
+ORDER BY created_at DESC
+LIMIT $3`, channelAccountID, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]ExportJobRecord, 0)
+	for rows.Next() {
+		var job ExportJobRecord
+		if err := scanExportJob(rows, &job); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *Store) ListExportJobQueue(ctx context.Context, limit int) ([]ExportJobRecord, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, exportJobSelect+`
+WHERE status='queued' AND attempt_no < max_attempts
+ORDER BY created_at ASC
+LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs := make([]ExportJobRecord, 0)
+	for rows.Next() {
+		var job ExportJobRecord
+		if err := scanExportJob(rows, &job); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, rows.Err()
+}
+
+func (s *Store) ClaimExportJob(ctx context.Context, params ClaimExportJobParams) (ExportJobRecord, bool, error) {
+	var job ExportJobRecord
+	err := scanExportJob(s.db.QueryRowContext(ctx, `
+UPDATE export_jobs
+SET status='claimed', version=version+1, attempt_no=attempt_no+1,
+    attempt_token=$2, lease_owner=$3, lease_expires_at=$4, heartbeat_at=$5,
+    started_at=COALESCE(started_at,$5)
+WHERE id=$1 AND status='queued' AND attempt_no < max_attempts
+  AND (
+      NOT EXISTS (
+          SELECT 1 FROM media_assets ma
+          WHERE ma.id=export_jobs.media_asset_id AND ma.stored_object_id IS NOT NULL
+      )
+      OR EXISTS (
+          SELECT 1 FROM media_assets ma
+          JOIN stored_object_pins p ON p.stored_object_id=ma.stored_object_id
+          WHERE ma.id=export_jobs.media_asset_id
+            AND p.owner_type='export_job' AND p.owner_id=export_jobs.id
+            AND p.purpose='source' AND p.released_at IS NULL
+      )
+  )
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+          COALESCE(idempotency_key,''), retry_generation, attempt_no,
+          COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
+          heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
+          COALESCE(diagnostic_id::text,''), created_at, started_at, completed_at,
+          cancel_requested_at, canceled_at, expires_at`, params.ExportJobID,
+		params.AttemptToken, params.LeaseOwner, params.LeaseExpiresAt, params.ClaimedAt), &job)
+	if err == sql.ErrNoRows {
+		return ExportJobRecord{}, false, nil
+	}
+	return job, err == nil, err
+}
+
+func (s *Store) RecordExportJobProgress(ctx context.Context, params RecordExportJobProgressParams) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE export_jobs
+SET status='running', version=version+1, progress=$4, heartbeat_at=$5,
+    lease_expires_at=$5 + (lease_expires_at - heartbeat_at)
+WHERE id=$1 AND lease_owner=$2 AND attempt_token=$3
+  AND status IN ('claimed','running') AND lease_expires_at > $5`, params.ExportJobID, params.LeaseOwner,
+		params.AttemptToken, jsonOrDefault(params.ProgressJSON, "{}"), params.HeartbeatAt)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) RequestExportJobCancel(ctx context.Context, channelAccountID, exportJobID string, requestedAt time.Time) (ExportJobRecord, error) {
+	var job ExportJobRecord
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var status string
+		if err := tx.QueryRowContext(ctx, `
+SELECT status FROM export_jobs WHERE id=$1 AND channel_account_id=$2 FOR UPDATE`, exportJobID, channelAccountID).Scan(&status); err != nil {
+			return err
+		}
+		next := status
+		switch status {
+		case "queued":
+			next = "canceled"
+		case "claimed", "running":
+			next = "cancel_requested"
+		case "cancel_requested", "canceled", "failed", "succeeded", "expired":
+		default:
+			return sql.ErrNoRows
+		}
+		if next == "canceled" {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE stored_object_pins SET released_at=$2
+WHERE owner_type='export_job' AND owner_id=$1 AND released_at IS NULL`, exportJobID, requestedAt); err != nil {
+				return err
+			}
+		}
+		row := tx.QueryRowContext(ctx, `
+UPDATE export_jobs
+SET status=$3, version=version+1, cancel_requested_at=COALESCE(cancel_requested_at,$4),
+    canceled_at=CASE WHEN $3='canceled' THEN $4 ELSE canceled_at END,
+    completed_at=CASE WHEN $3='canceled' THEN $4 ELSE completed_at END
+WHERE id=$1 AND channel_account_id=$2
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+          COALESCE(idempotency_key,''), retry_generation, attempt_no,
+          COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
+          heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
+          COALESCE(diagnostic_id::text,''), created_at, started_at, completed_at,
+          cancel_requested_at, canceled_at, expires_at`, exportJobID, channelAccountID, next, requestedAt)
+		return scanExportJob(row, &job)
+	})
+	return job, err
+}
+
+func (s *Store) RetryExportJob(ctx context.Context, channelAccountID, exportJobID, idempotencyKey string, pin StoredObjectPinRecord, retriedAt time.Time) (ExportJobRecord, error) {
+	var job ExportJobRecord
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if idempotencyKey != "" {
+			inserted, err := tx.ExecContext(ctx, `
+INSERT INTO operation_requests (
+    id, channel_account_id, operation_type, idempotency_key, request_hash,
+    status, target_type, target_id, metadata, created_at, completed_at
+)
+VALUES (md5($1 || ':export_job.retry:' || $3)::uuid,$1,'export_job.retry',$3,$2,'completed','export_job',$2,'{}',$4,$4)
+ON CONFLICT (channel_account_id, operation_type, idempotency_key) DO NOTHING`, channelAccountID, exportJobID, idempotencyKey, retriedAt)
+			if err != nil {
+				return err
+			}
+			rows, err := inserted.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if rows == 0 {
+				var targetID, requestHash string
+				if err := tx.QueryRowContext(ctx, `
+SELECT COALESCE(target_id::text,''), COALESCE(request_hash,'')
+FROM operation_requests
+WHERE channel_account_id=$1 AND operation_type='export_job.retry' AND idempotency_key=$2
+FOR UPDATE`, channelAccountID, idempotencyKey).Scan(&targetID, &requestHash); err != nil {
+					return err
+				}
+				if targetID != exportJobID || requestHash != exportJobID {
+					return ErrExportJobRetryIdempotencyConflict
+				}
+				return scanExportJob(tx.QueryRowContext(ctx, exportJobSelect+` WHERE id=$1 AND channel_account_id=$2`, exportJobID, channelAccountID), &job)
+			}
+		}
+		var status string
+		if err := tx.QueryRowContext(ctx, `
+SELECT status FROM export_jobs WHERE id=$1 AND channel_account_id=$2 FOR UPDATE`, exportJobID, channelAccountID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "failed" && status != "canceled" {
+			return sql.ErrNoRows
+		}
+		if pin.ID != "" {
+			if err := lockAvailableStoredObject(ctx, tx, pin.StoredObjectID); err != nil {
+				return err
+			}
+			result, err := tx.ExecContext(ctx, `
+INSERT INTO stored_object_pins (id, stored_object_id, owner_type, owner_id, purpose, expires_at, created_at)
+SELECT $1,$2,'export_job',$3,'source',NULL,$4
+FROM stored_objects
+WHERE id=$2 AND storage_status='available' AND deleted_at IS NULL`, pin.ID, pin.StoredObjectID, exportJobID, retriedAt)
+			if err != nil {
+				return err
+			}
+			if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+				if err != nil {
+					return err
+				}
+				return sql.ErrNoRows
+			}
+		}
+		row := tx.QueryRowContext(ctx, `
+UPDATE export_jobs
+SET status='queued', version=version+1, retry_generation=retry_generation+1,
+    attempt_no=0, attempt_token=NULL, lease_owner=NULL, lease_expires_at=NULL,
+    heartbeat_at=NULL, progress='{}'::jsonb, diagnostic_id=NULL, completed_at=NULL,
+    cancel_requested_at=NULL, canceled_at=NULL, expires_at=NULL
+WHERE id=$1 AND channel_account_id=$2
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+          COALESCE(idempotency_key,''), retry_generation, attempt_no,
+          COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
+          heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
+          COALESCE(diagnostic_id::text,''), created_at, started_at, completed_at,
+          cancel_requested_at, canceled_at, expires_at`, exportJobID, channelAccountID)
+		return scanExportJob(row, &job)
+	})
+	return job, err
+}
+
+func (s *Store) FinalizeExportJob(ctx context.Context, params FinalizeExportJobParams) (ExportJobRecord, error) {
+	var job ExportJobRecord
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var currentStatus string
+		if err := tx.QueryRowContext(ctx, `
+SELECT status FROM export_jobs
+WHERE id=$1 AND lease_owner=$2 AND attempt_token=$3
+  AND lease_expires_at > $4
+FOR UPDATE`, params.ExportJobID, params.LeaseOwner, params.AttemptToken, params.CompletedAt).Scan(&currentStatus); err != nil {
+			return err
+		}
+		status := params.Status
+		if currentStatus == "cancel_requested" {
+			status = "canceled"
+		} else if currentStatus != "claimed" && currentStatus != "running" {
+			return sql.ErrNoRows
+		}
+		if status != "succeeded" && status != "failed" && status != "canceled" {
+			return sql.ErrNoRows
+		}
+		if status == "succeeded" {
+			if params.Output.ID == "" || params.Delivery.ID == "" || params.DeliveryPin.ID == "" {
+				return sql.ErrNoRows
+			}
+			if err := ensureObjectLocationsWritable(ctx, tx, params.Output.Bucket, params.Output.ObjectKey); err != nil {
+				return err
+			}
+			registeredOutput, err := registerExportOutput(ctx, tx, params.Output)
+			if err != nil {
+				return err
+			}
+			params.Output = registeredOutput
+			params.DeliveryPin.StoredObjectID = registeredOutput.ID
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO export_deliveries (
+    id, export_job_id, channel_account_id, channel, status, version, attempt_no,
+    attempt_token, lease_owner, lease_expires_at, next_attempt_at, max_attempts, expires_at,
+    delivered_at, failure_code, created_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+				params.Delivery.ID, params.Delivery.ExportJobID, params.Delivery.ChannelAccountID,
+				params.Delivery.Channel, withDefault(params.Delivery.Status, "pending"),
+				positiveVersion(params.Delivery.Version), params.Delivery.AttemptNo,
+				nullString(params.Delivery.AttemptToken), nullString(params.Delivery.LeaseOwner),
+				params.Delivery.LeaseExpiresAt, params.Delivery.NextAttemptAt,
+				positiveInt(params.Delivery.MaxAttempts), params.Delivery.ExpiresAt,
+				params.Delivery.DeliveredAt, nullString(params.Delivery.FailureCode),
+				params.Delivery.CreatedAt); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO stored_object_pins (
+    id, stored_object_id, owner_type, owner_id, purpose, expires_at, created_at
+)
+VALUES ($1,$2,'export_delivery',$3,'delivery',$4,$5)`, params.DeliveryPin.ID,
+				params.DeliveryPin.StoredObjectID, params.DeliveryPin.OwnerID,
+				params.DeliveryPin.ExpiresAt, params.DeliveryPin.CreatedAt); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+UPDATE stored_object_pins SET released_at=$2
+WHERE owner_type='export_job' AND owner_id=$1 AND purpose='source' AND released_at IS NULL`, params.ExportJobID, params.CompletedAt); err != nil {
+			return err
+		}
+		if status == "succeeded" && params.RetentionDays > 0 {
+			if _, err := tx.ExecContext(ctx, `
+UPDATE stored_objects so
+SET last_successful_use_at=GREATEST(COALESCE(last_successful_use_at,$2),$2),
+    expires_at=GREATEST(generation_published_at,$2) + make_interval(days => $3)
+FROM media_assets ma
+WHERE ma.id=(SELECT media_asset_id FROM export_jobs WHERE id=$1)
+  AND ma.stored_object_id=so.id`, params.ExportJobID, params.CompletedAt, params.RetentionDays); err != nil {
+				return err
+			}
+		}
+		row := tx.QueryRowContext(ctx, `
+UPDATE export_jobs
+SET status=$4, version=version+1, output_stored_object_id=$5,
+    diagnostic_id=$6, completed_at=$7,
+    canceled_at=CASE WHEN $4='canceled' THEN $7 ELSE canceled_at END,
+    lease_expires_at=NULL, heartbeat_at=$7
+WHERE id=$1 AND lease_owner=$2 AND attempt_token=$3
+  AND lease_expires_at > $7
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+          COALESCE(idempotency_key,''), retry_generation, attempt_no,
+          COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
+          heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
+          COALESCE(diagnostic_id::text,''), created_at, started_at, completed_at,
+          cancel_requested_at, canceled_at, expires_at`, params.ExportJobID,
+			params.LeaseOwner, params.AttemptToken, status, nullString(params.Output.ID),
+			nullString(params.DiagnosticID), params.CompletedAt)
+		return scanExportJob(row, &job)
+	})
+	return job, err
+}
+
+func registerExportOutput(ctx context.Context, tx *sql.Tx, candidate StoredObjectRecord) (StoredObjectRecord, error) {
+	inserted, err := insertCanonicalExportOutput(ctx, tx, candidate)
+	if err != nil {
+		return StoredObjectRecord{}, err
+	}
+	if inserted {
+		return candidate, nil
+	}
+
+	var existing StoredObjectRecord
+	err = scanStoredObject(tx.QueryRowContext(ctx, storedObjectSelect+`
+WHERE channel_account_id=$1 AND checksum=$2 AND size_bytes=$3
+FOR UPDATE`, candidate.ChannelAccountID, candidate.Checksum, candidate.SizeBytes), &existing)
+	if err != nil {
+		return StoredObjectRecord{}, err
+	}
+	switch existing.StorageStatus {
+	case "available":
+		var registered StoredObjectRecord
+		err := scanStoredObject(tx.QueryRowContext(ctx, `
+UPDATE stored_objects
+		SET expires_at=CASE
+		        WHEN expires_at IS NULL THEN NULL
+		        WHEN $2::timestamptz IS NULL THEN expires_at
+		        ELSE GREATEST(expires_at,$2)
+		    END
+WHERE id=$1 AND storage_status='available' AND deleted_at IS NULL
+RETURNING id, COALESCE(channel_account_id::text,''), bucket, object_key,
+          COALESCE(staging_key,''), generation, generation_published_at,
+          COALESCE(content_type,''), size_bytes, checksum_algorithm,
+          COALESCE(checksum,''), storage_status, retention_state, hold_state,
+          last_successful_use_at, created_at, expires_at,
+          COALESCE(delete_owner,''), COALESCE(delete_token,''),
+	          delete_lease_expires_at, delete_attempts, deleted_at`, existing.ID, candidate.ExpiresAt), &registered)
+		return registered, err
+	case "deleted", "missing":
+		var registered StoredObjectRecord
+		err := scanStoredObject(tx.QueryRowContext(ctx, `
+UPDATE stored_objects
+SET bucket=$2, object_key=$3, staging_key=NULL, generation=generation+1,
+    generation_published_at=$4, content_type=$5, size_bytes=$6,
+    checksum_algorithm=$7, checksum=$8, storage_status='available',
+    retention_state=$9, hold_state='none', expires_at=$10,
+    delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL, deleted_at=NULL
+WHERE id=$1 AND storage_status IN ('deleted','missing')
+RETURNING id, COALESCE(channel_account_id::text,''), bucket, object_key,
+          COALESCE(staging_key,''), generation, generation_published_at,
+          COALESCE(content_type,''), size_bytes, checksum_algorithm,
+          COALESCE(checksum,''), storage_status, retention_state, hold_state,
+          last_successful_use_at, created_at, expires_at,
+          COALESCE(delete_owner,''), COALESCE(delete_token,''),
+          delete_lease_expires_at, delete_attempts, deleted_at`, existing.ID,
+			candidate.Bucket, candidate.ObjectKey, candidate.GenerationPublishedAt,
+			nullString(candidate.ContentType), candidate.SizeBytes,
+			withDefault(candidate.ChecksumAlgorithm, "sha256"), nullString(candidate.Checksum),
+			withDefault(candidate.RetentionState, "expires_scheduled"), candidate.ExpiresAt), &registered)
+		return registered, err
+	default:
+		return StoredObjectRecord{}, sql.ErrNoRows
+	}
+}
+
+func insertCanonicalExportOutput(ctx context.Context, tx *sql.Tx, record StoredObjectRecord) (bool, error) {
+	publishedAt := record.GenerationPublishedAt
+	if publishedAt.IsZero() {
+		publishedAt = record.CreatedAt
+	}
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO stored_objects (
+    id, channel_account_id, bucket, object_key, staging_key, generation,
+    generation_published_at, content_type, size_bytes, checksum_algorithm,
+    checksum, storage_status, retention_state, hold_state, last_successful_use_at,
+    created_at, expires_at, delete_owner, delete_token, delete_lease_expires_at,
+    delete_attempts, deleted_at
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+ON CONFLICT (channel_account_id, checksum, size_bytes)
+WHERE channel_account_id IS NOT NULL AND checksum IS NOT NULL AND checksum <> ''
+DO NOTHING`,
+		record.ID, nullString(record.ChannelAccountID), record.Bucket, record.ObjectKey,
+		nullString(record.StagingKey), positiveInt(record.Generation), publishedAt,
+		nullString(record.ContentType), record.SizeBytes,
+		withDefault(record.ChecksumAlgorithm, "sha256"), nullString(record.Checksum),
+		withDefault(record.StorageStatus, "available"),
+		withDefault(record.RetentionState, "expires_scheduled"), withDefault(record.HoldState, "none"),
+		record.LastSuccessfulUseAt, record.CreatedAt, record.ExpiresAt,
+		nullString(record.DeleteOwner), nullString(record.DeleteToken),
+		record.DeleteLeaseExpiresAt, record.DeleteAttempts, record.DeletedAt)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *Store) ListExportDeliveries(ctx context.Context, channelAccountID, exportJobID string) ([]ExportDeliveryRecord, error) {
+	rows, err := s.db.QueryContext(ctx, exportDeliverySelect+`
+WHERE channel_account_id=$1 AND export_job_id=$2
+ORDER BY created_at ASC`, channelAccountID, exportJobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	deliveries := make([]ExportDeliveryRecord, 0)
+	for rows.Next() {
+		var delivery ExportDeliveryRecord
+		if err := scanExportDelivery(rows, &delivery); err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, delivery)
+	}
+	return deliveries, rows.Err()
+}
+
+const exportDeliverySelect = `
+SELECT id, export_job_id, channel_account_id, channel, status, version,
+       attempt_no, COALESCE(attempt_token,''), COALESCE(lease_owner,''),
+       lease_expires_at, next_attempt_at, max_attempts, expires_at, delivered_at,
+       COALESCE(failure_code,''), created_at
+FROM export_deliveries`
+
+func (s *Store) ClaimExportDelivery(ctx context.Context, params ClaimExportDeliveryParams) (ExportDeliveryRecord, bool, error) {
+	var delivery ExportDeliveryRecord
+	err := scanExportDelivery(s.db.QueryRowContext(ctx, `
+UPDATE export_deliveries
+SET status='claimed', version=version+1, attempt_no=attempt_no+1,
+    attempt_token=$4, lease_owner=$5, lease_expires_at=$6, next_attempt_at=NULL, failure_code=NULL
+WHERE export_job_id=$1 AND channel_account_id=$2 AND channel=$3
+  AND status IN ('pending','failed') AND attempt_no < max_attempts
+  AND expires_at > $7 AND (next_attempt_at IS NULL OR next_attempt_at <= $7)
+RETURNING id, export_job_id, channel_account_id, channel, status, version,
+          attempt_no, COALESCE(attempt_token,''), COALESCE(lease_owner,''),
+          lease_expires_at, next_attempt_at, max_attempts, expires_at, delivered_at,
+          COALESCE(failure_code,''), created_at`, params.ExportJobID,
+		params.ChannelAccountID, params.Channel, params.AttemptToken, params.LeaseOwner,
+		params.LeaseExpiresAt, params.ClaimedAt), &delivery)
+	if err == sql.ErrNoRows {
+		return ExportDeliveryRecord{}, false, nil
+	}
+	return delivery, err == nil, err
+}
+
+func (s *Store) FinalizeExportDelivery(ctx context.Context, params FinalizeExportDeliveryParams) (ExportDeliveryRecord, error) {
+	var delivery ExportDeliveryRecord
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if params.Status != "delivered" && params.Status != "failed" {
+			return sql.ErrNoRows
+		}
+		row := tx.QueryRowContext(ctx, `
+UPDATE export_deliveries
+SET status=CASE
+        WHEN $6='delivered' THEN 'delivered'
+        WHEN NOT $9 OR attempt_no >= max_attempts OR expires_at <= $8 THEN 'expired'
+        ELSE 'pending'
+    END,
+    version=version+1,
+    attempt_token=NULL,
+    lease_owner=NULL,
+    lease_expires_at=NULL,
+    next_attempt_at=CASE
+        WHEN $6='failed' AND $9 AND attempt_no < max_attempts AND expires_at > $8
+        THEN LEAST(expires_at, $8 + make_interval(secs => LEAST(30 * power(2, GREATEST(attempt_no-1,0)), 900)::double precision))
+        ELSE NULL
+    END,
+	    delivered_at=CASE WHEN $6='delivered' THEN $8 ELSE delivered_at END,
+	    failure_code=CASE WHEN $6='failed' THEN NULLIF($7,'') ELSE NULL END
+WHERE export_job_id=$1 AND channel_account_id=$2 AND id=$3
+  AND lease_owner=$4 AND attempt_token=$5 AND status='claimed'
+  AND lease_expires_at > $8
+RETURNING id, export_job_id, channel_account_id, channel, status, version,
+          attempt_no, COALESCE(attempt_token,''), COALESCE(lease_owner,''),
+          lease_expires_at, next_attempt_at, max_attempts, expires_at, delivered_at,
+          COALESCE(failure_code,''), created_at`, params.ExportJobID,
+			params.ChannelAccountID, params.ExportDeliveryID, params.LeaseOwner, params.AttemptToken,
+			params.Status, params.FailureCode, params.FinalizedAt, params.Retryable)
+		if err := scanExportDelivery(row, &delivery); err != nil {
+			return err
+		}
+		if delivery.Status == "delivered" || delivery.Status == "expired" {
+			_, err := tx.ExecContext(ctx, `
+UPDATE stored_object_pins SET released_at=$2
+WHERE owner_type='export_delivery' AND owner_id=$1 AND purpose='delivery'
+  AND released_at IS NULL`, delivery.ID, params.FinalizedAt)
+			return err
+		}
+		return nil
+	})
+	return delivery, err
+}
+
+func (s *Store) ReclaimExportJobs(ctx context.Context, now time.Time, limit int) (ExportJobReclaimResult, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var result ExportJobReclaimResult
+	err := s.db.QueryRowContext(ctx, `
+WITH expired AS (
+    SELECT id, attempt_no, max_attempts
+    FROM export_jobs
+    WHERE status IN ('claimed','running','cancel_requested')
+      AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1
+    FOR UPDATE SKIP LOCKED
+	LIMIT $2
+), updated AS (
+UPDATE export_jobs ej
+SET status=CASE
+        WHEN expired.attempt_no < expired.max_attempts AND ej.status <> 'cancel_requested' THEN 'queued'
+        WHEN ej.status='cancel_requested' THEN 'canceled'
+        ELSE 'failed'
+    END,
+    version=version+1,
+    attempt_token=NULL,
+    lease_owner=NULL,
+    lease_expires_at=NULL,
+    heartbeat_at=NULL,
+    completed_at=CASE
+        WHEN expired.attempt_no >= expired.max_attempts OR ej.status='cancel_requested' THEN $1
+        ELSE completed_at
+    END,
+    canceled_at=CASE WHEN ej.status='cancel_requested' THEN $1 ELSE canceled_at END
+FROM expired
+WHERE ej.id=expired.id
+RETURNING ej.id, ej.status
+), released AS (
+UPDATE stored_object_pins p
+SET released_at=$1
+FROM updated
+WHERE updated.status IN ('failed','canceled')
+  AND p.owner_type='export_job' AND p.owner_id=updated.id
+  AND p.purpose='source' AND p.released_at IS NULL
+RETURNING p.id
+)
+SELECT count(*),
+       count(*) FILTER (WHERE status='queued'),
+       count(*) FILTER (WHERE status='failed')
+FROM updated`, now, limit).Scan(&result.Examined, &result.Requeued, &result.Failed)
+	return result, err
+}
+
+func (s *Store) ReclaimExportDeliveries(ctx context.Context, now time.Time, limit int) (int64, error) {
+	return s.reclaimExportDeliveries(ctx, now, limit)
+}
+
+func (s *Store) reclaimExportDeliveries(ctx context.Context, now time.Time, limit int) (int64, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var reclaimed int64
+	err := s.db.QueryRowContext(ctx, `
+WITH candidates AS (
+    SELECT id, expires_at, attempt_no, max_attempts
+    FROM export_deliveries
+    WHERE (status='claimed' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1)
+       OR (status IN ('pending','failed') AND expires_at <= $1)
+    FOR UPDATE SKIP LOCKED
+	LIMIT $2
+), updated AS (
+    UPDATE export_deliveries d
+    SET status=CASE
+            WHEN candidates.expires_at <= $1 OR candidates.attempt_no >= candidates.max_attempts THEN 'expired'
+            ELSE 'pending'
+        END,
+        version=version+1,
+        attempt_token=NULL,
+        lease_owner=NULL,
+        lease_expires_at=NULL,
+        next_attempt_at=NULL,
+        failure_code=CASE
+            WHEN candidates.expires_at <= $1 THEN 'delivery_expired'
+            WHEN candidates.attempt_no >= candidates.max_attempts THEN 'delivery_retry_exhausted'
+            ELSE failure_code
+        END
+    FROM candidates
+    WHERE d.id=candidates.id
+    RETURNING d.id, d.status
+), released AS (
+UPDATE stored_object_pins p
+SET released_at=$1
+FROM updated
+WHERE updated.status='expired' AND p.owner_type='export_delivery'
+  AND p.owner_id=updated.id AND p.purpose='delivery' AND p.released_at IS NULL
+RETURNING p.id
+)
+SELECT count(*) FROM updated`, now, limit).Scan(&reclaimed)
+	return reclaimed, err
+}
+
+func (s *Store) ClaimRetentionDeletes(ctx context.Context, owner, token string, now, leaseExpiresAt time.Time, limit int) ([]RetentionDeleteClaimRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+WITH expired_pins AS (
+    UPDATE stored_object_pins
+    SET released_at=$3
+    WHERE released_at IS NULL AND expires_at IS NOT NULL AND expires_at <= $3
+), candidates AS (
+    SELECT so.id
+    FROM stored_objects so
+    WHERE (
+          (so.storage_status='available' AND so.expires_at IS NOT NULL AND so.expires_at <= $3)
+          OR (
+              so.storage_status='delete_scheduled'
+              AND (so.delete_lease_expires_at IS NULL OR so.delete_lease_expires_at <= $3)
+	          AND (so.expires_at IS NULL OR so.expires_at <= $3)
+          )
+      )
+      AND so.hold_state='none'
+      AND NOT EXISTS (
+          SELECT 1 FROM stored_object_pins p
+          WHERE p.stored_object_id=so.id AND p.released_at IS NULL
+      )
+    ORDER BY so.expires_at ASC
+    FOR UPDATE SKIP LOCKED
+    LIMIT $5
+)
+UPDATE stored_objects so
+SET storage_status='delete_scheduled', retention_state='expires_scheduled',
+    delete_owner=$1, delete_token=$2, delete_lease_expires_at=$4,
+    delete_attempts=delete_attempts+1
+FROM candidates
+WHERE so.id=candidates.id
+RETURNING so.id, COALESCE(so.channel_account_id::text,''), so.bucket, so.object_key,
+          COALESCE(so.staging_key,''), so.generation, so.generation_published_at,
+          COALESCE(so.content_type,''), so.size_bytes, so.checksum_algorithm,
+          COALESCE(so.checksum,''), so.storage_status, so.retention_state,
+          so.hold_state, so.last_successful_use_at, so.created_at, so.expires_at,
+          COALESCE(so.delete_owner,''), COALESCE(so.delete_token,''),
+          so.delete_lease_expires_at, so.delete_attempts, so.deleted_at`,
+		owner, token, now, leaseExpiresAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	claims := make([]RetentionDeleteClaimRecord, 0)
+	for rows.Next() {
+		var object StoredObjectRecord
+		if err := scanStoredObject(rows, &object); err != nil {
+			return nil, err
+		}
+		claims = append(claims, RetentionDeleteClaimRecord{
+			StoredObject: object,
+			DeleteOwner:  owner,
+			DeleteToken:  token,
+		})
+	}
+	return claims, rows.Err()
+}
+
+func (s *Store) CompleteRetentionDelete(ctx context.Context, storedObjectID string, generation int, owner, token string, deletedAt time.Time) error {
+	return s.withTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='deleted', retention_state='expired', deleted_at=$6,
+    delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL
+WHERE id=$1 AND storage_status='delete_scheduled' AND delete_owner=$2
+  AND delete_token=$3 AND generation=$4 AND delete_lease_expires_at >= $5`, storedObjectID, owner, token, generation, deletedAt, deletedAt)
+		if err != nil {
+			return err
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if rows != 1 {
+			return sql.ErrNoRows
+		}
+		_, err = tx.ExecContext(ctx, `
+UPDATE export_jobs
+SET status='expired', version=version+1, expires_at=$2
+WHERE output_stored_object_id=$1 AND status='succeeded'`, storedObjectID, deletedAt)
+		return err
+	})
+}
+
+func (s *Store) FailRetentionDelete(ctx context.Context, storedObjectID string, generation int, owner, token string, failedAt time.Time) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE stored_objects
+SET storage_status='delete_scheduled', retention_state='expires_scheduled',
+    delete_owner=NULL, delete_token=NULL, delete_lease_expires_at=NULL,
+    expires_at=$5 + make_interval(secs => LEAST(30 * power(2, GREATEST(delete_attempts-1,0)), 3600)::double precision)
+WHERE id=$1 AND storage_status='delete_scheduled' AND delete_owner=$2
+  AND delete_token=$3 AND generation=$4 AND delete_lease_expires_at >= $5`, storedObjectID, owner, token, generation, failedAt)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+type exportDeliveryScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanExportDelivery(scanner exportDeliveryScanner, delivery *ExportDeliveryRecord) error {
+	return scanner.Scan(
+		&delivery.ID, &delivery.ExportJobID, &delivery.ChannelAccountID,
+		&delivery.Channel, &delivery.Status, &delivery.Version, &delivery.AttemptNo,
+		&delivery.AttemptToken, &delivery.LeaseOwner, &delivery.LeaseExpiresAt, &delivery.NextAttemptAt,
+		&delivery.MaxAttempts, &delivery.ExpiresAt, &delivery.DeliveredAt,
+		&delivery.FailureCode, &delivery.CreatedAt,
+	)
+}
+
+type exportJobScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanExportJob(scanner exportJobScanner, job *ExportJobRecord) error {
+	return scanner.Scan(
+		&job.ID, &job.ChannelAccountID, &job.MediaAssetID, &job.Operation,
+		&job.DeliveryChannel, &job.VariantJSON, &job.Status, &job.Version, &job.IdempotencyKey,
+		&job.RetryGeneration, &job.AttemptNo, &job.AttemptToken, &job.LeaseOwner,
+		&job.LeaseExpiresAt, &job.HeartbeatAt, &job.MaxAttempts, &job.ProgressJSON,
+		&job.OutputStoredObjectID, &job.DiagnosticID, &job.CreatedAt, &job.StartedAt,
+		&job.CompletedAt, &job.CancelRequestedAt, &job.CanceledAt, &job.ExpiresAt,
+	)
+}
+
+type metadataEnrichmentScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanMetadataEnrichment(scanner metadataEnrichmentScanner) (MetadataEnrichmentRecord, error) {
+	var record MetadataEnrichmentRecord
+	err := scanner.Scan(
+		&record.ID, &record.MediaAssetID, &record.ChannelAccountID, &record.Provider,
+		&record.CanonicalURL, &record.Status, &record.Version, &record.IdempotencyKey,
+		&record.AttemptNo, &record.MaxAttempts, &record.AttemptToken, &record.LeaseOwner,
+		&record.LeaseExpiresAt, &record.HeartbeatAt, &record.NextAttemptAt,
+		&record.ProgressJSON, &record.ErrorCode, &record.ErrorMessage, &record.CreatedAt,
+		&record.StartedAt, &record.CompletedAt,
+	)
+	return record, err
+}
+
 type channelSurfaceScanner interface {
 	Scan(dest ...any) error
 }
@@ -1899,18 +3593,167 @@ func (s *Store) withTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return tx.Commit()
 }
 
+func lockAvailableStoredObject(ctx context.Context, tx *sql.Tx, storedObjectID string) error {
+	var available bool
+	err := tx.QueryRowContext(ctx, `
+SELECT storage_status='available' AND deleted_at IS NULL
+FROM stored_objects
+WHERE id=$1
+FOR UPDATE`, storedObjectID).Scan(&available)
+	if err != nil {
+		return err
+	}
+	if !available {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func insertStoredObject(ctx context.Context, tx *sql.Tx, record StoredObjectRecord) error {
-	_, err := tx.ExecContext(ctx, `
+	publishedAt := record.GenerationPublishedAt
+	if publishedAt.IsZero() {
+		publishedAt = record.CreatedAt
+	}
+	result, err := tx.ExecContext(ctx, `
 INSERT INTO stored_objects (
-    id, bucket, object_key, content_type, size_bytes, checksum,
-    storage_status, retention_state, created_at, expires_at, deleted_at
+    id, channel_account_id, bucket, object_key, staging_key, generation,
+    generation_published_at, content_type, size_bytes, checksum_algorithm,
+    checksum, storage_status, retention_state, hold_state, last_successful_use_at,
+    created_at, expires_at, delete_owner, delete_token, delete_lease_expires_at,
+    delete_attempts, deleted_at
 )
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-ON CONFLICT (bucket, object_key) DO NOTHING`,
-		record.ID, record.Bucket, record.ObjectKey, nullString(record.ContentType),
-		record.SizeBytes, nullString(record.Checksum), withDefault(record.StorageStatus, "available"),
-		withDefault(record.RetentionState, "active"), record.CreatedAt, record.ExpiresAt,
-		record.DeletedAt)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+ON CONFLICT (id) DO UPDATE
+SET object_key=CASE
+        WHEN stored_objects.storage_status IN ('publishing','deleted','missing') THEN EXCLUDED.object_key
+        ELSE stored_objects.object_key
+    END,
+    staging_key=CASE
+        WHEN stored_objects.storage_status IN ('publishing','deleted','missing') THEN EXCLUDED.staging_key
+        ELSE stored_objects.staging_key
+    END,
+    generation=CASE
+        WHEN stored_objects.storage_status IN ('deleted','missing') THEN stored_objects.generation + 1
+        ELSE stored_objects.generation
+    END,
+    generation_published_at=CASE
+        WHEN stored_objects.storage_status IN ('deleted','missing') THEN EXCLUDED.generation_published_at
+        ELSE stored_objects.generation_published_at
+    END,
+    content_type=CASE
+        WHEN stored_objects.storage_status IN ('publishing','deleted','missing') THEN EXCLUDED.content_type
+        ELSE stored_objects.content_type
+    END,
+    size_bytes=CASE
+        WHEN stored_objects.storage_status IN ('publishing','deleted','missing') THEN EXCLUDED.size_bytes
+        ELSE stored_objects.size_bytes
+    END,
+    checksum_algorithm=CASE
+        WHEN stored_objects.storage_status IN ('publishing','deleted','missing') THEN EXCLUDED.checksum_algorithm
+        ELSE stored_objects.checksum_algorithm
+    END,
+    checksum=CASE
+        WHEN stored_objects.storage_status IN ('publishing','deleted','missing') THEN EXCLUDED.checksum
+        ELSE stored_objects.checksum
+    END,
+    storage_status=CASE
+        WHEN stored_objects.storage_status IN ('deleted','missing') THEN EXCLUDED.storage_status
+        ELSE stored_objects.storage_status
+    END,
+    retention_state=CASE
+        WHEN stored_objects.storage_status IN ('deleted','missing') THEN EXCLUDED.retention_state
+        ELSE stored_objects.retention_state
+    END,
+    expires_at=CASE
+        WHEN stored_objects.storage_status IN ('deleted','missing') THEN EXCLUDED.expires_at
+        ELSE stored_objects.expires_at
+    END,
+    deleted_at=CASE
+        WHEN stored_objects.storage_status IN ('deleted','missing') THEN NULL
+        ELSE stored_objects.deleted_at
+    END
+WHERE stored_objects.channel_account_id=EXCLUDED.channel_account_id`,
+		record.ID, nullString(record.ChannelAccountID), record.Bucket, record.ObjectKey,
+		nullString(record.StagingKey), positiveInt(record.Generation), publishedAt,
+		nullString(record.ContentType), record.SizeBytes,
+		withDefault(record.ChecksumAlgorithm, "sha256"), nullString(record.Checksum),
+		withDefault(record.StorageStatus, "available"),
+		withDefault(record.RetentionState, "active"), withDefault(record.HoldState, "none"),
+		record.LastSuccessfulUseAt, record.CreatedAt, record.ExpiresAt,
+		nullString(record.DeleteOwner), nullString(record.DeleteToken),
+		record.DeleteLeaseExpiresAt, record.DeleteAttempts, record.DeletedAt)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+type storedObjectScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanStoredObject(scanner storedObjectScanner, object *StoredObjectRecord) error {
+	return scanner.Scan(
+		&object.ID,
+		&object.ChannelAccountID,
+		&object.Bucket,
+		&object.ObjectKey,
+		&object.StagingKey,
+		&object.Generation,
+		&object.GenerationPublishedAt,
+		&object.ContentType,
+		&object.SizeBytes,
+		&object.ChecksumAlgorithm,
+		&object.Checksum,
+		&object.StorageStatus,
+		&object.RetentionState,
+		&object.HoldState,
+		&object.LastSuccessfulUseAt,
+		&object.CreatedAt,
+		&object.ExpiresAt,
+		&object.DeleteOwner,
+		&object.DeleteToken,
+		&object.DeleteLeaseExpiresAt,
+		&object.DeleteAttempts,
+		&object.DeletedAt,
+	)
+}
+
+func ensureObjectLocationsWritable(ctx context.Context, tx *sql.Tx, bucket string, objectKeys ...string) error {
+	keys := make([]string, 0, len(objectKeys))
+	for _, objectKey := range objectKeys {
+		if objectKey != "" {
+			keys = append(keys, objectKey)
+		}
+	}
+	sort.Strings(keys)
+	for _, objectKey := range keys {
+		if err := lockObjectLocation(ctx, tx, bucket, objectKey); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM object_delete_fences WHERE bucket=$1 AND object_key=$2 AND lease_expires_at <= now()`, bucket, objectKey); err != nil {
+			return err
+		}
+		var fenced bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM object_delete_fences WHERE bucket=$1 AND object_key=$2)`, bucket, objectKey).Scan(&fenced); err != nil {
+			return err
+		}
+		if fenced {
+			return sql.ErrNoRows
+		}
+	}
+	return nil
+}
+
+func lockObjectLocation(ctx context.Context, tx *sql.Tx, bucket, objectKey string) error {
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, bucket+"/"+objectKey)
 	return err
 }
 

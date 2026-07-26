@@ -39,10 +39,49 @@
     "storedObjectStatus": {
       "type": "string",
       "enum": [
-        "pending",
+        "publishing",
         "available",
-        "missing",
-        "deleted"
+        "delete_scheduled",
+        "deleted",
+        "missing"
+      ]
+    },
+    "exportOperation": {
+      "type": "string",
+      "enum": [
+        "youtube_audio",
+        "youtube_video",
+        "video_to_audio"
+      ]
+    },
+    "exportJobStatus": {
+      "type": "string",
+      "enum": [
+        "queued",
+        "claimed",
+        "running",
+        "cancel_requested",
+        "succeeded",
+        "failed",
+        "canceled",
+        "expired"
+      ]
+    },
+    "exportDeliveryStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "claimed",
+        "delivered",
+        "failed",
+        "expired"
+      ]
+    },
+    "exportDeliveryChannel": {
+      "type": "string",
+      "enum": [
+        "telegram",
+        "web"
       ]
     },
     "collectionKind": {
@@ -180,7 +219,10 @@
         "diagnostic",
         "channel_account",
         "channel_surface",
-        "operation_request"
+        "operation_request",
+        "export_job",
+        "export_delivery",
+        "stored_object_pin"
       ]
     },
     "diagnosticCode": {
@@ -201,7 +243,14 @@
         "orphan_object_cleanup",
         "orphan_object_cleanup_failed",
         "retention_denied",
-        "adapter_conflict"
+        "adapter_conflict",
+        "export_provider_resolution_failed",
+        "export_retry_exhausted",
+        "export_delivery_failed",
+        "retention_delete_failed",
+        "retention_reconciled_orphan",
+        "stored_object_missing",
+        "output_missing"
       ]
     },
     "channelSurfaceSubjectType": {
@@ -211,6 +260,8 @@
         "collection",
         "selection_snapshot",
         "analysis_run",
+        "export_job",
+        "export_delivery",
         "artifact",
         "diagnostic"
       ]

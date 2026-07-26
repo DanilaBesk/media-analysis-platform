@@ -5,10 +5,10 @@
 
   <ArchitectureShape>
     <goal>Make the API the durable product authority for media accumulation, curation, execution, artifacts, diagnostics, channel recovery, idempotency, and retention.</goal>
-    <canonical-chain>media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; analysis_run_step/artifacts -&gt; artifact_subject lineage</canonical-chain>
+    <canonical-chain>media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; analysis_run_step/artifacts -&gt; artifact_subject lineage; one media_asset -&gt; export_job -&gt; transient delivery object is an independent execution chain</canonical-chain>
     <control-plane>Go API owns target public contracts, channel_account scope, lifecycle transitions, validation, operation_requests, retention policy, diagnostics, artifact metadata, and channel_surface recovery state.</control-plane>
     <execution-plane>Python workers consume sealed selection_snapshot material and declared analysis_run_step_inputs through internal execution contracts.</execution-plane>
-    <queue-plane>PostgreSQL analysis_run_steps are the worker queue and execution control plane; queued work does not define user-facing product concepts.</queue-plane>
+    <queue-plane>PostgreSQL analysis_run_steps, metadata_enrichment_jobs, and export_jobs are separate durable worker queues; claims use expiring leases and per-attempt fencing tokens.</queue-plane>
     <object-plane>MinIO stores stored_object bodies for media assets, previews, generated artifacts, private execution evidence, and diagnostic bundles behind API-issued access decisions.</object-plane>
     <adapters>Telegram, Web, and MCP are thin clients over the same API-owned media_asset, collection, selection_snapshot, analysis_run, artifact, diagnostic, channel_account, and channel_surface state.</adapters>
   </ArchitectureShape>
@@ -18,6 +18,7 @@
     <component id="workers-transcription" path="workers/transcription" role="Python transcript assembly and speech transcription behind analysis_run_steps, including ordered inline and object-backed text materials" />
     <component id="external-copper-asr" path="external/copper-asr" role="External pinned CopperASR source submodule for the dedicated ASR runtime service" />
     <component id="workers-agent-runner" path="workers/agent-runner" role="Python report and research execution behind analysis_run_steps" />
+    <component id="workers-media-export" path="workers/media-export" role="Python YouTube export and uploaded-video audio conversion behind export_jobs" />
     <component id="apps-web" path="apps/web" role="React management UI for inbox, collections, selections, runs, artifacts, and diagnostics" />
     <component id="apps-telegram-bot" path="apps/telegram-bot" role="Thin Telegram capture, rendering, and recovery adapter over API-owned state" />
     <component id="apps-mcp-server" path="apps/mcp-server" role="Thin MCP tool adapter over API-owned state" />
@@ -38,8 +39,8 @@
     </table>
     <table name="stored_objects">
       <purpose>Shared object storage metadata for input media and output artifacts.</purpose>
-      <fields>id, bucket, object_key, content_type, size_bytes, checksum, storage_status, retention_state, created_at, expires_at, deleted_at</fields>
-      <rules>Stored object lifecycle can expire bytes without deleting historical run metadata.</rules>
+      <fields>id, channel_account_id, bucket, object_key, staging_key, generation, generation_published_at, content_type, size_bytes, checksum_algorithm, checksum, storage_status, retention_state, hold_state, last_successful_use_at, created_at, expires_at, delete_owner, delete_token, delete_lease_expires_at, delete_attempts, deleted_at</fields>
+      <rules>Unique channel_account_id plus SHA-256 plus size identifies physical uploaded bytes independent of filename. Publishing, re-upload generation, pinning, deletion, and reconciliation are fenced while historical metadata survives body expiry.</rules>
     </table>
     <table name="media_assets">
       <purpose>Channel-account-scoped durable input records independent of execution.</purpose>
@@ -86,6 +87,26 @@
       <fields>id, analysis_run_id, event_type, version, status, payload, created_at</fields>
       <rules>Events power polling and WebSocket updates.</rules>
     </table>
+    <table name="export_jobs">
+      <purpose>API-owned one-material download and conversion lifecycle independent of analysis collections.</purpose>
+      <fields>id, channel_account_id, media_asset_id, operation, variant, status, version, idempotency_key, retry_generation, attempt_no, attempt_token, lease_owner, lease_expires_at, heartbeat_at, max_attempts, progress, output_stored_object_id, diagnostic_id, created_at, started_at, completed_at, cancel_requested_at, canceled_at, expires_at</fields>
+      <rules>Only normalized semantic variants are public; provider format ids remain worker details. Owner plus attempt-token compare-and-set fences every active mutation and stale leases are reclaimable. Export lifecycle never mutates collection membership or analysis_run state.</rules>
+    </table>
+    <table name="metadata_enrichment_jobs">
+      <purpose>API-owned YouTube reference metadata queue independent from export and analysis execution.</purpose>
+      <fields>id, media_asset_id, channel_account_id, provider, canonical_url, status, version, idempotency_key, attempt_no, max_attempts, attempt_token, lease_owner, lease_expires_at, heartbeat_at, next_attempt_at, progress, error_code, error_message, created_at, started_at, completed_at</fields>
+      <rules>URL ingestion atomically enqueues the initial idempotent row. Owner plus attempt-token fences claims, progress, and finalize; heartbeats preserve the claimed lease duration, retries and stale-lease reclaim use bounded backoff, and successful finalize changes only current media_asset metadata.</rules>
+    </table>
+    <table name="export_deliveries">
+      <purpose>Fenced adapter delivery and finite output-retention protection.</purpose>
+      <fields>id, export_job_id, channel_account_id, channel, status, version, attempt_no, attempt_token, lease_owner, lease_expires_at, max_attempts, expires_at, delivered_at, failure_code</fields>
+      <rules>Telegram acknowledges only after send; Web link issuance preserves access until its fixed window expires.</rules>
+    </table>
+    <table name="stored_object_pins">
+      <purpose>Transactional source or delivery protection against physical retention deletion.</purpose>
+      <fields>id, stored_object_id, owner_type, owner_id, purpose, expires_at, created_at, released_at</fields>
+      <rules>Pin insertion succeeds only while the stored object is available; delete scheduling proves no active pins under the same row lock. Workload pins have null expires_at through queued/active work and release on every terminal transition. Retry reacquires them after availability validation. Delivery pins use finite expires_at.</rules>
+    </table>
     <table name="artifacts">
       <purpose>Run outputs, previews, evidence objects, and downloadable files.</purpose>
       <fields>id, channel_account_id, analysis_run_id, stored_object_id, kind, status, content_type, checksum, size_bytes, visibility, preview, created_at, expires_at, deleted_at</fields>
@@ -124,7 +145,19 @@
     <endpoint method="GET" path="/v1/media-assets">List channel-account-scoped media_asset records.</endpoint>
     <endpoint method="GET" path="/v1/media-assets/{media_asset_id}">Read one media_asset and safe origin or stored_object metadata.</endpoint>
     <endpoint method="DELETE" path="/v1/media-assets/{media_asset_id}">Mark one media_asset deleted.</endpoint>
+    <endpoint method="POST" path="/v1/media-assets/{media_asset_id}/refresh-metadata">Refresh supported remote provider metadata.</endpoint>
+    <endpoint method="POST" path="/v1/media-assets/{media_asset_id}/exports">Create an idempotent export job for one semantic variant.</endpoint>
+    <endpoint method="GET" path="/v1/export-jobs">List channel-account-scoped export jobs.</endpoint>
+    <endpoint method="GET" path="/v1/export-jobs/{export_job_id}">Read export progress, delivery, diagnostics, and output access.</endpoint>
+    <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/cancel">Request cooperative export cancellation.</endpoint>
+    <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/retry">Retry failed or canceled export work with a new generation.</endpoint>
+    <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/claim">Claim adapter delivery with a finite fenced lease.</endpoint>
+    <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/ack">Acknowledge successful Telegram delivery.</endpoint>
+    <endpoint method="GET" path="/internal/v1/export-jobs/{export_job_id}/download-access">Issue private container-reachable download access for trusted adapters without exposing the internal token or private MinIO hostname to Web clients.</endpoint>
+    <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/fail">Record retryable or terminal delivery failure.</endpoint>
+    <endpoint method="GET" path="/v1/export-jobs/{export_job_id}/download">Resolve account-scoped short-lived output access without exposing object keys.</endpoint>
     <endpoint method="GET" path="/v1/collections/inbox">Read the default inbox collection.</endpoint>
+    <endpoint method="POST" path="/v1/collections/{collection_id}/processing-runs">Atomically validate expected collection version, pin sources, seal exact membership, create the run graph, and detach only captured items.</endpoint>
     <endpoint method="POST" path="/v1/collections">Create a user collection.</endpoint>
     <endpoint method="GET" path="/v1/collections">List inbox and collections.</endpoint>
     <endpoint method="PATCH" path="/v1/collections/{collection_id}">Rename, archive, restore, or delete a collection with version checks.</endpoint>
@@ -163,6 +196,19 @@
     <endpoint method="GET" path="/internal/v1/reusable-transcripts">Find a channel-account-scoped successful single-source transcript artifact by stored_object id or checksum for duplicate media reuse.</endpoint>
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/artifacts">Record artifacts.</endpoint>
     <endpoint method="POST" path="/internal/v1/analysis-runs/{analysis_run_id}/diagnostics">Record diagnostics.</endpoint>
+    <endpoint method="GET" path="/internal/v1/export-jobs/queue">List claimable export jobs.</endpoint>
+    <endpoint method="POST" path="/internal/v1/export-jobs/{export_job_id}/claim">Claim an export job lease.</endpoint>
+    <endpoint method="POST" path="/internal/v1/export-jobs/{export_job_id}/progress">Record export progress and heartbeat.</endpoint>
+    <endpoint method="GET" path="/internal/v1/export-jobs/{export_job_id}/cancel-check">Read cooperative cancellation through the current attempt fence.</endpoint>
+    <endpoint method="POST" path="/internal/v1/export-jobs/{export_job_id}/finalize">Finalize output lineage or failure diagnostics.</endpoint>
+    <endpoint method="POST" path="/internal/v1/export-jobs/reclaim">Requeue stale leases or fail exhausted jobs using owner/token fencing.</endpoint>
+    <endpoint method="GET" path="/internal/v1/metadata-enrichment-jobs/queue">List due metadata enrichment jobs without performing provider I/O in the API.</endpoint>
+    <endpoint method="POST" path="/internal/v1/metadata-enrichment-jobs/{enrichment_id}/claim">Claim a metadata attempt through a finite owner/token lease.</endpoint>
+    <endpoint method="POST" path="/internal/v1/metadata-enrichment-jobs/{enrichment_id}/progress">Record bounded progress and preserve lease duration.</endpoint>
+    <endpoint method="POST" path="/internal/v1/metadata-enrichment-jobs/{enrichment_id}/finalize">Fenced finalize current media_asset provider metadata or schedule retry.</endpoint>
+    <endpoint method="POST" path="/internal/v1/metadata-enrichment-jobs/reclaim">Requeue expired leases with backoff or fail exhausted jobs.</endpoint>
+    <endpoint method="POST" path="/internal/v1/retention/sweep">Claim and process a bounded batch of eligible objects.</endpoint>
+    <endpoint method="POST" path="/internal/v1/retention/reconcile">Reconcile managed object prefixes, missing bodies, stale publication, and stale delete claims.</endpoint>
   </InternalApiSurface>
 
   <LifecycleAndRetention>
@@ -171,6 +217,19 @@
     <retention-rule>Selection snapshots remain immutable audit snapshots even if stored object bodies later expire.</retention-rule>
     <retention-rule>Artifacts can expire independently from run metadata; diagnostics explain unavailable artifacts.</retention-rule>
     <retention-rule>Deletion and export workflows must include media_asset, stored_object, collection, selection_snapshot, analysis_run, artifact, artifact_subject, diagnostic, and channel_surface records.</retention-rule>
+    <retention-rule>MEDIA_OBJECT_RETENTION_DAYS defaults to seven and controls each uploaded source generation from max(generation_published_at,last_successful_use_at); re-publication advances generation_published_at while preserving original created_at.</retention-rule>
+    <retention-rule>The API maintenance loop reclaims expired metadata-enrichment and export leases before retention reconciliation and sweeping; reconciliation dry-run never advances persistent cursors or mutates object state.</retention-rule>
+    <retention-rule>A one-time metadata-only upgrade may enqueue existing supported YouTube URL assets after canonicalizing exactly one video id; it stores no provider media bytes and invalid legacy references terminate with a stable diagnostic.</retention-rule>
+    <retention-rule>Stored-object publication uses attempt-owned staging, SHA-256 plus size uniqueness scoped by channel_account, deterministic managed keys, collision rejection, and reconciled losing uploads.</retention-rule>
+    <retention-rule>Source and delivery pins are acquired only while storage_status=available. Delete scheduling atomically proves no active pins, moves the row to delete_scheduled, and blocks new work before physical deletion.</retention-rule>
+    <retention-rule>Delete claims and export/delivery work carry owner, random token, finite lease, attempts, and compare-and-set transitions; stale claims are safely reclaimed.</retention-rule>
+    <retention-rule>YouTube source media is attempt-scoped scratch only; generated export output is a transient delivery object and becomes eligible immediately after successful delivery.</retention-rule>
+    <retention-rule>Application retention state is canonical. Bucket lifecycle rules are allowed only as a safety backstop for transient prefixes.</retention-rule>
+    <workspace-rule>S3-compatible storage is the durable byte authority; workers stream S3 bodies in bounded chunks into token-unique seekable attempt files without whole-object RAM buffering, remove partial downloads on failure, remove workspaces in outer finally paths, and periodically reap abandoned workspaces only after API lease expiry plus grace or absolute TTL.</workspace-rule>
+    <security-rule>Compose binds every private-state host port, including API and MinIO API/console, to 127.0.0.1. Public middleware rejects hostile Host and every disallowed non-empty Origin before handlers, including multipart; internal routes require PLATFORM_INTERNAL_TOKEN; output DTOs never expose object keys and access rechecks ownership plus succeeded/available state.</security-rule>
+    <operations-rule>Additive forward-only data migrations and disabled workers precede adapter rollout; export claims are enabled before retention sweeps. Historical stored-object aliases and provider URLs are repaired forward without destructive Down sections. Application rollback disables claims/sweeps, drains leases, and preserves additive tables. Physical deletion is irreversible.</operations-rule>
+    <configuration>MEDIA_OBJECT_RETENTION_DAYS=7; RETENTION_SWEEP_INTERVAL_SECONDS=300; RETENTION_BATCH_SIZE=100; RETENTION_CLAIM_SECONDS=120; OBJECT_ORPHAN_GRACE_MINUTES=60; EXPORT_DELIVERY_TTL_HOURS=24; EXPORT_DELIVERY_MAX_ATTEMPTS=5; EXPORT_WEB_ACCESS_TTL_HOURS=24; WORKSPACE_ORPHAN_GRACE_MINUTES=30; WORKSPACE_ABSOLUTE_TTL_HOURS=24; MEDIA_EXPORT_MAX_DURATION_SECONDS=14400; MEDIA_EXPORT_MAX_INPUT_BYTES=4294967296; MEDIA_EXPORT_MAX_OUTPUT_BYTES=2147483648; MEDIA_EXPORT_WORKSPACE_MAX_BYTES=6442450944; MEDIA_EXPORT_TIMEOUT_SECONDS=1800; MEDIA_EXPORT_CONCURRENCY=1.</configuration>
+    <observability>Stable diagnostics and maintenance logs cover provider resolution, export lease reclaim, retention claim/delete/reconcile, missing bodies, and workspace cleanup failure. Delivery failure codes are durable on fenced attempts; reclaim, reconcile, and sweep endpoints return structured counters. No dedicated metrics backend for queue age, retained/workspace bytes, or retry histograms is claimed by this packet.</observability>
   </LifecycleAndRetention>
 
   <AsrRuntime>
@@ -200,11 +259,11 @@
 
   <EvidenceContracts>
     <contract-evidence>Schema tests must prove target DTOs and route names exist, removed aliases are absent, and stale public product vocabulary does not appear in target operations.</contract-evidence>
-    <storage-evidence>Storage tests must cover target migration fragments, absence of legacy target tables, channel_account isolation, immutable selection snapshots, operation_request idempotency, step input linkage, lifecycle transitions, retention, diagnostics, channel_surface supersede rules, and artifact_subject lineage.</storage-evidence>
-    <api-evidence>API tests must cover ingestion, inbox membership, collection mutation, selection_snapshot sealing, analysis_run creation, prerequisite planning, event polling, cancellation, worker artifact stored_object registration, artifact access, and diagnostics queries.</api-evidence>
-    <worker-evidence>Worker tests must cover step_kind queue polling, analysis_run_step claim/progress/finalize, sealed selection_snapshot consumption, declared artifact step input materialization, API-safe diagnostic identifiers, partial diagnostics, and cancellation.</worker-evidence>
+    <storage-evidence>Storage tests must cover target migration fragments, channel-scoped digest identity, staged publication and reconciliation, atomic processing launch, pin/delete fencing, metadata enrichment enqueue/lease/retry/finalize/reclaim transitions, export/delivery lease transitions, physical deletion, immutable selection snapshots, operation_request idempotency, diagnostics, channel_surface supersede rules, and artifact_subject lineage.</storage-evidence>
+    <api-evidence>API tests must cover ingestion with atomic YouTube enrichment enqueue, account-scoped refresh, token-protected enrichment queue/claim/progress/finalize/reclaim, bounded provider metadata, collection mutation, selection_snapshot sealing, analysis_run retry/restore, export create/cancel/retry, delivery claim/ack/fail, scoped output access, retention operations, and diagnostics queries.</api-evidence>
+    <worker-evidence>Worker tests must cover step/metadata/export queue polling, owner-token claim/progress/finalize, sealed input consumption, provider metadata bounds, staged output publication, cancellation/process-group termination, resource limits, attempt-unique outer-finally cleanup, lease-aware reaping, diagnostics, and restart recovery.</worker-evidence>
     <asr-evidence>ASR evidence must cover CopperASR HTTP client configuration, service health, transcript artifact publication, sanitized provider metadata in run_manifest, stable asr_* diagnostics, hidden provider internals in normal Telegram/Web surfaces, explicit MCP service artifact previews, compose topology, and no-legacy runtime guardrails.</asr-evidence>
     <adapter-evidence>Adapter tests must prove Telegram, Web, and MCP operate over the same API-owned state and do not expose grouped submission modes as durable product state. Telegram tests must also prove target channel_account media_asset, selection_snapshot, analysis_run, artifact, and diagnostic request shapes plus channel_surface restart recovery, result duplicate prevention, supersede behavior, and custom local Bot API server session configuration.</adapter-evidence>
-    <runtime-evidence>Runtime smoke must prove a real item can be ingested, selected, analyzed, and resolved as artifacts with diagnostics available for failures.</runtime-evidence>
+    <runtime-evidence>Runtime smoke must prove real uploads and remote references can be ingested, atomically selected and analyzed, exported and delivered, restarted safely, reused by digest, cleaned from scratch/transient storage, and physically expired from MinIO while metadata persists.</runtime-evidence>
   </EvidenceContracts>
 </TechnologyStack>

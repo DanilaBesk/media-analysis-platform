@@ -15,6 +15,8 @@ RUNTIME_SERVICES=(
   mcp-server
   worker-transcription
   worker-agent-runner
+  worker-media-export
+  worker-metadata-enrichment
   postgres
   redis
   minio
@@ -301,6 +303,7 @@ require_materialized_runtime_service() {
 
 run_live_smoke() {
   local default_services
+  local internal_token
   local rendered_compose
   local service
 
@@ -318,8 +321,12 @@ run_live_smoke() {
 
   printf '%s starting compose stack and waiting for health convergence\n' "${MARKER}"
   docker compose -f "${COMPOSE_FILE}" up -d --build --force-recreate --wait >/dev/null
+  internal_token=$(docker compose -f "${COMPOSE_FILE}" exec -T api printenv PLATFORM_INTERNAL_TOKEN)
+  [[ -n "${internal_token}" ]] || fail "running API has no PLATFORM_INTERNAL_TOKEN"
   printf '%s running runtime-final target proof\n' "${MARKER}"
-  RUNTIME_E2E_POLL_TIMEOUT_SECONDS="${RUNTIME_E2E_POLL_TIMEOUT_SECONDS:-300}" python3 "${RUNTIME_E2E_SCRIPT}" >/dev/null
+  PLATFORM_INTERNAL_TOKEN="${internal_token}" \
+    RUNTIME_E2E_POLL_TIMEOUT_SECONDS="${RUNTIME_E2E_POLL_TIMEOUT_SECONDS:-300}" \
+    python3 "${RUNTIME_E2E_SCRIPT}" >/dev/null
   printf '%s compose live smoke completed successfully\n' "${MARKER}"
 }
 

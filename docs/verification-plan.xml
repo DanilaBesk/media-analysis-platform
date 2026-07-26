@@ -1,7 +1,7 @@
 <VerificationPlan VERSION="1.0.0">
   <GlobalPolicy>
     <deterministic-first>true</deterministic-first>
-    <source-of-truth>Verify the target chain media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; artifacts, plus channel_account/channel_surface recovery where channels render state.</source-of-truth>
+    <source-of-truth>Verify the target chain media_asset -&gt; collection/inbox -&gt; immutable selection_snapshot -&gt; analysis_run -&gt; artifacts and the independent media_asset -&gt; export_job -&gt; transient delivery chain, plus channel_account/channel_surface recovery where channels render state.</source-of-truth>
     <access-scope>The target product is single-user; verification must prove channel_account isolation, no accidental multi-user/workspace dependency, and no cross-channel mutation through stale callback or stale idempotency data.</access-scope>
     <diagnostics-policy>Rejected and partially processed records must produce stable diagnostics instead of disappearing.</diagnostics-policy>
     <retention-policy>Retention checks must prove metadata, stored object bodies, artifacts, diagnostics, and selection snapshots follow their separate lifecycle rules.</retention-policy>
@@ -17,8 +17,8 @@
       <required>
         <item>OpenAPI validates media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step_input, artifact, artifact_subject, diagnostic, channel_account, lifecycle, retention, pagination, idempotency, and error envelopes.</item>
         <item>Schema tests fail if target public contracts expose removed product route vocabulary, grouped-submission concepts, or aliases.</item>
-        <item>Enum tests cover media_asset, collection, selection_snapshot, analysis_run, analysis_run_step, artifact, and diagnostic statuses.</item>
-        <item>Diagnostic code tests cover ingestion rejection, channel-account mismatch, invalid selection snapshot, unavailable stored object, analysis prerequisite missing/failed/unavailable, worker failure, artifact expiry, retention denial, and adapter conflict.</item>
+        <item>Enum and transition tests cover media_asset, stored_object storage/retention, collection, selection_snapshot, analysis_run, analysis_run_step, export_job, export_delivery, artifact, and diagnostic statuses.</item>
+        <item>Diagnostic code tests cover ingestion rejection, channel-account mismatch, invalid selection snapshot, unavailable stored object, analysis prerequisite missing/failed/unavailable, export provider/lease/delivery failure, worker failure, artifact expiry, retention claim/delete/reconcile failure, workspace cleanup failure, and adapter conflict.</item>
       </required>
     </ContractTests>
 
@@ -38,6 +38,10 @@
         <item>Diagnostics are persisted for invalid media, invalid selection snapshot, worker error, artifact error, and retention action.</item>
         <item>Cross-channel-account reads and mutations fail for every table family.</item>
         <item>Channel_surface upsert can hand off one active address from a current materials panel to an analysis task surface without violating active address uniqueness or leaving two active surfaces for the same address.</item>
+        <item>Concurrent same-byte uploads under different filenames produce one channel-scoped SHA-256/size stored_object and one managed object-store body; staging publication failures, losing uploads, digest/size collision, deleted-body re-upload, and missing-body reconciliation are deterministic. Re-upload advances generation_published_at and cannot be swept before its fresh retention window.</item>
+        <item>Atomic processing launch validates expected collection version, pins available sources, seals exact membership, creates the run graph, and removes only captured rows; later arrivals remain and terminal delivery cannot clear them.</item>
+        <item>Export claims, retries, heartbeats, cancellation, progress, output registration, and finalization require owner plus attempt-token CAS; expired leases reclaim safely and stale attempts cannot mutate reassigned jobs.</item>
+        <item>Source/delivery pins, active holds, and retention scheduling share a database fence; start-versus-sweep, hold-versus-sweep, delivery-versus-sweep, delete-versus-finalize, stale deletion claim, and idempotent missing-object deletion races have deterministic outcomes.</item>
       </required>
     </StorageTests>
 
@@ -54,6 +58,9 @@
         <item>Resolve artifact preview and download metadata through channel-account-scoped API access.</item>
         <item>Query diagnostics by subject, severity, code, and correlation id.</item>
         <item>Empty collection and paginated list results encode items as [] rather than null.</item>
+        <item>One processing-launch request atomically returns snapshot, run, and detached captured ids; conflicts leave all state unchanged and retry/restore uses immutable snapshot history.</item>
+        <item>YouTube ingestion atomically creates an independent idempotent metadata_enrichment_job; refresh is account-scoped, internal routes are token-protected, owner/token fencing rejects stale progress/finalize, heartbeats preserve lease duration, retry/reclaim honors backoff and max attempts, and success stores only bounded title, thumbnail URL, and duration on the current media_asset without rewriting sealed snapshots. Export create/get/cancel/retry and delivery claim/ack/fail separately enforce account scope, idempotency conflicts, legal transitions, lease fencing, and finite TTL.</item>
+        <item>Output download rechecks account/job ownership, exposes no bucket/key, uses a short-lived attachment access window, and Web URL issuance does not acknowledge delivery.</item>
       </required>
     </ApiTests>
 
@@ -70,6 +77,8 @@
         <item>Transcription worker configuration points to the dedicated CopperASR service through COPPER_ASR_BASE_URL and rejects startup or execution paths that would require a removed legacy ASR backend.</item>
         <item>CopperASR responses produce transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics artifacts with sanitized provider metadata only in service artifacts.</item>
         <item>CopperASR service failures, invalid audio, empty transcript, and timeouts map to stable asr_* diagnostics and never collapse into generic user-facing backend-unavailable text after accepted input.</item>
+        <item>Analysis and export workers use attempt-token-unique directories, outer-finally cleanup, periodic lease-aware reaping, absolute TTL, bounded disk/input/output/duration/time/logs/concurrency, shell-free process groups, and cancellation that terminates children.</item>
+        <item>Export output staged publication and finalize crash cuts recover across restart; stale attempts cannot attach output, and cleanup failure emits workspace_cleanup_failed without changing terminal product state.</item>
       </required>
     </WorkerTests>
 
@@ -85,12 +94,15 @@
         <item>Compose-owned Telegram runtime uses the local Telegram Bot API service with local mode and shared file volume for getFile/download behavior, not the cloud Bot API file-size-limited download path.</item>
         <item>Callbacks use API ids and versions and cannot mutate another channel-account state.</item>
         <item>No user-facing execution mode is required to accumulate multiple items.</item>
+        <item>YouTube rows expose Скачать plus Убрать and uploaded-video rows expose В аудио plus Убрать; the matching main shortcut appears only for one eligible material.</item>
+        <item>Export progress, cancel/retry, delivery claim/ack/fail, and restart recovery use export_task_surface without removing inbox membership or replacing processing focus.</item>
       </Telegram>
       <Web>
         <item>Inbox, collection, selection builder, run list, run detail, artifact, diagnostics, and retention views use the same public API contract.</item>
         <item>Collection edits after run creation do not change the run detail selection snapshot.</item>
         <item>Normal Web UI labels use clear human wording for materials, groups, selection, progress, results, errors, and downloads instead of internal API vocabulary.</item>
         <item>Internal terms such as media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals appear only in explicit admin/debug contexts.</item>
+        <item>Enriched provider rows expose semantic export choices, progress, cancel/retry, and account-scoped download access over the same public API.</item>
       </Web>
       <MCP>
         <item>Tools create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, create_selection_snapshot, get_selection_snapshot, run_analysis, get_run, list_artifacts, and get_diagnostics share API behavior with Web and Telegram while using target vocabulary and channel_account_id schemas.</item>
@@ -104,7 +116,9 @@
         <item>Retention smoke expires or soft-deletes an artifact without corrupting selection or run history.</item>
         <item>Compose topology starts copper-asr, exposes /health internally, wires the transcription worker to COPPER_ASR_BASE_URL, and has no active legacy ASR model cache or dual-backend env switch.</item>
         <item>CopperASR E2E fixture harness validates short voice, representative long voice, corrupt audio, cancellation, and artifact-download cases before runtime suites consume them.</item>
-        <item>CopperASR Telegram E2E uploads the short voice fixture through a Telegram channel_account, proves inbox and channel_surface materialization, creates selection_snapshot and analysis_run_step-backed transcription, downloads transcript bytes, records result_artifact_surface document delivery, blocks duplicate delivery, and clears inbox membership after success.</item>
+        <item>CopperASR Telegram E2E uploads the short voice fixture through a Telegram channel_account, proves inbox and channel_surface materialization, atomically detaches the captured membership while creating selection_snapshot and analysis_run_step-backed transcription, accepts later inbox input during execution, downloads transcript bytes, records result_artifact_surface document delivery, blocks duplicate delivery, and preserves the later input after success.</item>
+        <item>The isolated export/retention Compose E2E selects the API and media-export worker plus their Compose dependencies, uploads identical bytes with different names, proves one canonical MinIO body, converts uploaded video, downloads and acknowledges the delivery, exercises restart recovery and workspace cleanup, physically deletes only its retention-eligible UUID-scoped source body, and runs dry-run reconciliation without touching unrelated state. It does not select the metadata-enrichment worker or prove YouTube title enrichment. Focused schema/API/worker/UI tests plus a separate live Compose metadata-enrichment smoke prove the metadata queue, worker resolution/finalization, bounded title metadata, and rendered enriched title without persisting provider source bytes.</item>
+        <item>Compose binds all API/MinIO/private-state host ports to loopback, authenticates internal routes, rejects hostile Host, disallowed Origin, DNS-rebinding and simple multipart CSRF, and proves cross-account/output-object denial without exposing object keys or secrets.</item>
       </required>
     </RuntimeTests>
   </TestingStrategy>
@@ -138,13 +152,17 @@
       <description>Workers execute only through analysis_run_step contracts and immutable declared inputs.</description>
       <required-evidence>Worker-common, transcription, and agent-runner tests pass for step_kind queue polling, step claim/progress/finalize, sealed selection_snapshot materialization, ordered inline and object-backed text document assembly, transcript/text-corpus artifact input materialization, diagnostics, and cancellation. Mixed text messages plus a text/* document must produce one ordered transcript without sending the document to CopperASR; unreadable textual objects must produce an explicit failed item diagnostic.</required-evidence>
     </Gate>
+    <Gate id="EV-MEDIA-EXPORT-RETENTION">
+      <description>Media storage, export, delivery, scratch, and physical retention are deterministic and restart-safe.</description>
+      <required-evidence>`go test ./...` in apps/api plus focused PostgreSQL/object-store tests prove SHA-256/size identity, staged publication crash cuts, atomic processing launch, source/delivery pin fencing, export/delivery lease transitions, metadata/export reclaim scheduling, retention claim/delete/reconcile, and stable diagnostics. `uv run pytest` for worker-common, transcription, agent-runner, media-export, metadata-enrichment, and Telegram proves chunked S3-to-attempt-file transfer without whole-object RAM buffering, partial-download cleanup, attempt cleanup, resource bounds, metadata provider/finalization behavior, output lifecycle, contextual actions, version-independent current-membership export validation, delivery acknowledgement, and restart recovery. Web tests/build prove semantic controls, enriched-title rendering, and scoped downloads. The isolated `infra/scripts/media-export-retention-e2e.py` proof covers filename-independent byte reuse, real MinIO publication/access, uploaded-video conversion and delivery, restart/workspace recovery, isolated physical source deletion, preserved history, and non-destructive reconciliation; it does not select the metadata-enrichment worker. A separate live Compose metadata-enrichment smoke proves current YouTube title resolution and fenced finalization through the metadata worker without treating that proof as part of the isolated export/retention E2E.</required-evidence>
+    </Gate>
     <Gate id="EV-ASR-RUNTIME">
       <description>CopperASR is the only active transcription backend.</description>
       <required-evidence>Focused worker tests pass for CopperASR HTTP client configuration, response normalization, run_manifest provider metadata, transcript artifact publication, stable asr_* diagnostics, and no fallback to removed ASR runtime; compose config includes copper-asr service health and worker COPPER_ASR_BASE_URL; `python3 infra/scripts/copper-asr-failure-e2e.py --json` proves failed corrupt-audio runs, retry, cancellation, policy artifacts, and resource-limit knobs against the live stack; `python3 infra/scripts/copper-asr-failure-e2e.py --json --require-invalid-audio` is the strict invalid-audio closure gate and now passes after the CopperASR provider classification fix; dependency/env scans plus `bash infra/scripts/no-legacy-asr-gate.sh` and `bash infra/scripts/no-legacy-target-gate.sh` reject active legacy ASR reintroduction; Telegram/Web normal surfaces hide provider internals while MCP service artifact previews expose explicit run_manifest metadata when requested.</required-evidence>
     </Gate>
     <Gate id="EV-ADAPTERS">
       <description>Telegram, Web, and MCP are thin adapters over shared API state.</description>
-      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-telegram-e2e.py --json` must prove the live Telegram voice-to-transcript delivery, result surface, duplicate guard, and inbox clear contract; focused Telegram regressions must prove successful transcript delivery uses Telegram document messages and hides the normal Result button after auto-delivery; Telegram transport regressions, compose-smoke, and `infra/scripts/telegram-local-bot-api-preflight.sh --runtime` must prove local Bot API endpoint parsing, aiogram local-mode session configuration, telegram-bot-api compose service health wiring, credential presence, shared read-only Bot API data volume, and running container cutover away from cloud Bot API. `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP; `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
+      <required-evidence>Adapter tests prove shared state behavior and absence of separate durable adapter product state. For CopperASR, `python3 infra/scripts/copper-asr-telegram-e2e.py --json` must prove atomic captured-membership detachment at launch, preservation of later inbox arrivals through result delivery, result surface, and duplicate guard; focused Telegram regressions must prove successful transcript delivery uses Telegram document messages and hides the normal Result button after auto-delivery. Export delivery tests prove failed-to-pending retry, lease reclaim, at-least-once post-send/pre-ack recovery, and best-effort duplicate retirement. Telegram transport regressions, compose-smoke, and `infra/scripts/telegram-local-bot-api-preflight.sh --runtime` must prove local Bot API endpoint parsing, aiogram local-mode session configuration, telegram-bot-api compose service health wiring, credential presence, shared read-only Bot API data volume, and running container cutover away from cloud Bot API. `python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json` must prove the live API/worker artifact and diagnostics contracts consumed by Web and MCP; `pnpm --dir apps/web test`, `pnpm --dir apps/mcp-server test`, and `pnpm --dir apps/mcp-server typecheck` prove the Web/MCP client and tool surfaces over those contracts.</required-evidence>
     </Gate>
     <Gate id="EV-COVERAGE-INVENTORY">
       <description>Executable coverage inventory reports the current per-surface baseline honestly.</description>
@@ -156,7 +174,7 @@
     </Gate>
     <Gate id="EV-RUNTIME">
       <description>Runtime smoke proves end-to-end behavior.</description>
-      <required-evidence>Compose proof captures target-only channel_account ingestion, inbox listing, selection_snapshot sealing, analysis_run execution, worker artifact publication, internal artifact download access, diagnostics query shape, channel-account denial, and history preservation after media_asset soft delete. CopperASR Telegram E2E must additionally upload the short voice fixture as Telegram voice, run transcription through the real worker/CopperASR service, assert transcript plus run policy artifacts, download transcript bytes, assert run_manifest provider=copperasr, record result_artifact_surface delivery, prevent duplicate delivery, and clear inbox membership. CopperASR API/Web/MCP E2E must upload the short voice fixture, run transcription through the same worker/CopperASR path, assert transcript plus run policy artifacts, download transcript bytes, assert run_manifest provider=copperasr, and preserve artifacts after source media deletion.</required-evidence>
+      <required-evidence>Compose proof captures target-only channel_account ingestion, inbox listing, atomic snapshot/run/captured-membership detach, analysis_run execution, worker artifact publication, internal artifact download access, diagnostics query shape, channel-account denial, and history preservation after media_asset soft delete. CopperASR Telegram E2E must additionally upload the short voice fixture as Telegram voice, run transcription through the real worker/CopperASR service, assert transcript plus run policy artifacts, accept later inbox input during the run, download transcript bytes, assert run_manifest provider=copperasr, record result_artifact_surface delivery, prevent duplicate delivery, and preserve the later input. CopperASR API/Web/MCP E2E must upload the short voice fixture, run transcription through the same worker/CopperASR path, assert transcript plus run policy artifacts, download transcript bytes, assert run_manifest provider=copperasr, and preserve artifacts after source media deletion.</required-evidence>
     </Gate>
   </EvidenceGates>
 
@@ -178,9 +196,17 @@
     <failure code="worker_failed">Internal execution failed and produced diagnostic context.</failure>
     <failure code="artifact_unavailable">Artifact is failed, expired, deleted, or not yet published.</failure>
     <failure code="retention_denied">Retention action violates audit, channel-account access, or lifecycle rules.</failure>
+    <failure code="export_provider_resolution_failed">Provider identity or current media could not be safely resolved.</failure>
+    <failure code="export_retry_exhausted">An export exhausted its fenced retry budget.</failure>
+    <failure code="export_delivery_failed">An adapter delivery attempt failed and remains retryable or expired by policy.</failure>
+    <failure code="retention_delete_failed">A fenced physical object deletion failed and is scheduled for bounded retry.</failure>
+    <failure code="retention_reconciled_orphan">Managed orphan, stale publication, missing body, or stale delete claim was reconciled.</failure>
+    <failure code="stored_object_missing">Metadata expected an available body but the managed object is absent.</failure>
+    <failure code="workspace_cleanup_failed">Attempt scratch cleanup failed; product terminal status remains unchanged and periodic cleanup retries.</failure>
   </FailureTaxonomy>
 
   <BeadsVerificationSequence>
+    <bead id="media-859r">Run GRACE contract review, content-addressed storage and retention tests, worker workspace cleanup tests, export and metadata-enrichment API/worker tests, Telegram and Web contextual-action/enriched-title tests, the isolated uploaded-video export/delivery/retention Compose proof, a separate live Compose metadata-enrichment smoke, full repository tests, iterative subagent review, and Git push verification.</bead>
     <bead id="media-7f3">Validate target architecture document, GRACE references, XML parsing, and architecture coverage checklist.</bead>
     <bead id="media-36a">Validate GRACE XML and stale vocabulary searches only.</bead>
     <bead id="media-49h">Run contract and schema checks.</bead>

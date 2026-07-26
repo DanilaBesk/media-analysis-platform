@@ -12,7 +12,12 @@ import type {
   DiagnosticSeverity,
   DiagnosticSubjectType,
   MediaAsset,
+  MediaAssetOrigin,
   MediaAssetSummary,
+  CreateExportJobInput,
+  ExportDownload,
+  ExportJob,
+  ExportJobStatus,
   ObservabilitySnapshot,
   PaginatedResponse,
   ReplaceCollectionItemsInput,
@@ -48,7 +53,14 @@ export interface WebUiApiClient {
   listMediaAssets(channelAccountId: ChannelAccountId, filter?: ListMediaAssetsFilter): Promise<PaginatedResponse<MediaAssetSummary>>;
   getMediaAsset(channelAccountId: ChannelAccountId, mediaAssetId: string): Promise<MediaAsset>;
   addMediaAsset(channelAccountId: ChannelAccountId, input: AddMediaAssetInput, collectionId?: string): Promise<MediaAsset>;
+  uploadMediaAsset(channelAccountId: ChannelAccountId, file: File, kind: string, displayName?: string, collectionId?: string): Promise<MediaAsset>;
   removeMediaAsset(channelAccountId: ChannelAccountId, mediaAssetId: string): Promise<MediaAsset>;
+  createExportJob(channelAccountId: ChannelAccountId, mediaAssetId: string, input: CreateExportJobInput): Promise<ExportJob>;
+  listExportJobs(channelAccountId: ChannelAccountId, filter?: ListExportJobsFilter): Promise<PaginatedResponse<ExportJob>>;
+  getExportJob(channelAccountId: ChannelAccountId, exportJobId: string): Promise<ExportJob>;
+  cancelExportJob(channelAccountId: ChannelAccountId, exportJobId: string): Promise<ExportJob>;
+  retryExportJob(channelAccountId: ChannelAccountId, exportJobId: string, idempotencyKey?: string): Promise<ExportJob>;
+  resolveExportDownload(channelAccountId: ChannelAccountId, exportJobId: string): Promise<ExportDownload>;
   getInboxCollection(channelAccountId: ChannelAccountId): Promise<Collection>;
   listCollections(channelAccountId: ChannelAccountId, page?: PageRequest): Promise<PaginatedResponse<Collection>>;
   getCollection(channelAccountId: ChannelAccountId, collectionId: string, page?: PageRequest): Promise<Collection>;
@@ -95,6 +107,10 @@ export interface ListAnalysisRunsFilter extends PageRequest {
 
 export interface ListArtifactsFilter extends PageRequest {
   analysisRunId?: string;
+}
+
+export interface ListExportJobsFilter extends PageRequest {
+  status?: ExportJobStatus | "";
 }
 
 export interface ListDiagnosticsFilter extends PageRequest {
@@ -170,6 +186,16 @@ function normalizeCollection(collection: Collection): Collection {
   return {
     ...collection,
     items: collection.items ?? [],
+  };
+}
+
+function createMediaAssetOrigin(input: AddMediaAssetInput): Pick<MediaAssetOrigin, "origin_type" | "origin_ref"> {
+  const originRef = input.origin.origin_ref
+    ?? (input.origin.origin_type === "text" ? input.origin.text : undefined)
+    ?? (input.origin.origin_type === "url" ? input.origin.url : undefined);
+  return {
+    origin_type: input.origin.origin_type,
+    origin_ref: originRef?.trim() || undefined,
   };
 }
 
@@ -306,9 +332,25 @@ export function createWebUiApiClient({
       const payload = await postJson<unknown>("/v1/media-assets", {
         channel_account_id: channelAccountID,
         kind: input.kind,
-        origin: input.origin,
+        origin: createMediaAssetOrigin(input),
         collection_id: collectionId || undefined,
         display_name: input.displayName.trim() || undefined,
+      });
+      return extractEnvelope<MediaAsset>(payload, "media_asset");
+    },
+
+    async uploadMediaAsset(channelAccountID, file, kind, displayName, collectionId) {
+      const form = new FormData();
+      form.append("metadata", JSON.stringify({
+        channel_account_id: channelAccountID,
+        kind,
+        collection_id: collectionId || undefined,
+        display_name: displayName?.trim() || file.name,
+      }));
+      form.append("file", file, file.name);
+      const payload = await requestJson<unknown>("/v1/media-assets/upload", {
+        method: "POST",
+        body: form,
       });
       return extractEnvelope<MediaAsset>(payload, "media_asset");
     },
@@ -319,6 +361,63 @@ export function createWebUiApiClient({
         method: "DELETE",
       });
       return extractEnvelope<MediaAsset>(payload, "media_asset");
+    },
+
+    async createExportJob(channelAccountID, mediaAssetId, input) {
+      const payload = await requestJson<unknown>(`/v1/media-assets/${mediaAssetId}/exports`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(input.idempotencyKey ? { "Idempotency-Key": input.idempotencyKey } : {}),
+        },
+        body: JSON.stringify({
+          channel_account_id: channelAccountID,
+          operation: input.operation,
+          variant: input.variant,
+          delivery_channel: input.deliveryChannel ?? "web",
+        }),
+      });
+      return extractEnvelope<ExportJob>(payload, "export_job");
+    },
+
+    listExportJobs(channelAccountID, filter = {}) {
+      const search = channelSearch(channelAccountID, filter);
+      if (filter.status) {
+        search.set("status", filter.status);
+      }
+      return requestJson<PaginatedResponse<ExportJob>>(`/v1/export-jobs?${search.toString()}`);
+    },
+
+    async getExportJob(channelAccountID, exportJobId) {
+      const search = channelSearch(channelAccountID);
+      const payload = await requestJson<unknown>(`/v1/export-jobs/${exportJobId}?${search.toString()}`);
+      return extractEnvelope<ExportJob>(payload, "export_job");
+    },
+
+    async cancelExportJob(channelAccountID, exportJobId) {
+      const payload = await postJson<unknown>(`/v1/export-jobs/${exportJobId}/cancel`, {
+        channel_account_id: channelAccountID,
+      });
+      return extractEnvelope<ExportJob>(payload, "export_job");
+    },
+
+    async retryExportJob(channelAccountID, exportJobId, idempotencyKey) {
+      const payload = await requestJson<unknown>(`/v1/export-jobs/${exportJobId}/retry`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+        },
+        body: JSON.stringify({
+          channel_account_id: channelAccountID,
+        }),
+      });
+      return extractEnvelope<ExportJob>(payload, "export_job");
+    },
+
+    resolveExportDownload(channelAccountID, exportJobId) {
+      const search = channelSearch(channelAccountID);
+      return requestJson<ExportDownload>(`/v1/export-jobs/${exportJobId}/download?${search.toString()}`);
     },
 
     async getInboxCollection(channelAccountID) {

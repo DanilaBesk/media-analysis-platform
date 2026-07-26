@@ -387,6 +387,7 @@ button[disabled] {
 }
 
 .status-pill[data-status="queued"],
+.status-pill[data-status="claimed"],
 .status-pill[data-status="running"],
 .status-pill[data-status="cancel_requested"],
 .status-pill[data-status="warning"] {
@@ -409,7 +410,8 @@ button[disabled] {
 }
 
 .artifact-groups,
-.outcome-table {
+.outcome-table,
+.export-job-actions {
   display: grid;
   gap: 0.75rem;
 }
@@ -457,6 +459,18 @@ button[disabled] {
 
 .timeline-entry {
   align-items: start;
+}
+
+.export-form {
+  margin-top: 1rem;
+}
+
+.export-job-row {
+  align-items: start;
+}
+
+.export-job-actions {
+  margin-top: 0;
 }
 
 .artifact-preview pre {
@@ -519,7 +533,8 @@ button[disabled] {
 
   .page-grid--inbox,
   .page-grid--builder,
-  .page-grid--detail {
+  .page-grid--detail,
+  .page-grid--exports {
     grid-template-columns: minmax(0, 1.45fr) minmax(20rem, 0.85fr);
   }
 
@@ -534,6 +549,14 @@ button[disabled] {
 
   .data-row:not(.media-row) {
     grid-template-columns: minmax(0, 1fr) minmax(16rem, 0.9fr);
+  }
+
+  .export-job-row {
+    grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.7fr);
+  }
+
+  .export-job-actions {
+    grid-column: 1 / -1;
   }
 
   .detail-grid {

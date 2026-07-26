@@ -32,10 +32,12 @@ type Dependencies struct {
 }
 
 type Server struct {
-	deps            Dependencies
-	logger          Logger
-	maxRequestBytes int64
-	readUploadBody  func(io.Reader) ([]byte, error)
+	deps                Dependencies
+	logger              Logger
+	maxRequestBytes     int64
+	readUploadBody      func(io.Reader) ([]byte, error)
+	strictLocalRequests bool
+	internalToken       string
 }
 
 type Option func(*Server)
@@ -54,6 +56,14 @@ func WithMaxRequestBytes(limit int64) Option {
 	}
 }
 
+func WithStrictLocalRequests(enabled bool) Option {
+	return func(s *Server) { s.strictLocalRequests = enabled }
+}
+
+func WithInternalToken(token string) Option {
+	return func(s *Server) { s.internalToken = strings.TrimSpace(token) }
+}
+
 func NewServer(deps Dependencies, opts ...Option) *Server {
 	server := &Server{
 		deps:            deps,
@@ -70,11 +80,21 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/media-assets",
 		"/v1/media-assets/upload",
 		"/v1/media-assets/{media_asset_id}",
+		"/v1/media-assets/{media_asset_id}/exports",
+		"/v1/export-jobs",
+		"/v1/export-jobs/{export_job_id}",
+		"/v1/export-jobs/{export_job_id}/cancel",
+		"/v1/export-jobs/{export_job_id}/retry",
+		"/v1/export-jobs/{export_job_id}/deliveries/claim",
+		"/v1/export-jobs/{export_job_id}/deliveries/ack",
+		"/v1/export-jobs/{export_job_id}/deliveries/fail",
+		"/v1/export-jobs/{export_job_id}/download",
 		"/v1/collections/inbox",
 		"/v1/collections",
 		"/v1/collections/{collection_id}",
 		"/v1/collections/{collection_id}/items",
 		"/v1/collections/{collection_id}/items/{media_asset_id}",
+		"/v1/collections/{collection_id}/processing-runs",
 		"/v1/selection-snapshots",
 		"/v1/selection-snapshots/{selection_snapshot_id}",
 		"/v1/analysis-runs",
@@ -106,6 +126,20 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/internal/v1/artifacts/{artifact_id}/download-access",
 		"/internal/v1/analysis-runs/{analysis_run_id}/artifacts",
 		"/internal/v1/analysis-runs/{analysis_run_id}/diagnostics",
+		"/internal/v1/export-jobs/queue",
+		"/internal/v1/export-jobs/{export_job_id}/claim",
+		"/internal/v1/export-jobs/{export_job_id}/progress",
+		"/internal/v1/export-jobs/{export_job_id}/cancel-check",
+		"/internal/v1/export-jobs/{export_job_id}/finalize",
+		"/internal/v1/export-jobs/{export_job_id}/download-access",
+		"/internal/v1/export-jobs/reclaim",
+		"/v1/media-assets/{media_asset_id}/refresh-metadata",
+		"/internal/v1/metadata-enrichment-jobs/queue",
+		"/internal/v1/metadata-enrichment-jobs/{enrichment_id}/claim",
+		"/internal/v1/metadata-enrichment-jobs/{enrichment_id}/progress",
+		"/internal/v1/metadata-enrichment-jobs/{enrichment_id}/finalize",
+		"/internal/v1/metadata-enrichment-jobs/reclaim",
+		"/internal/v1/retention/sweep",
 	} {
 		mux.HandleFunc("OPTIONS "+path, s.handleCORSPreflight)
 	}
@@ -115,6 +149,16 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/media-assets", s.withCORS(s.handleListTargetMediaAssets))
 	mux.HandleFunc("GET /v1/media-assets/{media_asset_id}", s.withCORS(s.handleGetTargetMediaAsset))
 	mux.HandleFunc("DELETE /v1/media-assets/{media_asset_id}", s.withCORS(s.handleDeleteTargetMediaAsset))
+	mux.HandleFunc("POST /v1/media-assets/{media_asset_id}/refresh-metadata", s.withCORS(s.handleRefreshMetadataEnrichment))
+	mux.HandleFunc("POST /v1/media-assets/{media_asset_id}/exports", s.withCORS(s.handleCreateExportJob))
+	mux.HandleFunc("GET /v1/export-jobs", s.withCORS(s.handleListExportJobs))
+	mux.HandleFunc("GET /v1/export-jobs/{export_job_id}", s.withCORS(s.handleGetExportJob))
+	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/cancel", s.withCORS(s.handleCancelExportJob))
+	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/retry", s.withCORS(s.handleRetryExportJob))
+	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/claim", s.withCORS(s.handleClaimExportDelivery))
+	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/ack", s.withCORS(s.handleAckExportDelivery))
+	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/fail", s.withCORS(s.handleFailExportDelivery))
+	mux.HandleFunc("GET /v1/export-jobs/{export_job_id}/download", s.withCORS(s.handleResolveExportDownload))
 	mux.HandleFunc("GET /v1/collections/inbox", s.withCORS(s.handleGetTargetInboxCollection))
 	mux.HandleFunc("POST /v1/collections", s.withCORS(s.handleCreateTargetCollection))
 	mux.HandleFunc("GET /v1/collections", s.withCORS(s.handleListTargetCollections))
@@ -122,6 +166,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/collections/{collection_id}", s.withCORS(s.handleUpdateTargetCollection))
 	mux.HandleFunc("POST /v1/collections/{collection_id}/items", s.withCORS(s.handleUpdateTargetCollectionItems))
 	mux.HandleFunc("DELETE /v1/collections/{collection_id}/items/{media_asset_id}", s.withCORS(s.handleRemoveTargetCollectionItem))
+	mux.HandleFunc("POST /v1/collections/{collection_id}/processing-runs", s.withCORS(s.handleStartTargetCollectionProcessingRun))
 	mux.HandleFunc("POST /v1/selection-snapshots", s.withCORS(s.handleCreateTargetSelectionSnapshot))
 	mux.HandleFunc("GET /v1/selection-snapshots/{selection_snapshot_id}", s.withCORS(s.handleGetTargetSelectionSnapshot))
 	mux.HandleFunc("POST /v1/analysis-runs", s.withCORS(s.handleCreateTargetAnalysisRun))
@@ -157,11 +202,33 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /internal/v1/artifacts/{artifact_id}/download-access", s.withCORS(s.handleResolveTargetArtifactDownloadAccess))
 	mux.HandleFunc("POST /internal/v1/analysis-runs/{analysis_run_id}/artifacts", s.withCORS(s.handleRecordTargetAnalysisRunArtifacts))
 	mux.HandleFunc("POST /internal/v1/analysis-runs/{analysis_run_id}/diagnostics", s.withCORS(s.handleRecordTargetAnalysisRunDiagnostics))
+	mux.HandleFunc("GET /internal/v1/export-jobs/queue", s.withCORS(s.handleListExportQueue))
+	mux.HandleFunc("POST /internal/v1/export-jobs/{export_job_id}/claim", s.withCORS(s.handleClaimExportJob))
+	mux.HandleFunc("POST /internal/v1/export-jobs/{export_job_id}/progress", s.withCORS(s.handleRecordExportProgress))
+	mux.HandleFunc("GET /internal/v1/export-jobs/{export_job_id}/cancel-check", s.withCORS(s.handleCheckExportCancel))
+	mux.HandleFunc("POST /internal/v1/export-jobs/{export_job_id}/finalize", s.withCORS(s.handleFinalizeExportJob))
+	mux.HandleFunc("GET /internal/v1/export-jobs/{export_job_id}/download-access", s.withCORS(s.handleResolveInternalExportDownloadAccess))
+	mux.HandleFunc("POST /internal/v1/export-jobs/reclaim", s.withCORS(s.handleReclaimExportJobs))
+	mux.HandleFunc("GET /internal/v1/metadata-enrichment-jobs/queue", s.withCORS(s.handleListMetadataEnrichmentQueue))
+	mux.HandleFunc("POST /internal/v1/metadata-enrichment-jobs/{enrichment_id}/claim", s.withCORS(s.handleClaimMetadataEnrichment))
+	mux.HandleFunc("POST /internal/v1/metadata-enrichment-jobs/{enrichment_id}/progress", s.withCORS(s.handleRecordMetadataEnrichmentProgress))
+	mux.HandleFunc("POST /internal/v1/metadata-enrichment-jobs/{enrichment_id}/finalize", s.withCORS(s.handleFinalizeMetadataEnrichment))
+	mux.HandleFunc("POST /internal/v1/metadata-enrichment-jobs/reclaim", s.withCORS(s.handleReclaimMetadataEnrichments))
+	mux.HandleFunc("POST /internal/v1/retention/sweep", s.withCORS(s.handleSweepRetention))
+	mux.HandleFunc("POST /internal/v1/retention/reconcile", s.withCORS(s.handleReconcileRetention))
 }
 
 func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		s.writeCORSHeaders(w, r)
+		if !s.writeCORSHeaders(w, r) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/internal/") && s.internalToken != "" &&
+			!constantTimeTokenEqual(r.Header.Get("X-Platform-Internal-Token"), s.internalToken) {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		next(w, r)
 	}
 }
@@ -175,6 +242,9 @@ func (s *Server) handleCORSPreflight(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
+	if s.strictLocalRequests && !isAllowedLocalHTTPHost(r.Host) {
+		return false
+	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	if origin == "" {
 		return true
@@ -188,6 +258,32 @@ func (s *Server) writeCORSHeaders(w http.ResponseWriter, r *http.Request) bool {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key")
 	w.Header().Set("Access-Control-Max-Age", "600")
 	return true
+}
+
+func isAllowedLocalHTTPHost(hostport string) bool {
+	parsed, err := neturl.Parse("//" + strings.TrimSpace(hostport))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Hostname()) {
+	case "localhost", "127.0.0.1", "::1", "api":
+		return true
+	default:
+		return false
+	}
+}
+
+func constantTimeTokenEqual(provided, expected string) bool {
+	provided = strings.TrimSpace(provided)
+	expected = strings.TrimSpace(expected)
+	if provided == "" || expected == "" || len(provided) != len(expected) {
+		return false
+	}
+	var mismatch byte
+	for index := range provided {
+		mismatch |= provided[index] ^ expected[index]
+	}
+	return mismatch == 0
 }
 
 func isAllowedLocalHTTPOrigin(origin string) bool {
@@ -363,12 +459,22 @@ func mapFinalStorageError(err error) apiError {
 	switch {
 	case errors.Is(err, storage.ErrCollectionVersionConflict):
 		return apiError{status: http.StatusConflict, code: "collection_version_conflict", message: "collection version conflict"}
+	case errors.Is(err, storage.ErrProcessingRunConflict):
+		return apiError{status: http.StatusConflict, code: "processing_run_conflict", message: "idempotency key was already used for a different processing request"}
 	case errors.Is(err, storage.ErrRetryRequiresTerminalStatus):
 		return apiError{status: http.StatusConflict, code: "retry_requires_terminal_status", message: "analysis run must be terminal before retry"}
+	case errors.Is(err, storage.ErrExportJobConflict):
+		return apiError{status: http.StatusConflict, code: "export_job_conflict", message: "export job state conflict"}
+	case errors.Is(err, storage.ErrMetadataEnrichmentConflict):
+		return apiError{status: http.StatusConflict, code: "metadata_enrichment_conflict", message: "metadata enrichment state conflict"}
+	case errors.Is(err, storage.ErrStoredObjectUnavailable):
+		return apiError{status: http.StatusConflict, code: "stored_object_unavailable", message: "stored object is not available"}
 	case errors.Is(err, storage.ErrMediaAssetNotFound),
 		errors.Is(err, storage.ErrCollectionNotFound),
 		errors.Is(err, storage.ErrSelectionSnapshotNotFound),
 		errors.Is(err, storage.ErrAnalysisRunNotFound),
+		errors.Is(err, storage.ErrExportJobNotFound),
+		errors.Is(err, storage.ErrMetadataEnrichmentNotFound),
 		errors.Is(err, storage.ErrArtifactNotFound):
 		return apiError{status: http.StatusNotFound, code: "not_found", message: "resource was not found"}
 	case errors.Is(err, storage.ErrArtifactResolutionFailed):

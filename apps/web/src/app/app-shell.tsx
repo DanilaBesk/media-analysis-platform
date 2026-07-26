@@ -4,6 +4,7 @@ import { NavLink } from "react-router-dom";
 const NAV_ITEMS = [
   { to: "/", label: "Материалы", end: true },
   { to: "/collections", label: "Группы" },
+  { to: "/exports", label: "Экспорт" },
   { to: "/runs", label: "Подборка" },
   { to: "/artifacts", label: "Результаты" },
   { to: "/diagnostics", label: "Проверки" },

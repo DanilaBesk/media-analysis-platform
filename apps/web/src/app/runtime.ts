@@ -23,6 +23,7 @@ import type { WebUiApiClient } from "../lib/api/client";
 export interface WebUiRuntimeEnv {
   apiBaseUrl: string;
   wsUrl: string;
+  channelAccountId: string;
 }
 
 export interface WebUiRuntime {
@@ -32,17 +33,24 @@ export interface WebUiRuntime {
 
 const DEFAULT_API_BASE_URL = "http://localhost:8080";
 const DEFAULT_WS_URL = "ws://localhost:8080/v1/ws";
+const CHANNEL_ACCOUNT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // START_BLOCK_BLOCK_RESOLVE_WEB_UI_RUNTIME_ENV
 export function resolveWebUiRuntimeEnv(
   rawEnv: Pick<ImportMetaEnv, "VITE_API_BASE_URL" | "VITE_WS_URL">,
+  runtimeConfig: Window["__WEB_UI_RUNTIME__"] = window.__WEB_UI_RUNTIME__,
 ): WebUiRuntimeEnv {
   const apiBaseUrl = rawEnv.VITE_API_BASE_URL?.trim() || DEFAULT_API_BASE_URL;
   const wsUrl = rawEnv.VITE_WS_URL?.trim() || DEFAULT_WS_URL;
+  const channelAccountId = runtimeConfig?.channelAccountId?.trim() ?? "";
+  if (!CHANNEL_ACCOUNT_ID_PATTERN.test(channelAccountId)) {
+    throw new Error("Web UI runtime configuration requires a valid channelAccountId UUID.");
+  }
 
   return {
     apiBaseUrl,
     wsUrl,
+    channelAccountId,
   };
 }
 // END_BLOCK_BLOCK_RESOLVE_WEB_UI_RUNTIME_ENV

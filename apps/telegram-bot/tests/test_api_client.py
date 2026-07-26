@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -96,6 +97,97 @@ def test_upload_media_asset_posts_multipart_target_payload() -> None:
     assert b'"display_name": "voice.ogg"' in body
     assert b'"message_id": 42' in body
     assert b"voice-bytes" in body
+
+
+def test_upload_media_asset_from_path_passes_a_file_stream_to_http_client(tmp_path: Path) -> None:
+    path = tmp_path / "large-video.mp4"
+    path.write_bytes(b"x" * 1024 * 1024)
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"media_asset": {"media_asset_id": "media-stream"}}
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            captured["timeout"] = kwargs["timeout"]
+
+        def __enter__(self) -> "Client":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, url: str, **kwargs: object) -> Response:
+            captured["url"] = url
+            captured["file"] = kwargs["files"]["file"][1]  # type: ignore[index]
+            return Response()
+
+    client = TelegramApiClient(
+        "http://api:8080",
+        urlopen_impl=lambda request: (_ for _ in ()).throw(AssertionError("byte multipart path must not be used")),
+        http_client_factory=Client,
+    )
+    asset = client.upload_media_asset(
+        channel_account_id="channel-account-1",
+        kind="video",
+        file_path=path,
+        file_name="large-video.mp4",
+        content_type="video/mp4",
+    )
+
+    stream = captured["file"]
+    assert asset == {"media_asset_id": "media-stream"}
+    assert captured["url"] == "http://api:8080/v1/media-assets/upload"
+    assert getattr(stream, "name") == str(path)
+    assert getattr(stream, "closed")
+
+
+def test_upload_media_asset_from_anonymous_stream_does_not_close_caller_handle() -> None:
+    captured: dict[str, object] = {}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"media_asset": {"media_asset_id": "media-stream"}}
+
+    class Client:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "Client":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, url: str, **kwargs: object) -> Response:
+            stream = kwargs["files"]["file"][1]  # type: ignore[index]
+            captured["stream"] = stream
+            captured["body"] = stream.read()
+            return Response()
+
+    stream = io.BytesIO(b"disk-backed-input")
+    stream.seek(5)
+    client = TelegramApiClient("http://api:8080", http_client_factory=Client)
+
+    asset = client.upload_media_asset(
+        channel_account_id="channel-account-1",
+        kind="video",
+        file_handle=stream,
+        file_name="video.mp4",
+        content_type="video/mp4",
+    )
+
+    assert asset == {"media_asset_id": "media-stream"}
+    assert captured["stream"] is stream
+    assert captured["body"] == b"disk-backed-input"
+    assert not stream.closed
 
 
 def test_remove_collection_item_uses_channel_account_query_and_expected_version() -> None:
@@ -197,6 +289,36 @@ def test_get_analysis_run_uses_channel_account_query_and_extracts_wrapped_object
 
     assert run == {"analysis_run_id": "run-1", "status": "queued"}
     assert captured["url"] == "http://api:8080/v1/analysis-runs/run-1?channel_account_id=channel-account-1"
+
+
+def test_export_client_uses_export_and_fenced_delivery_contracts() -> None:
+    requests = []
+
+    def fake_urlopen(request):
+        requests.append(request)
+        if request.full_url.endswith("/exports"):
+            return FakeHttpResponse(json.dumps({"export_job": {"export_job_id": "job-1", "status": "queued"}}).encode())
+        if request.full_url.endswith("/deliveries/claim"):
+            return FakeHttpResponse(json.dumps({"delivery": {"export_delivery_id": "delivery-1"}, "attempt_token": "t" * 16, "lease_owner": "bot"}).encode())
+        if request.full_url.endswith("/download-access"):
+            return FakeHttpResponse(json.dumps({"filename": "clip.mp4", "url": "http://minio:9000/clip.mp4"}).encode())
+        if "/download?" in request.full_url:
+            return FakeHttpResponse(json.dumps({"filename": "clip.mp4", "url": "http://files/clip.mp4"}).encode())
+        return FakeHttpResponse(json.dumps({"delivery": {"status": "delivered"}}).encode())
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    job = client.create_export_job(channel_account_id="channel-account-1", media_asset_id="media-1", operation="youtube_video", variant={"video_quality": "720p"}, idempotency_key="export-key")
+    claim = client.claim_export_delivery(channel_account_id="channel-account-1", export_job_id="job-1", lease_owner="bot")
+    client.acknowledge_export_delivery(channel_account_id="channel-account-1", export_job_id="job-1", export_delivery_id="delivery-1", lease_owner="bot", attempt_token="t" * 16)
+    download = client.get_export_download(channel_account_id="channel-account-1", export_job_id="job-1")
+    internal_download = client.get_internal_export_download_access(export_job_id="job-1")
+
+    assert job["export_job_id"] == "job-1"
+    assert claim["delivery"]["export_delivery_id"] == "delivery-1"
+    assert download["filename"] == "clip.mp4"
+    assert internal_download["url"] == "http://minio:9000/clip.mp4"
+    assert requests[0].headers["Idempotency-key"] == "export-key"
+    assert json.loads(requests[0].data.decode()) == {"channel_account_id": "channel-account-1", "operation": "youtube_video", "variant": {"video_quality": "720p"}, "delivery_channel": "telegram"}
 
 
 def test_list_analysis_run_events_uses_channel_account_query_and_page_size() -> None:

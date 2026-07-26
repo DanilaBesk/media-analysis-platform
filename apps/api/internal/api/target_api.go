@@ -1,10 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,9 +19,27 @@ type TargetService interface {
 	ListChannelAccounts(ctx context.Context, req TargetListChannelAccountsRequest) (TargetChannelAccountPage, error)
 	UpdateChannelAccount(ctx context.Context, req TargetUpdateChannelAccountRequest) (TargetChannelAccount, error)
 	CreateMediaAsset(ctx context.Context, req TargetCreateMediaAssetRequest) (TargetMediaAsset, error)
+	UploadMediaAsset(ctx context.Context, req TargetUploadMediaAssetRequest) (TargetMediaAsset, error)
 	ListMediaAssets(ctx context.Context, req TargetListMediaAssetsRequest) (TargetMediaAssetPage, error)
 	GetMediaAsset(ctx context.Context, req TargetGetMediaAssetRequest) (TargetMediaAsset, error)
 	DeleteMediaAsset(ctx context.Context, req TargetDeleteMediaAssetRequest) (TargetMediaAsset, error)
+	CreateExportJob(ctx context.Context, req TargetCreateExportJobRequest) (TargetExportJob, error)
+	ListExportJobs(ctx context.Context, req TargetListExportJobsRequest) (TargetExportJobPage, error)
+	GetExportJob(ctx context.Context, req TargetGetExportJobRequest) (TargetExportJob, error)
+	CancelExportJob(ctx context.Context, req TargetExportJobMutationRequest) (TargetExportJob, error)
+	RetryExportJob(ctx context.Context, req TargetExportJobMutationRequest) (TargetExportJob, error)
+	ClaimExportDelivery(ctx context.Context, req TargetClaimExportDeliveryRequest) (TargetExportDeliveryClaim, error)
+	FinalizeExportDelivery(ctx context.Context, req TargetFinalizeExportDeliveryRequest) (TargetExportDelivery, error)
+	ResolveExportDownload(ctx context.Context, req TargetGetExportJobRequest) (TargetExportDownload, error)
+	ResolveInternalExportDownloadAccess(ctx context.Context, req TargetGetExportJobRequest) (TargetExportDownload, error)
+	ListExportJobQueue(ctx context.Context, req TargetExportQueueRequest) (TargetExportJobPage, error)
+	ClaimExportJob(ctx context.Context, req TargetClaimExportJobRequest) (TargetExportJobClaim, error)
+	CheckExportJobCancel(ctx context.Context, req TargetExportAttemptRequest) (TargetExportCancelState, error)
+	RecordExportJobProgress(ctx context.Context, req TargetRecordExportProgressRequest) error
+	FinalizeExportJob(ctx context.Context, req TargetFinalizeExportJobRequest) (TargetExportJob, error)
+	ReclaimExportJobs(ctx context.Context, req TargetExportReclaimRequest) (TargetExportReclaimResult, error)
+	SweepRetention(ctx context.Context, req TargetRetentionSweepRequest) (TargetRetentionSweepResult, error)
+	ReconcileRetention(ctx context.Context, req TargetRetentionReconcileRequest) (TargetRetentionReconcileResult, error)
 	GetInboxCollection(ctx context.Context, req TargetGetInboxCollectionRequest) (TargetCollection, error)
 	CreateCollection(ctx context.Context, req TargetCreateCollectionRequest) (TargetCollection, error)
 	ListCollections(ctx context.Context, req TargetListCollectionsRequest) (TargetCollectionPage, error)
@@ -28,6 +47,7 @@ type TargetService interface {
 	UpdateCollection(ctx context.Context, req TargetUpdateCollectionRequest) (TargetCollection, error)
 	UpdateCollectionItems(ctx context.Context, req TargetUpdateCollectionItemsRequest) (TargetCollection, error)
 	RemoveCollectionItem(ctx context.Context, req TargetRemoveCollectionItemRequest) (TargetCollection, error)
+	StartCollectionProcessingRun(ctx context.Context, req TargetStartProcessingRunRequest) (TargetProcessingRun, error)
 	CreateSelectionSnapshot(ctx context.Context, req TargetCreateSelectionSnapshotRequest) (TargetSelectionSnapshot, error)
 	GetSelectionSnapshot(ctx context.Context, req TargetGetSelectionSnapshotRequest) (TargetSelectionSnapshot, error)
 	CreateAnalysisRun(ctx context.Context, req TargetCreateAnalysisRunRequest) (TargetAnalysisRun, error)
@@ -109,6 +129,7 @@ type TargetMediaAssetOrigin struct {
 	ContentType      string `json:"content_type,omitempty"`
 	SizeBytes        int64  `json:"size_bytes,omitempty"`
 	Checksum         string `json:"checksum,omitempty"`
+	StagingKey       string `json:"-"`
 	UploadBody       []byte `json:"-"`
 }
 
@@ -129,6 +150,13 @@ type TargetCreateMediaAssetMultipartMetadata struct {
 	DisplayName      string          `json:"display_name,omitempty"`
 	Metadata         json.RawMessage `json:"metadata,omitempty"`
 	IdempotencyKey   string          `json:"idempotency_key,omitempty"`
+}
+
+type TargetUploadMediaAssetRequest struct {
+	Metadata    TargetCreateMediaAssetMultipartMetadata
+	Filename    string
+	ContentType string
+	Reader      io.Reader
 }
 
 type TargetListMediaAssetsRequest struct {
@@ -162,6 +190,7 @@ type TargetMediaAsset struct {
 	DisplayName      string                 `json:"display_name"`
 	Status           string                 `json:"status"`
 	Metadata         json.RawMessage        `json:"metadata,omitempty"`
+	ProviderMetadata json.RawMessage        `json:"provider_metadata,omitempty"`
 	Diagnostics      []TargetDiagnostic     `json:"diagnostics,omitempty"`
 	CreatedAt        time.Time              `json:"created_at"`
 	UpdatedAt        time.Time              `json:"updated_at"`
@@ -219,6 +248,26 @@ type TargetRemoveCollectionItemRequest struct {
 	CollectionID     string
 	MediaAssetID     string
 	ExpectedVersion  int64
+}
+
+type TargetStartProcessingRunRequest struct {
+	ChannelAccountID    string                               `json:"channel_account_id"`
+	CollectionID        string                               `json:"-"`
+	ExpectedVersion     int64                                `json:"expected_version"`
+	Items               []TargetSelectionSnapshotItemRequest `json:"items"`
+	RunType             string                               `json:"run_type"`
+	OptionSnapshot      json.RawMessage                      `json:"option_snapshot,omitempty"`
+	Params              json.RawMessage                      `json:"params,omitempty"`
+	Delivery            json.RawMessage                      `json:"delivery,omitempty"`
+	CreatedViaChannelID string                               `json:"created_via_channel_id,omitempty"`
+	IdempotencyKey      string                               `json:"idempotency_key,omitempty"`
+}
+
+type TargetProcessingRun struct {
+	SelectionSnapshot     TargetSelectionSnapshot `json:"selection_snapshot"`
+	AnalysisRun           TargetAnalysisRun       `json:"analysis_run"`
+	DetachedMediaAssetIDs []string                `json:"detached_media_asset_ids"`
+	CollectionVersion     int64                   `json:"collection_version"`
 }
 
 type TargetCollectionPage struct {
@@ -762,6 +811,16 @@ func (s *Server) handleCreateTargetMediaAsset(w http.ResponseWriter, r *http.Req
 	if body.IdempotencyKey == "" {
 		body.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	}
+	if body.Origin.StoredObjectID != "" || body.Origin.ObjectRef != "" || body.Origin.StagingKey != "" ||
+		body.Origin.Checksum != "" || body.Origin.SizeBytes != 0 || len(body.Origin.UploadBody) != 0 ||
+		body.Origin.OriginType == "upload" {
+		s.writeAPIError(w, apiError{
+			status:  http.StatusBadRequest,
+			code:    "invalid_media_asset",
+			message: "uploaded media must use the multipart upload endpoint",
+		})
+		return
+	}
 	asset, err := s.deps.Target.CreateMediaAsset(r.Context(), body)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
@@ -776,74 +835,88 @@ func (s *Server) handleUploadTargetMediaAsset(w http.ResponseWriter, r *http.Req
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBytes)
-	if err := r.ParseMultipartForm(s.maxRequestBytes); err != nil {
+	reader, err := r.MultipartReader()
+	if err != nil {
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart media asset request must be valid form data", details: err.Error()})
 		return
 	}
-	metadataValue := strings.TrimSpace(r.FormValue("metadata"))
-	if metadataValue == "" {
+	var metadata *TargetCreateMediaAssetMultipartMetadata
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart media asset request could not be read", details: err.Error()})
+			return
+		}
+		switch part.FormName() {
+		case "metadata":
+			body, err := io.ReadAll(io.LimitReader(part, 1<<20))
+			_ = part.Close()
+			if err != nil || len(strings.TrimSpace(string(body))) == 0 {
+				s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart media asset request must include metadata"})
+				return
+			}
+			var decoded TargetCreateMediaAssetMultipartMetadata
+			decoder := json.NewDecoder(strings.NewReader(string(body)))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&decoded); err != nil {
+				s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart metadata must be valid JSON", details: err.Error()})
+				return
+			}
+			metadata = &decoded
+		case "file":
+			if metadata == nil {
+				_ = part.Close()
+				s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart metadata must precede the file"})
+				return
+			}
+			filename := strings.TrimSpace(part.FileName())
+			if filename == "" {
+				filename = "upload.bin"
+			}
+			contentType := strings.TrimSpace(part.Header.Get("Content-Type"))
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+			if metadata.IdempotencyKey == "" {
+				metadata.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+			}
+			uploadReader := io.Reader(part)
+			if s.readUploadBody != nil {
+				body, err := s.readUploadBody(part)
+				if err != nil {
+					_ = part.Close()
+					s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "media asset upload body could not be read", details: err.Error()})
+					return
+				}
+				uploadReader = bytes.NewReader(body)
+			}
+			asset, err := s.deps.Target.UploadMediaAsset(r.Context(), TargetUploadMediaAssetRequest{
+				Metadata: *metadata, Filename: filename, ContentType: contentType, Reader: uploadReader,
+			})
+			_ = part.Close()
+			if err != nil {
+				s.writeAPIError(w, mapFinalStorageError(err))
+				return
+			}
+			writeJSON(w, http.StatusCreated, map[string]any{"media_asset": asset})
+			return
+		default:
+			_ = part.Close()
+		}
+	}
+	if metadata == nil {
 		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart media asset request must include metadata"})
 		return
 	}
-	var metadata TargetCreateMediaAssetMultipartMetadata
-	decoder := json.NewDecoder(strings.NewReader(metadataValue))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&metadata); err != nil {
-		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart metadata must be valid JSON", details: err.Error()})
-		return
-	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart media asset request must include a file", details: err.Error()})
-		return
-	}
-	defer file.Close()
-	body, ok := s.readTargetMultipartUploadBody(w, file)
-	if !ok {
-		return
-	}
-	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	sum := sha256.Sum256(body)
-	checksum := fmt.Sprintf("sha256:%x", sum[:])
-	filename := strings.TrimSpace(header.Filename)
-	if filename == "" {
-		filename = "upload.bin"
-	}
-	storedObjectID := targetUploadStoredObjectID(metadata.ChannelAccountID, filename, checksum)
-	objectRef := "sources/uploads/" + storedObjectID + "/" + filename
-	displayName := firstNonEmpty(metadata.DisplayName, filename)
-	idempotencyKey := firstNonEmpty(metadata.IdempotencyKey, strings.TrimSpace(r.Header.Get("Idempotency-Key")))
-	asset, err := s.deps.Target.CreateMediaAsset(r.Context(), TargetCreateMediaAssetRequest{
-		ChannelAccountID: metadata.ChannelAccountID,
-		Origin: TargetMediaAssetOrigin{
-			OriginType:       "upload",
-			OriginRef:        objectRef,
-			ObjectRef:        objectRef,
-			OriginalFilename: filename,
-			StoredObjectID:   storedObjectID,
-			ContentType:      contentType,
-			SizeBytes:        int64(len(body)),
-			Checksum:         checksum,
-			UploadBody:       body,
-		},
-		Kind:           metadata.Kind,
-		DisplayName:    displayName,
-		CollectionID:   metadata.CollectionID,
-		Metadata:       metadata.Metadata,
-		IdempotencyKey: idempotencyKey,
-	})
-	if err != nil {
-		s.writeAPIError(w, mapFinalStorageError(err))
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"media_asset": asset})
+	s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_media_asset", message: "multipart media asset request must include a file"})
 }
 
-func targetUploadStoredObjectID(channelAccountID, filename, checksum string) string {
-	return stableTargetID(strings.Join([]string{"target-upload-sources-v2", channelAccountID, filename, checksum}, ":"))
+func targetUploadStoredObjectID(channelAccountID, filename, checksum string, sizeBytes int64) string {
+	_ = filename
+	return stableTargetID(strings.Join([]string{"target-upload-sources-v4", channelAccountID, checksum, fmt.Sprintf("%d", sizeBytes)}, ":"))
 }
 
 func (s *Server) handleListTargetMediaAssets(w http.ResponseWriter, r *http.Request) {
@@ -1063,6 +1136,28 @@ func (s *Server) handleRemoveTargetCollectionItem(w http.ResponseWriter, r *http
 		collection.Items = []TargetCollectionItem{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"collection": collection})
+}
+
+func (s *Server) handleStartTargetCollectionProcessingRun(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Target == nil {
+		s.writeAPIError(w, dependencyUnavailableError("target service is not configured"))
+		return
+	}
+	var body TargetStartProcessingRunRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_processing_run", message: "processing run request must be valid JSON", details: err.Error()})
+		return
+	}
+	body.CollectionID = r.PathValue("collection_id")
+	if body.IdempotencyKey == "" {
+		body.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	}
+	processingRun, err := s.deps.Target.StartCollectionProcessingRun(r.Context(), body)
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusCreated, processingRun)
 }
 
 func (s *Server) handleCreateTargetSelectionSnapshot(w http.ResponseWriter, r *http.Request) {
