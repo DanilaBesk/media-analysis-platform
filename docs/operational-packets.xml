@@ -541,6 +541,7 @@ Result artifact surfaces prevent duplicate Telegram delivery after restart while
       <file-6>docs/verification-plan.xml</file-6>
       <file-7>docs/knowledge-graph.xml</file-7>
       <file-8>docs/operational-packets.xml</file-8>
+      <file-9>docs/architecture/media-export-retention-contract.md</file-9>
     </write-scope>
     <contract-excerpt><![CDATA[
 Telegram resolves its chat/user scope into a channel_account and then calls target public operations with channel_account_id.
@@ -1615,4 +1616,26 @@ This packet supersedes older Telegram delivery-time inbox clearing: processing l
       <check>Full repository tests, builds, compose smoke, GRACE XML parsing, Beads closure, commit, and push pass.</check>
     </verification>
   </ExecutionPacket>
+  <HotfixPacket id="telegram-native-audio-export-delivery" status="completed" bead="media-rixe">
+    <purpose>Present successful audio exports in Telegram's native audio player instead of as generic document attachments.</purpose>
+    <write-scope>
+      <file-1>apps/telegram-bot/src/telegram_adapter/bot.py</file-1>
+      <file-2>apps/telegram-bot/tests/test_bot_runtime.py</file-2>
+      <file-3>docs/requirements.xml</file-3>
+      <file-4>docs/technology.xml</file-4>
+      <file-5>docs/development-plan.xml</file-5>
+      <file-6>docs/verification-plan.xml</file-6>
+      <file-7>docs/knowledge-graph.xml</file-7>
+      <file-8>docs/operational-packets.xml</file-8>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+The media-export worker continues to publish canonical M4A/AAC audio bodies. The Telegram adapter selects only the channel presentation from trusted download metadata: audio/* uses send_audio for immediate playback, while other media types retain send_document fallback. The adapter streams through the existing anonymous disk-backed handle, closes it on every terminal path, and acknowledges delivery only after the selected Telegram send method succeeds.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Focused Telegram regressions prove audio/mp4 dispatches through send_audio and does not call send_document.</check>
+      <check>A non-audio export still uses send_document.</check>
+      <check>Success, failure, cancellation, heartbeat loss, and acknowledgement ordering retain deterministic temporary-handle cleanup and fenced ownership.</check>
+      <check>Full Python tests, GRACE XML parsing, Compose adapter recreation, runtime log checks, Beads closure, commit, and push pass.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

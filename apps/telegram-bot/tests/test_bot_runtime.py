@@ -390,18 +390,21 @@ class FakeBot:
         edit_error: Exception | None = None,
         edit_errors: dict[tuple[int, int], Exception] | None = None,
         send_message_errors: dict[int, Exception] | None = None,
+        send_audio_errors: dict[int, Exception] | None = None,
         send_document_errors: dict[int, Exception] | None = None,
     ) -> None:
         self.file_bytes = file_bytes or {}
         self.edit_error = edit_error
         self.edit_errors = edit_errors or {}
         self.send_message_errors = send_message_errors or {}
+        self.send_audio_errors = send_audio_errors or {}
         self.send_document_errors = send_document_errors or {}
         self.set_commands_calls: list[tuple[list[Any], str]] = []
         self.get_file_calls: list[str] = []
         self.download_calls: list[str] = []
         self.edit_calls: list[dict[str, Any]] = []
         self.send_message_calls: list[dict[str, Any]] = []
+        self.send_audio_calls: list[dict[str, Any]] = []
         self.send_document_calls: list[dict[str, Any]] = []
         self.delete_message_calls: list[dict[str, int]] = []
         self.outbound_call_order: list[str] = []
@@ -456,6 +459,14 @@ class FakeBot:
         self.outbound_call_order.append("document")
         self.send_document_calls.append({"chat_id": chat_id, "document": document, **kwargs})
         return SimpleNamespace(message_id=9004)
+
+    async def send_audio(self, chat_id: int, audio: Any, **kwargs) -> SimpleNamespace:
+        scoped_error = self.send_audio_errors.get(chat_id)
+        if scoped_error is not None:
+            raise scoped_error
+        self.outbound_call_order.append("audio")
+        self.send_audio_calls.append({"chat_id": chat_id, "audio": audio, **kwargs})
+        return SimpleNamespace(message_id=9005)
 
     async def delete_message(self, chat_id: int, message_id: int) -> None:
         self.outbound_call_order.append("delete")
@@ -1034,7 +1045,7 @@ async def test_file_ingest_uses_anonymous_temp_stream_and_closes_it_after_upload
 
 
 @pytest.mark.asyncio
-async def test_export_delivery_claims_then_acks_and_records_send_failures() -> None:
+async def test_export_delivery_sends_authenticated_audio_as_playable_track_then_acks() -> None:
     class ExportGateway:
         def __init__(self) -> None:
             self.acks: list[dict[str, Any]] = []
@@ -1044,7 +1055,12 @@ async def test_export_delivery_claims_then_acks_and_records_send_failures() -> N
             return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
 
         def get_internal_export_download(self, **kwargs: Any) -> dict[str, Any]:
-            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+            return {
+                "filename": "export.m4a",
+                "content_type": "audio/mp4",
+                "url": "http://minio/export.m4a",
+                "size_bytes": 12,
+            }
 
         def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
             self.acks.append(kwargs)
@@ -1070,25 +1086,96 @@ async def test_export_delivery_claims_then_acks_and_records_send_failures() -> N
 
     await app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
 
-    assert len(bot.send_document_calls) == 1
+    assert len(bot.send_audio_calls) == 1
+    assert bot.send_audio_calls[0]["audio"].filename == "export.m4a"
+    assert bot.send_audio_calls[0]["caption"] == "Экспорт готов"
+    assert bot.send_document_calls == []
     assert gateway.acks[0]["export_job_id"] == "job-1"
     assert delivered_files[0].closed
-    failing_gateway = ExportGateway()
-    failing_app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), failing_gateway, bot=FakeBot(send_document_errors={10: RuntimeError("send failed")}))  # type: ignore[arg-type]
-    failing_files: list[Any] = []
 
-    def failing_export_file(_url: str, _size: int) -> Any:
-        handle = tempfile.TemporaryFile(mode="w+b")
-        handle.write(b"export-bytes")
-        handle.seek(0)
-        failing_files.append(handle)
-        return handle
 
-    failing_app._download_artifact_file = failing_export_file  # type: ignore[method-assign]
+@pytest.mark.asyncio
+async def test_export_delivery_keeps_non_audio_download_as_document() -> None:
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.acks: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "filename": "export.mp4",
+                "content_type": "video/mp4",
+                "url": "http://minio/export.mp4",
+                "size_bytes": 12,
+            }
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            return {}
+
+        def fail_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("successful delivery must not be failed")
+
+    gateway = ExportGateway()
+    bot = FakeBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    delivered_file = tempfile.TemporaryFile(mode="w+b")
+    delivered_file.write(b"export-bytes")
+    delivered_file.seek(0)
+    app._download_artifact_file = lambda _url, _size: delivered_file  # type: ignore[method-assign]
+
+    await app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+
+    assert bot.send_audio_calls == []
+    assert len(bot.send_document_calls) == 1
+    assert bot.send_document_calls[0]["document"].filename == "export.mp4"
+    assert bot.send_document_calls[0]["caption"] == "Экспорт готов"
+    assert delivered_file.closed
+    assert len(gateway.acks) == 1
+
+
+@pytest.mark.asyncio
+async def test_export_delivery_records_audio_send_failure_and_closes_file() -> None:
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.acks: list[dict[str, Any]] = []
+            self.failures: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "filename": "export.m4a",
+                "content_type": "audio/aac",
+                "url": "http://minio/export.m4a",
+                "size_bytes": 12,
+            }
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            return {}
+
+        def fail_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.failures.append(kwargs)
+            return {}
+
+    gateway = ExportGateway()
+    bot = FakeBot(send_audio_errors={10: RuntimeError("send failed")})
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    delivered_file = tempfile.TemporaryFile(mode="w+b")
+    delivered_file.write(b"export-bytes")
+    delivered_file.seek(0)
+    app._download_artifact_file = lambda _url, _size: delivered_file  # type: ignore[method-assign]
+
     with pytest.raises(RuntimeError, match="send failed"):
-        await failing_app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
-    assert failing_gateway.failures[0]["failure_code"] == "telegram_delivery_failed"
-    assert failing_files[0].closed
+        await app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+
+    assert gateway.acks == []
+    assert gateway.failures[0]["failure_code"] == "telegram_delivery_failed"
+    assert delivered_file.closed
 
 
 @pytest.mark.asyncio
@@ -1106,7 +1193,12 @@ async def test_export_delivery_heartbeats_repeatedly_until_blocked_send_finishes
             return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
 
         def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+            return {
+                "filename": "export.m4a",
+                "content_type": "audio/mp4",
+                "url": "http://minio/export.m4a",
+                "size_bytes": 12,
+            }
 
         def heartbeat_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
             self.heartbeats.append(kwargs)
@@ -1127,11 +1219,11 @@ async def test_export_delivery_heartbeats_repeatedly_until_blocked_send_finishes
             self.send_started = asyncio.Event()
             self.release_send = asyncio.Event()
 
-        async def send_document(self, chat_id: int, document: Any, **kwargs: Any) -> SimpleNamespace:
+        async def send_audio(self, chat_id: int, audio: Any, **kwargs: Any) -> SimpleNamespace:
             events.append("send_started")
             self.send_started.set()
             await self.release_send.wait()
-            result = await super().send_document(chat_id, document, **kwargs)
+            result = await super().send_audio(chat_id, audio, **kwargs)
             events.append("send_finished")
             return result
 
@@ -1191,7 +1283,12 @@ async def test_export_delivery_stops_without_ack_when_heartbeat_loses_the_fence(
             return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
 
         def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
-            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+            return {
+                "filename": "export.m4a",
+                "content_type": "audio/mp4",
+                "url": "http://minio/export.m4a",
+                "size_bytes": 12,
+            }
 
         def heartbeat_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
             raise RuntimeError("stale delivery claim")
@@ -1210,14 +1307,14 @@ async def test_export_delivery_stops_without_ack_when_heartbeat_loses_the_fence(
             self.send_started = asyncio.Event()
             self.send_cancelled = asyncio.Event()
 
-        async def send_document(self, chat_id: int, document: Any, **kwargs: Any) -> SimpleNamespace:
+        async def send_audio(self, chat_id: int, audio: Any, **kwargs: Any) -> SimpleNamespace:
             self.send_started.set()
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 self.send_cancelled.set()
                 raise
-            return await super().send_document(chat_id, document, **kwargs)
+            return await super().send_audio(chat_id, audio, **kwargs)
 
     gateway = ExportGateway()
     bot = BlockingBot()

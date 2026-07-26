@@ -273,6 +273,7 @@
     <completed bead="media-b8s.3.4">Final readiness packet is published in docs/architecture/copper-asr-final-readiness-packet.md with verification commands, runtime proof, Beads closure, residual risks, and commit readiness context.</completed>
     <completed bead="media-b8s">Root CopperASR migration is complete after implementation, coverage, QA, final readiness, and runtime proof.</completed>
     <completed bead="media-kzwf">Transcription now assembles inline text and object-backed text/* documents in immutable selection order without ASR; live compose run bb8c3046-3a41-49ba-b868-30ce5119d4fe completed with three included items, no skips, no failures, and no diagnostics.</completed>
+    <completed bead="media-rixe">Telegram audio/* exports now open in the native audio player while non-audio results preserve document fallback, temporary-file cleanup, heartbeat fencing, and acknowledgement ordering.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>
@@ -284,6 +285,7 @@
     <item>Retention and diagnostics are not deferred behind UI-only behavior.</item>
     <item>Adapters remain thin and share API-owned state.</item>
     <item>media-859r proves content-addressed uploaded sources, seven-day configurable retention, physical object expiry, workspace cleanup, remote metadata enrichment, independent export jobs, contextual Telegram/Web export actions, and owner plus attempt-token delivery heartbeats for long Telegram transfers.</item>
+    <item>media-rixe proves Telegram presents audio exports with send_audio without changing the canonical M4A/AAC artifact, S3 retention, or delivery ownership semantics.</item>
     <item>Remote metadata enrichment uses additive migration 0003 and an API-owned fenced queue that is independent from export_jobs and analysis_runs; successful finalization updates current media_asset state while immutable selection snapshots retain captured values.</item>
   </DefinitionOfDone>
 </DevelopmentPlan>

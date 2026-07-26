@@ -1487,11 +1487,11 @@ class TelegramInboxApp:
             raise RuntimeError("export_delivery_size_invalid")
         content = await self._download_export_artifact_file(str(download["url"]), size_bytes)
         try:
-            await self.bot.send_document(
-                chat_id=chat_id,
-                document=_TemporaryInputFile(content, filename=str(download["filename"])),
-                caption="Экспорт готов",
-            )
+            export_file = _TemporaryInputFile(content, filename=str(download["filename"]))
+            if str(download.get("content_type") or "").strip().lower().startswith("audio/"):
+                await self.bot.send_audio(chat_id=chat_id, audio=export_file, caption="Экспорт готов")
+            else:
+                await self.bot.send_document(chat_id=chat_id, document=export_file, caption="Экспорт готов")
         finally:
             content.close()
 
