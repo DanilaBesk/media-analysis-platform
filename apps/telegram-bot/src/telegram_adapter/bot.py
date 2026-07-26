@@ -73,6 +73,7 @@ from telegram_adapter.gateway import (
     TERMINAL_EXPORT_STATUSES,
     TelegramFileInput,
     TelegramInboxGateway,
+    youtube_audio_export_ready,
 )
 from telegram_adapter.i18n import DEFAULT_LOCALE, TelegramLocaleService, TelegramTextKey, build_localized_commands
 from telegram_adapter.policy import TelegramChatScope
@@ -88,6 +89,32 @@ _BUFFER_LINK_PREVIEW_OPTIONS = LinkPreviewOptions(is_disabled=True)
 _MAX_EXPORT_DELIVERY_BYTES = 2 * 1024 * 1024 * 1024
 _EXPORT_DELIVERY_LEASE_SECONDS = 120
 _EXPORT_DELIVERY_HEARTBEAT_INTERVAL_SECONDS = 30.0
+_MAX_TELEGRAM_AUDIO_METADATA_CHARS = 64
+
+
+def _telegram_music_metadata(download: JsonObject) -> dict[str, Any] | None:
+    presentation = download.get("presentation")
+    if not isinstance(presentation, dict) or presentation.get("kind") != "music":
+        return None
+
+    metadata: dict[str, Any] = {}
+    title = _bounded_telegram_audio_metadata(presentation.get("title"))
+    performer = _bounded_telegram_audio_metadata(presentation.get("performer"))
+    if title is not None:
+        metadata["title"] = title
+    if performer is not None:
+        metadata["performer"] = performer
+    duration_seconds = presentation.get("duration_seconds")
+    if isinstance(duration_seconds, int) and not isinstance(duration_seconds, bool) and duration_seconds > 0:
+        metadata["duration"] = duration_seconds
+    return metadata
+
+
+def _bounded_telegram_audio_metadata(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    sanitized = "".join(character for character in value if ord(character) >= 32 and ord(character) != 127).strip()
+    return sanitized[:_MAX_TELEGRAM_AUDIO_METADATA_CHARS] or None
 
 
 class _TemporaryInputFile(InputFile):
@@ -449,8 +476,12 @@ class TelegramInboxApp:
                     "expected_version": expected_version,
                     "media_asset_id": media_asset_id,
                     "mode": "youtube",
+                    "audio_ready": youtube_audio_export_ready(item),
                 }
-                await self._edit_callback_status(callback, status, prefix="Скачать с YouTube\nВыбери формат.\n\n")
+                prefix = "Скачать с YouTube\nВыбери формат.\n\n"
+                if not self.export_selections[key]["audio_ready"]:
+                    prefix = "Скачать с YouTube\nАудио станет доступно после загрузки метаданных.\n\n"
+                await self._edit_callback_status(callback, status, prefix=prefix)
                 await callback.answer("Выбери формат")
                 return
             if action in {"ea", "eq"}:
@@ -1489,10 +1520,14 @@ class TelegramInboxApp:
         try:
             export_file = _TemporaryInputFile(content, filename=str(download["filename"]))
             content_type = str(download.get("content_type") or "").split(";", 1)[0].strip().lower()
-            if content_type in {"audio/ogg", "audio/opus"}:
+            if content_type in {"audio/ogg", "audio/opus", "application/ogg"}:
                 await self.bot.send_voice(chat_id=chat_id, voice=export_file, caption="Экспорт готов")
             elif content_type.startswith("audio/"):
-                await self.bot.send_audio(chat_id=chat_id, audio=export_file, caption="Экспорт готов")
+                music_metadata = _telegram_music_metadata(download)
+                if music_metadata is None:
+                    await self.bot.send_audio(chat_id=chat_id, audio=export_file, caption="Экспорт готов")
+                else:
+                    await self.bot.send_audio(chat_id=chat_id, audio=export_file, **music_metadata)
             else:
                 await self.bot.send_document(chat_id=chat_id, document=export_file, caption="Экспорт готов")
         finally:
@@ -2670,10 +2705,11 @@ def _material_action_row(
 
 def _export_selection_rows(selection: JsonObject) -> list[list[InlineKeyboardButton]]:
     if selection.get("mode") == "youtube":
-        return [
-            [InlineKeyboardButton(text="Аудио", callback_data=_callback_payload("ey"))],
-            [InlineKeyboardButton(text="Видео", callback_data=_callback_payload("ev"))],
-        ]
+        rows: list[list[InlineKeyboardButton]] = []
+        if selection.get("audio_ready") is True:
+            rows.append([InlineKeyboardButton(text="Аудио", callback_data=_callback_payload("ey"))])
+        rows.append([InlineKeyboardButton(text="Видео", callback_data=_callback_payload("ev"))])
+        return rows
     collection_id = _encode_callback_token(str(selection["collection_id"]))
     version = _encode_callback_version(int(selection["expected_version"]))
     media_asset_id = _encode_callback_token(str(selection["media_asset_id"]))

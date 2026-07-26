@@ -2879,19 +2879,23 @@ FOR UPDATE`, job.ChannelAccountID, job.IdempotencyKey), &existing)
 		}
 		result, err := tx.ExecContext(ctx, `
 INSERT INTO export_jobs (
-    id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+    id, channel_account_id, media_asset_id, operation, delivery_channel, variant,
+    output_profile, presentation_title, presentation_performer,
+    presentation_duration_seconds, presentation_frozen_at, status, version,
     idempotency_key, retry_generation, attempt_no, attempt_token, lease_owner,
     lease_expires_at, heartbeat_at, max_attempts, progress, output_stored_object_id,
     diagnostic_id, created_at, started_at, completed_at, cancel_requested_at,
     canceled_at, expires_at
 )
-SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25
+SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30
 FROM media_assets
 WHERE id=$3 AND channel_account_id=$2 AND status='available' AND deleted_at IS NULL
 ON CONFLICT (channel_account_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
 			job.ID, job.ChannelAccountID, job.MediaAssetID, job.Operation,
-			withDefault(job.DeliveryChannel, "telegram"), jsonOrDefault(job.VariantJSON, "{}"), withDefault(job.Status, "queued"),
-			positiveVersion(job.Version), nullString(job.IdempotencyKey), job.RetryGeneration,
+			withDefault(job.DeliveryChannel, "telegram"), jsonOrDefault(job.VariantJSON, "{}"), job.OutputProfile,
+			nullString(job.PresentationTitle), nullString(job.PresentationPerformer), job.PresentationDurationSeconds,
+			job.PresentationFrozenAt, withDefault(job.Status, "queued"), positiveVersion(job.Version),
+			nullString(job.IdempotencyKey), job.RetryGeneration,
 			job.AttemptNo, nullString(job.AttemptToken), nullString(job.LeaseOwner),
 			job.LeaseExpiresAt, job.HeartbeatAt, positiveInt(job.MaxAttempts),
 			jsonOrDefault(job.ProgressJSON, "{}"), nullString(job.OutputStoredObjectID),
@@ -2946,7 +2950,9 @@ WHERE channel_account_id=$1 AND idempotency_key=$2`, channelAccountID, idempoten
 }
 
 const exportJobSelect = `
-SELECT id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+SELECT id, channel_account_id, media_asset_id, operation, delivery_channel, variant,
+       output_profile, COALESCE(presentation_title,''), COALESCE(presentation_performer,''),
+       presentation_duration_seconds, presentation_frozen_at, status, version,
        COALESCE(idempotency_key,''), retry_generation, attempt_no,
        COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
        heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
@@ -3035,7 +3041,9 @@ WHERE id=$1 AND status='queued' AND attempt_no < max_attempts
             AND p.purpose='source' AND p.released_at IS NULL
       )
   )
-RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant,
+          output_profile, COALESCE(presentation_title,''), COALESCE(presentation_performer,''),
+          presentation_duration_seconds, presentation_frozen_at, status, version,
           COALESCE(idempotency_key,''), retry_generation, attempt_no,
           COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
           heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
@@ -3100,7 +3108,9 @@ SET status=$3, version=version+1, cancel_requested_at=COALESCE(cancel_requested_
     canceled_at=CASE WHEN $3='canceled' THEN $4 ELSE canceled_at END,
     completed_at=CASE WHEN $3='canceled' THEN $4 ELSE completed_at END
 WHERE id=$1 AND channel_account_id=$2
-RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant,
+          output_profile, COALESCE(presentation_title,''), COALESCE(presentation_performer,''),
+          presentation_duration_seconds, presentation_frozen_at, status, version,
           COALESCE(idempotency_key,''), retry_generation, attempt_no,
           COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
           heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
@@ -3178,7 +3188,9 @@ SET status='queued', version=version+1, retry_generation=retry_generation+1,
     heartbeat_at=NULL, progress='{}'::jsonb, diagnostic_id=NULL, completed_at=NULL,
     cancel_requested_at=NULL, canceled_at=NULL, expires_at=NULL
 WHERE id=$1 AND channel_account_id=$2
-RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant,
+          output_profile, COALESCE(presentation_title,''), COALESCE(presentation_performer,''),
+          presentation_duration_seconds, presentation_frozen_at, status, version,
           COALESCE(idempotency_key,''), retry_generation, attempt_no,
           COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
           heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
@@ -3267,20 +3279,27 @@ WHERE ma.id=(SELECT media_asset_id FROM export_jobs WHERE id=$1)
 		}
 		row := tx.QueryRowContext(ctx, `
 UPDATE export_jobs
-SET status=$4, version=version+1, output_stored_object_id=$5,
-    diagnostic_id=$6, completed_at=$7,
+SET status=$4, version=version+1,
+    output_stored_object_id=CASE WHEN $4='succeeded' THEN $5 ELSE output_stored_object_id END,
+    diagnostic_id=CASE WHEN $4='failed' THEN $6 ELSE diagnostic_id END,
+    completed_at=$7,
+    presentation_duration_seconds=CASE WHEN $4='succeeded' THEN COALESCE($8, presentation_duration_seconds) ELSE presentation_duration_seconds END,
+    presentation_frozen_at=CASE WHEN $4='succeeded' THEN COALESCE($9, presentation_frozen_at) ELSE presentation_frozen_at END,
     canceled_at=CASE WHEN $4='canceled' THEN $7 ELSE canceled_at END,
     lease_expires_at=NULL, heartbeat_at=$7
 WHERE id=$1 AND lease_owner=$2 AND attempt_token=$3
   AND lease_expires_at > $7
-RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version,
+RETURNING id, channel_account_id, media_asset_id, operation, delivery_channel, variant,
+          output_profile, COALESCE(presentation_title,''), COALESCE(presentation_performer,''),
+          presentation_duration_seconds, presentation_frozen_at, status, version,
           COALESCE(idempotency_key,''), retry_generation, attempt_no,
           COALESCE(attempt_token,''), COALESCE(lease_owner,''), lease_expires_at,
           heartbeat_at, max_attempts, progress, COALESCE(output_stored_object_id::text,''),
           COALESCE(diagnostic_id::text,''), created_at, started_at, completed_at,
-          cancel_requested_at, canceled_at, expires_at`, params.ExportJobID,
+			cancel_requested_at, canceled_at, expires_at`, params.ExportJobID,
 			params.LeaseOwner, params.AttemptToken, status, nullString(params.Output.ID),
-			nullString(params.DiagnosticID), params.CompletedAt)
+			nullString(params.DiagnosticID), params.CompletedAt,
+			params.PresentationDurationSeconds, params.PresentationFrozenAt)
 		return scanExportJob(row, &job)
 	})
 	return job, err
@@ -3723,7 +3742,10 @@ type exportJobScanner interface {
 func scanExportJob(scanner exportJobScanner, job *ExportJobRecord) error {
 	return scanner.Scan(
 		&job.ID, &job.ChannelAccountID, &job.MediaAssetID, &job.Operation,
-		&job.DeliveryChannel, &job.VariantJSON, &job.Status, &job.Version, &job.IdempotencyKey,
+		&job.DeliveryChannel, &job.VariantJSON, &job.OutputProfile,
+		&job.PresentationTitle, &job.PresentationPerformer,
+		&job.PresentationDurationSeconds, &job.PresentationFrozenAt,
+		&job.Status, &job.Version, &job.IdempotencyKey,
 		&job.RetryGeneration, &job.AttemptNo, &job.AttemptToken, &job.LeaseOwner,
 		&job.LeaseExpiresAt, &job.HeartbeatAt, &job.MaxAttempts, &job.ProgressJSON,
 		&job.OutputStoredObjectID, &job.DiagnosticID, &job.CreatedAt, &job.StartedAt,

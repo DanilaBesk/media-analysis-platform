@@ -444,8 +444,12 @@ describe("createWebUiRoutes", () => {
       "128",
       "192",
       "256",
+      "320",
     ]);
+    expect(screen.getByRole("button", { name: "Аудио" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Скачать" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Видео" }));
+    expect(screen.getByRole("button", { name: "Скачать" })).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Качество видео"), { target: { value: "1080p" } });
     fireEvent.click(screen.getByRole("button", { name: "Скачать" }));
 

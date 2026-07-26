@@ -8,7 +8,7 @@
       "properties": {
         "audio_bitrate_kbps": {
           "type": "integer",
-          "enum": [64, 96, 128, 192, 256]
+          "enum": [64, 96, 128, 192, 256, 320]
         },
         "video_quality": {
           "type": "string",
@@ -59,6 +59,26 @@
       },
       "additionalProperties": false
     },
+    "exportOutputProfile": {
+      "type": "string",
+      "enum": [
+        "audio_ogg_opus_v1",
+        "audio_m4a_aac_legacy",
+        "audio_m4a_aac_v1",
+        "video_mp4_v1"
+      ]
+    },
+    "exportPresentation": {
+      "type": "object",
+      "required": ["kind", "title", "performer", "duration_seconds"],
+      "properties": {
+        "kind": {"type": "string", "enum": ["music", "audio", "document"]},
+        "title": {"type": "string", "maxLength": 64},
+        "performer": {"type": "string", "maxLength": 64},
+        "duration_seconds": {"type": ["integer", "null"], "minimum": 1, "maximum": 2678400}
+      },
+      "additionalProperties": false
+    },
     "exportOutput": {
       "type": "object",
       "required": ["content_type", "filename", "size_bytes", "sha256"],
@@ -66,7 +86,8 @@
         "content_type": {"type": "string", "minLength": 1},
         "filename": {"type": "string", "minLength": 1, "maxLength": 255},
         "size_bytes": {"type": "integer", "minimum": 1},
-        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 2678400}
       },
       "additionalProperties": false
     },
@@ -99,7 +120,7 @@
       "required": [
         "export_job_id", "channel_account_id", "media_asset_id", "operation", "variant",
         "status", "version", "retry_generation", "attempt_no", "max_attempts", "progress",
-        "deliveries", "created_at"
+        "deliveries", "output_profile", "created_at"
       ],
       "properties": {
         "export_job_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
@@ -107,6 +128,7 @@
         "media_asset_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
         "operation": {"$ref": "../common/enums.schema.json#/$defs/exportOperation"},
         "variant": {"$ref": "#/$defs/semanticVariant"},
+        "output_profile": {"$ref": "#/$defs/exportOutputProfile"},
         "status": {"$ref": "../common/enums.schema.json#/$defs/exportJobStatus"},
         "version": {"$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"},
         "retry_generation": {"type": "integer", "minimum": 0},
@@ -211,14 +233,15 @@
     },
     "exportDownloadResponse": {
       "type": "object",
-      "required": ["export_job_id", "filename", "content_type", "size_bytes", "url", "expires_at"],
+      "required": ["export_job_id", "filename", "content_type", "size_bytes", "url", "expires_at", "presentation"],
       "properties": {
         "export_job_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
         "filename": {"type": "string", "minLength": 1, "maxLength": 255},
         "content_type": {"type": "string", "minLength": 1},
         "size_bytes": {"type": "integer", "minimum": 1},
         "url": {"type": "string", "format": "uri"},
-        "expires_at": {"type": "string", "format": "date-time"}
+        "expires_at": {"type": "string", "format": "date-time"},
+        "presentation": {"$ref": "#/$defs/exportPresentation"}
       },
       "additionalProperties": false
     }

@@ -33,6 +33,7 @@ type privateExportObjectStore struct {
 type exportCreateRecordingStore struct {
 	fakeTargetRuntimeStore
 	createParams []targetstore.CreateExportJobParams
+	asset        *targetstore.MediaAssetRecord
 }
 
 func (s *exportCreateRecordingStore) CreateExportJob(_ context.Context, params targetstore.CreateExportJobParams) (targetstore.ExportJobRecord, error) {
@@ -41,6 +42,9 @@ func (s *exportCreateRecordingStore) CreateExportJob(_ context.Context, params t
 }
 
 func (s *exportCreateRecordingStore) GetMediaAsset(_ context.Context, channelAccountID, mediaAssetID string) (targetstore.MediaAssetRecord, error) {
+	if s.asset != nil {
+		return *s.asset, nil
+	}
 	return targetstore.MediaAssetRecord{
 		ID: mediaAssetID, ChannelAccountID: channelAccountID, StoredObjectID: "source-1",
 		OriginType: "upload", Kind: "video", DisplayName: "source.mp4", Status: "available",
@@ -61,24 +65,26 @@ func (f *privateExportObjectStore) PresignInternalGetObject(_ context.Context, b
 func (f *exportAccessTargetService) ResolveExportDownload(_ context.Context, req TargetGetExportJobRequest) (TargetExportDownload, error) {
 	f.publicDownloadRequests = append(f.publicDownloadRequests, req)
 	return TargetExportDownload{
-		ExportJobID: req.ExportJobID,
-		Filename:    "result.mp3",
-		ContentType: "audio/mpeg",
-		SizeBytes:   42,
-		URL:         "http://public-object-store/result.mp3",
-		ExpiresAt:   time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC),
+		ExportJobID:  req.ExportJobID,
+		Filename:     "result.mp3",
+		ContentType:  "audio/mpeg",
+		SizeBytes:    42,
+		URL:          "http://public-object-store/result.mp3",
+		ExpiresAt:    time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC),
+		Presentation: TargetExportPresentation{Kind: "audio", Title: "Legacy track", Performer: "", DurationSeconds: nil},
 	}, nil
 }
 
 func (f *exportAccessTargetService) ResolveInternalExportDownloadAccess(_ context.Context, req TargetGetExportJobRequest) (TargetExportDownload, error) {
 	f.internalDownloadRequests = append(f.internalDownloadRequests, req)
 	return TargetExportDownload{
-		ExportJobID: req.ExportJobID,
-		Filename:    "result.mp3",
-		ContentType: "audio/mpeg",
-		SizeBytes:   42,
-		URL:         "http://minio:9000/result.mp3",
-		ExpiresAt:   time.Date(2026, 7, 26, 12, 15, 0, 0, time.UTC),
+		ExportJobID:  req.ExportJobID,
+		Filename:     "result.mp3",
+		ContentType:  "audio/mpeg",
+		SizeBytes:    42,
+		URL:          "http://minio:9000/result.mp3",
+		ExpiresAt:    time.Date(2026, 7, 26, 12, 15, 0, 0, time.UTC),
+		Presentation: TargetExportPresentation{Kind: "audio", Title: "Legacy track", Performer: "", DurationSeconds: nil},
 	}, nil
 }
 
@@ -122,6 +128,9 @@ func TestInternalExportDownloadAccessUsesAuthenticatedPrivateRoute(t *testing.T)
 	}
 	if response.URL != "http://minio:9000/result.mp3" || response.ExportJobID != "export-1" {
 		t.Fatalf("internal download response = %#v", response)
+	}
+	if response.Presentation.Kind != "audio" || response.Presentation.Title != "Legacy track" || response.Presentation.DurationSeconds != nil {
+		t.Fatalf("internal download presentation = %#v", response.Presentation)
 	}
 
 	public := httptest.NewRecorder()
@@ -169,6 +178,10 @@ func TestResolveInternalExportDownloadAccessUsesPrivatePresigner(t *testing.T) {
 	if internal.URL != "http://minio:9000/sources/file-id" || objects.internalCalls != 1 || objects.publicCalls != 0 {
 		t.Fatalf("internal=%#v public_calls=%d internal_calls=%d", internal, objects.publicCalls, objects.internalCalls)
 	}
+	if internal.Presentation.Kind != "music" || internal.Presentation.Title != "Track title" ||
+		internal.Presentation.Performer != "Artist" || internal.Presentation.DurationSeconds == nil || *internal.Presentation.DurationSeconds != 183 {
+		t.Fatalf("internal presentation=%#v", internal.Presentation)
+	}
 
 	public, err := service.ResolveExportDownload(context.Background(), TargetGetExportJobRequest{
 		ChannelAccountID: "channel-account-1",
@@ -212,6 +225,77 @@ func TestCreateExportJobScopesImplicitIdempotencyToOneUserAction(t *testing.T) {
 	}
 }
 
+func TestCreateExportJobSnapshotsImmutableProfileAndPresentation(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		operation     string
+		asset         targetstore.MediaAssetRecord
+		wantTitle     string
+		wantPerformer string
+	}{
+		{
+			name:      "youtube enriched metadata",
+			operation: "youtube_audio",
+			asset: targetstore.MediaAssetRecord{
+				ID: "media-1", ChannelAccountID: "channel-account-1", OriginType: "url",
+				OriginRef: "https://www.youtube.com/watch?v=abc123DEF_-", Kind: "video",
+				DisplayName: "Fallback title", Status: "available",
+				MetadataJSON: []byte(`{"provider_metadata":{"provider":"youtube","title":"  Track\nTitle  ","performer":"  Artist\tName  "}}`),
+			},
+			wantTitle: "Track Title", wantPerformer: "Artist Name",
+		},
+		{
+			name:      "uploaded video fallback",
+			operation: "video_to_audio",
+			asset: targetstore.MediaAssetRecord{
+				ID: "media-1", ChannelAccountID: "channel-account-1", StoredObjectID: "source-1",
+				OriginType: "upload", Kind: "video", DisplayName: "clip.mp4", Status: "available", MetadataJSON: []byte(`{}`),
+			},
+			wantTitle: "clip.mp4", wantPerformer: "Извлечено из видео",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &exportCreateRecordingStore{asset: &test.asset}
+			service := NewTargetRuntimeService(store, WithTargetIDGenerator(sequenceTargetIDs("export-1", "pin-1")))
+			_, err := service.CreateExportJob(context.Background(), TargetCreateExportJobRequest{
+				ChannelAccountID: "channel-account-1", MediaAssetID: "media-1", Operation: test.operation,
+				Variant: []byte(`{"audio_bitrate_kbps":320}`), DeliveryChannel: "telegram",
+			})
+			if err != nil {
+				t.Fatalf("CreateExportJob() error = %v", err)
+			}
+			job := store.createParams[0].Job
+			if job.OutputProfile != exportProfileAudioM4AV1 || job.PresentationTitle != test.wantTitle || job.PresentationPerformer != test.wantPerformer {
+				t.Fatalf("snapshotted job = %#v", job)
+			}
+		})
+	}
+}
+
+func TestCreateYouTubeAudioExportWaitsForStableMusicMetadata(t *testing.T) {
+	t.Parallel()
+	asset := targetstore.MediaAssetRecord{
+		ID: "media-1", ChannelAccountID: "channel-account-1", OriginType: "url",
+		OriginRef: "https://www.youtube.com/watch?v=abc123DEF_-", Kind: "url",
+		DisplayName: "Fallback title", Status: "available",
+		MetadataJSON: []byte(`{"provider_metadata":{"provider":"youtube","title":"Track"}}`),
+	}
+	store := &exportCreateRecordingStore{asset: &asset}
+	service := NewTargetRuntimeService(store)
+	_, err := service.CreateExportJob(context.Background(), TargetCreateExportJobRequest{
+		ChannelAccountID: "channel-account-1", MediaAssetID: "media-1", Operation: "youtube_audio",
+		Variant: []byte(`{"audio_bitrate_kbps":192}`), DeliveryChannel: "telegram",
+	})
+	if !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("CreateExportJob() error = %v, want pending metadata contract violation", err)
+	}
+	if len(store.createParams) != 0 {
+		t.Fatalf("export job was created before metadata stabilized: %#v", store.createParams)
+	}
+}
+
 func TestCreateExportJobReplaysBeforeMutableSourceLookupAndRejectsMismatch(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
@@ -245,20 +329,55 @@ func TestCreateExportJobReplaysBeforeMutableSourceLookupAndRejectsMismatch(t *te
 	}
 }
 
+func TestClaimExportJobExposesImmutableOutputProfile(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
+	asset := targetstore.MediaAssetRecord{
+		ID: "media-1", ChannelAccountID: "channel-account-1", OriginType: "url",
+		OriginRef: "https://www.youtube.com/watch?v=abc123DEF_-", Kind: "video",
+		DisplayName: "Track", Status: "available", MetadataJSON: []byte(`{}`),
+	}
+	store := &exportCreateRecordingStore{
+		fakeTargetRuntimeStore: fakeTargetRuntimeStore{exportJob: targetstore.ExportJobRecord{
+			ID: "export-1", ChannelAccountID: "channel-account-1", MediaAssetID: "media-1",
+			Operation: "youtube_audio", DeliveryChannel: "telegram", VariantJSON: []byte(`{"audio_bitrate_kbps":320}`),
+			OutputProfile: exportProfileAudioM4AV1, PresentationTitle: "Track", PresentationPerformer: "YouTube",
+			Status: "queued", Version: 1, MaxAttempts: 3, ProgressJSON: []byte(`{}`), CreatedAt: now,
+		}},
+		asset: &asset,
+	}
+	service := NewTargetRuntimeService(store, WithTargetClock(func() time.Time { return now }))
+	claim, err := service.ClaimExportJob(context.Background(), TargetClaimExportJobRequest{
+		ExportJobID: "export-1", LeaseOwner: "media-export", LeaseSeconds: 120,
+	})
+	if err != nil {
+		t.Fatalf("ClaimExportJob() error = %v", err)
+	}
+	if claim.ExportJob.OutputProfile != exportProfileAudioM4AV1 {
+		t.Fatalf("claim output_profile = %q", claim.ExportJob.OutputProfile)
+	}
+}
+
 func targetExportJobRecordForDownload() targetstore.ExportJobRecord {
 	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	duration := 183
 	return targetstore.ExportJobRecord{
-		ID:                   "export-1",
-		ChannelAccountID:     "channel-account-1",
-		MediaAssetID:         "media-1",
-		Operation:            "youtube_audio",
-		DeliveryChannel:      "telegram",
-		VariantJSON:          []byte(`{"audio_bitrate_kbps":192}`),
-		Status:               "succeeded",
-		Version:              2,
-		OutputStoredObjectID: "output-1",
-		ProgressJSON:         []byte(`{"stage":"completed","percent":100}`),
-		CreatedAt:            now,
-		CompletedAt:          &now,
+		ID:                          "export-1",
+		ChannelAccountID:            "channel-account-1",
+		MediaAssetID:                "media-1",
+		Operation:                   "youtube_audio",
+		DeliveryChannel:             "telegram",
+		VariantJSON:                 []byte(`{"audio_bitrate_kbps":192}`),
+		OutputProfile:               exportProfileAudioM4AV1,
+		PresentationTitle:           "Track title",
+		PresentationPerformer:       "Artist",
+		PresentationDurationSeconds: &duration,
+		PresentationFrozenAt:        &now,
+		Status:                      "succeeded",
+		Version:                     2,
+		OutputStoredObjectID:        "output-1",
+		ProgressJSON:                []byte(`{"stage":"completed","percent":100}`),
+		CreatedAt:                   now,
+		CompletedAt:                 &now,
 	}
 }

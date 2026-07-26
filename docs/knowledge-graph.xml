@@ -237,6 +237,7 @@
         <export-resultDeliveryDeduplication PURPOSE="Auto-deliver successful transcript results as Telegram document messages, then use result_artifact_surface records with valid Telegram addresses to avoid duplicate delivery after restart without mutating product lifecycle; supersede addressless stale result surfaces and retry delivery." />
         <export-reusableTranscriptDelivery PURPOSE="Before creating a new run for one uploaded media item, query API reusable transcript state and resend the matched transcript artifact for explicit duplicate user input." />
         <export-voiceAudioDelivery PATH="apps/telegram-bot/src/telegram_adapter/bot.py" PURPOSE="Present authenticated audio/ogg and audio/opus export downloads through Telegram send_voice, retain send_audio for legacy audio and send_document for non-audio, and preserve the fenced delivery lifecycle." />
+        <export-musicCardDelivery PATH="apps/telegram-bot/src/telegram_adapter/bot.py" PURPOSE="Present new immutable M4A/AAC YouTube exports through Telegram send_audio with snapshotted title, performer, and duration while preserving historical OGG/Opus delivery semantics." />
         <contract-selectionProcessingCards PATH="docs/architecture/telegram-selection-processing-cards.md" PURPOSE="Define Telegram user-facing processing card copy, buttons, current selection behavior, task card lifecycle, recent-task navigation, and interaction-surface requirements." />
       </annotations>
     </M-TELEGRAM-ADAPTER>

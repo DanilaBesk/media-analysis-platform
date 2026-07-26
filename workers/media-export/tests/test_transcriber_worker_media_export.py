@@ -15,6 +15,7 @@ from transcriber_worker_media_export import (
     ExportClaim,
     ExportJob,
     ExportSource,
+    ExportWorkerError,
     MediaExportWorker,
     MediaExportWorkerConfig,
     MinioExportObjectStore,
@@ -73,11 +74,13 @@ def _claim(
     operation: str = "video_to_audio",
     source_type: str = "uploaded_object",
     audio_bitrate_kbps: int = 128,
+    output_profile: str | None = None,
 ) -> ExportClaim:
     job = ExportJob(
         export_job_id="job-123",
         operation=operation,
         variant={"audio_bitrate_kbps": audio_bitrate_kbps} if operation != "youtube_video" else {"video_quality": "720p"},
+        output_profile=output_profile,
     )
     return ExportClaim(
         job=job,
@@ -118,7 +121,7 @@ def _install_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, bo
     ("operation", "source_type"),
     (("video_to_audio", "uploaded_object"), ("youtube_audio", "remote_reference")),
 )
-def test_audio_exports_publish_ogg_opus_to_attempt_staging_and_finalize(
+def test_missing_audio_profile_defaults_to_ogg_opus_and_finalizes(
     tmp_path: Path, operation: str, source_type: str
 ) -> None:
     claim = _claim(operation=operation, source_type=source_type)
@@ -166,8 +169,30 @@ def test_audio_exports_publish_ogg_opus_to_attempt_staging_and_finalize(
     assert not any((_config(tmp_path).workspace_root).glob("*"))
 
 
-@pytest.mark.parametrize("bitrate", [64, 96, 128, 192, 256])
-def test_every_supported_audio_bitrate_produces_real_ogg_opus(tmp_path: Path, bitrate: int) -> None:
+def test_claim_parses_optional_output_profile() -> None:
+    payload = {
+        "export_job": {
+            "export_job_id": "job-123",
+            "operation": "youtube_audio",
+            "variant": {"audio_bitrate_kbps": 320},
+            "output_profile": "audio_m4a_aac_v1",
+        },
+        "attempt_token": "attempt-token-123456",
+        "lease_owner": "test-worker",
+        "source": {
+            "media_asset_id": "asset-123",
+            "source_type": "remote_reference",
+            "url": "https://www.youtube.com/watch?v=abc123",
+        },
+    }
+
+    claim = ExportClaim.from_payload(payload)
+
+    assert claim.job.output_profile == "audio_m4a_aac_v1"
+
+
+@pytest.mark.parametrize("bitrate", [64, 96, 128, 192, 256, 320])
+def test_every_supported_aac_bitrate_produces_real_m4a(tmp_path: Path, bitrate: int) -> None:
     source = tmp_path / "source.wav"
     with wave.open(str(source), "wb") as wav:
         wav.setnchannels(1)
@@ -175,7 +200,7 @@ def test_every_supported_audio_bitrate_produces_real_ogg_opus(tmp_path: Path, bi
         wav.setframerate(48_000)
         wav.writeframes(b"\x00\x00" * 4_800)
 
-    claim = _claim(audio_bitrate_kbps=bitrate)
+    claim = _claim(audio_bitrate_kbps=bitrate, output_profile="audio_m4a_aac_v1")
     worker = MediaExportWorker(
         _config(
             tmp_path,
@@ -208,9 +233,110 @@ def test_every_supported_audio_bitrate_produces_real_ogg_opus(tmp_path: Path, bi
         timeout=10,
     )
 
+    assert content_type == "audio/mp4"
+    assert output.suffix == ".m4a"
+    assert "codec_name=aac" in probe.stdout
+    assert "format_name=mov,mp4,m4a,3gp,3g2,mj2" in probe.stdout
+
+
+def test_legacy_ogg_profile_retains_opus_and_rejects_320_kbps(tmp_path: Path) -> None:
+    source = tmp_path / "source.wav"
+    with wave.open(str(source), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(48_000)
+        wav.writeframes(b"\x00\x00" * 4_800)
+
+    legacy_claim = _claim(audio_bitrate_kbps=256, output_profile="audio_ogg_opus_v1")
+    worker = MediaExportWorker(
+        _config(
+            tmp_path,
+            max_input_bytes=1_000_000,
+            max_output_bytes=1_000_000,
+            workspace_max_bytes=2_000_000,
+            timeout_seconds=10,
+        ),
+        control=RecordingControl(legacy_claim),
+        object_store=RecordingStore(),
+    )
+
+    output, content_type = worker._convert(legacy_claim, source, tmp_path)
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name:format=format_name",
+            "-of",
+            "default=noprint_wrappers=1",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
     assert content_type == "audio/ogg"
     assert "codec_name=opus" in probe.stdout
     assert "format_name=ogg" in probe.stdout
+
+    for output_profile in (None, "audio_ogg_opus_v1"):
+        unsupported = _claim(audio_bitrate_kbps=320, output_profile=output_profile)
+        with pytest.raises(ExportWorkerError, match="invalid audio bitrate"):
+            worker._convert(unsupported, source, tmp_path)
+
+
+@pytest.mark.parametrize("output_profile", ["audio_m4a_aac_v1", "audio_m4a_aac_legacy"])
+def test_m4a_profiles_finalize_with_actual_output_duration(
+    tmp_path: Path, output_profile: str
+) -> None:
+    claim = _claim(audio_bitrate_kbps=320, output_profile=output_profile)
+    control = RecordingControl(claim)
+    store = RecordingStore()
+    commands: list[list[str]] = []
+    probed: list[Path] = []
+
+    def download(_url: str, destination: Path, *, max_bytes: int, cancelled) -> None:
+        destination.write_bytes(b"raw")
+
+    def tool(command: list[str], *, cwd: Path, timeout_seconds: float, cancelled, resource_guard) -> None:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"audio")
+
+    def probe_duration(path: Path) -> float:
+        probed.append(path)
+        return 0.1 if path.name.startswith("export-") else 1.0
+
+    worker = MediaExportWorker(
+        _config(tmp_path),
+        control=control,
+        object_store=store,
+        download_source=download,
+        run_tool=tool,
+        probe_duration=probe_duration,
+    )
+
+    assert worker.run_once() == 1
+
+    ffmpeg = next(command for command in commands if command[0] == "ffmpeg")
+    assert ffmpeg[-1].endswith("export-job-123.m4a")
+    assert ffmpeg[ffmpeg.index("-c:a") + 1] == "aac"
+    assert ffmpeg[ffmpeg.index("-b:a") + 1] == "320k"
+    assert ffmpeg[ffmpeg.index("-movflags") + 1] == "+faststart"
+    assert [path.name for path in probed] == ["source.bin", "export-job-123.m4a"]
+    assert store.uploads[0]["content_type"] == "audio/mp4"
+    assert control.finalized[0]["output"] == {
+        "content_type": "audio/mp4",
+        "duration_seconds": 1,
+        "filename": "export-job-123.m4a",
+        "size_bytes": 5,
+        "sha256": "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b",
+        "staging_key": "transient/staging/job-123/attempt-token-123456/export-job-123.m4a",
+    }
 
 
 def test_cancel_requested_before_materialization_finalizes_canceled_without_tool_or_upload(tmp_path: Path) -> None:
@@ -331,7 +457,13 @@ def test_duration_over_limit_fails_before_conversion(tmp_path: Path) -> None:
 
 
 def test_youtube_video_selects_the_requested_semantic_quality_before_ffmpeg(tmp_path: Path) -> None:
-    control = RecordingControl(_claim(operation="youtube_video", source_type="remote_reference"))
+    control = RecordingControl(
+        _claim(
+            operation="youtube_video",
+            source_type="remote_reference",
+            output_profile="video_mp4_v1",
+        )
+    )
     commands: list[list[str]] = []
 
     def tool(command: list[str], *, cwd: Path, timeout_seconds: float, cancelled, resource_guard) -> None:

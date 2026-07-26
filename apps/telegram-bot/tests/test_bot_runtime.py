@@ -78,7 +78,13 @@ from telegram_adapter.bot import (
 )
 from telegram_adapter.config import TelegramAdapterSettings, load_settings
 from telegram_adapter.errors import TelegramUserError, TelegramUserErrorCode, rejected_reason_text
-from telegram_adapter.gateway import InboxStatus, IngressRecord, TelegramFileInput, TelegramInboxGateway
+from telegram_adapter.gateway import (
+    InboxStatus,
+    IngressRecord,
+    TelegramFileInput,
+    TelegramInboxGateway,
+    youtube_audio_export_ready,
+)
 from telegram_adapter.i18n import DEFAULT_LOCALE, TelegramTextKey
 
 
@@ -1107,12 +1113,113 @@ async def test_export_delivery_sends_authenticated_audio_as_playable_track_then_
 
 
 @pytest.mark.asyncio
+async def test_export_delivery_sends_music_presentation_as_native_audio_card_without_caption() -> None:
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.acks: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "filename": "export.m4a",
+                "content_type": " Audio/MP4 ; codecs=mp4a.40.2 ",
+                "url": "http://minio/export.m4a",
+                "size_bytes": 12,
+                "presentation": {
+                    "kind": "music",
+                    "title": "T" * 70,
+                    "performer": "P" * 70,
+                    "duration_seconds": 183,
+                },
+            }
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            return {}
+
+        def fail_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("successful delivery must not be failed")
+
+    gateway = ExportGateway()
+    bot = FakeBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    delivered_file = tempfile.TemporaryFile(mode="w+b")
+    delivered_file.write(b"export-bytes")
+    delivered_file.seek(0)
+    app._download_artifact_file = lambda _url, _size: delivered_file  # type: ignore[method-assign]
+
+    await app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+
+    assert len(bot.send_audio_calls) == 1
+    call = bot.send_audio_calls[0]
+    assert call["audio"].filename == "export.m4a"
+    assert call["title"] == "T" * 64
+    assert call["performer"] == "P" * 64
+    assert call["duration"] == 183
+    assert "caption" not in call
+    assert bot.send_voice_calls == []
+    assert bot.send_document_calls == []
+    assert delivered_file.closed
+    assert len(gateway.acks) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("duration_seconds", [0, -1, "not-a-duration", None, True])
+async def test_export_delivery_omits_invalid_music_duration_but_keeps_native_card(
+    duration_seconds: Any,
+) -> None:
+    class ExportGateway:
+        def claim_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "filename": "export.mp3",
+                "content_type": "audio/mpeg",
+                "url": "http://minio/export.mp3",
+                "size_bytes": 12,
+                "presentation": {
+                    "kind": "music",
+                    "title": "Title",
+                    "performer": "Performer",
+                    "duration_seconds": duration_seconds,
+                },
+            }
+
+        def acknowledge_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {}
+
+        def fail_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("successful delivery must not be failed")
+
+    gateway = ExportGateway()
+    bot = FakeBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    delivered_file = tempfile.TemporaryFile(mode="w+b")
+    delivered_file.write(b"export-bytes")
+    delivered_file.seek(0)
+    app._download_artifact_file = lambda _url, _size: delivered_file  # type: ignore[method-assign]
+
+    await app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+
+    call = bot.send_audio_calls[0]
+    assert call["title"] == "Title"
+    assert call["performer"] == "Performer"
+    assert "duration" not in call
+    assert "caption" not in call
+    assert delivered_file.closed
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("filename", "content_type"),
     [
         ("voice.ogg", "audio/ogg"),
         ("voice.opus", "audio/opus"),
         ("voice.ogg", "Audio/OGG; codecs=opus"),
+        ("voice.ogg", "application/ogg"),
     ],
 )
 async def test_export_delivery_sends_authenticated_voice_download_as_telegram_voice_and_acks(
@@ -1158,6 +1265,20 @@ async def test_export_delivery_sends_authenticated_voice_download_as_telegram_vo
     assert bot.send_document_calls == []
     assert delivered_file.closed
     assert len(gateway.acks) == 1
+
+
+def test_youtube_audio_export_waits_for_stable_music_metadata() -> None:
+    item = {
+        "metadata": {
+            "provider_metadata": {
+                "provider": "youtube",
+                "title": "Track",
+            }
+        }
+    }
+    assert youtube_audio_export_ready(item) is False
+    item["metadata"]["provider_metadata"]["performer"] = "Artist"
+    assert youtube_audio_export_ready(item) is True
 
 
 @pytest.mark.asyncio

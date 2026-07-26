@@ -279,6 +279,14 @@ def test_processing_and_export_schemas_are_fenced_and_semantic() -> None:
         128,
         192,
         256,
+        320,
+    ]
+    assert export_defs["exportJob"]["required"].count("output_profile") == 1
+    assert export_defs["exportDownloadResponse"]["required"].count("presentation") == 1
+    assert export_defs["exportPresentation"]["properties"]["kind"]["enum"] == [
+        "music",
+        "audio",
+        "document",
     ]
     assert export_defs["exportJob"]["properties"]["status"]["$ref"].endswith(
         "#/$defs/exportJobStatus"
@@ -319,6 +327,11 @@ def test_processing_and_export_schemas_are_fenced_and_semantic() -> None:
         export_defs["failExportDeliveryRequest"]["properties"]
     )
     assert "staging_key" in export_control_defs["exportOutputPublication"]["properties"]
+    assert export_control_defs["exportOutputPublication"]["properties"]["duration_seconds"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 2678400,
+    }
 
 
 def test_metadata_enrichment_is_separate_fenced_and_bounded() -> None:
@@ -332,6 +345,7 @@ def test_metadata_enrichment_is_separate_fenced_and_bounded() -> None:
         "canonical_url", "status", "attempt_no", "max_attempts",
     }.issubset(item["required"])
     assert enrichment_defs["providerMetadata"]["properties"]["title"]["maxLength"] == 200
+    assert enrichment_defs["providerMetadata"]["properties"]["performer"]["maxLength"] == 200
     assert control_defs["claimResponse"]["required"] == [
         "enrichment", "attempt_token", "lease_owner", "lease_expires_at",
     ]
@@ -344,6 +358,7 @@ def test_metadata_enrichment_is_separate_fenced_and_bounded() -> None:
         "attempt_token": "attempt-token-123",
         "outcome": "succeeded",
         "title": "Resolved title",
+        "performer": "Resolved performer",
         "duration_seconds": 42,
     }
     assert set(representative_without_thumbnail).issubset(control_defs["finalizeRequest"]["properties"])

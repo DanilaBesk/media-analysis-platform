@@ -63,12 +63,12 @@ func TestMetadataEnrichmentRoutesAndInternalToken(t *testing.T) {
 	finalize := httptest.NewRecorder()
 	finalizeReq := jsonRequest(http.MethodPost, "/internal/v1/metadata-enrichment-jobs/enrichment-1/finalize", map[string]any{
 		"lease_owner": "worker-1", "attempt_token": "attempt-token-current", "outcome": "succeeded",
-		"title": "Title", "thumbnail_url": "https://i.ytimg.com/demo.jpg", "duration_seconds": 42,
+		"title": "Title", "thumbnail_url": "https://i.ytimg.com/demo.jpg", "duration_seconds": 42, "performer": "Performer",
 	})
 	finalizeReq.Header.Set("X-Platform-Internal-Token", "internal-secret")
 	mux.ServeHTTP(finalize, finalizeReq)
 	assertTargetStatus(t, finalize, http.StatusOK)
-	if service.finalizeReq.Title != "Title" || service.finalizeReq.DurationSeconds != 42 {
+	if service.finalizeReq.Title != "Title" || service.finalizeReq.DurationSeconds != 42 || service.finalizeReq.Performer != "Performer" {
 		t.Fatalf("finalize request=%#v", service.finalizeReq)
 	}
 

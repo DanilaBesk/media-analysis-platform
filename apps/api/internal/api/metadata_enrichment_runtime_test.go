@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,13 +54,13 @@ func TestMetadataEnrichmentRuntimeFencesSanitizesAndBacksOff(t *testing.T) {
 	result, err := service.FinalizeMetadataEnrichment(context.Background(), TargetFinalizeMetadataEnrichmentRequest{
 		EnrichmentID: "enrichment-1", LeaseOwner: "worker-1", AttemptToken: "attempt-token-current",
 		Outcome: "succeeded", Title: "  A\n\t title \x00 with spaces  ",
-		ThumbnailURL: "https://i.ytimg.com/demo.jpg", DurationSeconds: 42,
+		ThumbnailURL: "https://i.ytimg.com/demo.jpg", DurationSeconds: 42, Performer: "  Artist\n\x00 with spaces  ",
 	})
 	if err != nil || result.Status != "succeeded" {
 		t.Fatalf("FinalizeMetadataEnrichment()=%#v err=%v", result, err)
 	}
 	if store.finalize.DisplayName != "A title with spaces" ||
-		string(store.finalize.ProviderMetadataJSON) != `{"duration_seconds":42,"provider":"youtube","thumbnail_url":"https://i.ytimg.com/demo.jpg","title":"A title with spaces"}` {
+		string(store.finalize.ProviderMetadataJSON) != `{"duration_seconds":42,"performer":"Artist with spaces","provider":"youtube","thumbnail_url":"https://i.ytimg.com/demo.jpg","title":"A title with spaces"}` {
 		t.Fatalf("sanitized finalize params=%#v metadata=%s", store.finalize, store.finalize.ProviderMetadataJSON)
 	}
 
@@ -82,6 +84,62 @@ func TestMetadataEnrichmentRuntimeFencesSanitizesAndBacksOff(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("stale finalize must be rejected")
+	}
+}
+
+func TestMetadataEnrichmentRuntimeBoundsOptionalPerformer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	store := &fakeMetadataRuntimeStore{fakeTargetRuntimeStore: &fakeTargetRuntimeStore{}}
+	store.record = targetstore.MetadataEnrichmentRecord{
+		ID: "enrichment-1", MediaAssetID: "media-1", ChannelAccountID: "channel-1",
+		Provider: "youtube", CanonicalURL: "https://www.youtube.com/watch?v=abc123DEF_-",
+		Status: "running", AttemptNo: 1, MaxAttempts: 3, LeaseOwner: "worker-1",
+		AttemptToken: "attempt-token-current", ProgressJSON: []byte(`{}`), CreatedAt: now,
+	}
+	service := NewTargetRuntimeService(store, WithTargetClock(func() time.Time { return now }))
+
+	_, err := service.FinalizeMetadataEnrichment(context.Background(), TargetFinalizeMetadataEnrichmentRequest{
+		EnrichmentID: "enrichment-1", LeaseOwner: "worker-1", AttemptToken: "attempt-token-current",
+		Outcome: "succeeded", Title: "Title", Performer: strings.Repeat("p", 201),
+	})
+	if err != nil {
+		t.Fatalf("FinalizeMetadataEnrichment() error=%v", err)
+	}
+	var providerMetadata map[string]any
+	if err := json.Unmarshal(store.finalize.ProviderMetadataJSON, &providerMetadata); err != nil {
+		t.Fatalf("provider metadata JSON=%q error=%v", store.finalize.ProviderMetadataJSON, err)
+	}
+	if providerMetadata["performer"] != strings.Repeat("p", 200) {
+		t.Fatalf("provider performer=%#v", providerMetadata["performer"])
+	}
+}
+
+func TestMetadataEnrichmentRuntimeKeepsProviderMetadataCompatibleWithoutPerformer(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	store := &fakeMetadataRuntimeStore{fakeTargetRuntimeStore: &fakeTargetRuntimeStore{}}
+	store.record = targetstore.MetadataEnrichmentRecord{
+		ID: "enrichment-1", MediaAssetID: "media-1", ChannelAccountID: "channel-1",
+		Provider: "youtube", CanonicalURL: "https://www.youtube.com/watch?v=abc123DEF_-",
+		Status: "running", AttemptNo: 1, MaxAttempts: 3, LeaseOwner: "worker-1",
+		AttemptToken: "attempt-token-current", ProgressJSON: []byte(`{}`), CreatedAt: now,
+	}
+	service := NewTargetRuntimeService(store, WithTargetClock(func() time.Time { return now }))
+
+	_, err := service.FinalizeMetadataEnrichment(context.Background(), TargetFinalizeMetadataEnrichmentRequest{
+		EnrichmentID: "enrichment-1", LeaseOwner: "worker-1", AttemptToken: "attempt-token-current",
+		Outcome: "succeeded", Title: "Title",
+	})
+	if err != nil {
+		t.Fatalf("FinalizeMetadataEnrichment() error=%v", err)
+	}
+	var providerMetadata map[string]any
+	if err := json.Unmarshal(store.finalize.ProviderMetadataJSON, &providerMetadata); err != nil {
+		t.Fatalf("provider metadata JSON=%q error=%v", store.finalize.ProviderMetadataJSON, err)
+	}
+	if _, found := providerMetadata["performer"]; found {
+		t.Fatalf("provider metadata must omit empty performer: %#v", providerMetadata)
 	}
 }
 

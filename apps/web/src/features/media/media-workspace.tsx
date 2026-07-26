@@ -26,7 +26,7 @@ const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "cancel_requested"]);
 const ACTIVE_EXPORT_STATUSES = new Set(["queued", "claimed", "running", "cancel_requested"]);
 const RETRYABLE_EXPORT_STATUSES = new Set(["failed", "canceled"]);
 const EXPORT_JOB_POLL_INTERVAL_MS = 2_000;
-const AUDIO_BITRATES = [64, 96, 128, 192, 256] as const;
+const AUDIO_BITRATES = [64, 96, 128, 192, 256, 320] as const;
 const VIDEO_QUALITIES = ["360p", "480p", "720p", "1080p"] as const;
 
 interface DiagnosticSubject {
@@ -471,6 +471,16 @@ function youtubeMetadata(item: MediaAssetSummary): { title: string | null; statu
   };
 }
 
+function youtubeAudioExportReady(item: MediaAssetSummary): boolean {
+  if (!isYouTubeAsset(item)) {
+    return false;
+  }
+  const provider = preferredYoutubeMetadata(item, "provider_metadata");
+  return providerString(provider, "provider")?.toLowerCase() === "youtube"
+    && providerString(provider, "title") !== null
+    && providerString(provider, "performer") !== null;
+}
+
 function mediaAssetDisplayName(item: MediaAssetSummary): string {
   const metadata = youtubeMetadata(item);
   if (metadata?.title) {
@@ -866,6 +876,7 @@ export function ExportsRouteShell(): JSX.Element {
     [mediaAssets],
   );
   const selectedAsset = eligibleAssets.find((asset) => asset.media_asset_id === selectedMediaAssetId) ?? eligibleAssets[0];
+  const selectedYouTubeAudioReady = selectedAsset ? youtubeAudioExportReady(selectedAsset) : false;
   const activeExportJobKey = useMemo(
     () => jobs
       .filter((job) => ACTIVE_EXPORT_STATUSES.has(job.status))
@@ -943,6 +954,10 @@ export function ExportsRouteShell(): JSX.Element {
       return;
     }
     const operation: ExportOperation = isYouTubeAsset(selectedAsset) ? youtubeOperation : "video_to_audio";
+    if (operation === "youtube_audio" && !youtubeAudioExportReady(selectedAsset)) {
+      setError("Метаданные аудио ещё загружаются.");
+      return;
+    }
     const variant: ExportVariant =
       operation === "youtube_video" ? { video_quality: videoQuality } : { audio_bitrate_kbps: audioBitrate };
     setPending(true);
@@ -1022,7 +1037,7 @@ export function ExportsRouteShell(): JSX.Element {
             </label>
             {isYouTubeAsset(selectedAsset) ? (
               <div className="segmented" role="group" aria-label="Формат YouTube">
-                <button aria-pressed={youtubeOperation === "youtube_audio"} className="segment-button" onClick={() => setYoutubeOperation("youtube_audio")} type="button">Аудио</button>
+                <button aria-pressed={youtubeOperation === "youtube_audio"} className="segment-button" disabled={!selectedYouTubeAudioReady} onClick={() => setYoutubeOperation("youtube_audio")} type="button">Аудио</button>
                 <button aria-pressed={youtubeOperation === "youtube_video"} className="segment-button" onClick={() => setYoutubeOperation("youtube_video")} type="button">Видео</button>
               </div>
             ) : <p className="helper-text">Будет создан аудиофайл из загруженного видео.</p>}
@@ -1041,7 +1056,7 @@ export function ExportsRouteShell(): JSX.Element {
                 </select>
               </label>
             )}
-            <button disabled={pending} onClick={() => void createExport()} type="button">
+            <button disabled={pending || (isYouTubeAsset(selectedAsset) && youtubeOperation === "youtube_audio" && !selectedYouTubeAudioReady)} onClick={() => void createExport()} type="button">
               {pending ? "Добавляем..." : isYouTubeAsset(selectedAsset) ? "Скачать" : "Конвертировать в аудио"}
             </button>
           </div>

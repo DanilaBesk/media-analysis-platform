@@ -75,6 +75,7 @@ type TargetFinalizeMetadataEnrichmentRequest struct {
 	Title           string `json:"title,omitempty"`
 	ThumbnailURL    string `json:"thumbnail_url,omitempty"`
 	DurationSeconds int64  `json:"duration_seconds,omitempty"`
+	Performer       string `json:"performer,omitempty"`
 	ErrorCode       string `json:"error_code,omitempty"`
 	ErrorMessage    string `json:"error_message,omitempty"`
 	Retryable       bool   `json:"retryable,omitempty"`

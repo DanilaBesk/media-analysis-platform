@@ -242,6 +242,7 @@ def test_http_client_uses_internal_token_and_top_level_finalize_contract() -> No
             title="Title",
             thumbnail_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg",
             duration_seconds=10,
+            performer="Performer",
         ),
     )
 
@@ -256,6 +257,7 @@ def test_http_client_uses_internal_token_and_top_level_finalize_contract() -> No
         "title": "Title",
         "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg",
         "duration_seconds": 10,
+        "performer": "Performer",
     }
     assert "metadata" not in final_payload
 
@@ -264,6 +266,51 @@ def test_http_client_uses_internal_token_and_top_level_finalize_contract() -> No
         EnrichmentMetadata(title="No image", thumbnail_url="", duration_seconds=11),
     )
     assert "thumbnail_url" not in json.loads(requests[-1].data)
+    assert "performer" not in json.loads(requests[-1].data)
+
+
+@pytest.mark.parametrize(
+    ("provider_fields", "expected_performer"),
+    [
+        (
+            {"artist": "  \x00" + "A" * 205, "creator": "Creator", "uploader": "Uploader", "channel": "Channel"},
+            "A" * 200,
+        ),
+        ({"artist": "", "creator": "Creator", "uploader": "Uploader", "channel": "Channel"}, "Creator"),
+        ({"creator": "", "uploader": "Uploader", "channel": "Channel"}, "Uploader"),
+        ({"uploader": "", "channel": "Channel"}, "Channel"),
+        ({}, "YouTube"),
+    ],
+)
+def test_yt_dlp_performer_uses_sanitized_provider_priority(
+    provider_fields: dict[str, str], expected_performer: str
+) -> None:
+    class Process:
+        returncode = 0
+        pid = 123
+
+        def __init__(self) -> None:
+            self.stdout = io.BytesIO(
+                json.dumps(
+                    {
+                        "id": "dQw4w9WgXcQ",
+                        "title": "Title",
+                        "thumbnail": "",
+                        "duration": 1,
+                        **provider_fields,
+                    }
+                ).encode()
+            )
+            self.stderr = io.BytesIO()
+
+        def poll(self) -> int:
+            return 0
+
+    resolver = YtDlpMetadataResolver(_config(), popen=lambda *_args, **_kwargs: Process())
+
+    result = resolver.resolve(CANONICAL_URL, heartbeat=lambda: None, cancelled=lambda: False)
+
+    assert result.performer == expected_performer
 
 
 def test_yt_dlp_is_metadata_only_and_uses_a_proxy_free_environment(monkeypatch) -> None:
@@ -319,6 +366,7 @@ def test_yt_dlp_is_metadata_only_and_uses_a_proxy_free_environment(monkeypatch) 
         title="Title with spaces",
         thumbnail_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
         duration_seconds=213,
+        performer="YouTube",
     )
 
 

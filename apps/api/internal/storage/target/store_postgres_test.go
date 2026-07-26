@@ -1298,6 +1298,189 @@ WHERE id='20000000-0000-4000-8000-000000000021'
 WHERE id='20000000-0000-4000-8000-000000000022' AND status='queued'`, 1)
 }
 
+func TestNativeMusicExportProfileBackfillPostgresContracts(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaBaseMigration(t, ctx, db)
+
+	const accountID = "23000000-0000-4000-8000-000000000001"
+	const assetID = "23000000-0000-4000-8000-000000000002"
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_accounts (id, channel, external_account_ref, status)
+VALUES ($1, 'telegram', 'native-music-backfill', 'active')`, accountID); err != nil {
+		t.Fatalf("seed native music migration account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status)
+VALUES ($2, $1, 'url', 'https://www.youtube.com/watch?v=abc123DEF_-', 'video', 'Track', 'available')`, accountID, assetID); err != nil {
+		t.Fatalf("seed native music migration asset: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO stored_objects (id, channel_account_id, bucket, object_key, generation_published_at, content_type, size_bytes, checksum, storage_status, retention_state)
+VALUES
+('23000000-0000-4000-8000-000000000011', $1, 'artifacts', 'transient/legacy/result.bin', now(), 'Audio/MP4; codecs=mp4a.40.2', 11, 'sha256:m4a', 'available', 'active'),
+	('23000000-0000-4000-8000-000000000012', $1, 'artifacts', 'transient/legacy/result.ogg', now(), 'application/octet-stream', 12, 'sha256:ogg', 'available', 'active')`, accountID); err != nil {
+		t.Fatalf("seed native music migration outputs: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, variant, status, output_stored_object_id)
+VALUES
+('23000000-0000-4000-8000-000000000021', $1, $2, 'youtube_audio', '{"audio_bitrate_kbps":192}', 'succeeded', '23000000-0000-4000-8000-000000000011'),
+('23000000-0000-4000-8000-000000000022', $1, $2, 'youtube_audio', '{"audio_bitrate_kbps":192}', 'succeeded', '23000000-0000-4000-8000-000000000012'),
+('23000000-0000-4000-8000-000000000023', $1, $2, 'youtube_audio', '{"audio_bitrate_kbps":320}', 'queued', NULL),
+('23000000-0000-4000-8000-000000000024', $1, $2, 'video_to_audio', '{"audio_bitrate_kbps":192}', 'failed', NULL),
+('23000000-0000-4000-8000-000000000025', $1, $2, 'youtube_video', '{"video_quality":"720p"}', 'queued', NULL)`, accountID, assetID); err != nil {
+		t.Fatalf("seed native music migration jobs: %v", err)
+	}
+
+	applyNamedTargetMigration(t, ctx, db, "0008_native_music_export_profile.sql")
+	for jobID, want := range map[string]string{
+		"23000000-0000-4000-8000-000000000021": "audio_m4a_aac_legacy",
+		"23000000-0000-4000-8000-000000000022": "audio_ogg_opus_v1",
+		"23000000-0000-4000-8000-000000000023": "audio_m4a_aac_legacy",
+		"23000000-0000-4000-8000-000000000024": "audio_ogg_opus_v1",
+		"23000000-0000-4000-8000-000000000025": "video_mp4_v1",
+	} {
+		var got string
+		if err := db.QueryRowContext(ctx, `SELECT output_profile FROM export_jobs WHERE id=$1`, jobID).Scan(&got); err != nil || got != want {
+			t.Fatalf("job %s output_profile=%q err=%v, want %q", jobID, got, err, want)
+		}
+	}
+}
+
+func TestYouTubeMusicPerformerBackfillPostgresContracts(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaBaseMigration(t, ctx, db)
+	applyMetadataEnrichmentMigration(t, ctx, db)
+
+	const accountID = "23500000-0000-4000-8000-000000000001"
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_accounts (id, channel, external_account_ref, status)
+VALUES ($1, 'telegram', 'native-music-performer-backfill', 'active')`, accountID); err != nil {
+		t.Fatalf("seed performer backfill account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (
+    id, channel_account_id, origin_type, origin_ref, kind, display_name, status, metadata
+) VALUES
+('23500000-0000-4000-8000-000000000011', $1, 'url', 'https://www.youtube.com/watch?v=roEzqWv7HpI', 'url', 'missing performer', 'available', '{"provider_metadata":{"provider":"youtube","title":"Track"}}'),
+('23500000-0000-4000-8000-000000000012', $1, 'url', 'https://youtu.be/goXKlOozyx8', 'url', 'ready performer', 'available', '{"provider_metadata":{"provider":"youtube","title":"Track","performer":"Artist"}}')`, accountID); err != nil {
+		t.Fatalf("seed performer backfill assets: %v", err)
+	}
+
+	applyNamedTargetMigration(t, ctx, db, "0009_backfill_youtube_music_performer.sql")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE media_asset_id='23500000-0000-4000-8000-000000000011'
+  AND status='queued'
+  AND idempotency_key='youtube-metadata-enrichment:native-music:23500000-0000-4000-8000-000000000011'`, 1)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM metadata_enrichment_jobs
+WHERE media_asset_id='23500000-0000-4000-8000-000000000012'`, 0)
+}
+
+func TestNativeMusicExportFinalizationIsFencedAndAtomicPostgres(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	leaseExpiresAt := now.Add(5 * time.Minute)
+	const accountID = "24000000-0000-4000-8000-000000000001"
+	const assetID = "24000000-0000-4000-8000-000000000002"
+	const jobID = "24000000-0000-4000-8000-000000000003"
+	if _, err := db.ExecContext(ctx, `INSERT INTO channel_accounts (id, channel, external_account_ref, status)
+VALUES ($1, 'telegram', 'native-music-finalize', 'active')`, accountID); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status)
+VALUES ($1, $2, 'url', 'https://www.youtube.com/watch?v=abc123DEF_-', 'video', 'Track', 'available')`, assetID, accountID); err != nil {
+		t.Fatalf("seed asset: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO export_jobs (
+    id, channel_account_id, media_asset_id, operation, variant, output_profile,
+    presentation_title, presentation_performer, status, attempt_no, attempt_token,
+    lease_owner, lease_expires_at, heartbeat_at
+) VALUES ($1,$2,$3,'youtube_audio','{"audio_bitrate_kbps":320}','audio_m4a_aac_v1',
+          'Track','Artist','running',1,'attempt-current','worker-current',$4,$5)`,
+		jobID, accountID, assetID, leaseExpiresAt, now); err != nil {
+		t.Fatalf("seed export job: %v", err)
+	}
+	duration := 183
+	frozenAt := now
+	deliveryExpiresAt := now.Add(24 * time.Hour)
+	params := FinalizeExportJobParams{
+		ExportJobID: jobID, LeaseOwner: "worker-stale", AttemptToken: "attempt-stale",
+		Status: "succeeded", CompletedAt: now,
+		Output: StoredObjectRecord{
+			ID: "24000000-0000-4000-8000-000000000004", ChannelAccountID: accountID,
+			Bucket: "artifacts", ObjectKey: "transient/exports/native-music/result.m4a",
+			Generation: 1, GenerationPublishedAt: now, ContentType: "audio/mp4", SizeBytes: 42,
+			ChecksumAlgorithm: "sha256", Checksum: "sha256:native-music", StorageStatus: "available",
+			RetentionState: "expires_scheduled", HoldState: "none", CreatedAt: now,
+		},
+		Delivery: ExportDeliveryRecord{
+			ID: "24000000-0000-4000-8000-000000000005", ExportJobID: jobID,
+			ChannelAccountID: accountID, Channel: "telegram", Status: "pending", Version: 1,
+			MaxAttempts: 5, ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now,
+		},
+		DeliveryPin: StoredObjectPinRecord{
+			ID: "24000000-0000-4000-8000-000000000006", OwnerType: "export_delivery",
+			OwnerID: "24000000-0000-4000-8000-000000000005", Purpose: "delivery",
+			ExpiresAt: &deliveryExpiresAt, CreatedAt: now,
+		},
+		PresentationDurationSeconds: &duration, PresentationFrozenAt: &frozenAt,
+	}
+	if _, err := store.FinalizeExportJob(ctx, params); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("stale FinalizeExportJob() error = %v, want sql.ErrNoRows", err)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1`, 0, params.Output.ID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM export_jobs WHERE id=$1 AND presentation_duration_seconds IS NULL AND presentation_frozen_at IS NULL`, 1, jobID)
+
+	params.LeaseOwner = "worker-current"
+	params.AttemptToken = "attempt-current"
+	finalized, err := store.FinalizeExportJob(ctx, params)
+	if err != nil {
+		t.Fatalf("current FinalizeExportJob() error = %v", err)
+	}
+	if finalized.OutputProfile != "audio_m4a_aac_v1" || finalized.PresentationDurationSeconds == nil ||
+		*finalized.PresentationDurationSeconds != duration || finalized.PresentationFrozenAt == nil ||
+		!finalized.PresentationFrozenAt.Equal(frozenAt) {
+		t.Fatalf("finalized export job = %#v", finalized)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1`, 1, params.Output.ID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM export_deliveries WHERE id=$1`, 1, params.Delivery.ID)
+
+	const canceledJobID = "24000000-0000-4000-8000-000000000007"
+	if _, err := db.ExecContext(ctx, `INSERT INTO export_jobs (
+    id, channel_account_id, media_asset_id, operation, variant, output_profile,
+    presentation_title, presentation_performer, status, attempt_no, attempt_token,
+    lease_owner, lease_expires_at, heartbeat_at, cancel_requested_at
+) VALUES ($1,$2,$3,'youtube_audio','{"audio_bitrate_kbps":320}','audio_m4a_aac_v1',
+          'Canceled track','Artist','cancel_requested',1,'attempt-canceled','worker-canceled',$4,$5,$5)`,
+		canceledJobID, accountID, assetID, leaseExpiresAt, now); err != nil {
+		t.Fatalf("seed canceled export job: %v", err)
+	}
+	params.ExportJobID = canceledJobID
+	params.LeaseOwner = "worker-canceled"
+	params.AttemptToken = "attempt-canceled"
+	params.Output.ID = "24000000-0000-4000-8000-000000000008"
+	params.Delivery.ID = "24000000-0000-4000-8000-000000000009"
+	params.Delivery.ExportJobID = canceledJobID
+	params.DeliveryPin.ID = "24000000-0000-4000-8000-000000000010"
+	params.DeliveryPin.OwnerID = params.Delivery.ID
+	canceled, err := store.FinalizeExportJob(ctx, params)
+	if err != nil {
+		t.Fatalf("cancel-raced FinalizeExportJob() error = %v", err)
+	}
+	if canceled.Status != "canceled" || canceled.PresentationDurationSeconds != nil || canceled.PresentationFrozenAt != nil {
+		t.Fatalf("cancel-raced export job = %#v", canceled)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_objects WHERE id=$1`, 0, params.Output.ID)
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM export_deliveries WHERE id=$1`, 0, params.Delivery.ID)
+}
+
 func TestFinalizeExportDeliveryRejectsExpiredLeasePostgres(t *testing.T) {
 	ctx := context.Background()
 	db := openTargetPostgresTestDB(t, ctx)
@@ -1318,7 +1501,7 @@ func TestFinalizeExportDeliveryRejectsExpiredLeasePostgres(t *testing.T) {
 	}{
 		{`INSERT INTO channel_accounts (id, channel, external_account_ref, status) VALUES ($1,'telegram','expired-delivery','active')`, []any{accountID}},
 		{`INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status) VALUES ($1,$2,'url','https://youtu.be/example','url','Example','available')`, []any{assetID, accountID}},
-		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version, max_attempts, progress) VALUES ($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}')`, []any{jobID, accountID, assetID}},
+		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, output_profile, status, version, max_attempts, progress) VALUES ($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','audio_ogg_opus_v1','succeeded',2,3,'{}')`, []any{jobID, accountID, assetID}},
 		{`INSERT INTO export_deliveries (id, export_job_id, channel_account_id, channel, status, version, attempt_no, attempt_token, lease_owner, lease_expires_at, max_attempts, expires_at) VALUES ($1,$2,$3,'telegram','claimed',2,1,'attempt-token-current','telegram-adapter',$4,5,$5)`, []any{deliveryID, jobID, accountID, now.Add(time.Minute), now.Add(time.Hour)}},
 	}
 	for _, seed := range seedStatements {
@@ -1370,10 +1553,10 @@ func TestHeartbeatExportDeliveryExtendsLeaseForAckAndRejectsStaleOrExpiredFences
 	}{
 		{`INSERT INTO channel_accounts (id, channel, external_account_ref, status) VALUES ($1,'telegram','heartbeat-delivery','active')`, []any{accountID}},
 		{`INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status) VALUES ($1,$2,'url','https://youtu.be/heartbeat','url','Heartbeat','available')`, []any{assetID, accountID}},
-		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version, max_attempts, progress) VALUES
-($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}'),
-($4,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}'),
-($5,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}')`, []any{liveJobID, accountID, assetID, expiredLeaseJobID, expiredDeliveryJobID}},
+		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, output_profile, status, version, max_attempts, progress) VALUES
+($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','audio_ogg_opus_v1','succeeded',2,3,'{}'),
+($4,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','audio_ogg_opus_v1','succeeded',2,3,'{}'),
+($5,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','audio_ogg_opus_v1','succeeded',2,3,'{}')`, []any{liveJobID, accountID, assetID, expiredLeaseJobID, expiredDeliveryJobID}},
 		{`INSERT INTO export_deliveries (id, export_job_id, channel_account_id, channel, status, version, attempt_no, attempt_token, lease_owner, lease_expires_at, max_attempts, expires_at) VALUES
 ($1,$2,$3,'telegram','claimed',2,1,'attempt-token-live','telegram-adapter',$4,5,$5),
 ($6,$7,$3,'telegram','claimed',2,1,'attempt-token-expired','telegram-adapter',$8,5,$5),
@@ -1382,7 +1565,7 @@ func TestHeartbeatExportDeliveryExtendsLeaseForAckAndRejectsStaleOrExpiredFences
 			expiredLeaseDeliveryID, expiredLeaseJobID, now.Add(30 * time.Second),
 			expiredDeliveryID, expiredDeliveryJobID, now.Add(time.Minute), now.Add(20 * time.Second),
 		}},
-		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version, max_attempts, progress) VALUES ($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}')`, []any{cappedClaimJobID, accountID, assetID}},
+		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, output_profile, status, version, max_attempts, progress) VALUES ($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','audio_ogg_opus_v1','succeeded',2,3,'{}')`, []any{cappedClaimJobID, accountID, assetID}},
 		{`INSERT INTO export_deliveries (id, export_job_id, channel_account_id, channel, status, version, attempt_no, max_attempts, expires_at) VALUES ($1,$2,$3,'telegram','pending',1,0,5,$4)`, []any{cappedClaimDeliveryID, cappedClaimJobID, accountID, now.Add(20 * time.Second)}},
 	}
 	for _, seed := range seedStatements {
@@ -1634,7 +1817,8 @@ func TestExportJobReclaimReleasesTerminalSourcePin(t *testing.T) {
 		Job: ExportJobRecord{
 			ID: jobID, ChannelAccountID: channelID, MediaAssetID: assetID,
 			Operation: "video_to_audio", DeliveryChannel: "telegram", Status: "queued",
-			Version: 1, MaxAttempts: 2, CreatedAt: now,
+			OutputProfile: "audio_m4a_aac_v1", PresentationTitle: "reclaim.mp4",
+			PresentationPerformer: "Извлечено из видео", Version: 1, MaxAttempts: 2, CreatedAt: now,
 		},
 		SourcePin: StoredObjectPinRecord{
 			ID: pinID, StoredObjectID: storedID, OwnerType: "export_job",
@@ -1710,7 +1894,9 @@ func TestExportCreateReplaySurvivesSourceExpiryAndConcurrentCreatePostgres(t *te
 			Job: ExportJobRecord{
 				ID: jobID, ChannelAccountID: channelID, MediaAssetID: assetID, Operation: "video_to_audio",
 				DeliveryChannel: "telegram", VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), Status: "queued",
-				Version: 1, IdempotencyKey: "export-replay-key", MaxAttempts: 3, ProgressJSON: []byte(`{}`), CreatedAt: now,
+				OutputProfile: "audio_m4a_aac_v1", PresentationTitle: "replay.mp4",
+				PresentationPerformer: "Извлечено из видео",
+				Version:               1, IdempotencyKey: "export-replay-key", MaxAttempts: 3, ProgressJSON: []byte(`{}`), CreatedAt: now,
 			},
 			SourcePin: StoredObjectPinRecord{
 				ID: pinID, StoredObjectID: storedID, OwnerType: "export_job", OwnerID: jobID, Purpose: "source", CreatedAt: now,
@@ -2030,6 +2216,12 @@ func applyTargetMigration(t *testing.T, ctx context.Context, db *sql.DB) {
 }
 
 func applyGovernedMediaMigration(t *testing.T, ctx context.Context, db *sql.DB) {
+	t.Helper()
+	applyGovernedMediaBaseMigration(t, ctx, db)
+	applyNamedTargetMigration(t, ctx, db, "0008_native_music_export_profile.sql")
+}
+
+func applyGovernedMediaBaseMigration(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join("..", "migrations", "0002_governed_media_export_retention.sql"))
 	if err != nil {

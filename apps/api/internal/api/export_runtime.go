@@ -23,6 +23,15 @@ import (
 
 var exportFilenameSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
+const (
+	exportProfileAudioOGGOpusV1  = "audio_ogg_opus_v1"
+	exportProfileAudioM4ALegacy  = "audio_m4a_aac_legacy"
+	exportProfileAudioM4AV1      = "audio_m4a_aac_v1"
+	exportProfileVideoMP4V1      = "video_mp4_v1"
+	exportPresentationTextRunes  = 64
+	exportPresentationMaxSeconds = 2678400
+)
+
 func (s *TargetRuntimeService) CreateExportJob(ctx context.Context, req TargetCreateExportJobRequest) (TargetExportJob, error) {
 	if s.store == nil {
 		return TargetExportJob{}, fmt.Errorf("target storage is required")
@@ -58,15 +67,25 @@ func (s *TargetRuntimeService) CreateExportJob(ctx context.Context, req TargetCr
 	if err := validateExportOperation(asset, req.Operation); err != nil {
 		return TargetExportJob{}, err
 	}
+	if req.Operation == "youtube_audio" && !youtubeMusicMetadataReady(asset) {
+		return TargetExportJob{}, storage.ContractViolationf("YouTube audio metadata is not ready")
+	}
 	if idempotencyKey == "" {
 		idempotencyKey = "implicit-action:" + uuid.NewString()
+	}
+	outputProfile := exportOutputProfile(req.Operation)
+	presentationTitle, presentationPerformer := exportPresentationSnapshot(asset, req.Operation)
+	if outputProfile == exportProfileAudioM4AV1 && (presentationTitle == "" || presentationPerformer == "") {
+		return TargetExportJob{}, storage.ContractViolationf("music presentation title and performer are required")
 	}
 	now := s.now()
 	jobID := s.nextID()
 	params := targetstore.CreateExportJobParams{Job: targetstore.ExportJobRecord{
 		ID: jobID, ChannelAccountID: req.ChannelAccountID, MediaAssetID: req.MediaAssetID,
 		Operation: req.Operation, DeliveryChannel: deliveryChannel, VariantJSON: variant,
-		Status: "queued", Version: 1, IdempotencyKey: idempotencyKey,
+		OutputProfile: outputProfile, PresentationTitle: presentationTitle,
+		PresentationPerformer: presentationPerformer,
+		Status:                "queued", Version: 1, IdempotencyKey: idempotencyKey,
 		MaxAttempts: 3, ProgressJSON: []byte(`{"stage":"queued","percent":0}`), CreatedAt: now,
 	}}
 	if asset.StoredObjectID != "" {
@@ -281,6 +300,15 @@ func (s *TargetRuntimeService) FinalizeExportJob(ctx context.Context, req Target
 		if req.Output == nil {
 			return TargetExportJob{}, storage.ContractViolationf("successful export requires output")
 		}
+		if err := validateExportPublication(current, *req.Output); err != nil {
+			return TargetExportJob{}, err
+		}
+		if req.Output.DurationSeconds != nil {
+			params.PresentationDurationSeconds = req.Output.DurationSeconds
+			if current.OutputProfile == exportProfileAudioM4AV1 {
+				params.PresentationFrozenAt = &now
+			}
+		}
 		output, err := s.publishExportOutput(ctx, current, req.AttemptToken, *req.Output, now)
 		if err != nil {
 			return TargetExportJob{}, err
@@ -470,6 +498,11 @@ func (s *TargetRuntimeService) resolveExportDownload(ctx context.Context, req Ta
 		ExportJobID: job.ID, Filename: exportFilename(job, object),
 		ContentType: object.ContentType, SizeBytes: object.SizeBytes,
 		URL: download.URL, ExpiresAt: download.ExpiresAt,
+		Presentation: TargetExportPresentation{
+			Kind: exportPresentationKind(job), Title: job.PresentationTitle,
+			Performer:       job.PresentationPerformer,
+			DurationSeconds: job.PresentationDurationSeconds,
+		},
 	}, nil
 }
 
@@ -814,7 +847,8 @@ func (s *TargetRuntimeService) exportJobFromRecord(ctx context.Context, record t
 	dto := TargetExportJob{
 		ExportJobID: record.ID, ChannelAccountID: record.ChannelAccountID,
 		MediaAssetID: record.MediaAssetID, Operation: record.Operation,
-		Variant: record.VariantJSON, Status: record.Status, Version: record.Version,
+		Variant: record.VariantJSON, OutputProfile: record.OutputProfile,
+		Status: record.Status, Version: record.Version,
 		RetryGeneration: record.RetryGeneration, AttemptNo: record.AttemptNo,
 		MaxAttempts: record.MaxAttempts, Progress: record.ProgressJSON,
 		Deliveries: make([]TargetExportDelivery, 0, len(deliveries)), CreatedAt: record.CreatedAt,
@@ -849,6 +883,100 @@ func exportDeliveryFromRecord(record targetstore.ExportDeliveryRecord) TargetExp
 	}
 }
 
+func exportOutputProfile(operation string) string {
+	if operation == "youtube_video" {
+		return exportProfileVideoMP4V1
+	}
+	return exportProfileAudioM4AV1
+}
+
+func exportPresentationSnapshot(asset targetstore.MediaAssetRecord, operation string) (string, string) {
+	metadata := exportProviderMetadataFromAsset(asset)
+	title := sanitizeBoundedText(metadata.ProviderMetadata.Title, exportPresentationTextRunes)
+	if title == "" {
+		title = sanitizeBoundedText(asset.DisplayName, exportPresentationTextRunes)
+	}
+	performer := sanitizeBoundedText(metadata.ProviderMetadata.Performer, exportPresentationTextRunes)
+	switch operation {
+	case "youtube_audio":
+		if performer == "" {
+			performer = "YouTube"
+		}
+	case "video_to_audio":
+		performer = "Извлечено из видео"
+	}
+	return title, performer
+}
+
+func youtubeMusicMetadataReady(asset targetstore.MediaAssetRecord) bool {
+	metadata := exportProviderMetadataFromAsset(asset)
+	return strings.EqualFold(strings.TrimSpace(metadata.ProviderMetadata.Provider), "youtube") &&
+		sanitizeBoundedText(metadata.ProviderMetadata.Title, exportPresentationTextRunes) != "" &&
+		sanitizeBoundedText(metadata.ProviderMetadata.Performer, exportPresentationTextRunes) != ""
+}
+
+func exportProviderMetadataFromAsset(asset targetstore.MediaAssetRecord) struct {
+	ProviderMetadata struct {
+		Provider  string `json:"provider"`
+		Title     string `json:"title"`
+		Performer string `json:"performer"`
+	} `json:"provider_metadata"`
+} {
+	var metadata struct {
+		ProviderMetadata struct {
+			Provider  string `json:"provider"`
+			Title     string `json:"title"`
+			Performer string `json:"performer"`
+		} `json:"provider_metadata"`
+	}
+	_ = json.Unmarshal(asset.MetadataJSON, &metadata)
+	return metadata
+}
+
+func validateExportPublication(job targetstore.ExportJobRecord, publication TargetExportPublication) error {
+	durationSeconds := publication.DurationSeconds
+	if durationSeconds != nil && (*durationSeconds <= 0 || *durationSeconds > exportPresentationMaxSeconds) {
+		return storage.ContractViolationf("duration_seconds must be between 1 and %d", exportPresentationMaxSeconds)
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.SplitN(publication.ContentType, ";", 2)[0]))
+	filename := strings.ToLower(strings.TrimSpace(publication.Filename))
+	profileMatches := false
+	switch job.OutputProfile {
+	case exportProfileAudioM4AV1, exportProfileAudioM4ALegacy:
+		profileMatches = contentType == "audio/mp4" && strings.HasSuffix(filename, ".m4a")
+	case exportProfileAudioOGGOpusV1:
+		profileMatches = contentType == "audio/ogg" && strings.HasSuffix(filename, ".ogg")
+	case exportProfileVideoMP4V1:
+		profileMatches = contentType == "video/mp4" && strings.HasSuffix(filename, ".mp4")
+	}
+	if !profileMatches {
+		return storage.ContractViolationf("export output does not match output_profile")
+	}
+	if job.OutputProfile != exportProfileAudioM4AV1 {
+		return nil
+	}
+	if durationSeconds == nil {
+		return storage.ContractViolationf("audio_m4a_aac_v1 requires duration_seconds")
+	}
+	if title := strings.TrimSpace(job.PresentationTitle); title == "" || len([]rune(title)) > exportPresentationTextRunes {
+		return storage.ContractViolationf("music presentation title is invalid")
+	}
+	if performer := strings.TrimSpace(job.PresentationPerformer); performer == "" || len([]rune(performer)) > exportPresentationTextRunes {
+		return storage.ContractViolationf("music presentation performer is invalid")
+	}
+	return nil
+}
+
+func exportPresentationKind(job targetstore.ExportJobRecord) string {
+	if job.Operation == "youtube_video" || job.OutputProfile == exportProfileVideoMP4V1 {
+		return "document"
+	}
+	if job.Operation == "youtube_audio" && job.OutputProfile == exportProfileAudioM4AV1 {
+		return "music"
+	}
+	return "audio"
+}
+
 func normalizeExportVariant(operation string, raw json.RawMessage) ([]byte, error) {
 	var variant map[string]any
 	if len(raw) == 0 || json.Unmarshal(raw, &variant) != nil || len(variant) != 1 {
@@ -857,7 +985,7 @@ func normalizeExportVariant(operation string, raw json.RawMessage) ([]byte, erro
 	switch operation {
 	case "youtube_audio", "video_to_audio":
 		value, ok := variant["audio_bitrate_kbps"].(float64)
-		if !ok || !containsInt([]int{64, 96, 128, 192, 256}, int(value)) || value != float64(int(value)) {
+		if !ok || !containsInt([]int{64, 96, 128, 192, 256, 320}, int(value)) || value != float64(int(value)) {
 			return nil, storage.ContractViolationf("audio_bitrate_kbps is unsupported")
 		}
 	case "youtube_video":

@@ -230,6 +230,7 @@ func TestFinalizeExportJobKeepsOutputForMediaRetentionWindow(t *testing.T) {
 		Operation: "youtube_audio", DeliveryChannel: "telegram", Status: "running",
 		Version: 2, RetryGeneration: 0, AttemptNo: 2, AttemptToken: "current-attempt",
 		LeaseOwner: "worker-current", LeaseExpiresAt: &leaseExpiresAt, MaxAttempts: 3,
+		OutputProfile: exportProfileAudioM4AV1, PresentationTitle: "Track title", PresentationPerformer: "Artist",
 		VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), ProgressJSON: []byte(`{}`), CreatedAt: now.Add(-time.Minute),
 	}}
 	objects := &fakeTargetObjectStore{objects: map[string]storage.ManagedObjectInfo{
@@ -238,11 +239,13 @@ func TestFinalizeExportJobKeepsOutputForMediaRetentionWindow(t *testing.T) {
 		},
 	}}
 	service := NewTargetRuntimeService(store, WithTargetObjectStore(objects), WithTargetClock(func() time.Time { return now }))
+	duration := 183
 
 	if _, err := service.FinalizeExportJob(context.Background(), TargetFinalizeExportJobRequest{
 		ExportJobID: "export-1", LeaseOwner: "worker-current", AttemptToken: "current-attempt",
 		Outcome: "succeeded", Output: &TargetExportPublication{
 			ContentType: "audio/mp4", Filename: "result.m4a", SizeBytes: 5, SHA256: digest, StagingKey: stagingKey,
+			DurationSeconds: &duration,
 		},
 	}); err != nil {
 		t.Fatalf("FinalizeExportJob() error = %v", err)
@@ -253,6 +256,47 @@ func TestFinalizeExportJobKeepsOutputForMediaRetentionWindow(t *testing.T) {
 	}
 	if !store.finalizeExportParams.Delivery.ExpiresAt.Equal(now.Add(24 * time.Hour)) {
 		t.Fatalf("delivery expiry = %v, want independent 24-hour delivery window", store.finalizeExportParams.Delivery.ExpiresAt)
+	}
+	if store.finalizeExportParams.PresentationDurationSeconds == nil || *store.finalizeExportParams.PresentationDurationSeconds != 183 ||
+		store.finalizeExportParams.PresentationFrozenAt == nil || !store.finalizeExportParams.PresentationFrozenAt.Equal(now) {
+		t.Fatalf("presentation finalization = duration %v frozen_at %v", store.finalizeExportParams.PresentationDurationSeconds, store.finalizeExportParams.PresentationFrozenAt)
+	}
+}
+
+func TestValidateExportPublicationRequiresMatchingProfileAndBoundedCurrentMusicSnapshot(t *testing.T) {
+	t.Parallel()
+	validDuration := 183
+	job := targetstore.ExportJobRecord{
+		OutputProfile:     exportProfileAudioM4AV1,
+		PresentationTitle: "Track title", PresentationPerformer: "Artist",
+	}
+	validPublication := TargetExportPublication{ContentType: "audio/mp4", Filename: "track.m4a", DurationSeconds: &validDuration}
+	if err := validateExportPublication(job, validPublication); err != nil {
+		t.Fatalf("valid presentation error = %v", err)
+	}
+	for _, test := range []struct {
+		name        string
+		job         targetstore.ExportJobRecord
+		publication TargetExportPublication
+	}{
+		{name: "missing duration", job: job, publication: TargetExportPublication{ContentType: "audio/mp4", Filename: "track.m4a"}},
+		{name: "missing title", job: targetstore.ExportJobRecord{OutputProfile: exportProfileAudioM4AV1, PresentationPerformer: "Artist"}, publication: validPublication},
+		{name: "missing performer", job: targetstore.ExportJobRecord{OutputProfile: exportProfileAudioM4AV1, PresentationTitle: "Track"}, publication: validPublication},
+		{name: "m4a mime mismatch", job: job, publication: TargetExportPublication{ContentType: "audio/ogg", Filename: "track.m4a", DurationSeconds: &validDuration}},
+		{name: "m4a extension mismatch", job: job, publication: TargetExportPublication{ContentType: "audio/mp4", Filename: "track.ogg", DurationSeconds: &validDuration}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateExportPublication(test.job, test.publication); !errors.Is(err, storage.ErrContractViolation) {
+				t.Fatalf("validation error = %v, want contract violation", err)
+			}
+		})
+	}
+	zero := 0
+	if err := validateExportPublication(targetstore.ExportJobRecord{OutputProfile: exportProfileAudioM4ALegacy}, TargetExportPublication{ContentType: "audio/mp4", Filename: "legacy.m4a", DurationSeconds: &zero}); !errors.Is(err, storage.ErrContractViolation) {
+		t.Fatalf("legacy invalid optional duration error = %v, want contract violation", err)
+	}
+	if err := validateExportPublication(targetstore.ExportJobRecord{OutputProfile: exportProfileAudioM4ALegacy}, TargetExportPublication{ContentType: "audio/mp4", Filename: "legacy.m4a"}); err != nil {
+		t.Fatalf("legacy omitted duration error = %v", err)
 	}
 }
 

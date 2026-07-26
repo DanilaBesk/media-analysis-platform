@@ -1676,4 +1676,60 @@ New youtube_audio and video_to_audio jobs accept only the libopus-compatible sem
       <check>Full tests, GRACE XML parsing, rebuilt worker and bot Compose services, live runtime proof, independent review, Beads closure, commit, and push pass.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="native-telegram-music-card-exports" status="completed" bead="media-u81i">
+    <purpose>Supersede voice presentation for newly created audio jobs with immutable M4A/AAC profiles and Telegram native music cards while preserving historical output lineage.</purpose>
+    <write-scope>
+      <file-1>apps/api/internal/storage/migrations/0008_native_music_export_profile.sql</file-1>
+      <file-2>apps/api/internal/storage/target/model.go</file-2>
+      <file-3>apps/api/internal/storage/target/store.go</file-3>
+      <file-4>apps/api/internal/storage/target/store_postgres_test.go</file-4>
+      <file-5>apps/api/internal/storage/target_schema_test.go</file-5>
+      <file-6>apps/api/internal/api/export_api.go</file-6>
+      <file-7>apps/api/internal/api/export_runtime.go</file-7>
+      <file-8>apps/api/internal/api/export_access_test.go</file-8>
+      <file-9>apps/api/internal/api/export_variant_test.go</file-9>
+      <file-10>apps/api/internal/api/metadata_enrichment_api.go</file-10>
+      <file-11>apps/api/internal/api/metadata_enrichment_runtime.go</file-11>
+      <file-12>workers/metadata-enrichment/src/transcriber_worker_metadata_enrichment.py</file-12>
+      <file-13>workers/metadata-enrichment/tests/test_transcriber_worker_metadata_enrichment.py</file-13>
+      <file-14>workers/media-export/src/transcriber_worker_media_export.py</file-14>
+      <file-15>workers/media-export/tests/test_transcriber_worker_media_export.py</file-15>
+      <file-16>apps/telegram-bot/src/telegram_adapter/bot.py</file-16>
+      <file-17>apps/telegram-bot/tests/test_bot_runtime.py</file-17>
+      <file-18>packages/contracts/schemas/http/export-job.schema.json</file-18>
+      <file-19>packages/contracts/schemas/http/metadata-enrichment.schema.json</file-19>
+      <file-20>packages/contracts/tests/test_contract_surfaces.py</file-20>
+      <file-21>apps/web/src/features/media/media-workspace.tsx</file-21>
+      <file-22>apps/web/src/lib/api/types.ts</file-22>
+      <file-23>apps/web/tests/routes.test.tsx</file-23>
+      <file-24>docs/architecture/media-export-retention-contract.md</file-24>
+      <file-25>docs/requirements.xml</file-25>
+      <file-26>docs/technology.xml</file-26>
+      <file-27>docs/development-plan.xml</file-27>
+      <file-28>docs/verification-plan.xml</file-28>
+      <file-29>docs/knowledge-graph.xml</file-29>
+      <file-30>docs/operational-packets.xml</file-30>
+      <file-31>apps/api/internal/storage/migrations/0009_backfill_youtube_music_performer.sql</file-31>
+      <file-32>apps/api/internal/api/metadata_enrichment_api_test.go</file-32>
+      <file-33>apps/api/internal/api/metadata_enrichment_runtime_test.go</file-33>
+      <file-34>apps/api/internal/api/target_runtime_test.go</file-34>
+      <file-35>apps/telegram-bot/src/telegram_adapter/gateway.py</file-35>
+      <file-36>packages/contracts/schemas/internal/export-control.schema.json</file-36>
+      <file-37>packages/contracts/schemas/internal/metadata-enrichment-control.schema.json</file-37>
+      <file-38>apps/web/dist/index.html</file-38>
+      <file-39>apps/web/dist/assets/index-WD6iGcpy.js</file-39>
+      <file-40>apps/web/dist/assets/index-BTvMz8vk.js</file-40>
+      <file-41>apps/telegram-bot/tests/test_gateway.py</file-41>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+export_jobs output_profile is immutable across idempotency replay and retry. Migration 0008 classifies terminal audio jobs from stored-object MIME or extension, retains unfinished 320-kbps jobs as legacy M4A because that variant predates the OGG cutover, and defaults other unfinished audio jobs to OGG. Migration 0009 requeues YouTube assets without performer metadata. New YouTube audio waits for stable provider title and performer before creating an audio_m4a_aac_v1 snapshot. Output duration and presentation_frozen_at commit under the same attempt fence as successful publication; profile-incompatible MIME or filename is rejected, and a cancellation race cannot retain output or success-only presentation facts. Delivery never rereads mutable media_asset metadata. New M4A/AAC uses send_audio with explicit bounded music metadata and no generic caption; historical OGG/Opus, including application/ogg, keeps send_voice.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Migration and storage tests prove legacy profile classification, immutable retries, presentation snapshot persistence, and stale-attempt fencing.</check>
+      <check>Metadata-enrichment tests prove sanitized performer priority artist, creator, uploader, channel, then the documented YouTube fallback; migration tests prove old missing-performer assets are requeued without duplicating ready or active work.</check>
+      <check>Real ffmpeg plus ffprobe coverage proves M4A/AAC for every advertised bitrate including 320 kbps; legacy OGG profile and video MP4 remain unchanged.</check>
+      <check>API and PostgreSQL tests prove profile-to-publication matching, stable metadata gating, and cancellation-race fencing. Telegram tests prove audio/mp4 with parameterized MIME uses send_audio title, performer, and duration without a caption; audio/ogg, audio/opus, and application/ogg use send_voice; generic audio and document fallbacks remain compatible.</check>
+      <check>Full Python, Go, contract, Web, XML, migration, rebuilt Compose, live Telegram, independent review, Beads, commit, and push gates pass.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

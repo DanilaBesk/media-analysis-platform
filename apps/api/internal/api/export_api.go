@@ -46,6 +46,7 @@ type TargetExportJob struct {
 	MediaAssetID      string                 `json:"media_asset_id"`
 	Operation         string                 `json:"operation"`
 	Variant           json.RawMessage        `json:"variant"`
+	OutputProfile     string                 `json:"output_profile"`
 	Status            string                 `json:"status"`
 	Version           int64                  `json:"version"`
 	RetryGeneration   int                    `json:"retry_generation"`
@@ -122,12 +123,20 @@ type TargetFinalizeExportDeliveryRequest struct {
 }
 
 type TargetExportDownload struct {
-	ExportJobID string    `json:"export_job_id"`
-	Filename    string    `json:"filename"`
-	ContentType string    `json:"content_type"`
-	SizeBytes   int64     `json:"size_bytes"`
-	URL         string    `json:"url"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	ExportJobID  string                   `json:"export_job_id"`
+	Filename     string                   `json:"filename"`
+	ContentType  string                   `json:"content_type"`
+	SizeBytes    int64                    `json:"size_bytes"`
+	URL          string                   `json:"url"`
+	ExpiresAt    time.Time                `json:"expires_at"`
+	Presentation TargetExportPresentation `json:"presentation"`
+}
+
+type TargetExportPresentation struct {
+	Kind            string `json:"kind"`
+	Title           string `json:"title"`
+	Performer       string `json:"performer"`
+	DurationSeconds *int   `json:"duration_seconds"`
 }
 
 type TargetExportQueueRequest struct {
@@ -187,11 +196,12 @@ type TargetFinalizeExportJobRequest struct {
 }
 
 type TargetExportPublication struct {
-	ContentType string `json:"content_type"`
-	Filename    string `json:"filename"`
-	SizeBytes   int64  `json:"size_bytes"`
-	SHA256      string `json:"sha256"`
-	StagingKey  string `json:"staging_key"`
+	ContentType     string `json:"content_type"`
+	Filename        string `json:"filename"`
+	SizeBytes       int64  `json:"size_bytes"`
+	SHA256          string `json:"sha256"`
+	StagingKey      string `json:"staging_key"`
+	DurationSeconds *int   `json:"duration_seconds,omitempty"`
 }
 
 type TargetExportReclaimRequest struct {

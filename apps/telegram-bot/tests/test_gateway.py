@@ -822,7 +822,12 @@ def test_export_controls_use_per_material_rows_and_only_single_item_main_shortcu
         channel_identity=base.channel_identity,
         collection={"collection_id": "inbox-1", "version": 1, "items": [{"media_asset_id": "yt-1"}, {"media_asset_id": "video-1"}]},
         items=[
-            {"media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT", "origin": {"origin_ref": "https://youtube.com/watch?v=one"}, "metadata": {}},
+            {
+                "media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT",
+                "origin": {"origin_ref": "https://youtube.com/watch?v=one"},
+                "provider_metadata": {"provider": "youtube", "title": "Track", "performer": "Artist"},
+                "metadata": {},
+            },
             {"media_asset_id": "video-1", "kind": "video", "status": "ready", "display_name": "clip", "metadata": {}},
         ],
         page={"page_size": 5, "has_more": False}, active_runs=[], recent_runs=[], artifacts_by_run={}, diagnostics_by_run={}, rejected=[],
@@ -870,9 +875,20 @@ def test_export_controls_use_per_material_rows_and_only_single_item_main_shortcu
     )
     format_choice = build_status_keyboard(
         single,
-        export_selection={"collection_id": "inbox-1", "expected_version": 1, "media_asset_id": "yt-1", "mode": "youtube"},
-    )
+            export_selection={
+                "collection_id": "inbox-1", "expected_version": 1,
+                "media_asset_id": "yt-1", "mode": "youtube", "audio_ready": True,
+            },
+        )
     assert [[button.text for button in row] for row in format_choice.inline_keyboard[:2]] == [["Аудио"], ["Видео"]]
+    pending_format_choice = build_status_keyboard(
+        single,
+        export_selection={
+            "collection_id": "inbox-1", "expected_version": 1,
+            "media_asset_id": "yt-1", "mode": "youtube", "audio_ready": False,
+        },
+    )
+    assert [button.text for button in pending_format_choice.inline_keyboard[0]] == ["Видео"]
     quality_choice = build_status_keyboard(
         single,
         export_selection={"collection_id": "inbox-1", "expected_version": 1, "media_asset_id": "yt-1", "mode": "video_quality"},
@@ -945,7 +961,9 @@ def test_create_export_job_keeps_current_collection_intact() -> None:
     api.items = [
         {
             "media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT",
-            "origin": {"origin_ref": "https://youtu.be/example"}, "metadata": {},
+            "origin": {"origin_ref": "https://youtu.be/example"},
+            "provider_metadata": {"provider": "youtube", "title": "Track", "performer": "Artist"},
+            "metadata": {},
         }
     ]
     api.collection["items"] = [{"media_asset_id": "yt-1", "position": 0}]
@@ -996,7 +1014,9 @@ def test_create_export_job_ignores_unrelated_collection_version_changes() -> Non
     api.items = [
         {
             "media_asset_id": "yt-1", "kind": "url", "status": "ready", "display_name": "YT",
-            "origin": {"origin_ref": "https://youtu.be/example"}, "metadata": {},
+            "origin": {"origin_ref": "https://youtu.be/example"},
+            "provider_metadata": {"provider": "youtube", "title": "Track", "performer": "Artist"},
+            "metadata": {},
         },
         {"media_asset_id": "text-2", "kind": "text", "status": "ready", "display_name": "note", "metadata": {}},
     ]

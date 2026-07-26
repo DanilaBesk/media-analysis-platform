@@ -16,6 +16,7 @@ import hmac
 import http.client
 import json
 import logging
+import math
 import os
 import signal
 import socket
@@ -37,6 +38,8 @@ _LOGGER = logging.getLogger(__name__)
 _LOG_MARKER = "[WorkerMediaExport][run_export_job]"
 _AUDIO_OPERATIONS = frozenset({"youtube_audio", "video_to_audio"})
 _OPERATIONS = frozenset({*_AUDIO_OPERATIONS, "youtube_video"})
+_AAC_AUDIO_PROFILES = frozenset({"audio_m4a_aac_legacy", "audio_m4a_aac_v1"})
+_OUTPUT_PROFILES = frozenset({*_AAC_AUDIO_PROFILES, "audio_ogg_opus_v1", "video_mp4_v1"})
 
 __all__ = [
     "ExportClaim",
@@ -65,12 +68,15 @@ class ExportJob:
     export_job_id: str
     operation: str
     variant: Mapping[str, object]
+    output_profile: str | None = None
 
     def __post_init__(self) -> None:
         if not self.export_job_id.strip():
             raise ValueError("export_job_id must not be empty")
         if self.operation not in _OPERATIONS:
             raise ValueError("unsupported export operation")
+        if self.output_profile is not None and self.output_profile not in _OUTPUT_PROFILES:
+            raise ValueError("unsupported export output profile")
 
     @classmethod
     def from_payload(cls, payload: object) -> "ExportJob":
@@ -79,6 +85,7 @@ class ExportJob:
             export_job_id=_string(data.get("export_job_id"), "export_job_id"),
             operation=_string(data.get("operation"), "operation"),
             variant=_mapping(data.get("variant"), "variant"),
+            output_profile=_optional_string(data.get("output_profile"), "output_profile"),
         )
 
 
@@ -485,6 +492,15 @@ class MediaExportWorker:
                 digest = _sha256_file(output_path)
                 filename = output_path.name
                 staging_key = f"transient/staging/{claim.job.export_job_id}/{claim.attempt_token}/{filename}"
+                output: dict[str, object] = {
+                    "content_type": content_type,
+                    "filename": filename,
+                    "size_bytes": output_path.stat().st_size,
+                    "sha256": digest,
+                    "staging_key": staging_key,
+                }
+                if claim.job.output_profile in _AAC_AUDIO_PROFILES:
+                    output["duration_seconds"] = _rounded_positive_duration(self.probe_duration(output_path))
                 self.object_store.put_file(
                     object_key=staging_key,
                     source=output_path,
@@ -496,13 +512,7 @@ class MediaExportWorker:
                 self.control.finalize(
                     claim,
                     outcome="succeeded",
-                    output={
-                        "content_type": content_type,
-                        "filename": filename,
-                        "size_bytes": output_path.stat().st_size,
-                        "sha256": digest,
-                        "staging_key": staging_key,
-                    },
+                    output=output,
                 )
         except ExportCancellationRequested:
             self.control.finalize(claim, outcome="canceled")
@@ -553,8 +563,30 @@ class MediaExportWorker:
         variant = claim.job.variant
         if claim.job.operation in _AUDIO_OPERATIONS:
             bitrate = variant.get("audio_bitrate_kbps")
-            if not isinstance(bitrate, int) or bitrate not in {64, 96, 128, 192, 256}:
+            output_profile = claim.job.output_profile or "audio_ogg_opus_v1"
+            supported_bitrates = {64, 96, 128, 192, 256, 320} if output_profile in _AAC_AUDIO_PROFILES else {64, 96, 128, 192, 256}
+            if not isinstance(bitrate, int) or isinstance(bitrate, bool) or bitrate not in supported_bitrates:
                 raise ExportWorkerError("export_invalid_variant", "invalid audio bitrate")
+            if output_profile in _AAC_AUDIO_PROFILES:
+                output = workspace / f"export-{claim.job.export_job_id}.m4a"
+                command = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    str(source),
+                    "-vn",
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    f"{bitrate}k",
+                    "-movflags",
+                    "+faststart",
+                    str(output),
+                ]
+                self._tool(command, workspace, claim, stage="converting", percent=40, output_path=output)
+                return output, "audio/mp4"
+            if output_profile != "audio_ogg_opus_v1":
+                raise ExportWorkerError("export_invalid_variant", "invalid audio output profile")
             output = workspace / f"export-{claim.job.export_job_id}.ogg"
             command = [
                 "ffmpeg",
@@ -574,6 +606,8 @@ class MediaExportWorker:
             ]
             self._tool(command, workspace, claim, stage="converting", percent=40, output_path=output)
             return output, "audio/ogg"
+        if claim.job.output_profile not in {None, "video_mp4_v1"}:
+            raise ExportWorkerError("export_invalid_variant", "invalid video output profile")
         quality = variant.get("video_quality")
         if quality not in {"360p", "480p", "720p", "1080p"}:
             raise ExportWorkerError("export_invalid_variant", "invalid video quality")
@@ -811,6 +845,18 @@ def _string(value: object, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{context} must be a non-empty string")
     return value
+
+
+def _optional_string(value: object, context: str) -> str | None:
+    if value is None:
+        return None
+    return _string(value, context)
+
+
+def _rounded_positive_duration(value: float) -> int:
+    if not math.isfinite(value) or value < 0:
+        raise ExportWorkerError("export_duration_probe_failed", "output duration was invalid")
+    return max(1, int(value + 0.5))
 
 
 def _number(value: str | None, default: float) -> float:

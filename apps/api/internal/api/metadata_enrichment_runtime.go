@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	metadataTitleMaxRunes   = 200
-	metadataErrorMaxRunes   = 1000
-	metadataPayloadMaxBytes = 16 * 1024
-	metadataMaxDuration     = 31 * 24 * 60 * 60
+	metadataTitleMaxRunes     = 200
+	metadataPerformerMaxRunes = 200
+	metadataErrorMaxRunes     = 1000
+	metadataPayloadMaxBytes   = 16 * 1024
+	metadataMaxDuration       = 31 * 24 * 60 * 60
 )
 
 type targetMetadataEnrichmentStore interface {
@@ -201,14 +202,19 @@ func (s *TargetRuntimeService) FinalizeMetadataEnrichment(ctx context.Context, r
 		if req.DurationSeconds < 0 || req.DurationSeconds > metadataMaxDuration {
 			return TargetMetadataEnrichment{}, storage.ContractViolationf("duration_seconds is outside the supported range")
 		}
+		performer := sanitizeBoundedText(req.Performer, metadataPerformerMaxRunes)
 		var thumbnailValue any
 		if thumbnail != "" {
 			thumbnailValue = thumbnail
 		}
-		providerMetadata, err := json.Marshal(map[string]any{
+		providerMetadataValue := map[string]any{
 			"provider": "youtube", "title": title, "thumbnail_url": thumbnailValue,
 			"duration_seconds": req.DurationSeconds,
-		})
+		}
+		if performer != "" {
+			providerMetadataValue["performer"] = performer
+		}
+		providerMetadata, err := json.Marshal(providerMetadataValue)
 		if err != nil || len(providerMetadata) > metadataPayloadMaxBytes {
 			return TargetMetadataEnrichment{}, storage.ContractViolationf("provider metadata is invalid")
 		}

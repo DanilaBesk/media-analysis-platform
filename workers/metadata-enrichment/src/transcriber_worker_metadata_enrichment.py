@@ -139,6 +139,7 @@ class EnrichmentMetadata:
     title: str
     thumbnail_url: str
     duration_seconds: int
+    performer: str = ""
 
 
 class MetadataEnrichmentControlClient(Protocol):
@@ -278,6 +279,8 @@ class HttpMetadataEnrichmentControlClient:
         }
         if metadata.thumbnail_url:
             payload["thumbnail_url"] = metadata.thumbnail_url
+        if metadata.performer:
+            payload["performer"] = metadata.performer
         self._request(
             "POST",
             self._path(claim.enrichment.enrichment_id, "finalize"),
@@ -651,10 +654,20 @@ def _metadata_from_yt_dlp(raw: bytes, *, expected_video_id: str) -> EnrichmentMe
             retryable=False,
         )
     thumbnail_url = _sanitize_thumbnail_url(thumbnail_value)
+    performer = ""
+    for field in ("artist", "creator", "uploader", "channel"):
+        raw_performer = data.get(field)
+        if isinstance(raw_performer, str):
+            performer = _sanitize_text(raw_performer, 200)
+            if performer:
+                break
+    if not performer:
+        performer = "YouTube"
     return EnrichmentMetadata(
         title=title,
         thumbnail_url=thumbnail_url,
         duration_seconds=int(duration_value + 0.5),
+        performer=performer,
     )
 
 

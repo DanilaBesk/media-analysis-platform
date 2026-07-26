@@ -1180,8 +1180,23 @@ def _export_operation_allowed(item: JsonObject, operation: str) -> bool:
         origin = item.get("origin")
         url = str(origin.get("origin_ref") or "") if isinstance(origin, dict) else ""
         host = (urlparse(url).hostname or "").lower().removeprefix("www.")
-        return kind == "url" and (host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"))
+        is_youtube = kind == "url" and (host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"))
+        return is_youtube and (operation == "youtube_video" or youtube_audio_export_ready(item))
     return operation == "video_to_audio" and kind == "video"
+
+
+def youtube_audio_export_ready(item: JsonObject) -> bool:
+    provider_metadata = item.get("provider_metadata")
+    if not isinstance(provider_metadata, dict):
+        metadata = item.get("metadata")
+        provider_metadata = metadata.get("provider_metadata") if isinstance(metadata, dict) else None
+    if not isinstance(provider_metadata, dict):
+        return False
+    return (
+        str(provider_metadata.get("provider") or "").strip().lower() == "youtube"
+        and bool(str(provider_metadata.get("title") or "").strip())
+        and bool(str(provider_metadata.get("performer") or "").strip())
+    )
 
 
 def _export_variant_key(variant: JsonObject) -> str:

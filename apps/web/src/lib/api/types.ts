@@ -50,6 +50,11 @@ export type ExportJobStatus =
   | "canceled"
   | "expired";
 export type ExportDeliveryChannel = "web" | "telegram";
+export type ExportOutputProfile =
+  | "audio_ogg_opus_v1"
+  | "audio_m4a_aac_legacy"
+  | "audio_m4a_aac_v1"
+  | "video_mp4_v1";
 export type DiagnosticSubjectType =
   | "media_asset"
   | "stored_object"
@@ -292,7 +297,7 @@ export interface ObservabilitySnapshot {
 }
 
 export interface ExportVariant {
-  audio_bitrate_kbps?: 64 | 96 | 128 | 192 | 256;
+  audio_bitrate_kbps?: 64 | 96 | 128 | 192 | 256 | 320;
   video_quality?: "360p" | "480p" | "720p" | "1080p";
 }
 
@@ -308,6 +313,14 @@ export interface ExportOutput {
   filename: string;
   size_bytes: number;
   sha256: string;
+  duration_seconds?: number;
+}
+
+export interface ExportPresentation {
+  kind: "music" | "audio" | "document";
+  title: string;
+  performer: string;
+  duration_seconds: number | null;
 }
 
 export interface ExportJob {
@@ -316,6 +329,7 @@ export interface ExportJob {
   media_asset_id: string;
   operation: ExportOperation;
   variant: ExportVariant;
+  output_profile: ExportOutputProfile;
   status: ExportJobStatus;
   version: number;
   retry_generation: number;
@@ -338,6 +352,7 @@ export interface ExportDownload {
   size_bytes: number;
   url: string;
   expires_at: string;
+  presentation: ExportPresentation;
 }
 
 export interface AddMediaAssetInput {

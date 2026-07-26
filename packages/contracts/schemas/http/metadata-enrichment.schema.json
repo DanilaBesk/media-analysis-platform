@@ -9,6 +9,7 @@
       "properties": {
         "provider": {"const": "youtube"},
         "title": {"type": "string", "minLength": 1, "maxLength": 200},
+        "performer": {"type": "string", "minLength": 1, "maxLength": 200},
         "thumbnail_url": {"type": ["string", "null"], "format": "uri", "maxLength": 2048},
         "duration_seconds": {"type": "integer", "minimum": 0, "maximum": 2678400}
       },

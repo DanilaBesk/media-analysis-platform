@@ -67,31 +67,36 @@ type StoredObjectPinRecord struct {
 }
 
 type ExportJobRecord struct {
-	ID                   string
-	ChannelAccountID     string
-	MediaAssetID         string
-	Operation            string
-	DeliveryChannel      string
-	VariantJSON          []byte
-	Status               string
-	Version              int64
-	IdempotencyKey       string
-	RetryGeneration      int
-	AttemptNo            int
-	AttemptToken         string
-	LeaseOwner           string
-	LeaseExpiresAt       *time.Time
-	HeartbeatAt          *time.Time
-	MaxAttempts          int
-	ProgressJSON         []byte
-	OutputStoredObjectID string
-	DiagnosticID         string
-	CreatedAt            time.Time
-	StartedAt            *time.Time
-	CompletedAt          *time.Time
-	CancelRequestedAt    *time.Time
-	CanceledAt           *time.Time
-	ExpiresAt            *time.Time
+	ID                          string
+	ChannelAccountID            string
+	MediaAssetID                string
+	Operation                   string
+	DeliveryChannel             string
+	VariantJSON                 []byte
+	OutputProfile               string
+	PresentationTitle           string
+	PresentationPerformer       string
+	PresentationDurationSeconds *int
+	PresentationFrozenAt        *time.Time
+	Status                      string
+	Version                     int64
+	IdempotencyKey              string
+	RetryGeneration             int
+	AttemptNo                   int
+	AttemptToken                string
+	LeaseOwner                  string
+	LeaseExpiresAt              *time.Time
+	HeartbeatAt                 *time.Time
+	MaxAttempts                 int
+	ProgressJSON                []byte
+	OutputStoredObjectID        string
+	DiagnosticID                string
+	CreatedAt                   time.Time
+	StartedAt                   *time.Time
+	CompletedAt                 *time.Time
+	CancelRequestedAt           *time.Time
+	CanceledAt                  *time.Time
+	ExpiresAt                   *time.Time
 }
 
 type ExportDeliveryRecord struct {
@@ -551,16 +556,18 @@ type RecordExportJobProgressParams struct {
 }
 
 type FinalizeExportJobParams struct {
-	ExportJobID   string
-	LeaseOwner    string
-	AttemptToken  string
-	Status        string
-	CompletedAt   time.Time
-	Output        StoredObjectRecord
-	Delivery      ExportDeliveryRecord
-	DeliveryPin   StoredObjectPinRecord
-	DiagnosticID  string
-	RetentionDays int
+	ExportJobID                 string
+	LeaseOwner                  string
+	AttemptToken                string
+	Status                      string
+	CompletedAt                 time.Time
+	Output                      StoredObjectRecord
+	Delivery                    ExportDeliveryRecord
+	DeliveryPin                 StoredObjectPinRecord
+	DiagnosticID                string
+	RetentionDays               int
+	PresentationDurationSeconds *int
+	PresentationFrozenAt        *time.Time
 }
 
 type ClaimExportDeliveryParams struct {

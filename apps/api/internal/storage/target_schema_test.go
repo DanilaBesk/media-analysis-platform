@@ -75,6 +75,32 @@ func TestGovernedMediaExportRetentionMigrationIsAdditive(t *testing.T) {
 	}
 }
 
+func TestNativeMusicExportProfileMigrationIsAdditiveAndForwardOnly(t *testing.T) {
+	t.Parallel()
+	migration := readStorageTextFixture(t, "migrations", "0008_native_music_export_profile.sql")
+	for _, fragment := range []string{
+		"ADD COLUMN output_profile text NULL",
+		"presentation_title text NULL",
+		"presentation_performer text NULL",
+		"presentation_duration_seconds integer NULL",
+		"presentation_frozen_at timestamptz NULL",
+		"audio_ogg_opus_v1",
+		"audio_m4a_aac_legacy",
+		"audio_m4a_aac_v1",
+		"video_mp4_v1",
+		"output_stored_object_id",
+		"audio_bitrate_kbps",
+		"0008 is forward-only",
+	} {
+		if !strings.Contains(migration, fragment) {
+			t.Fatalf("native music export profile migration missing %q", fragment)
+		}
+	}
+	if strings.Contains(migration, "DROP COLUMN") || strings.Contains(migration, "DROP TABLE") {
+		t.Fatal("native music export profile migration must preserve operational history")
+	}
+}
+
 func TestYouTubeMetadataEnrichmentMigrationIsAdditiveAndFenced(t *testing.T) {
 	t.Parallel()
 	migration := readStorageTextFixture(t, "migrations", "0003_youtube_metadata_enrichment.sql")
@@ -92,6 +118,24 @@ func TestYouTubeMetadataEnrichmentMigrationIsAdditiveAndFenced(t *testing.T) {
 	}
 	if strings.Contains(migration, "ALTER TABLE selection_snapshot") {
 		t.Fatal("metadata enrichment migration must not mutate immutable snapshot tables")
+	}
+}
+
+func TestYouTubeMusicPerformerBackfillIsAdditiveAndForwardOnly(t *testing.T) {
+	t.Parallel()
+	migration := readStorageTextFixture(t, "migrations", "0009_backfill_youtube_music_performer.sql")
+	for _, fragment := range []string{
+		"provider_metadata,performer",
+		"youtube-metadata-enrichment:native-music:",
+		"status IN ('queued', 'claimed', 'running', 'retry_wait')",
+		"0009 is forward-only",
+	} {
+		if !strings.Contains(migration, fragment) {
+			t.Fatalf("YouTube performer backfill migration missing %q", fragment)
+		}
+	}
+	if strings.Contains(migration, "DELETE FROM metadata_enrichment_jobs") {
+		t.Fatal("YouTube performer backfill must preserve enrichment history")
 	}
 }
 
