@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import stat
+import subprocess
 import sys
 import time
+import wave
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -66,11 +68,16 @@ class RecordingStore:
         )
 
 
-def _claim(*, operation: str = "video_to_audio", source_type: str = "uploaded_object") -> ExportClaim:
+def _claim(
+    *,
+    operation: str = "video_to_audio",
+    source_type: str = "uploaded_object",
+    audio_bitrate_kbps: int = 128,
+) -> ExportClaim:
     job = ExportJob(
         export_job_id="job-123",
         operation=operation,
-        variant={"audio_bitrate_kbps": 128} if operation != "youtube_video" else {"video_quality": "720p"},
+        variant={"audio_bitrate_kbps": audio_bitrate_kbps} if operation != "youtube_video" else {"video_quality": "720p"},
     )
     return ExportClaim(
         job=job,
@@ -107,40 +114,103 @@ def _install_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, bo
     monkeypatch.setenv("PATH", f"{executable.parent}:{os.environ.get('PATH', '')}")
 
 
-def test_uploaded_video_is_converted_uploaded_to_attempt_staging_and_finalized(tmp_path: Path) -> None:
-    claim = _claim()
+@pytest.mark.parametrize(
+    ("operation", "source_type"),
+    (("video_to_audio", "uploaded_object"), ("youtube_audio", "remote_reference")),
+)
+def test_audio_exports_publish_ogg_opus_to_attempt_staging_and_finalize(
+    tmp_path: Path, operation: str, source_type: str
+) -> None:
+    claim = _claim(operation=operation, source_type=source_type)
     control = RecordingControl(claim)
     store = RecordingStore()
+    commands: list[list[str]] = []
 
     def download(_url: str, destination: Path, *, max_bytes: int, cancelled) -> None:
         assert cancelled() is False
         destination.write_bytes(b"raw")
 
     def tool(command: list[str], *, cwd: Path, timeout_seconds: float, cancelled, resource_guard) -> None:
-        assert command[0] == "ffmpeg"
-        Path(command[-1]).write_bytes(b"audio")
+        commands.append(command)
+        if command[0] == "yt-dlp":
+            (cwd / "remote-source.webm").write_bytes(b"source")
+        else:
+            Path(command[-1]).write_bytes(b"audio")
 
     worker = MediaExportWorker(_config(tmp_path), control=control, object_store=store, download_source=download, run_tool=tool, probe_duration=lambda _path: 1)
 
     assert worker.run_once() == 1
 
+    ffmpeg = next(command for command in commands if command[0] == "ffmpeg")
+    assert ffmpeg[-1].endswith("export-job-123.ogg")
+    assert ffmpeg[ffmpeg.index("-c:a") + 1] == "libopus"
+    assert ffmpeg[ffmpeg.index("-b:a") + 1] == "128k"
+    assert ffmpeg[ffmpeg.index("-vbr") + 1] == "on"
+    assert ffmpeg[ffmpeg.index("-application") + 1] == "audio"
     assert store.uploads == [
         {
-            "object_key": "transient/staging/job-123/attempt-token-123456/export-job-123.m4a",
+            "object_key": "transient/staging/job-123/attempt-token-123456/export-job-123.ogg",
             "content": b"audio",
-            "content_type": "audio/mp4",
+            "content_type": "audio/ogg",
             "metadata": {"sha256": "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"},
         }
     ]
     assert control.finalized[0]["outcome"] == "succeeded"
     assert control.finalized[0]["output"] == {
-        "content_type": "audio/mp4",
-        "filename": "export-job-123.m4a",
+        "content_type": "audio/ogg",
+        "filename": "export-job-123.ogg",
         "size_bytes": 5,
         "sha256": "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b",
-        "staging_key": "transient/staging/job-123/attempt-token-123456/export-job-123.m4a",
+        "staging_key": "transient/staging/job-123/attempt-token-123456/export-job-123.ogg",
     }
     assert not any((_config(tmp_path).workspace_root).glob("*"))
+
+
+@pytest.mark.parametrize("bitrate", [64, 96, 128, 192, 256])
+def test_every_supported_audio_bitrate_produces_real_ogg_opus(tmp_path: Path, bitrate: int) -> None:
+    source = tmp_path / "source.wav"
+    with wave.open(str(source), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(48_000)
+        wav.writeframes(b"\x00\x00" * 4_800)
+
+    claim = _claim(audio_bitrate_kbps=bitrate)
+    worker = MediaExportWorker(
+        _config(
+            tmp_path,
+            max_input_bytes=1_000_000,
+            max_output_bytes=1_000_000,
+            workspace_max_bytes=2_000_000,
+            timeout_seconds=10,
+        ),
+        control=RecordingControl(claim),
+        object_store=RecordingStore(),
+    )
+
+    output, content_type = worker._convert(claim, source, tmp_path)
+    probe = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name:format=format_name",
+            "-of",
+            "default=noprint_wrappers=1",
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert content_type == "audio/ogg"
+    assert "codec_name=opus" in probe.stdout
+    assert "format_name=ogg" in probe.stdout
 
 
 def test_cancel_requested_before_materialization_finalizes_canceled_without_tool_or_upload(tmp_path: Path) -> None:
@@ -284,6 +354,10 @@ def test_youtube_video_selects_the_requested_semantic_quality_before_ffmpeg(tmp_
     assert "--ignore-config" in commands[0]
     assert commands[0][commands[0].index("--match-filter") + 1] == "!is_live & duration <= 14400"
     assert commands[0][commands[0].index("-f") + 1] == "bestvideo[height<=720]+bestaudio/best[height<=720]"
+    ffmpeg = next(command for command in commands if command[0] == "ffmpeg")
+    assert ffmpeg[-1].endswith("export-job-123.mp4")
+    assert ffmpeg[ffmpeg.index("-c:v") + 1] == "copy"
+    assert ffmpeg[ffmpeg.index("-c:a") + 1] == "aac"
     assert control.finalized[0]["outcome"] == "succeeded"
 
 

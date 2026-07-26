@@ -239,7 +239,7 @@ func TestCreateExportJobReplaysBeforeMutableSourceLookupAndRejectsMismatch(t *te
 		t.Fatalf("CreateExportJob(replay) = %#v", replayed)
 	}
 
-	request.Variant = []byte(`{"audio_bitrate_kbps":320}`)
+	request.Variant = []byte(`{"audio_bitrate_kbps":256}`)
 	if _, err := service.CreateExportJob(context.Background(), request); !errors.Is(err, storage.ErrExportJobConflict) {
 		t.Fatalf("CreateExportJob(mismatched replay) error = %v, want conflict", err)
 	}

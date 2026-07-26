@@ -8,7 +8,7 @@
       "properties": {
         "audio_bitrate_kbps": {
           "type": "integer",
-          "enum": [64, 96, 128, 192, 256, 320]
+          "enum": [64, 96, 128, 192, 256]
         },
         "video_quality": {
           "type": "string",

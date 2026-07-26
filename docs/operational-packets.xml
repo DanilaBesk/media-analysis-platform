@@ -1638,4 +1638,42 @@ The media-export worker continues to publish canonical M4A/AAC audio bodies. The
       <check>Full Python tests, GRACE XML parsing, Compose adapter recreation, runtime log checks, Beads closure, commit, and push pass.</check>
     </verification>
   </HotfixPacket>
+  <HotfixPacket id="telegram-voice-audio-export" status="completed" bead="media-vicm">
+    <purpose>Correct audio export encoding and Telegram delivery so new results appear as voice-message bubbles rather than audio-file cards.</purpose>
+    <write-scope>
+      <file-1>workers/media-export/src/transcriber_worker_media_export.py</file-1>
+      <file-2>workers/media-export/tests/test_transcriber_worker_media_export.py</file-2>
+      <file-3>apps/telegram-bot/src/telegram_adapter/bot.py</file-3>
+      <file-4>apps/telegram-bot/tests/test_bot_runtime.py</file-4>
+      <file-5>docs/architecture/media-export-retention-contract.md</file-5>
+      <file-6>docs/requirements.xml</file-6>
+      <file-7>docs/technology.xml</file-7>
+      <file-8>docs/development-plan.xml</file-8>
+      <file-9>docs/verification-plan.xml</file-9>
+      <file-10>docs/knowledge-graph.xml</file-10>
+      <file-11>docs/operational-packets.xml</file-11>
+      <file-12>packages/contracts/schemas/http/export-job.schema.json</file-12>
+      <file-13>packages/contracts/tests/test_contract_surfaces.py</file-13>
+      <file-14>apps/api/internal/api/export_runtime.go</file-14>
+      <file-15>apps/api/internal/api/export_access_test.go</file-15>
+      <file-16>apps/api/internal/api/export_variant_test.go</file-16>
+      <file-17>apps/web/src/lib/api/types.ts</file-17>
+      <file-18>apps/web/src/features/media/media-workspace.tsx</file-18>
+      <file-19>apps/web/tests/routes.test.tsx</file-19>
+      <file-20>apps/web/dist/index.html</file-20>
+      <file-21>apps/web/dist/assets/index-WD6iGcpy.js</file-21>
+      <delete-1>apps/web/dist/assets/index-DvCABUHF.js</delete-1>
+    </write-scope>
+    <contract-excerpt><![CDATA[
+New youtube_audio and video_to_audio jobs accept only the libopus-compatible semantic bitrates 64, 96, 128, 192, and 256 kbps, then publish an OGG container encoded by libopus with application=audio. Telegram routes authenticated audio/ogg and audio/opus output, including parameterized MIME values, through send_voice, retains send_audio only for legacy audio types, and retains send_document for non-audio output. Existing M4A objects remain readable; new callback action ids create new format-correct jobs. Storage publication, retention, bounded scratch, heartbeat ownership, acknowledgement fencing, and cleanup do not change.
+    ]]></contract-excerpt>
+    <verification>
+      <check>Schema, API, Web, and worker regressions expose exactly 64, 96, 128, 192, and 256 kbps and reject the unsupported 320 kbps value.</check>
+      <check>Worker RED/GREEN regressions prove .ogg, audio/ogg, libopus, requested bitrate, VBR, and application=audio while video remains MP4/AAC.</check>
+      <check>Real ffmpeg plus ffprobe coverage for every advertised bitrate proves format_name=ogg and codec_name=opus.</check>
+      <check>Telegram RED/GREEN regressions prove bare and parameterized audio/ogg and audio/opus call send_voice, legacy audio calls send_audio, and non-audio calls send_document.</check>
+      <check>Voice send success, failure, heartbeat loss, delayed acknowledgement, and cancellation close the anonymous file handle and preserve delivery fencing.</check>
+      <check>Full tests, GRACE XML parsing, rebuilt worker and bot Compose services, live runtime proof, independent review, Beads closure, commit, and push pass.</check>
+    </verification>
+  </HotfixPacket>
 </OperationalPackets>

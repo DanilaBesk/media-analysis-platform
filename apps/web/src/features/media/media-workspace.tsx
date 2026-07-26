@@ -26,7 +26,7 @@ const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "cancel_requested"]);
 const ACTIVE_EXPORT_STATUSES = new Set(["queued", "claimed", "running", "cancel_requested"]);
 const RETRYABLE_EXPORT_STATUSES = new Set(["failed", "canceled"]);
 const EXPORT_JOB_POLL_INTERVAL_MS = 2_000;
-const AUDIO_BITRATES = [64, 96, 128, 192, 256, 320] as const;
+const AUDIO_BITRATES = [64, 96, 128, 192, 256] as const;
 const VIDEO_QUALITIES = ["360p", "480p", "720p", "1080p"] as const;
 
 interface DiagnosticSubject {

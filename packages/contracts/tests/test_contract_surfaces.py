@@ -273,6 +273,13 @@ def test_processing_and_export_schemas_are_fenced_and_semantic() -> None:
     assert export_defs["createExportJobRequest"]["properties"]["operation"]["$ref"].endswith(
         "#/$defs/exportOperation"
     )
+    assert export_defs["semanticVariant"]["properties"]["audio_bitrate_kbps"]["enum"] == [
+        64,
+        96,
+        128,
+        192,
+        256,
+    ]
     assert export_defs["exportJob"]["properties"]["status"]["$ref"].endswith(
         "#/$defs/exportJobStatus"
     )

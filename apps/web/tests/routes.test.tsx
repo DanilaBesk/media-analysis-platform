@@ -438,6 +438,13 @@ describe("createWebUiRoutes", () => {
 
     expect(await screen.findByRole("heading", { name: "Скачать или конвертировать" })).toBeVisible();
     expect(screen.getByText("Экспорт не меняет текущие материалы и не запускает обработку.")).toBeVisible();
+    expect(Array.from(screen.getByLabelText("Качество аудио").querySelectorAll("option"), (option) => option.value)).toEqual([
+      "64",
+      "96",
+      "128",
+      "192",
+      "256",
+    ]);
     fireEvent.click(screen.getByRole("button", { name: "Видео" }));
     fireEvent.change(screen.getByLabelText("Качество видео"), { target: { value: "1080p" } });
     fireEvent.click(screen.getByRole("button", { name: "Скачать" }));

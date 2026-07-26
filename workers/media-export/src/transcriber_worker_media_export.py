@@ -553,12 +553,27 @@ class MediaExportWorker:
         variant = claim.job.variant
         if claim.job.operation in _AUDIO_OPERATIONS:
             bitrate = variant.get("audio_bitrate_kbps")
-            if not isinstance(bitrate, int) or bitrate not in {64, 96, 128, 192, 256, 320}:
+            if not isinstance(bitrate, int) or bitrate not in {64, 96, 128, 192, 256}:
                 raise ExportWorkerError("export_invalid_variant", "invalid audio bitrate")
-            output = workspace / f"export-{claim.job.export_job_id}.m4a"
-            command = ["ffmpeg", "-y", "-i", str(source), "-vn", "-c:a", "aac", "-b:a", f"{bitrate}k", str(output)]
+            output = workspace / f"export-{claim.job.export_job_id}.ogg"
+            command = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(source),
+                "-vn",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                f"{bitrate}k",
+                "-vbr",
+                "on",
+                "-application",
+                "audio",
+                str(output),
+            ]
             self._tool(command, workspace, claim, stage="converting", percent=40, output_path=output)
-            return output, "audio/mp4"
+            return output, "audio/ogg"
         quality = variant.get("video_quality")
         if quality not in {"360p", "480p", "720p", "1080p"}:
             raise ExportWorkerError("export_invalid_variant", "invalid video quality")

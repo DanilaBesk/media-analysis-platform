@@ -1488,7 +1488,10 @@ class TelegramInboxApp:
         content = await self._download_export_artifact_file(str(download["url"]), size_bytes)
         try:
             export_file = _TemporaryInputFile(content, filename=str(download["filename"]))
-            if str(download.get("content_type") or "").strip().lower().startswith("audio/"):
+            content_type = str(download.get("content_type") or "").split(";", 1)[0].strip().lower()
+            if content_type in {"audio/ogg", "audio/opus"}:
+                await self.bot.send_voice(chat_id=chat_id, voice=export_file, caption="Экспорт готов")
+            elif content_type.startswith("audio/"):
                 await self.bot.send_audio(chat_id=chat_id, audio=export_file, caption="Экспорт готов")
             else:
                 await self.bot.send_document(chat_id=chat_id, document=export_file, caption="Экспорт готов")

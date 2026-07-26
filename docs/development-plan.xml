@@ -274,6 +274,7 @@
     <completed bead="media-b8s">Root CopperASR migration is complete after implementation, coverage, QA, final readiness, and runtime proof.</completed>
     <completed bead="media-kzwf">Transcription now assembles inline text and object-backed text/* documents in immutable selection order without ASR; live compose run bb8c3046-3a41-49ba-b868-30ce5119d4fe completed with three included items, no skips, no failures, and no diagnostics.</completed>
     <completed bead="media-rixe">Telegram audio/* exports now open in the native audio player while non-audio results preserve document fallback, temporary-file cleanup, heartbeat fencing, and acknowledgement ordering.</completed>
+    <completed bead="media-vicm">New audio exports now publish OGG/Opus at the supported 64-256 kbps semantic variants and Telegram presents them through send_voice. Full Python, Go, Web, XML, real-codec, rebuilt Compose, live delivery, and independent review gates passed; live job 25247c21-5395-418d-8cea-d18467e45dab delivered on its first attempt.</completed>
   </CurrentClosureState>
 
   <DefinitionOfDone>
@@ -286,6 +287,7 @@
     <item>Adapters remain thin and share API-owned state.</item>
     <item>media-859r proves content-addressed uploaded sources, seven-day configurable retention, physical object expiry, workspace cleanup, remote metadata enrichment, independent export jobs, contextual Telegram/Web export actions, and owner plus attempt-token delivery heartbeats for long Telegram transfers.</item>
     <item>media-rixe proves Telegram presents audio exports with send_audio without changing the canonical M4A/AAC artifact, S3 retention, or delivery ownership semantics.</item>
+    <item>media-vicm supersedes the current audio presentation for new exports with OGG/Opus plus send_voice while preserving backward delivery compatibility for existing M4A outputs.</item>
     <item>Remote metadata enrichment uses additive migration 0003 and an API-owned fenced queue that is independent from export_jobs and analysis_runs; successful finalization updates current media_asset state while immutable selection snapshots retain captured values.</item>
   </DefinitionOfDone>
 </DevelopmentPlan>

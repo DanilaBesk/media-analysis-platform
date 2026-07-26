@@ -292,7 +292,7 @@ export interface ObservabilitySnapshot {
 }
 
 export interface ExportVariant {
-  audio_bitrate_kbps?: 64 | 96 | 128 | 192 | 256 | 320;
+  audio_bitrate_kbps?: 64 | 96 | 128 | 192 | 256;
   video_quality?: "360p" | "480p" | "720p" | "1080p";
 }
 

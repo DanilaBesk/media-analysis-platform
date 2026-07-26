@@ -857,7 +857,7 @@ func normalizeExportVariant(operation string, raw json.RawMessage) ([]byte, erro
 	switch operation {
 	case "youtube_audio", "video_to_audio":
 		value, ok := variant["audio_bitrate_kbps"].(float64)
-		if !ok || !containsInt([]int{64, 96, 128, 192, 256, 320}, int(value)) || value != float64(int(value)) {
+		if !ok || !containsInt([]int{64, 96, 128, 192, 256}, int(value)) || value != float64(int(value)) {
 			return nil, storage.ContractViolationf("audio_bitrate_kbps is unsupported")
 		}
 	case "youtube_video":
