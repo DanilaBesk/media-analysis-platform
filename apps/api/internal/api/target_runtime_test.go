@@ -5,7 +5,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +216,43 @@ func TestFinalizeExportJobRejectsStaleAttemptBeforeObjectPromotion(t *testing.T)
 	}
 	if len(objects.promotions) != 0 {
 		t.Fatalf("stale attempt promoted objects: %#v", objects.promotions)
+	}
+}
+
+func TestFinalizeExportJobKeepsOutputForMediaRetentionWindow(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 11, 30, 0, 0, time.UTC)
+	leaseExpiresAt := now.Add(5 * time.Minute)
+	const digest = "6ed8919ce20490a5e3ad8630a4fab69475297abd07db73918dd5f36fcfaeb11b"
+	const stagingKey = "transient/staging/export-1/current-attempt/result.m4a"
+	store := &fakeTargetRuntimeStore{exportJob: targetstore.ExportJobRecord{
+		ID: "export-1", ChannelAccountID: "channel-account-1", MediaAssetID: "media-1",
+		Operation: "youtube_audio", DeliveryChannel: "telegram", Status: "running",
+		Version: 2, RetryGeneration: 0, AttemptNo: 2, AttemptToken: "current-attempt",
+		LeaseOwner: "worker-current", LeaseExpiresAt: &leaseExpiresAt, MaxAttempts: 3,
+		VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), ProgressJSON: []byte(`{}`), CreatedAt: now.Add(-time.Minute),
+	}}
+	objects := &fakeTargetObjectStore{objects: map[string]storage.ManagedObjectInfo{
+		storage.ArtifactsBucket + "/" + stagingKey: {
+			SizeBytes: 5, ContentType: "audio/mp4", Metadata: map[string]string{"sha256": digest},
+		},
+	}}
+	service := NewTargetRuntimeService(store, WithTargetObjectStore(objects), WithTargetClock(func() time.Time { return now }))
+
+	if _, err := service.FinalizeExportJob(context.Background(), TargetFinalizeExportJobRequest{
+		ExportJobID: "export-1", LeaseOwner: "worker-current", AttemptToken: "current-attempt",
+		Outcome: "succeeded", Output: &TargetExportPublication{
+			ContentType: "audio/mp4", Filename: "result.m4a", SizeBytes: 5, SHA256: digest, StagingKey: stagingKey,
+		},
+	}); err != nil {
+		t.Fatalf("FinalizeExportJob() error = %v", err)
+	}
+	if store.finalizeExportParams.Output.ExpiresAt == nil ||
+		!store.finalizeExportParams.Output.ExpiresAt.Equal(now.Add(7*24*time.Hour)) {
+		t.Fatalf("output expiry = %v, want seven-day media retention", store.finalizeExportParams.Output.ExpiresAt)
+	}
+	if !store.finalizeExportParams.Delivery.ExpiresAt.Equal(now.Add(24 * time.Hour)) {
+		t.Fatalf("delivery expiry = %v, want independent 24-hour delivery window", store.finalizeExportParams.Delivery.ExpiresAt)
 	}
 }
 
@@ -2534,12 +2573,10 @@ func TestTargetRuntimeServiceStartsProcessingWithOneAtomicStoreMutation(t *testi
 		ChannelAccountID: "channel-account-1",
 		CollectionID:     "inbox-1",
 		ExpectedVersion:  7,
-		Items: []TargetSelectionSnapshotItemRequest{{
-			MediaAssetID: "media-asset-1",
-			Position:     0,
-		}},
-		RunType:        "transcription",
-		IdempotencyKey: "telegram:process:1",
+		SelectedItemIDs:  []string{"media-asset-1"},
+		RunType:          "transcription",
+		Options:          []byte(`{"z":2,"a":1}`),
+		IdempotencyKey:   "telegram:process:1",
 	})
 
 	if err != nil {
@@ -2555,50 +2592,168 @@ func TestTargetRuntimeServiceStartsProcessingWithOneAtomicStoreMutation(t *testi
 	if params.ExpectedVersion != 7 || params.CollectionID != "inbox-1" || params.Graph.Run.SelectionSnapshot != "snapshot-atomic" {
 		t.Fatalf("atomic store params = %#v", params)
 	}
+	if params.Graph.Run.CreatedViaChannel != "channel-account-1" || params.Snapshot.CreatedViaChannel != "channel-account-1" {
+		t.Fatalf("atomic processing creator scope = run %q snapshot %q", params.Graph.Run.CreatedViaChannel, params.Snapshot.CreatedViaChannel)
+	}
+	if string(params.Snapshot.OptionSnapshotJSON) != `{"a":1,"z":2}` || string(params.Graph.Run.ParamsJSON) != `{"a":1,"z":2}` || string(params.Graph.Run.DeliveryJSON) != `{"strategy":"polling"}` {
+		t.Fatalf("normalized processing options = snapshot %s params %s delivery %s", params.Snapshot.OptionSnapshotJSON, params.Graph.Run.ParamsJSON, params.Graph.Run.DeliveryJSON)
+	}
 	if len(params.SnapshotItems) != 1 || len(params.Graph.StepInputs) != 1 || params.Graph.StepInputs[0].SelectionSnapshotItemID != params.SnapshotItems[0].ID {
 		t.Fatalf("atomic graph lineage = %#v", params)
 	}
 }
 
+func TestTargetRuntimeServiceReplaysProcessingBeforeMutableSourceReads(t *testing.T) {
+	t.Parallel()
+	createdAt := time.Date(2026, 7, 26, 9, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		failMethod:               "GetMediaAsset",
+		processingRunReplayFound: true,
+		processingRunReplayResult: targetstore.CreateProcessingRunResult{
+			Snapshot: targetstore.SelectionSnapshotRecord{
+				ID: "snapshot-original", ChannelAccountID: "channel-account-1", SourceCollectionID: "inbox-1",
+				Status: "sealed", OptionSnapshotJSON: []byte(`{"language":"ru"}`), DiagnosticsJSON: []byte(`[]`),
+				CreatedViaChannel: "channel-account-1", CreatedAt: createdAt, SealedAt: createdAt,
+			},
+			SnapshotItems: []targetstore.SelectionSnapshotItemRecord{{
+				ID: "snapshot-item-original", SelectionSnapshotID: "snapshot-original", Position: 0,
+				MediaAssetID: "media-asset-deleted", Kind: "voice", DisplayName: "voice.ogg",
+				OriginSnapshotJSON: []byte(`{"origin_type":"telegram_file"}`), StorageSnapshotJSON: []byte(`{"stored_object_id":"stored-object-deleted"}`),
+				MetadataJSON: []byte(`{}`), StatusAtSelection: "available", DiagnosticsJSON: []byte(`[]`),
+			}},
+			Run: targetstore.AnalysisRunRecord{
+				ID: "run-original", ChannelAccountID: "channel-account-1", SelectionSnapshot: "snapshot-original",
+				RunType: "transcription", Status: "queued", Version: 1, IdempotencyKey: "telegram:process:1",
+				ParamsJSON: []byte(`{"format":"plain"}`), DeliveryJSON: []byte(`{"strategy":"polling"}`),
+				EvidenceGateState: "not_required", CreatedViaChannel: "channel-account-1", CreatedAt: createdAt,
+			},
+			Steps: []targetstore.AnalysisRunStepRecord{{
+				ID: "step-original", AnalysisRunID: "run-original", StepKind: "transcription", WorkerKind: "transcription",
+				Status: "queued", AttemptNo: 1, MetadataJSON: []byte(`{}`), CreatedAt: createdAt,
+			}},
+			DetachedAssetIDs: []string{"media-asset-deleted"}, CollectionVersion: 8, Replayed: true,
+		},
+	}
+	service := NewTargetRuntimeService(store)
+
+	result, err := service.StartCollectionProcessingRun(context.Background(), TargetStartProcessingRunRequest{
+		ChannelAccountID: "channel-account-1", CollectionID: "inbox-1", ExpectedVersion: 7,
+		SelectedItemIDs: []string{"media-asset-deleted"}, RunType: "transcription",
+		Options: []byte(`{"language":"ru"}`), CreatedViaChannelAccountID: "channel-account-1",
+		IdempotencyKey: "telegram:process:1",
+	})
+
+	if err != nil {
+		t.Fatalf("StartCollectionProcessingRun(replay) error = %v", err)
+	}
+	if result.AnalysisRun.AnalysisRunID != "run-original" || len(result.AnalysisRun.Steps) != 1 || result.AnalysisRun.Steps[0].AnalysisRunStepID != "step-original" {
+		t.Fatalf("replayed analysis run = %#v", result.AnalysisRun)
+	}
+	if result.CollectionVersion != 8 || !reflect.DeepEqual(result.DetachedMediaAssetIDs, []string{"media-asset-deleted"}) {
+		t.Fatalf("replayed processing facts = %#v", result)
+	}
+	wantReplay := targetstore.FindProcessingRunReplayParams{
+		ChannelAccountID: "channel-account-1", CollectionID: "inbox-1", ExpectedVersion: 7,
+		IdempotencyKey: "telegram:process:1", RunType: "transcription",
+		SelectedAssetIDs: []string{"media-asset-deleted"}, OptionsJSON: []byte(`{"language":"ru"}`),
+		ParamsJSON: []byte(`{"language":"ru"}`), DeliveryJSON: []byte(`{"strategy":"polling"}`),
+		CreatedViaChannel: "channel-account-1",
+	}
+	if !reflect.DeepEqual(store.processingRunReplayParams, wantReplay) {
+		t.Fatalf("processing replay query = %#v, want %#v", store.processingRunReplayParams, wantReplay)
+	}
+	if store.processingRunParams.CollectionID != "" {
+		t.Fatalf("replay reached CreateProcessingRun with %#v", store.processingRunParams)
+	}
+}
+
+func TestTargetRuntimeServiceRejectsInvalidProcessingSelectionBeforeStore(t *testing.T) {
+	t.Parallel()
+	tooMany := make([]string, 1001)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("media-asset-%04d", index)
+	}
+	tests := []struct {
+		name            string
+		selected        []string
+		createdVia      string
+		expectedVersion int64
+		runType         string
+		options         []byte
+		idempotencyKey  string
+	}{
+		{name: "non-positive expected version", selected: []string{"media-asset-1"}, runType: "transcription", idempotencyKey: "key"},
+		{name: "duplicate ids", selected: []string{"media-asset-1", "media-asset-1"}, expectedVersion: 7, runType: "transcription", idempotencyKey: "key"},
+		{name: "blank selected id", selected: []string{" "}, expectedVersion: 7, runType: "transcription", idempotencyKey: "key"},
+		{name: "more than one thousand ids", selected: tooMany, expectedVersion: 7, runType: "transcription", idempotencyKey: "key"},
+		{name: "unsupported run type", selected: []string{"media-asset-1"}, expectedVersion: 7, runType: "summary", idempotencyKey: "key"},
+		{name: "array options", selected: []string{"media-asset-1"}, expectedVersion: 7, runType: "transcription", options: []byte(`[]`), idempotencyKey: "key"},
+		{name: "string options", selected: []string{"media-asset-1"}, expectedVersion: 7, runType: "transcription", options: []byte(`"ru"`), idempotencyKey: "key"},
+		{name: "null options", selected: []string{"media-asset-1"}, expectedVersion: 7, runType: "transcription", options: []byte(`null`), idempotencyKey: "key"},
+		{name: "oversized idempotency key", selected: []string{"media-asset-1"}, expectedVersion: 7, runType: "transcription", idempotencyKey: strings.Repeat("k", 161)},
+		{name: "different creator account", selected: []string{"media-asset-1"}, expectedVersion: 7, runType: "transcription", createdVia: "channel-account-2", idempotencyKey: "key"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeTargetRuntimeStore{failMethod: "FindProcessingRunReplay"}
+			service := NewTargetRuntimeService(store)
+			_, err := service.StartCollectionProcessingRun(context.Background(), TargetStartProcessingRunRequest{
+				ChannelAccountID: "channel-account-1", CollectionID: "inbox-1", ExpectedVersion: test.expectedVersion,
+				SelectedItemIDs: test.selected, RunType: test.runType, Options: test.options,
+				CreatedViaChannelAccountID: test.createdVia, IdempotencyKey: test.idempotencyKey,
+			})
+			if !errors.Is(err, storage.ErrContractViolation) {
+				t.Fatalf("StartCollectionProcessingRun() error = %v, want %v", err, storage.ErrContractViolation)
+			}
+			if store.processingRunReplayParams.IdempotencyKey != "" || store.processingRunParams.CollectionID != "" {
+				t.Fatalf("invalid selection reached target store: replay=%#v create=%#v", store.processingRunReplayParams, store.processingRunParams)
+			}
+		})
+	}
+}
+
 type fakeTargetRuntimeStore struct {
-	channelAccount         targetstore.ChannelAccountRecord
-	operation              targetstore.OperationRequestRecord
-	operationsByKey        map[string]targetstore.OperationRequestRecord
-	mediaAssetParams       targetstore.CreateMediaAssetWithInboxParams
-	mediaAssetCreateCalls  int
-	selectionSnapshot      targetstore.SelectionSnapshotRecord
-	selectionSnapshotItems []targetstore.SelectionSnapshotItemRecord
-	snapshotItems          []targetstore.SelectionSnapshotItemRecord
-	analysisRunGraph       targetstore.AnalysisRunGraph
-	processingRunParams    targetstore.CreateProcessingRunParams
-	getAnalysisRunErr      error
-	checkStepErr           error
-	progressCalls          int
-	progress               targetstore.RecordAnalysisRunProgressParams
-	artifactCalls          int
-	storedObjects          []targetstore.StoredObjectRecord
-	artifacts              []targetstore.ArtifactRecord
-	reusableTranscriptReq  TargetReusableTranscriptRequest
-	reusableTranscriptReqs []TargetReusableTranscriptRequest
-	reusableRun            targetstore.AnalysisRunRecord
-	reusableArtifact       targetstore.ArtifactRecord
-	reusableTranscripts    map[string]fakeReusableTranscript
-	artifactSubjects       []targetstore.ArtifactSubjectRecord
-	diagnosticCalls        int
-	diagnostics            []targetstore.DiagnosticRecord
-	finalizeCalls          int
-	surface                targetstore.ChannelSurfaceRecord
-	surfaceSubjects        []targetstore.ChannelSurfaceSubjectRecord
-	supersede              targetstore.SupersedeChannelSurfaceParams
-	failMethod             string
-	failErr                error
-	claimUnclaimed         bool
-	exportJob              targetstore.ExportJobRecord
-	finalizeExportParams   targetstore.FinalizeExportJobParams
-	reconcileObjects       []targetstore.StoredObjectRecord
-	completedPublications  []string
-	markedMissing          []string
-	reconcileCursors       map[string]string
+	channelAccount            targetstore.ChannelAccountRecord
+	operation                 targetstore.OperationRequestRecord
+	operationsByKey           map[string]targetstore.OperationRequestRecord
+	mediaAssetParams          targetstore.CreateMediaAssetWithInboxParams
+	mediaAssetCreateCalls     int
+	selectionSnapshot         targetstore.SelectionSnapshotRecord
+	selectionSnapshotItems    []targetstore.SelectionSnapshotItemRecord
+	snapshotItems             []targetstore.SelectionSnapshotItemRecord
+	analysisRunGraph          targetstore.AnalysisRunGraph
+	processingRunParams       targetstore.CreateProcessingRunParams
+	processingRunReplayParams targetstore.FindProcessingRunReplayParams
+	processingRunReplayResult targetstore.CreateProcessingRunResult
+	processingRunReplayFound  bool
+	getAnalysisRunErr         error
+	checkStepErr              error
+	progressCalls             int
+	progress                  targetstore.RecordAnalysisRunProgressParams
+	artifactCalls             int
+	storedObjects             []targetstore.StoredObjectRecord
+	artifacts                 []targetstore.ArtifactRecord
+	reusableTranscriptReq     TargetReusableTranscriptRequest
+	reusableTranscriptReqs    []TargetReusableTranscriptRequest
+	reusableRun               targetstore.AnalysisRunRecord
+	reusableArtifact          targetstore.ArtifactRecord
+	reusableTranscripts       map[string]fakeReusableTranscript
+	artifactSubjects          []targetstore.ArtifactSubjectRecord
+	diagnosticCalls           int
+	diagnostics               []targetstore.DiagnosticRecord
+	finalizeCalls             int
+	surface                   targetstore.ChannelSurfaceRecord
+	surfaceSubjects           []targetstore.ChannelSurfaceSubjectRecord
+	supersede                 targetstore.SupersedeChannelSurfaceParams
+	failMethod                string
+	failErr                   error
+	claimUnclaimed            bool
+	exportJob                 targetstore.ExportJobRecord
+	finalizeExportParams      targetstore.FinalizeExportJobParams
+	reconcileObjects          []targetstore.StoredObjectRecord
+	completedPublications     []string
+	markedMissing             []string
+	reconcileCursors          map[string]string
 }
 
 type fakeReusableTranscript struct {
@@ -2935,9 +3090,17 @@ func (s *fakeTargetRuntimeStore) CreateProcessingRun(_ context.Context, params t
 	}
 	s.processingRunParams = params
 	return targetstore.CreateProcessingRunResult{
-		Snapshot: params.Snapshot, SnapshotItems: params.SnapshotItems, Run: params.Graph.Run,
+		Snapshot: params.Snapshot, SnapshotItems: params.SnapshotItems, Run: params.Graph.Run, Steps: params.Graph.Steps,
 		DetachedAssetIDs: params.CapturedAssetIDs, CollectionVersion: params.ExpectedVersion + 1,
 	}, nil
+}
+
+func (s *fakeTargetRuntimeStore) FindProcessingRunReplay(_ context.Context, params targetstore.FindProcessingRunReplayParams) (targetstore.CreateProcessingRunResult, bool, error) {
+	s.processingRunReplayParams = params
+	if err := s.fail("FindProcessingRunReplay"); err != nil {
+		return targetstore.CreateProcessingRunResult{}, false, err
+	}
+	return s.processingRunReplayResult, s.processingRunReplayFound, nil
 }
 
 func (s *fakeTargetRuntimeStore) GetSelectionSnapshot(_ context.Context, channelAccountID, selectionSnapshotID string) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, error) {
@@ -3377,6 +3540,15 @@ func (s *fakeTargetRuntimeStore) GetExportJob(_ context.Context, channelAccountI
 		return s.exportJob, nil
 	}
 	return targetstore.ExportJobRecord{ID: exportJobID, ChannelAccountID: channelAccountID, MediaAssetID: "media-1", Operation: "youtube_audio", DeliveryChannel: "telegram", VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), Status: "queued", Version: 1, MaxAttempts: 3, ProgressJSON: []byte(`{"stage":"queued"}`), CreatedAt: time.Now()}, nil
+}
+func (s *fakeTargetRuntimeStore) GetExportJobByIdempotency(_ context.Context, channelAccountID, idempotencyKey string) (targetstore.ExportJobRecord, error) {
+	if err := s.fail("GetExportJobByIdempotency"); err != nil {
+		return targetstore.ExportJobRecord{}, err
+	}
+	if s.exportJob.ID != "" && s.exportJob.ChannelAccountID == channelAccountID && s.exportJob.IdempotencyKey == idempotencyKey {
+		return s.exportJob, nil
+	}
+	return targetstore.ExportJobRecord{}, sql.ErrNoRows
 }
 func (s *fakeTargetRuntimeStore) GetExportJobByID(_ context.Context, exportJobID string) (targetstore.ExportJobRecord, error) {
 	return s.GetExportJob(context.Background(), "channel-account-1", exportJobID)

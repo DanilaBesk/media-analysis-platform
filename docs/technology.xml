@@ -152,6 +152,7 @@
     <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/cancel">Request cooperative export cancellation.</endpoint>
     <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/retry">Retry failed or canceled export work with a new generation.</endpoint>
     <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/claim">Claim adapter delivery with a finite fenced lease.</endpoint>
+    <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/heartbeat">Extend the active owner and attempt-token delivery fence without exceeding delivery expiry.</endpoint>
     <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/ack">Acknowledge successful Telegram delivery.</endpoint>
     <endpoint method="GET" path="/internal/v1/export-jobs/{export_job_id}/download-access">Issue private container-reachable download access for trusted adapters without exposing the internal token or private MinIO hostname to Web clients.</endpoint>
     <endpoint method="POST" path="/v1/export-jobs/{export_job_id}/deliveries/fail">Record retryable or terminal delivery failure.</endpoint>
@@ -217,7 +218,7 @@
     <retention-rule>Selection snapshots remain immutable audit snapshots even if stored object bodies later expire.</retention-rule>
     <retention-rule>Artifacts can expire independently from run metadata; diagnostics explain unavailable artifacts.</retention-rule>
     <retention-rule>Deletion and export workflows must include media_asset, stored_object, collection, selection_snapshot, analysis_run, artifact, artifact_subject, diagnostic, and channel_surface records.</retention-rule>
-    <retention-rule>MEDIA_OBJECT_RETENTION_DAYS defaults to seven and controls each uploaded source generation from max(generation_published_at,last_successful_use_at); re-publication advances generation_published_at while preserving original created_at.</retention-rule>
+    <retention-rule>MEDIA_OBJECT_RETENTION_DAYS defaults to seven and controls each uploaded source generation and generated export body independently from delivery/access TTL; source re-publication advances generation_published_at while preserving original created_at.</retention-rule>
     <retention-rule>The API maintenance loop reclaims expired metadata-enrichment and export leases before retention reconciliation and sweeping; reconciliation dry-run never advances persistent cursors or mutates object state.</retention-rule>
     <retention-rule>A one-time metadata-only upgrade may enqueue existing supported YouTube URL assets after canonicalizing exactly one video id; it stores no provider media bytes and invalid legacy references terminate with a stable diagnostic.</retention-rule>
     <retention-rule>Stored-object publication uses attempt-owned staging, SHA-256 plus size uniqueness scoped by channel_account, deterministic managed keys, collision rejection, and reconciled losing uploads.</retention-rule>

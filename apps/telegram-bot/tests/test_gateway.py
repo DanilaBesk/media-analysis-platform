@@ -911,6 +911,35 @@ def test_internal_export_download_is_scoped_to_resolved_channel_account() -> Non
     assert requests == [{"channel_account_id": "channel-account-1", "export_job_id": "job-1"}]
 
 
+def test_export_delivery_heartbeat_forwards_the_active_fence() -> None:
+    api = FakeFinalApiClient()
+    requests: list[dict[str, Any]] = []
+    renewed_claim = {
+        "delivery": {"export_delivery_id": "delivery-1"},
+        "lease_owner": "adapter",
+        "attempt_token": "t" * 16,
+    }
+    api.heartbeat_export_delivery = lambda **kwargs: requests.append(kwargs) or renewed_claim  # type: ignore[attr-defined]
+    gateway = TelegramInboxGateway(api)
+
+    result = gateway.heartbeat_export_delivery(
+        channel_identity=channel_identity(),
+        export_job_id="job-1",
+        claim=renewed_claim,
+        lease_seconds=120,
+    )
+
+    assert result == renewed_claim
+    assert requests == [{
+        "channel_account_id": "channel-account-1",
+        "export_job_id": "job-1",
+        "export_delivery_id": "delivery-1",
+        "lease_owner": "adapter",
+        "attempt_token": "t" * 16,
+        "lease_seconds": 120,
+    }]
+
+
 def test_create_export_job_keeps_current_collection_intact() -> None:
     api = FakeFinalApiClient()
     api.items = [

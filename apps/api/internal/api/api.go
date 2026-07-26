@@ -86,6 +86,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		"/v1/export-jobs/{export_job_id}/cancel",
 		"/v1/export-jobs/{export_job_id}/retry",
 		"/v1/export-jobs/{export_job_id}/deliveries/claim",
+		"/v1/export-jobs/{export_job_id}/deliveries/heartbeat",
 		"/v1/export-jobs/{export_job_id}/deliveries/ack",
 		"/v1/export-jobs/{export_job_id}/deliveries/fail",
 		"/v1/export-jobs/{export_job_id}/download",
@@ -156,6 +157,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/cancel", s.withCORS(s.handleCancelExportJob))
 	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/retry", s.withCORS(s.handleRetryExportJob))
 	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/claim", s.withCORS(s.handleClaimExportDelivery))
+	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/heartbeat", s.withCORS(s.handleHeartbeatExportDelivery))
 	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/ack", s.withCORS(s.handleAckExportDelivery))
 	mux.HandleFunc("POST /v1/export-jobs/{export_job_id}/deliveries/fail", s.withCORS(s.handleFailExportDelivery))
 	mux.HandleFunc("GET /v1/export-jobs/{export_job_id}/download", s.withCORS(s.handleResolveExportDownload))

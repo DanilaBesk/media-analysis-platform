@@ -78,6 +78,7 @@ def test_openapi_exposes_only_target_routes() -> None:
         "/v1/export-jobs/{export_job_id}/cancel",
         "/v1/export-jobs/{export_job_id}/retry",
         "/v1/export-jobs/{export_job_id}/deliveries/claim",
+        "/v1/export-jobs/{export_job_id}/deliveries/heartbeat",
         "/v1/export-jobs/{export_job_id}/deliveries/ack",
         "/v1/export-jobs/{export_job_id}/deliveries/fail",
         "/v1/export-jobs/{export_job_id}/download",
@@ -175,7 +176,6 @@ def test_public_target_routes_use_channel_scope_and_idempotency() -> None:
         ("/v1/selection-snapshots", "post"),
         ("/v1/analysis-runs", "post"),
         ("/v1/analysis-runs/{analysis_run_id}/retry", "post"),
-        ("/v1/collections/{collection_id}/processing-runs", "post"),
         ("/v1/media-assets/{media_asset_id}/exports", "post"),
         ("/v1/media-assets/{media_asset_id}/refresh-metadata", "post"),
         ("/v1/export-jobs/{export_job_id}/retry", "post"),
@@ -228,6 +228,9 @@ def test_worker_control_schema_uses_step_contract() -> None:
 
 def test_processing_and_export_schemas_are_fenced_and_semantic() -> None:
     surface = _contract_surface()
+    processing_operation = _path_item(
+        surface["openapi"], "/v1/collections/{collection_id}/processing-runs", "post"
+    )
     collection_defs = surface["collection"]["$defs"]
     export_defs = surface["export_job"]["$defs"]
     export_control_defs = surface["export_control"]["$defs"]
@@ -238,11 +241,63 @@ def test_processing_and_export_schemas_are_fenced_and_semantic() -> None:
         "run_type",
         "selected_item_ids",
     ]
+    processing_properties = collection_defs["createProcessingRunRequest"]["properties"]
+    assert set(processing_properties) == {
+        "channel_account_id",
+        "expected_version",
+        "run_type",
+        "selected_item_ids",
+        "options",
+        "created_via_channel_account_id",
+    }
+    processing_response = collection_defs["processingRunResponse"]
+    assert processing_response["required"] == [
+        "selection_snapshot",
+        "analysis_run",
+        "detached_media_asset_ids",
+        "collection_version",
+    ]
+    assert processing_response["properties"]["analysis_run"]["$ref"] == "#/$defs/analysisRunLaunch"
+    assert processing_response["properties"]["detached_media_asset_ids"]["uniqueItems"] is True
+    assert processing_response["properties"]["collection_version"]["$ref"].endswith(
+        "#/$defs/optimisticVersion"
+    )
+    idempotency_parameter = next(
+        parameter
+        for parameter in processing_operation["parameters"]
+        if parameter.get("name") == "Idempotency-Key"
+    )
+    assert idempotency_parameter["in"] == "header"
+    assert idempotency_parameter["required"] is True
+    assert idempotency_parameter["schema"]["$ref"].endswith("#/$defs/idempotencyKey")
     assert export_defs["createExportJobRequest"]["properties"]["operation"]["$ref"].endswith(
         "#/$defs/exportOperation"
     )
     assert export_defs["exportJob"]["properties"]["status"]["$ref"].endswith(
         "#/$defs/exportJobStatus"
+    )
+    assert export_defs["heartbeatExportDeliveryRequest"]["required"] == [
+        "channel_account_id",
+        "export_delivery_id",
+        "lease_owner",
+        "attempt_token",
+    ]
+    assert export_defs["heartbeatExportDeliveryRequest"]["properties"]["lease_seconds"] == {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 900,
+    }
+    heartbeat = _path_item(
+        surface["openapi"],
+        "/v1/export-jobs/{export_job_id}/deliveries/heartbeat",
+        "post",
+    )
+    assert heartbeat["operationId"] == "heartbeatExportDelivery"
+    assert heartbeat["requestBody"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "export-job.schema.json#/$defs/heartbeatExportDeliveryRequest"
+    )
+    assert heartbeat["responses"]["200"]["content"]["application/json"]["schema"]["$ref"].endswith(
+        "export-job.schema.json#/$defs/exportDeliveryClaim"
     )
     assert export_control_defs["exportClaimResponse"]["required"] == [
         "export_job",

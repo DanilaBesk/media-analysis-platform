@@ -505,10 +505,24 @@ type CreateProcessingRunParams struct {
 	SourcePins       []StoredObjectPinRecord
 }
 
+type FindProcessingRunReplayParams struct {
+	ChannelAccountID  string
+	CollectionID      string
+	ExpectedVersion   int64
+	IdempotencyKey    string
+	RunType           string
+	SelectedAssetIDs  []string
+	OptionsJSON       []byte
+	ParamsJSON        []byte
+	DeliveryJSON      []byte
+	CreatedViaChannel string
+}
+
 type CreateProcessingRunResult struct {
 	Snapshot          SelectionSnapshotRecord
 	SnapshotItems     []SelectionSnapshotItemRecord
 	Run               AnalysisRunRecord
+	Steps             []AnalysisRunStepRecord
 	DetachedAssetIDs  []string
 	CollectionVersion int64
 	Replayed          bool
@@ -556,6 +570,16 @@ type ClaimExportDeliveryParams struct {
 	LeaseOwner       string
 	AttemptToken     string
 	ClaimedAt        time.Time
+	LeaseExpiresAt   time.Time
+}
+
+type HeartbeatExportDeliveryParams struct {
+	ExportJobID      string
+	ChannelAccountID string
+	ExportDeliveryID string
+	LeaseOwner       string
+	AttemptToken     string
+	HeartbeatAt      time.Time
 	LeaseExpiresAt   time.Time
 }
 

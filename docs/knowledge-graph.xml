@@ -104,7 +104,7 @@
         <table-channelSurfaces PURPOSE="Store restart-safe channel presentation mappings with active uniqueness by channel account, surface key, and address fingerprint." />
         <table-channelSurfaceSubjects PURPOSE="Store external surface links to target product subjects while enforcing one primary subject per surface." />
         <table-channelSurfaceEvents PURPOSE="Store append-only channel surface lifecycle and recovery history." />
-        <test-livePostgresContracts PATH="apps/api/internal/storage/target/store_postgres_test.go" PURPOSE="Runs the target migration twice on disposable Postgres and proves operation idempotency replay, channel isolation, collection conflicts, immutable selection_snapshots, analysis_run lifecycle/events/cancellation, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/event history." />
+        <test-livePostgresContracts PATH="apps/api/internal/storage/target/store_postgres_test.go" PURPOSE="Runs the target migration twice on disposable Postgres and proves operation and processing-run idempotency replay, channel isolation, collection conflicts, immutable selection_snapshots, analysis_run lifecycle/events/cancellation, export-delivery heartbeat fencing, artifact access, diagnostics, retention state, and channel_surface uniqueness/supersede/event history." />
       </annotations>
     </M-API-STORAGE>
 

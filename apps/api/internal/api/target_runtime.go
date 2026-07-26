@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -49,6 +50,7 @@ type TargetStateStore interface {
 	DeleteMediaAsset(ctx context.Context, channelAccountID, mediaAssetID string, deletedAt time.Time) (targetstore.MediaAssetRecord, error)
 	CreateExportJob(ctx context.Context, params targetstore.CreateExportJobParams) (targetstore.ExportJobRecord, error)
 	GetExportJob(ctx context.Context, channelAccountID, exportJobID string) (targetstore.ExportJobRecord, error)
+	GetExportJobByIdempotency(ctx context.Context, channelAccountID, idempotencyKey string) (targetstore.ExportJobRecord, error)
 	GetExportJobByID(ctx context.Context, exportJobID string) (targetstore.ExportJobRecord, error)
 	ListExportJobs(ctx context.Context, channelAccountID, status string, limit int) ([]targetstore.ExportJobRecord, error)
 	ListExportJobQueue(ctx context.Context, limit int) ([]targetstore.ExportJobRecord, error)
@@ -59,6 +61,7 @@ type TargetStateStore interface {
 	FinalizeExportJob(ctx context.Context, params targetstore.FinalizeExportJobParams) (targetstore.ExportJobRecord, error)
 	ListExportDeliveries(ctx context.Context, channelAccountID, exportJobID string) ([]targetstore.ExportDeliveryRecord, error)
 	ClaimExportDelivery(ctx context.Context, params targetstore.ClaimExportDeliveryParams) (targetstore.ExportDeliveryRecord, bool, error)
+	HeartbeatExportDelivery(ctx context.Context, params targetstore.HeartbeatExportDeliveryParams) (targetstore.ExportDeliveryRecord, error)
 	FinalizeExportDelivery(ctx context.Context, params targetstore.FinalizeExportDeliveryParams) (targetstore.ExportDeliveryRecord, error)
 	ReclaimExportJobs(ctx context.Context, now time.Time, limit int) (targetstore.ExportJobReclaimResult, error)
 	ReclaimExportDeliveries(ctx context.Context, now time.Time, limit int) (int64, error)
@@ -66,6 +69,7 @@ type TargetStateStore interface {
 	CompleteRetentionDelete(ctx context.Context, storedObjectID string, generation int, owner, token string, deletedAt time.Time) error
 	FailRetentionDelete(ctx context.Context, storedObjectID string, generation int, owner, token string, failedAt time.Time) error
 	CreateSelectionSnapshot(ctx context.Context, snapshot targetstore.SelectionSnapshotRecord, items []targetstore.SelectionSnapshotItemRecord) error
+	FindProcessingRunReplay(ctx context.Context, params targetstore.FindProcessingRunReplayParams) (targetstore.CreateProcessingRunResult, bool, error)
 	CreateProcessingRun(ctx context.Context, params targetstore.CreateProcessingRunParams) (targetstore.CreateProcessingRunResult, error)
 	GetSelectionSnapshot(ctx context.Context, channelAccountID, selectionSnapshotID string) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, error)
 	ListSelectionSnapshotItems(ctx context.Context, selectionSnapshotID string) ([]targetstore.SelectionSnapshotItemRecord, error)
@@ -759,17 +763,60 @@ func (s *TargetRuntimeService) StartCollectionProcessingRun(ctx context.Context,
 	if s.store == nil {
 		return TargetProcessingRun{}, fmt.Errorf("target storage is required")
 	}
-	if len(req.Items) == 0 {
+	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if strings.TrimSpace(req.ChannelAccountID) == "" || strings.TrimSpace(req.CollectionID) == "" ||
+		len(req.SelectedItemIDs) == 0 || len(req.SelectedItemIDs) > 1000 || idempotencyKey == "" || len(idempotencyKey) > 160 ||
+		req.ExpectedVersion <= 0 || !containsString([]string{"transcription", "report", "deep_research"}, req.RunType) {
 		return TargetProcessingRun{}, storage.ErrContractViolation
 	}
+	normalizedOptions, validOptions := normalizeJSONObject(req.Options)
+	if !validOptions {
+		return TargetProcessingRun{}, storage.ErrContractViolation
+	}
+	createdViaChannel := strings.TrimSpace(req.CreatedViaChannelAccountID)
+	if createdViaChannel == "" {
+		createdViaChannel = req.ChannelAccountID
+	} else if createdViaChannel != req.ChannelAccountID {
+		return TargetProcessingRun{}, storage.ErrContractViolation
+	}
+	seenSelectedItems := make(map[string]struct{}, len(req.SelectedItemIDs))
+	for _, mediaAssetID := range req.SelectedItemIDs {
+		trimmedMediaAssetID := strings.TrimSpace(mediaAssetID)
+		if trimmedMediaAssetID == "" || trimmedMediaAssetID != mediaAssetID {
+			return TargetProcessingRun{}, storage.ErrContractViolation
+		}
+		if _, duplicate := seenSelectedItems[mediaAssetID]; duplicate {
+			return TargetProcessingRun{}, storage.ErrContractViolation
+		}
+		seenSelectedItems[mediaAssetID] = struct{}{}
+	}
+	replayQuery := targetstore.FindProcessingRunReplayParams{
+		ChannelAccountID: req.ChannelAccountID, CollectionID: req.CollectionID,
+		ExpectedVersion: req.ExpectedVersion, IdempotencyKey: idempotencyKey,
+		RunType: req.RunType, SelectedAssetIDs: append([]string(nil), req.SelectedItemIDs...),
+		OptionsJSON: normalizedOptions, ParamsJSON: normalizedOptions,
+		DeliveryJSON:      []byte(`{"strategy":"polling"}`),
+		CreatedViaChannel: createdViaChannel,
+	}
+	if replay, found, err := s.store.FindProcessingRunReplay(ctx, replayQuery); errors.Is(err, targetstore.ErrProcessingRunIdempotencyConflict) {
+		return TargetProcessingRun{}, storage.ErrProcessingRunConflict
+	} else if err != nil {
+		return TargetProcessingRun{}, err
+	} else if found {
+		return targetProcessingRunFromCreateResult(replay), nil
+	}
 	now := s.now()
+	requestedItems := make([]TargetSelectionSnapshotItemRequest, 0, len(req.SelectedItemIDs))
+	for position, mediaAssetID := range req.SelectedItemIDs {
+		requestedItems = append(requestedItems, TargetSelectionSnapshotItemRequest{MediaAssetID: mediaAssetID, Position: position})
+	}
 	snapshot, snapshotItems, _, err := s.buildSelectionSnapshot(ctx, TargetCreateSelectionSnapshotRequest{
 		ChannelAccountID:   req.ChannelAccountID,
 		SourceCollectionID: req.CollectionID,
-		Items:              req.Items,
-		OptionSnapshot:     req.OptionSnapshot,
-		CreatedViaChannel:  req.CreatedViaChannelID,
-		IdempotencyKey:     req.IdempotencyKey,
+		Items:              requestedItems,
+		OptionSnapshot:     normalizedOptions,
+		CreatedViaChannel:  createdViaChannel,
+		IdempotencyKey:     idempotencyKey,
 	}, now)
 	if err != nil {
 		return TargetProcessingRun{}, err
@@ -788,11 +835,11 @@ func (s *TargetRuntimeService) StartCollectionProcessingRun(ctx context.Context,
 			RunType:           req.RunType,
 			Status:            "queued",
 			Version:           1,
-			IdempotencyKey:    req.IdempotencyKey,
-			ParamsJSON:        jsonOrObject(req.Params),
-			DeliveryJSON:      jsonOrDefaultRaw(req.Delivery, `{"strategy":"polling"}`),
+			IdempotencyKey:    idempotencyKey,
+			ParamsJSON:        normalizedOptions,
+			DeliveryJSON:      []byte(`{"strategy":"polling"}`),
 			EvidenceGateState: "not_required",
-			CreatedViaChannel: req.CreatedViaChannelID,
+			CreatedViaChannel: createdViaChannel,
 			CreatedAt:         now,
 		},
 		Steps:      steps,
@@ -803,14 +850,15 @@ func (s *TargetRuntimeService) StartCollectionProcessingRun(ctx context.Context,
 			EventType:     "analysis_run.created",
 			Version:       1,
 			Status:        "queued",
-			PayloadJSON:   []byte(`{"collection_membership":"detached_at_launch"}`),
-			CreatedAt:     now,
+			PayloadJSON: mustJSON(map[string]any{
+				"collection_membership":       "detached_at_launch",
+				"expected_collection_version": req.ExpectedVersion,
+				"collection_version":          req.ExpectedVersion + 1,
+			}),
+			CreatedAt: now,
 		},
 	}
-	capturedIDs := make([]string, 0, len(req.Items))
-	for _, item := range req.Items {
-		capturedIDs = append(capturedIDs, item.MediaAssetID)
-	}
+	capturedIDs := append([]string(nil), req.SelectedItemIDs...)
 	sourcePins := make([]targetstore.StoredObjectPinRecord, 0)
 	seenStoredObjects := map[string]struct{}{}
 	for _, item := range snapshotItems {
@@ -845,12 +893,12 @@ func (s *TargetRuntimeService) StartCollectionProcessingRun(ctx context.Context,
 	} else if err != nil {
 		return TargetProcessingRun{}, err
 	}
-	canonicalSteps := steps
-	if created.Replayed {
-		canonicalSteps = nil
-	}
-	dtoSteps := make([]TargetAnalysisRunStep, 0, len(canonicalSteps))
-	for _, step := range canonicalSteps {
+	return targetProcessingRunFromCreateResult(created), nil
+}
+
+func targetProcessingRunFromCreateResult(created targetstore.CreateProcessingRunResult) TargetProcessingRun {
+	dtoSteps := make([]TargetAnalysisRunStep, 0, len(created.Steps))
+	for _, step := range created.Steps {
 		dtoSteps = append(dtoSteps, targetAnalysisRunStepFromRecord(step))
 	}
 	return TargetProcessingRun{
@@ -875,7 +923,7 @@ func (s *TargetRuntimeService) StartCollectionProcessingRun(ctx context.Context,
 		},
 		DetachedMediaAssetIDs: created.DetachedAssetIDs,
 		CollectionVersion:     created.CollectionVersion,
-	}, nil
+	}
 }
 
 func (s *TargetRuntimeService) buildSelectionSnapshot(ctx context.Context, req TargetCreateSelectionSnapshotRequest, now time.Time) (targetstore.SelectionSnapshotRecord, []targetstore.SelectionSnapshotItemRecord, []TargetSelectionSnapshotItem, error) {
@@ -1983,6 +2031,26 @@ func jsonOrObject(raw json.RawMessage) []byte {
 		return []byte(`{}`)
 	}
 	return raw
+}
+
+func normalizeJSONObject(raw json.RawMessage) ([]byte, bool) {
+	if len(raw) == 0 {
+		return []byte(`{}`), true
+	}
+	var object map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil || object == nil {
+		return nil, false
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return nil, false
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return nil, false
+	}
+	return normalized, true
 }
 
 func jsonOrDefaultRaw(raw json.RawMessage, fallback string) []byte {

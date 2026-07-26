@@ -27,18 +27,8 @@ func (s *TargetRuntimeService) CreateExportJob(ctx context.Context, req TargetCr
 	if s.store == nil {
 		return TargetExportJob{}, fmt.Errorf("target storage is required")
 	}
-	asset, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, req.MediaAssetID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TargetExportJob{}, storage.ErrMediaAssetNotFound
-	}
-	if err != nil {
-		return TargetExportJob{}, err
-	}
 	variant, err := normalizeExportVariant(req.Operation, req.Variant)
 	if err != nil {
-		return TargetExportJob{}, err
-	}
-	if err := validateExportOperation(asset, req.Operation); err != nil {
 		return TargetExportJob{}, err
 	}
 	deliveryChannel := withDefaultString(strings.TrimSpace(req.DeliveryChannel), "telegram")
@@ -46,6 +36,28 @@ func (s *TargetRuntimeService) CreateExportJob(ctx context.Context, req TargetCr
 		return TargetExportJob{}, storage.ContractViolationf("delivery_channel must be telegram or web")
 	}
 	idempotencyKey := strings.TrimSpace(req.IdempotencyKey)
+	if idempotencyKey != "" {
+		existing, err := s.store.GetExportJobByIdempotency(ctx, req.ChannelAccountID, idempotencyKey)
+		if err == nil {
+			if !exportJobRequestMatches(existing, req.MediaAssetID, req.Operation, deliveryChannel, variant) {
+				return TargetExportJob{}, storage.ErrExportJobConflict
+			}
+			return s.exportJobFromRecord(ctx, existing)
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return TargetExportJob{}, err
+		}
+	}
+	asset, err := s.store.GetMediaAsset(ctx, req.ChannelAccountID, req.MediaAssetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetExportJob{}, storage.ErrMediaAssetNotFound
+	}
+	if err != nil {
+		return TargetExportJob{}, err
+	}
+	if err := validateExportOperation(asset, req.Operation); err != nil {
+		return TargetExportJob{}, err
+	}
 	if idempotencyKey == "" {
 		idempotencyKey = "implicit-action:" + uuid.NewString()
 	}
@@ -70,11 +82,15 @@ func (s *TargetRuntimeService) CreateExportJob(ctx context.Context, req TargetCr
 	if err != nil {
 		return TargetExportJob{}, err
 	}
-	if record.MediaAssetID != req.MediaAssetID || record.Operation != req.Operation ||
-		record.DeliveryChannel != deliveryChannel || !jsonBytesEqual(record.VariantJSON, variant) {
+	if !exportJobRequestMatches(record, req.MediaAssetID, req.Operation, deliveryChannel, variant) {
 		return TargetExportJob{}, storage.ErrExportJobConflict
 	}
 	return s.exportJobFromRecord(ctx, record)
+}
+
+func exportJobRequestMatches(record targetstore.ExportJobRecord, mediaAssetID, operation, deliveryChannel string, variant []byte) bool {
+	return record.MediaAssetID == mediaAssetID && record.Operation == operation &&
+		record.DeliveryChannel == deliveryChannel && jsonBytesEqual(record.VariantJSON, variant)
 }
 
 func (s *TargetRuntimeService) ListExportJobs(ctx context.Context, req TargetListExportJobsRequest) (TargetExportJobPage, error) {
@@ -351,6 +367,43 @@ func (s *TargetRuntimeService) ClaimExportDelivery(ctx context.Context, req Targ
 	}
 	return TargetExportDeliveryClaim{
 		Delivery: exportDeliveryFromRecord(delivery), AttemptToken: token,
+		LeaseOwner: req.LeaseOwner, LeaseExpiresAt: *delivery.LeaseExpiresAt,
+	}, nil
+}
+
+func (s *TargetRuntimeService) HeartbeatExportDelivery(ctx context.Context, req TargetHeartbeatExportDeliveryRequest) (TargetExportDeliveryClaim, error) {
+	if strings.TrimSpace(req.ChannelAccountID) == "" || strings.TrimSpace(req.ExportJobID) == "" ||
+		strings.TrimSpace(req.ExportDeliveryID) == "" || strings.TrimSpace(req.LeaseOwner) == "" ||
+		strings.TrimSpace(req.AttemptToken) == "" {
+		return TargetExportDeliveryClaim{}, storage.ContractViolationf("export delivery heartbeat fence is required")
+	}
+	if len(req.LeaseOwner) > 160 || len(req.AttemptToken) < 16 || len(req.AttemptToken) > 160 {
+		return TargetExportDeliveryClaim{}, storage.ContractViolationf("export delivery heartbeat fence is invalid")
+	}
+	leaseSeconds := 120
+	if req.LeaseSeconds != nil {
+		leaseSeconds = *req.LeaseSeconds
+		if leaseSeconds < 1 || leaseSeconds > 900 {
+			return TargetExportDeliveryClaim{}, storage.ContractViolationf("lease_seconds must be between 1 and 900")
+		}
+	}
+	now := s.now()
+	delivery, err := s.store.HeartbeatExportDelivery(ctx, targetstore.HeartbeatExportDeliveryParams{
+		ExportJobID: req.ExportJobID, ChannelAccountID: req.ChannelAccountID,
+		ExportDeliveryID: req.ExportDeliveryID, LeaseOwner: req.LeaseOwner, AttemptToken: req.AttemptToken,
+		HeartbeatAt: now, LeaseExpiresAt: now.Add(time.Duration(leaseSeconds) * time.Second),
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetExportDeliveryClaim{}, storage.ErrExportJobConflict
+	}
+	if err != nil {
+		return TargetExportDeliveryClaim{}, err
+	}
+	if delivery.ID != req.ExportDeliveryID || delivery.LeaseExpiresAt == nil {
+		return TargetExportDeliveryClaim{}, storage.ErrExportJobConflict
+	}
+	return TargetExportDeliveryClaim{
+		Delivery: exportDeliveryFromRecord(delivery), AttemptToken: req.AttemptToken,
 		LeaseOwner: req.LeaseOwner, LeaseExpiresAt: *delivery.LeaseExpiresAt,
 	}, nil
 }
@@ -736,7 +789,7 @@ func (s *TargetRuntimeService) publishExportOutput(ctx context.Context, job targ
 	if err != nil || published.SizeBytes != publication.SizeBytes || !metadataSHA256Matches(published.Metadata, sha) {
 		return targetstore.StoredObjectRecord{}, fmt.Errorf("%w: verify promoted export output", storage.ErrStorageUnavailable)
 	}
-	expiresAt := now.Add(s.exportDeliveryTTL)
+	expiresAt := now.Add(time.Duration(s.mediaObjectRetentionDays) * 24 * time.Hour)
 	return targetstore.StoredObjectRecord{
 		ID:               stableTargetID(strings.Join([]string{"export-output", job.ID, attemptToken}, ":")),
 		ChannelAccountID: job.ChannelAccountID, Bucket: storage.ArtifactsBucket,

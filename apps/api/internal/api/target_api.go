@@ -29,6 +29,7 @@ type TargetService interface {
 	CancelExportJob(ctx context.Context, req TargetExportJobMutationRequest) (TargetExportJob, error)
 	RetryExportJob(ctx context.Context, req TargetExportJobMutationRequest) (TargetExportJob, error)
 	ClaimExportDelivery(ctx context.Context, req TargetClaimExportDeliveryRequest) (TargetExportDeliveryClaim, error)
+	HeartbeatExportDelivery(ctx context.Context, req TargetHeartbeatExportDeliveryRequest) (TargetExportDeliveryClaim, error)
 	FinalizeExportDelivery(ctx context.Context, req TargetFinalizeExportDeliveryRequest) (TargetExportDelivery, error)
 	ResolveExportDownload(ctx context.Context, req TargetGetExportJobRequest) (TargetExportDownload, error)
 	ResolveInternalExportDownloadAccess(ctx context.Context, req TargetGetExportJobRequest) (TargetExportDownload, error)
@@ -251,16 +252,14 @@ type TargetRemoveCollectionItemRequest struct {
 }
 
 type TargetStartProcessingRunRequest struct {
-	ChannelAccountID    string                               `json:"channel_account_id"`
-	CollectionID        string                               `json:"-"`
-	ExpectedVersion     int64                                `json:"expected_version"`
-	Items               []TargetSelectionSnapshotItemRequest `json:"items"`
-	RunType             string                               `json:"run_type"`
-	OptionSnapshot      json.RawMessage                      `json:"option_snapshot,omitempty"`
-	Params              json.RawMessage                      `json:"params,omitempty"`
-	Delivery            json.RawMessage                      `json:"delivery,omitempty"`
-	CreatedViaChannelID string                               `json:"created_via_channel_id,omitempty"`
-	IdempotencyKey      string                               `json:"idempotency_key,omitempty"`
+	ChannelAccountID           string          `json:"channel_account_id"`
+	CollectionID               string          `json:"-"`
+	ExpectedVersion            int64           `json:"expected_version"`
+	SelectedItemIDs            []string        `json:"selected_item_ids"`
+	RunType                    string          `json:"run_type"`
+	Options                    json.RawMessage `json:"options,omitempty"`
+	CreatedViaChannelAccountID string          `json:"created_via_channel_account_id,omitempty"`
+	IdempotencyKey             string          `json:"-"`
 }
 
 type TargetProcessingRun struct {
@@ -1149,8 +1148,10 @@ func (s *Server) handleStartTargetCollectionProcessingRun(w http.ResponseWriter,
 		return
 	}
 	body.CollectionID = r.PathValue("collection_id")
+	body.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	if body.IdempotencyKey == "" {
-		body.IdempotencyKey = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		s.writeAPIError(w, apiError{status: http.StatusBadRequest, code: "invalid_processing_run", message: "Idempotency-Key header is required"})
+		return
 	}
 	processingRun, err := s.deps.Target.StartCollectionProcessingRun(r.Context(), body)
 	if err != nil {

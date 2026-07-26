@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -203,15 +205,19 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 
 	processingRun := httptest.NewRecorder()
 	processingRequest := jsonRequest(http.MethodPost, "/v1/collections/collection-1/processing-runs", map[string]any{
-		"channel_account_id": "channel-account-1",
-		"expected_version":   4,
-		"items":              []map[string]any{{"media_asset_id": "media-asset-1", "position": 0}},
-		"run_type":           "transcription",
+		"channel_account_id":             "channel-account-1",
+		"expected_version":               4,
+		"selected_item_ids":              []string{"media-asset-1"},
+		"run_type":                       "transcription",
+		"options":                        map[string]any{"language": "ru"},
+		"created_via_channel_account_id": "channel-account-1",
 	})
 	processingRequest.Header.Set("Idempotency-Key", "telegram:process:1")
 	mux.ServeHTTP(processingRun, processingRequest)
 	assertTargetStatus(t, processingRun, http.StatusCreated)
-	if target.startProcessingRunReq.CollectionID != "collection-1" || target.startProcessingRunReq.ExpectedVersion != 4 || target.startProcessingRunReq.IdempotencyKey != "telegram:process:1" {
+	if target.startProcessingRunReq.CollectionID != "collection-1" || target.startProcessingRunReq.ExpectedVersion != 4 || target.startProcessingRunReq.IdempotencyKey != "telegram:process:1" ||
+		len(target.startProcessingRunReq.SelectedItemIDs) != 1 || target.startProcessingRunReq.SelectedItemIDs[0] != "media-asset-1" ||
+		target.startProcessingRunReq.CreatedViaChannelAccountID != "channel-account-1" {
 		t.Fatalf("start processing run request = %#v", target.startProcessingRunReq)
 	}
 	if !strings.Contains(processingRun.Body.String(), `"detached_media_asset_ids":["media-asset-1"]`) {
@@ -535,6 +541,111 @@ func TestTargetApiCanonicalRoutesUseTargetVocabulary(t *testing.T) {
 	assertNoLegacyTargetVocabulary(t, listSurfaceEvents.Body.String())
 	if target.listSurfaceEventsReq.SurfaceID != "surface-1" {
 		t.Fatalf("list surface events request = %#v", target.listSurfaceEventsReq)
+	}
+}
+
+func TestProcessingRunHandlerResponseMatchesLaunchContractSurface(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	const (
+		channelID  = "00000000-0000-4000-8000-000000000002"
+		collection = "00000000-0000-4000-8000-000000000102"
+		assetID    = "00000000-0000-4000-8000-000000000301"
+		snapshotID = "00000000-0000-4000-8000-000000000401"
+		itemID     = "00000000-0000-4000-8000-000000000402"
+		runID      = "00000000-0000-4000-8000-000000000501"
+		stepID     = "00000000-0000-4000-8000-000000000502"
+	)
+	target := &fakeTargetService{now: now, processingRunResult: &TargetProcessingRun{
+		SelectionSnapshot: TargetSelectionSnapshot{
+			SelectionSnapshotID: snapshotID, ChannelAccountID: channelID, SourceCollectionID: collection,
+			Status: "sealed", OptionSnapshot: []byte(`{"language":"ru"}`), Diagnostics: []TargetDiagnostic{},
+			Items: []TargetSelectionSnapshotItem{{
+				SelectionSnapshotItemID: itemID, MediaAssetID: assetID, Position: 0, Kind: "voice", DisplayName: "voice.ogg",
+				OriginSnapshot: []byte(`{"origin_type":"telegram_file","origin_ref":"file-1"}`), StorageSnapshot: []byte(`{}`),
+				Metadata: []byte(`{}`), StatusAtSelection: "available",
+			}},
+			CreatedAt: now, SealedAt: now,
+		},
+		AnalysisRun: TargetAnalysisRun{
+			AnalysisRunID: runID, ChannelAccountID: channelID, SelectionSnapshotID: snapshotID,
+			RunType: "transcription", Status: "queued", Version: 1, Params: []byte(`{}`),
+			Delivery: []byte(`{"strategy":"polling"}`), EvidenceGateState: "not_required",
+			Steps: []TargetAnalysisRunStep{{
+				AnalysisRunStepID: stepID, AnalysisRunID: runID, StepKind: "transcription",
+				WorkerKind: "transcription", Status: "queued", AttemptNo: 0,
+			}},
+			CreatedAt: now,
+		},
+		DetachedMediaAssetIDs: []string{assetID}, CollectionVersion: 8,
+	}}
+	mux := newFinalMux(Dependencies{Target: target})
+	response := httptest.NewRecorder()
+	request := jsonRequest(http.MethodPost, "/v1/collections/"+collection+"/processing-runs", map[string]any{
+		"channel_account_id": channelID, "expected_version": 7, "selected_item_ids": []string{assetID},
+		"run_type": "transcription", "options": map[string]any{"language": "ru"},
+		"created_via_channel_account_id": channelID,
+	})
+	request.Header.Set("Idempotency-Key", "processing:contract:1")
+	mux.ServeHTTP(response, request)
+	assertTargetStatus(t, response, http.StatusCreated)
+	assertJSONSurfaceMatchesSchemaDefinition(t, response.Body.Bytes(), "processingRunResponse")
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode processing response: %v", err)
+	}
+	assertJSONSurfaceMatchesSchemaDefinition(t, payload["analysis_run"], "analysisRunLaunch")
+}
+
+func TestProcessingRunHandlerRequiresIdempotencyHeader(t *testing.T) {
+	t.Parallel()
+	target := &fakeTargetService{now: time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)}
+	mux := newFinalMux(Dependencies{Target: target})
+	response := httptest.NewRecorder()
+	mux.ServeHTTP(response, jsonRequest(http.MethodPost, "/v1/collections/collection-1/processing-runs", map[string]any{
+		"channel_account_id": "channel-account-1", "expected_version": 1,
+		"selected_item_ids": []string{"media-asset-1"}, "run_type": "transcription",
+	}))
+
+	assertTargetStatus(t, response, http.StatusBadRequest)
+	if target.startProcessingRunReq.CollectionID != "" {
+		t.Fatalf("missing idempotency header reached target service: %#v", target.startProcessingRunReq)
+	}
+}
+
+func assertJSONSurfaceMatchesSchemaDefinition(t *testing.T, body []byte, definitionName string) {
+	t.Helper()
+	schemaBody, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "contracts", "schemas", "http", "collection.schema.json"))
+	if err != nil {
+		t.Fatalf("read collection contract: %v", err)
+	}
+	var schema struct {
+		Definitions map[string]struct {
+			Required   []string                   `json:"required"`
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(schemaBody, &schema); err != nil {
+		t.Fatalf("decode collection contract: %v", err)
+	}
+	definition, ok := schema.Definitions[definitionName]
+	if !ok {
+		t.Fatalf("collection contract has no %q definition", definitionName)
+	}
+	var actual map[string]json.RawMessage
+	if err := json.Unmarshal(body, &actual); err != nil {
+		t.Fatalf("decode %s response surface: %v", definitionName, err)
+	}
+	for _, required := range definition.Required {
+		if _, ok := actual[required]; !ok {
+			t.Errorf("%s response is missing required field %q", definitionName, required)
+		}
+	}
+	for field := range actual {
+		if _, ok := definition.Properties[field]; !ok {
+			t.Errorf("%s response has additional field %q", definitionName, field)
+		}
 	}
 }
 
@@ -1037,6 +1148,7 @@ type fakeTargetService struct {
 	updateCollectionErr error
 	listStepQueueErr    error
 	nilItems            bool
+	processingRunResult *TargetProcessingRun
 
 	channelAccountReq        TargetChannelAccountRequest
 	listChannelAccountsReq   TargetListChannelAccountsRequest
@@ -1325,10 +1437,13 @@ func (f *fakeTargetService) StartCollectionProcessingRun(_ context.Context, req 
 	if f.err != nil {
 		return TargetProcessingRun{}, f.err
 	}
+	if f.processingRunResult != nil {
+		return *f.processingRunResult, nil
+	}
 	return TargetProcessingRun{
 		SelectionSnapshot:     TargetSelectionSnapshot{SelectionSnapshotID: "snapshot-atomic", ChannelAccountID: req.ChannelAccountID, SourceCollectionID: req.CollectionID, Status: "sealed", Items: []TargetSelectionSnapshotItem{}, Diagnostics: []TargetDiagnostic{}, CreatedAt: f.now, SealedAt: f.now},
 		AnalysisRun:           TargetAnalysisRun{AnalysisRunID: "run-atomic", ChannelAccountID: req.ChannelAccountID, SelectionSnapshotID: "snapshot-atomic", RunType: req.RunType, Status: "queued", Version: 1, CreatedAt: f.now},
-		DetachedMediaAssetIDs: []string{req.Items[0].MediaAssetID},
+		DetachedMediaAssetIDs: append([]string(nil), req.SelectedItemIDs...),
 		CollectionVersion:     req.ExpectedVersion + 1,
 	}, nil
 }

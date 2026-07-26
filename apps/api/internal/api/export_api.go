@@ -101,6 +101,15 @@ type TargetExportDeliveryClaim struct {
 	LeaseExpiresAt time.Time            `json:"lease_expires_at"`
 }
 
+type TargetHeartbeatExportDeliveryRequest struct {
+	ChannelAccountID string `json:"channel_account_id"`
+	ExportJobID      string `json:"-"`
+	ExportDeliveryID string `json:"export_delivery_id"`
+	LeaseOwner       string `json:"lease_owner"`
+	AttemptToken     string `json:"attempt_token"`
+	LeaseSeconds     *int   `json:"lease_seconds,omitempty"`
+}
+
 type TargetFinalizeExportDeliveryRequest struct {
 	ChannelAccountID string `json:"channel_account_id"`
 	ExportJobID      string `json:"-"`
@@ -329,6 +338,21 @@ func (s *Server) handleClaimExportDelivery(w http.ResponseWriter, r *http.Reques
 	}
 	body.ExportJobID = r.PathValue("export_job_id")
 	claim, err := s.deps.Target.ClaimExportDelivery(r.Context(), body)
+	if err != nil {
+		s.writeAPIError(w, mapFinalStorageError(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, claim)
+}
+
+func (s *Server) handleHeartbeatExportDelivery(w http.ResponseWriter, r *http.Request) {
+	var body TargetHeartbeatExportDeliveryRequest
+	if err := decodeJSONBody(r, &body); err != nil {
+		s.writeAPIError(w, apiError{status: 400, code: "invalid_export_delivery", message: "delivery heartbeat must be valid JSON"})
+		return
+	}
+	body.ExportJobID = r.PathValue("export_job_id")
+	claim, err := s.deps.Target.HeartbeatExportDelivery(r.Context(), body)
 	if err != nil {
 		s.writeAPIError(w, mapFinalStorageError(err))
 		return

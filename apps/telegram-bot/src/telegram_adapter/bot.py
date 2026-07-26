@@ -86,6 +86,8 @@ _LOG_MARKER_TELEGRAM_POLLING_STATE = "[TelegramAdapter][bot][BLOCK_TRACK_TELEGRA
 _AUTO_DELIVER_RUN_STATUSES = {"succeeded", "partially_succeeded"}
 _BUFFER_LINK_PREVIEW_OPTIONS = LinkPreviewOptions(is_disabled=True)
 _MAX_EXPORT_DELIVERY_BYTES = 2 * 1024 * 1024 * 1024
+_EXPORT_DELIVERY_LEASE_SECONDS = 120
+_EXPORT_DELIVERY_HEARTBEAT_INTERVAL_SECONDS = 30.0
 
 
 class _TemporaryInputFile(InputFile):
@@ -168,6 +170,8 @@ class TelegramInboxApp:
         self.export_selections: dict[tuple[int, int | None], JsonObject] = {}
         self.inbound_status_burst_until: dict[tuple[int, int | None], float] = {}
         self.inbound_status_burst_window_seconds = 5.0
+        self.export_delivery_lease_seconds = _EXPORT_DELIVERY_LEASE_SECONDS
+        self.export_delivery_heartbeat_interval_seconds = _EXPORT_DELIVERY_HEARTBEAT_INTERVAL_SECONDS
         self._monotonic = time.monotonic
         self._sleep = asyncio.sleep
         self._register_handlers()
@@ -1361,39 +1365,150 @@ class TelegramInboxApp:
         lease_owner = f"telegram-adapter:{channel_identity['external_account_ref']}"
         claim = self.gateway.claim_export_delivery(
             channel_identity=channel_identity, export_job_id=export_job_id, lease_owner=lease_owner,
+            lease_seconds=self.export_delivery_lease_seconds,
         )
         try:
-            download = self.gateway.get_internal_export_download(
-                channel_identity=channel_identity, export_job_id=export_job_id,
+            await self._run_export_delivery_with_heartbeat(
+                channel_identity=channel_identity,
+                export_job_id=export_job_id,
+                claim=claim,
+                chat_id=chat_id,
             )
-            size_bytes = int(download.get("size_bytes") or 0)
-            if size_bytes <= 0 or size_bytes > _MAX_EXPORT_DELIVERY_BYTES:
-                raise RuntimeError("export_delivery_size_invalid")
-            content = await asyncio.to_thread(
-                self._download_artifact_file, str(download["url"]), size_bytes,
+            await asyncio.to_thread(
+                self.gateway.acknowledge_export_delivery,
+                channel_identity=channel_identity,
+                export_job_id=export_job_id,
+                claim=claim,
             )
-            try:
-                await self.bot.send_document(
-                    chat_id=chat_id,
-                    document=_TemporaryInputFile(content, filename=str(download["filename"])),
-                    caption="Экспорт готов",
-                )
-            finally:
-                content.close()
         except Exception as exc:
             try:
-                self.gateway.fail_export_delivery(
-                    channel_identity=channel_identity,
-                    export_job_id=export_job_id,
-                    claim=claim,
-                    failure_code="telegram_delivery_failed",
+                await asyncio.to_thread(
+                    self.gateway.fail_export_delivery,
+                    channel_identity=channel_identity, export_job_id=export_job_id,
+                    claim=claim, failure_code="telegram_delivery_failed",
                 )
             except Exception as fail_exc:
                 _LOGGER.warning("export delivery failure could not be recorded for %s: %s", export_job_id, fail_exc)
             raise exc
-        self.gateway.acknowledge_export_delivery(
-            channel_identity=channel_identity, export_job_id=export_job_id, claim=claim,
+
+    async def _run_export_delivery_with_heartbeat(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        claim: JsonObject,
+        chat_id: int,
+    ) -> None:
+        stop_heartbeat = asyncio.Event()
+        delivery_task = asyncio.create_task(
+            self._download_and_send_export(
+                channel_identity=channel_identity,
+                export_job_id=export_job_id,
+                chat_id=chat_id,
+            )
         )
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_export_delivery(
+                channel_identity=channel_identity,
+                export_job_id=export_job_id,
+                claim=claim,
+                stop=stop_heartbeat,
+            )
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                {delivery_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                heartbeat_task.result()
+                raise RuntimeError("export_delivery_heartbeat_stopped")
+            delivery_task.result()
+            stop_heartbeat.set()
+            await heartbeat_task
+        finally:
+            stop_heartbeat.set()
+            if not delivery_task.done():
+                delivery_task.cancel()
+            await asyncio.gather(delivery_task, heartbeat_task, return_exceptions=True)
+
+    async def _heartbeat_export_delivery(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        claim: JsonObject,
+        stop: asyncio.Event,
+    ) -> None:
+        active_claim = claim
+        while not stop.is_set():
+            sleep_task = asyncio.create_task(self._sleep(self.export_delivery_heartbeat_interval_seconds))
+            stop_task = asyncio.create_task(stop.wait())
+            try:
+                done, pending = await asyncio.wait(
+                    {sleep_task, stop_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                if stop_task in done:
+                    return
+                sleep_task.result()
+            finally:
+                for task in (sleep_task, stop_task):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(sleep_task, stop_task, return_exceptions=True)
+            if stop.is_set():
+                return
+            active_claim = await asyncio.to_thread(
+                self.gateway.heartbeat_export_delivery,
+                channel_identity=channel_identity,
+                export_job_id=export_job_id,
+                claim=active_claim,
+                lease_seconds=self.export_delivery_lease_seconds,
+            )
+
+    async def _download_and_send_export(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        chat_id: int,
+    ) -> None:
+        download = await asyncio.to_thread(
+            self.gateway.get_internal_export_download,
+            channel_identity=channel_identity,
+            export_job_id=export_job_id,
+        )
+        size_bytes = int(download.get("size_bytes") or 0)
+        if size_bytes <= 0 or size_bytes > _MAX_EXPORT_DELIVERY_BYTES:
+            raise RuntimeError("export_delivery_size_invalid")
+        content = await self._download_export_artifact_file(str(download["url"]), size_bytes)
+        try:
+            await self.bot.send_document(
+                chat_id=chat_id,
+                document=_TemporaryInputFile(content, filename=str(download["filename"])),
+                caption="Экспорт готов",
+            )
+        finally:
+            content.close()
+
+    async def _download_export_artifact_file(self, download_url: str, expected_size: int) -> BinaryIO:
+        download_task = asyncio.create_task(
+            asyncio.to_thread(self._download_artifact_file, download_url, expected_size)
+        )
+        try:
+            return await asyncio.shield(download_task)
+        except asyncio.CancelledError:
+            try:
+                content = await asyncio.shield(download_task)
+            except Exception:
+                pass
+            else:
+                content.close()
+            raise
 
     def _download_artifact_file(self, download_url: str, expected_size: int) -> BinaryIO:
         destination = tempfile.TemporaryFile(mode="w+b")

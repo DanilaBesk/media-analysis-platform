@@ -18,6 +18,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
+import telegram_adapter.api_client as api_client_module
 from telegram_adapter.api_client import TelegramApiClient, TelegramApiClientError
 from telegram_adapter.errors import TelegramUserErrorCode, classify_user_error, user_error_text
 
@@ -41,6 +42,31 @@ CHANNEL_IDENTITY = {
     "external_account_ref": "chat:10:user:7",
     "adapter_identity": {"telegram_chat_id": "10", "telegram_user_id": "7"},
 }
+
+
+def test_default_api_transport_has_bounded_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_urlopen(request, *, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        raise TimeoutError("stalled API request")
+
+    monkeypatch.setattr(api_client_module, "urlopen", fake_urlopen)
+    client = TelegramApiClient("http://api:8080")
+
+    with pytest.raises(TelegramApiClientError, match="Backend is unavailable") as error:
+        client.heartbeat_export_delivery(
+            channel_account_id="channel-account-1",
+            export_job_id="job-1",
+            export_delivery_id="delivery-1",
+            lease_owner="adapter",
+            attempt_token="t" * 16,
+        )
+
+    assert captured["timeout"] == 15.0
+    assert captured["request"].full_url.endswith("/v1/export-jobs/job-1/deliveries/heartbeat")
+    assert error.value.status == 0
 
 
 def test_create_media_asset_posts_target_media_asset_payload() -> None:
@@ -254,6 +280,48 @@ def test_create_selection_snapshot_and_analysis_run_use_target_identifiers() -> 
     }
 
 
+def test_start_collection_processing_run_uses_semantic_contract_and_stable_header() -> None:
+    captured = {}
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(
+            json.dumps(
+                {
+                    "selection_snapshot": {"selection_snapshot_id": "snapshot-1"},
+                    "analysis_run": {"analysis_run_id": "run-1", "steps": []},
+                    "detached_media_asset_ids": ["media-2", "media-1"],
+                    "collection_version": 8,
+                }
+            ).encode("utf-8")
+        )
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    result = client.start_collection_processing_run(
+        channel_account_id="channel-account-1",
+        collection_id="inbox-1",
+        expected_version=7,
+        items=[
+            {"media_asset_id": "media-2", "position": 0},
+            {"media_asset_id": "media-1", "position": 1},
+        ],
+        run_type="report",
+        option_snapshot={"language": "ru"},
+    )
+
+    request = captured["request"]
+    assert result["collection_version"] == 8
+    assert request.headers["Idempotency-key"] == "processing:inbox-1:7:report"
+    assert json.loads(request.data.decode("utf-8")) == {
+        "channel_account_id": "channel-account-1",
+        "expected_version": 7,
+        "selected_item_ids": ["media-2", "media-1"],
+        "run_type": "report",
+        "options": {"language": "ru"},
+        "created_via_channel_account_id": "channel-account-1",
+    }
+
+
 def test_restore_reads_inbox_media_assets_and_runs_with_channel_account_query() -> None:
     urls = []
 
@@ -325,6 +393,40 @@ def test_export_client_uses_export_and_fenced_delivery_contracts() -> None:
     )
     assert requests[0].headers["Idempotency-key"] == "export-key"
     assert json.loads(requests[0].data.decode()) == {"channel_account_id": "channel-account-1", "operation": "youtube_video", "variant": {"video_quality": "720p"}, "delivery_channel": "telegram"}
+
+
+def test_export_delivery_heartbeat_renews_the_fenced_claim() -> None:
+    captured = {}
+    response_claim = {
+        "delivery": {"export_delivery_id": "delivery-1"},
+        "attempt_token": "t" * 16,
+        "lease_owner": "bot",
+    }
+
+    def fake_urlopen(request):
+        captured["request"] = request
+        return FakeHttpResponse(json.dumps(response_claim).encode())
+
+    client = TelegramApiClient("http://api:8080", urlopen_impl=fake_urlopen)
+    result = client.heartbeat_export_delivery(
+        channel_account_id="channel-account-1",
+        export_job_id="job-1",
+        export_delivery_id="delivery-1",
+        lease_owner="bot",
+        attempt_token="t" * 16,
+        lease_seconds=120,
+    )
+
+    request = captured["request"]
+    assert result == response_claim
+    assert request.full_url == "http://api:8080/v1/export-jobs/job-1/deliveries/heartbeat"
+    assert json.loads(request.data.decode()) == {
+        "channel_account_id": "channel-account-1",
+        "export_delivery_id": "delivery-1",
+        "lease_owner": "bot",
+        "attempt_token": "t" * 16,
+        "lease_seconds": 120,
+    }
 
 
 def test_list_analysis_run_events_uses_channel_account_query_and_page_size() -> None:

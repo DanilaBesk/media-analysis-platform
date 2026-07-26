@@ -283,7 +283,7 @@
     <item>analysis_run_step_inputs and artifact_subjects prove worker inputs and artifact lineage.</item>
     <item>Retention and diagnostics are not deferred behind UI-only behavior.</item>
     <item>Adapters remain thin and share API-owned state.</item>
-    <item>media-859r proves content-addressed uploaded sources, seven-day configurable retention, physical object expiry, workspace cleanup, remote metadata enrichment, independent export jobs, and Telegram/Web contextual export actions.</item>
+    <item>media-859r proves content-addressed uploaded sources, seven-day configurable retention, physical object expiry, workspace cleanup, remote metadata enrichment, independent export jobs, contextual Telegram/Web export actions, and owner plus attempt-token delivery heartbeats for long Telegram transfers.</item>
     <item>Remote metadata enrichment uses additive migration 0003 and an API-owned fenced queue that is independent from export_jobs and analysis_runs; successful finalization updates current media_asset state while immutable selection snapshots retain captured values.</item>
   </DefinitionOfDone>
 </DevelopmentPlan>

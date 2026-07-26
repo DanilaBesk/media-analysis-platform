@@ -1,11 +1,14 @@
 package target
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math/big"
 	"reflect"
 	"sort"
 	"time"
@@ -1337,7 +1340,7 @@ func (s *Store) CreateProcessingRun(ctx context.Context, params CreateProcessing
 			if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, params.ChannelAccountID+":processing_run:"+params.Graph.Run.IdempotencyKey); err != nil {
 				return err
 			}
-			replay, found, err := findProcessingRunReplay(ctx, tx, params)
+			replay, found, err := findProcessingRunReplay(ctx, tx, processingRunReplayParamsFromCreate(params))
 			if err != nil {
 				return err
 			}
@@ -1442,7 +1445,8 @@ WHERE id=$1 AND channel_account_id=$2 AND version=$3`, params.CollectionID, para
 		}
 		createdResult = CreateProcessingRunResult{
 			Snapshot: params.Snapshot, SnapshotItems: append([]SelectionSnapshotItemRecord(nil), params.SnapshotItems...),
-			Run: params.Graph.Run, DetachedAssetIDs: append([]string(nil), params.CapturedAssetIDs...),
+			Run: params.Graph.Run, Steps: canonicalProcessingRunSteps(params.Graph.Steps),
+			DetachedAssetIDs:  append([]string(nil), params.CapturedAssetIDs...),
 			CollectionVersion: params.ExpectedVersion + 1,
 		}
 		return nil
@@ -1450,15 +1454,37 @@ WHERE id=$1 AND channel_account_id=$2 AND version=$3`, params.CollectionID, para
 	return createdResult, err
 }
 
-func findProcessingRunReplay(ctx context.Context, tx *sql.Tx, params CreateProcessingRunParams) (CreateProcessingRunResult, bool, error) {
+type processingRunReplayQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func (s *Store) FindProcessingRunReplay(ctx context.Context, params FindProcessingRunReplayParams) (CreateProcessingRunResult, bool, error) {
+	if params.IdempotencyKey == "" {
+		return CreateProcessingRunResult{}, false, nil
+	}
+	return findProcessingRunReplay(ctx, s.db, params)
+}
+
+func processingRunReplayParamsFromCreate(params CreateProcessingRunParams) FindProcessingRunReplayParams {
+	return FindProcessingRunReplayParams{
+		ChannelAccountID: params.ChannelAccountID, CollectionID: params.CollectionID,
+		ExpectedVersion: params.ExpectedVersion, IdempotencyKey: params.Graph.Run.IdempotencyKey,
+		RunType: params.Graph.Run.RunType, SelectedAssetIDs: append([]string(nil), params.CapturedAssetIDs...),
+		OptionsJSON: params.Snapshot.OptionSnapshotJSON, ParamsJSON: params.Graph.Run.ParamsJSON,
+		DeliveryJSON: params.Graph.Run.DeliveryJSON, CreatedViaChannel: params.Graph.Run.CreatedViaChannel,
+	}
+}
+
+func findProcessingRunReplay(ctx context.Context, query processingRunReplayQuerier, params FindProcessingRunReplayParams) (CreateProcessingRunResult, bool, error) {
 	var run AnalysisRunRecord
-	err := scanAnalysisRun(tx.QueryRowContext(ctx, `
+	err := scanAnalysisRun(query.QueryRowContext(ctx, `
 SELECT id, COALESCE(channel_account_id::text,''), selection_snapshot_id, run_type,
        status, version, COALESCE(idempotency_key,''), params, delivery,
        evidence_gate_state, COALESCE(created_via_channel_account_id::text,''),
        created_at, started_at, completed_at, cancel_requested_at, canceled_at, expires_at
 FROM analysis_runs
-WHERE channel_account_id=$1 AND idempotency_key=$2`, params.ChannelAccountID, params.Graph.Run.IdempotencyKey), &run)
+WHERE channel_account_id=$1 AND idempotency_key=$2`, params.ChannelAccountID, params.IdempotencyKey), &run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return CreateProcessingRunResult{}, false, nil
 	}
@@ -1466,7 +1492,7 @@ WHERE channel_account_id=$1 AND idempotency_key=$2`, params.ChannelAccountID, pa
 		return CreateProcessingRunResult{}, false, err
 	}
 	var snapshot SelectionSnapshotRecord
-	if err := tx.QueryRowContext(ctx, `
+	if err := query.QueryRowContext(ctx, `
 SELECT id, COALESCE(channel_account_id::text,''), COALESCE(source_collection_id::text,''),
        status, option_snapshot, diagnostics, COALESCE(created_via_channel_account_id::text,''),
        created_at, sealed_at
@@ -1478,7 +1504,7 @@ WHERE id=$1 AND channel_account_id=$2`, run.SelectionSnapshot, params.ChannelAcc
 	); err != nil {
 		return CreateProcessingRunResult{}, false, err
 	}
-	rows, err := tx.QueryContext(ctx, `
+	rows, err := query.QueryContext(ctx, `
 SELECT id, selection_snapshot_id, position, COALESCE(media_asset_id::text,''), kind,
        display_name, origin_snapshot, storage_snapshot, metadata_snapshot,
        status_at_selection, diagnostics
@@ -1504,11 +1530,70 @@ ORDER BY position ASC`, snapshot.ID)
 	if err := rows.Err(); err != nil {
 		return CreateProcessingRunResult{}, false, err
 	}
-	if !processingRunRequestMatches(params, run, snapshot, items) {
+	var launchPayload []byte
+	if err := query.QueryRowContext(ctx, `
+SELECT payload
+FROM analysis_run_events
+WHERE analysis_run_id=$1 AND event_type='analysis_run.created'
+ORDER BY version ASC, created_at ASC
+LIMIT 1`, run.ID).Scan(&launchPayload); err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	var launchFacts struct {
+		ExpectedCollectionVersion *int64 `json:"expected_collection_version"`
+		CollectionVersion         *int64 `json:"collection_version"`
+	}
+	if json.Unmarshal(launchPayload, &launchFacts) != nil {
+		return CreateProcessingRunResult{}, false, ErrProcessingRunIdempotencyConflict
+	}
+	legacyLaunch := launchFacts.ExpectedCollectionVersion == nil && launchFacts.CollectionVersion == nil
+	if !processingRunRequestMatches(params, run, snapshot, items, legacyLaunch) {
 		return CreateProcessingRunResult{}, false, ErrProcessingRunIdempotencyConflict
 	}
 	var collectionVersion int64
-	if err := tx.QueryRowContext(ctx, `SELECT version FROM collections WHERE id=$1 AND channel_account_id=$2`, params.CollectionID, params.ChannelAccountID).Scan(&collectionVersion); err != nil {
+	if legacyLaunch {
+		// Pre-upgrade events did not capture launch versions, so preserve their current-version replay contract.
+		if err := query.QueryRowContext(ctx, `SELECT version FROM collections WHERE id=$1 AND channel_account_id=$2`, params.CollectionID, params.ChannelAccountID).Scan(&collectionVersion); err != nil {
+			return CreateProcessingRunResult{}, false, err
+		}
+	} else {
+		if launchFacts.ExpectedCollectionVersion == nil || launchFacts.CollectionVersion == nil ||
+			*launchFacts.ExpectedCollectionVersion <= 0 || *launchFacts.CollectionVersion <= 0 ||
+			*launchFacts.ExpectedCollectionVersion != params.ExpectedVersion ||
+			*launchFacts.CollectionVersion != *launchFacts.ExpectedCollectionVersion+1 {
+			return CreateProcessingRunResult{}, false, ErrProcessingRunIdempotencyConflict
+		}
+		collectionVersion = *launchFacts.CollectionVersion
+	}
+	stepRows, err := query.QueryContext(ctx, `
+SELECT id, analysis_run_id, step_kind, worker_kind, status, attempt_no,
+       COALESCE(lease_owner,''), claimed_at, heartbeat_at, finalized_at, metadata, created_at
+FROM analysis_run_steps
+WHERE analysis_run_id=$1
+ORDER BY CASE step_kind
+           WHEN 'selection.transcription' THEN 0
+           WHEN 'report.analysis' THEN 1
+           WHEN 'deep_research.analysis' THEN 1
+           ELSE 2
+         END ASC,
+         created_at ASC, id ASC`, run.ID)
+	if err != nil {
+		return CreateProcessingRunResult{}, false, err
+	}
+	defer stepRows.Close()
+	steps := make([]AnalysisRunStepRecord, 0)
+	for stepRows.Next() {
+		var step AnalysisRunStepRecord
+		if err := stepRows.Scan(
+			&step.ID, &step.AnalysisRunID, &step.StepKind, &step.WorkerKind, &step.Status,
+			&step.AttemptNo, &step.LeaseOwner, &step.ClaimedAt, &step.HeartbeatAt,
+			&step.FinalizedAt, &step.MetadataJSON, &step.CreatedAt,
+		); err != nil {
+			return CreateProcessingRunResult{}, false, err
+		}
+		steps = append(steps, step)
+	}
+	if err := stepRows.Err(); err != nil {
 		return CreateProcessingRunResult{}, false, err
 	}
 	detached := make([]string, 0, len(items))
@@ -1516,37 +1601,108 @@ ORDER BY position ASC`, snapshot.ID)
 		detached = append(detached, item.MediaAssetID)
 	}
 	return CreateProcessingRunResult{
-		Snapshot: snapshot, SnapshotItems: items, Run: run, DetachedAssetIDs: detached,
+		Snapshot: snapshot, SnapshotItems: items, Run: run, Steps: steps, DetachedAssetIDs: detached,
 		CollectionVersion: collectionVersion, Replayed: true,
 	}, true, nil
 }
 
-func processingRunRequestMatches(params CreateProcessingRunParams, run AnalysisRunRecord, snapshot SelectionSnapshotRecord, items []SelectionSnapshotItemRecord) bool {
-	if run.RunType != params.Graph.Run.RunType || run.CreatedViaChannel != params.Graph.Run.CreatedViaChannel ||
-		snapshot.SourceCollectionID != params.CollectionID || snapshot.CreatedViaChannel != params.Snapshot.CreatedViaChannel ||
-		!jsonValuesEqual(run.ParamsJSON, params.Graph.Run.ParamsJSON) ||
-		!jsonValuesEqual(run.DeliveryJSON, params.Graph.Run.DeliveryJSON) ||
-		!jsonValuesEqual(snapshot.OptionSnapshotJSON, params.Snapshot.OptionSnapshotJSON) ||
-		len(items) != len(params.SnapshotItems) {
+func processingRunRequestMatches(params FindProcessingRunReplayParams, run AnalysisRunRecord, snapshot SelectionSnapshotRecord, items []SelectionSnapshotItemRecord, legacyLaunch bool) bool {
+	createdViaMatches := run.CreatedViaChannel == params.CreatedViaChannel && snapshot.CreatedViaChannel == params.CreatedViaChannel
+	paramsMatch := jsonValuesEqual(run.ParamsJSON, params.ParamsJSON)
+	if legacyLaunch {
+		createdViaMatches = createdViaMatches || (run.CreatedViaChannel == "" && snapshot.CreatedViaChannel == "")
+		paramsMatch = paramsMatch || jsonValuesEqual(run.ParamsJSON, []byte(`{}`))
+	}
+	if run.RunType != params.RunType || !createdViaMatches ||
+		snapshot.SourceCollectionID != params.CollectionID || !paramsMatch ||
+		!jsonValuesEqual(run.DeliveryJSON, params.DeliveryJSON) ||
+		!jsonValuesEqual(snapshot.OptionSnapshotJSON, params.OptionsJSON) ||
+		len(items) != len(params.SelectedAssetIDs) {
 		return false
 	}
-	expected := append([]SelectionSnapshotItemRecord(nil), params.SnapshotItems...)
-	sort.Slice(expected, func(i, j int) bool { return expected[i].Position < expected[j].Position })
 	for index := range items {
-		if items[index].Position != expected[index].Position || items[index].MediaAssetID != expected[index].MediaAssetID {
+		if items[index].Position != index || items[index].MediaAssetID != params.SelectedAssetIDs[index] {
 			return false
 		}
 	}
 	return true
 }
 
+func canonicalProcessingRunSteps(steps []AnalysisRunStepRecord) []AnalysisRunStepRecord {
+	canonical := append([]AnalysisRunStepRecord(nil), steps...)
+	for index := range canonical {
+		canonical[index].Status = withDefault(canonical[index].Status, "pending")
+		canonical[index].AttemptNo = positiveInt(canonical[index].AttemptNo)
+		canonical[index].MetadataJSON = jsonOrDefault(canonical[index].MetadataJSON, "{}")
+	}
+	sort.SliceStable(canonical, func(left, right int) bool {
+		leftRank := processingRunStepRank(canonical[left].StepKind)
+		rightRank := processingRunStepRank(canonical[right].StepKind)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
+		if !canonical[left].CreatedAt.Equal(canonical[right].CreatedAt) {
+			return canonical[left].CreatedAt.Before(canonical[right].CreatedAt)
+		}
+		return canonical[left].ID < canonical[right].ID
+	})
+	return canonical
+}
+
+func processingRunStepRank(stepKind string) int {
+	switch stepKind {
+	case "selection.transcription":
+		return 0
+	case "report.analysis", "deep_research.analysis":
+		return 1
+	default:
+		return 2
+	}
+}
+
 func jsonValuesEqual(left, right []byte) bool {
 	var leftValue any
 	var rightValue any
-	if json.Unmarshal(left, &leftValue) != nil || json.Unmarshal(right, &rightValue) != nil {
+	leftDecoder := json.NewDecoder(bytes.NewReader(left))
+	leftDecoder.UseNumber()
+	rightDecoder := json.NewDecoder(bytes.NewReader(right))
+	rightDecoder.UseNumber()
+	if leftDecoder.Decode(&leftValue) != nil || rightDecoder.Decode(&rightValue) != nil {
 		return false
 	}
-	return reflect.DeepEqual(leftValue, rightValue)
+	if leftDecoder.Decode(&struct{}{}) != io.EOF || rightDecoder.Decode(&struct{}{}) != io.EOF {
+		return false
+	}
+	return reflect.DeepEqual(canonicalJSONValue(leftValue), canonicalJSONValue(rightValue))
+}
+
+type semanticJSONNumber struct {
+	Rational string
+}
+
+func canonicalJSONValue(value any) any {
+	switch typed := value.(type) {
+	case json.Number:
+		rational, ok := new(big.Rat).SetString(string(typed))
+		if !ok {
+			return semanticJSONNumber{Rational: string(typed)}
+		}
+		return semanticJSONNumber{Rational: rational.RatString()}
+	case []any:
+		canonical := make([]any, len(typed))
+		for index := range typed {
+			canonical[index] = canonicalJSONValue(typed[index])
+		}
+		return canonical
+	case map[string]any:
+		canonical := make(map[string]any, len(typed))
+		for key, item := range typed {
+			canonical[key] = canonicalJSONValue(item)
+		}
+		return canonical
+	default:
+		return value
+	}
 }
 
 func (s *Store) ClaimAnalysisRunStep(ctx context.Context, analysisRunID, workerKind, stepKind, leaseOwner string, claimedAt time.Time) (AnalysisRunStepRecord, []AnalysisRunStepInputRecord, bool, error) {
@@ -2703,6 +2859,19 @@ LIMIT $2`, surfaceID, limit)
 func (s *Store) CreateExportJob(ctx context.Context, params CreateExportJobParams) (ExportJobRecord, error) {
 	job := params.Job
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if job.IdempotencyKey != "" {
+			existing := ExportJobRecord{}
+			err := scanExportJob(tx.QueryRowContext(ctx, exportJobSelect+`
+WHERE channel_account_id=$1 AND idempotency_key=$2
+FOR UPDATE`, job.ChannelAccountID, job.IdempotencyKey), &existing)
+			if err == nil {
+				job = existing
+				return nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+		}
 		if params.SourcePin.ID != "" {
 			if err := lockAvailableStoredObject(ctx, tx, params.SourcePin.StoredObjectID); err != nil {
 				return err
@@ -2766,6 +2935,13 @@ WHERE id=$2 AND storage_status='available' AND deleted_at IS NULL`,
 		}
 		return nil
 	})
+	return job, err
+}
+
+func (s *Store) GetExportJobByIdempotency(ctx context.Context, channelAccountID, idempotencyKey string) (ExportJobRecord, error) {
+	var job ExportJobRecord
+	err := scanExportJob(s.db.QueryRowContext(ctx, exportJobSelect+`
+WHERE channel_account_id=$1 AND idempotency_key=$2`, channelAccountID, idempotencyKey), &job)
 	return job, err
 }
 
@@ -3236,7 +3412,7 @@ func (s *Store) ClaimExportDelivery(ctx context.Context, params ClaimExportDeliv
 	err := scanExportDelivery(s.db.QueryRowContext(ctx, `
 UPDATE export_deliveries
 SET status='claimed', version=version+1, attempt_no=attempt_no+1,
-    attempt_token=$4, lease_owner=$5, lease_expires_at=$6, next_attempt_at=NULL, failure_code=NULL
+	    attempt_token=$4, lease_owner=$5, lease_expires_at=LEAST(expires_at, $6), next_attempt_at=NULL, failure_code=NULL
 WHERE export_job_id=$1 AND channel_account_id=$2 AND channel=$3
   AND status IN ('pending','failed') AND attempt_no < max_attempts
   AND expires_at > $7 AND (next_attempt_at IS NULL OR next_attempt_at <= $7)
@@ -3250,6 +3426,25 @@ RETURNING id, export_job_id, channel_account_id, channel, status, version,
 		return ExportDeliveryRecord{}, false, nil
 	}
 	return delivery, err == nil, err
+}
+
+func (s *Store) HeartbeatExportDelivery(ctx context.Context, params HeartbeatExportDeliveryParams) (ExportDeliveryRecord, error) {
+	var delivery ExportDeliveryRecord
+	err := scanExportDelivery(s.db.QueryRowContext(ctx, `
+UPDATE export_deliveries
+SET version=version+1,
+	    lease_expires_at=LEAST(expires_at, GREATEST(lease_expires_at, $7))
+WHERE export_job_id=$1 AND channel_account_id=$2 AND id=$3
+  AND lease_owner=$4 AND attempt_token=$5 AND status='claimed'
+  AND lease_expires_at IS NOT NULL AND lease_expires_at > $6
+  AND expires_at > $6
+RETURNING id, export_job_id, channel_account_id, channel, status, version,
+          attempt_no, COALESCE(attempt_token,''), COALESCE(lease_owner,''),
+          lease_expires_at, next_attempt_at, max_attempts, expires_at, delivered_at,
+          COALESCE(failure_code,''), created_at`, params.ExportJobID,
+		params.ChannelAccountID, params.ExportDeliveryID, params.LeaseOwner, params.AttemptToken,
+		params.HeartbeatAt, params.LeaseExpiresAt), &delivery)
+	return delivery, err
 }
 
 func (s *Store) FinalizeExportDelivery(ctx context.Context, params FinalizeExportDeliveryParams) (ExportDeliveryRecord, error) {
@@ -3277,8 +3472,9 @@ SET status=CASE
 	    delivered_at=CASE WHEN $6='delivered' THEN $8 ELSE delivered_at END,
 	    failure_code=CASE WHEN $6='failed' THEN NULLIF($7,'') ELSE NULL END
 WHERE export_job_id=$1 AND channel_account_id=$2 AND id=$3
-  AND lease_owner=$4 AND attempt_token=$5 AND status='claimed'
-  AND lease_expires_at > $8
+	  AND lease_owner=$4 AND attempt_token=$5 AND status='claimed'
+	  AND lease_expires_at > $8
+	  AND ($6 <> 'delivered' OR expires_at > $8)
 RETURNING id, export_job_id, channel_account_id, channel, status, version,
           attempt_no, COALESCE(attempt_token,''), COALESCE(lease_owner,''),
           lease_expires_at, next_attempt_at, max_attempts, expires_at, delivered_at,

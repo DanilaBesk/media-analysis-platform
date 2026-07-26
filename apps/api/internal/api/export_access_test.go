@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/danila/media-analysis-platform/apps/api/internal/storage"
 	targetstore "github.com/danila/media-analysis-platform/apps/api/internal/storage/target"
 )
 
@@ -207,6 +209,39 @@ func TestCreateExportJobScopesImplicitIdempotencyToOneUserAction(t *testing.T) {
 	secondKey := store.createParams[1].Job.IdempotencyKey
 	if firstKey == "" || secondKey == "" || firstKey == secondKey {
 		t.Fatalf("implicit keys = %q, %q; each explicit action must have a distinct fallback key", firstKey, secondKey)
+	}
+}
+
+func TestCreateExportJobReplaysBeforeMutableSourceLookupAndRejectsMismatch(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
+	store := &fakeTargetRuntimeStore{
+		failMethod: "GetMediaAsset",
+		failErr:    errors.New("mutable source must not be read during replay"),
+		exportJob: targetstore.ExportJobRecord{
+			ID: "export-original", ChannelAccountID: "channel-account-1", MediaAssetID: "media-1",
+			Operation: "video_to_audio", DeliveryChannel: "telegram",
+			VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), Status: "queued", Version: 1,
+			IdempotencyKey: "export-action-1", MaxAttempts: 3, ProgressJSON: []byte(`{}`), CreatedAt: now,
+		},
+	}
+	service := NewTargetRuntimeService(store)
+	request := TargetCreateExportJobRequest{
+		ChannelAccountID: "channel-account-1", MediaAssetID: "media-1", Operation: "video_to_audio",
+		Variant: []byte(`{"audio_bitrate_kbps":192}`), DeliveryChannel: "telegram", IdempotencyKey: "export-action-1",
+	}
+
+	replayed, err := service.CreateExportJob(context.Background(), request)
+	if err != nil {
+		t.Fatalf("CreateExportJob(replay) error = %v", err)
+	}
+	if replayed.ExportJobID != "export-original" {
+		t.Fatalf("CreateExportJob(replay) = %#v", replayed)
+	}
+
+	request.Variant = []byte(`{"audio_bitrate_kbps":320}`)
+	if _, err := service.CreateExportJob(context.Background(), request); !errors.Is(err, storage.ErrExportJobConflict) {
+		t.Fatalf("CreateExportJob(mismatched replay) error = %v, want conflict", err)
 	}
 }
 

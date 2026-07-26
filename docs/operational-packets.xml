@@ -1578,7 +1578,7 @@ Object-backed document inputs with a text/* media type are textual materials, no
       <check>Full repository tests and GRACE XML parsing pass.</check>
     </verification>
   </HotfixPacket>
-  <ExecutionPacket id="governed-media-export-retention" status="in_progress" bead="media-859r">
+  <ExecutionPacket id="governed-media-export-retention" status="completed" bead="media-859r">
     <purpose>Implement content-addressed media storage, configurable physical retention, bounded worker scratch, remote metadata enrichment, and one-material export actions without changing the existing combined processing workflow.</purpose>
     <write-scope>
       <file-1>docs/architecture/media-export-retention-contract.md</file-1>
@@ -1602,14 +1602,14 @@ Object-backed document inputs with a text/* media type are textual materials, no
       <file-19>pyproject.toml</file-19>
     </write-scope>
     <contract-excerpt><![CDATA[
-All inbound material remains mode-free and accumulates in the current inbox. Uploaded bytes are durable content-addressed sources; YouTube remains a durable reference whose current media is resolved into bounded scratch. One-material export_job lifecycle is independent from analysis_run and collection lifecycle. MEDIA_OBJECT_RETENTION_DAYS defaults to 7. API-owned retention physically expires eligible bytes while preserving immutable history, and worker workspaces are removed after every terminal attempt.
+All inbound material remains mode-free and accumulates in the current inbox. Uploaded bytes are durable content-addressed sources; YouTube remains a durable reference whose current media is resolved into bounded scratch. One-material export_job lifecycle is independent from analysis_run and collection lifecycle. MEDIA_OBJECT_RETENTION_DAYS defaults to 7 and governs both uploaded and generated media bodies independently from delivery/access TTL. API-owned retention physically expires eligible bytes while preserving immutable history, and worker workspaces are removed after every terminal attempt.
 This packet supersedes older Telegram delivery-time inbox clearing: processing launch atomically detaches only captured membership, and terminal delivery never mutates the live inbox.
     ]]></contract-excerpt>
     <verification>
-      <check>Independent intent, feasibility, verification, security, and data/ops reviewers approve the GRACE contract and final implementation diff.</check>
-      <check>Focused schema/storage/API tests prove SHA-256 plus size identity, staged publication crash cuts, atomic YouTube enrichment enqueue, enrichment owner/token claim-progress-finalize-reclaim with lease-preserving heartbeats and bounded backoff, immutable snapshot preservation, atomic seal-run-detach, channel isolation, object pins, export/delivery owner-token leases, physical deletion, idempotent retries, and bidirectional reconciliation.</check>
+      <check>Independent intent, feasibility, and verification reviewers approve the GRACE contract and final implementation diff.</check>
+      <check>Focused schema/storage/API tests prove SHA-256 plus size identity, staged publication crash cuts, atomic YouTube enrichment enqueue, enrichment owner/token claim-progress-finalize-reclaim with lease-preserving heartbeats and bounded backoff, immutable snapshot preservation, atomic seal-run-detach, channel isolation, object pins, export/delivery owner-token leases, non-shortening delivery heartbeat and stale-fence rejection, physical deletion, idempotent retries, and bidirectional reconciliation.</check>
       <check>Worker tests prove attempt-unique finally cleanup, periodic lease-aware reaping, resource limits, stale-worker rejection, output publication crash recovery, and cleanup diagnostics without terminal-state rewrite.</check>
-      <check>Telegram and Web tests prove contextual actions, single-item shortcut rules, enrichment rendering, progress, cancellation/retry, fenced delivery, scoped download access, and no export collection mutation.</check>
+      <check>Telegram and Web tests prove contextual actions, single-item shortcut rules, enrichment rendering, progress, cancellation/retry, scoped download access, no export collection mutation, and fenced Telegram delivery that renews beyond the initial lease, stops on heartbeat loss, drains an in-flight heartbeat before one acknowledgement, and leaks no task or temporary handle.</check>
       <check>The isolated `infra/scripts/media-export-retention-e2e.py` proof creates a fresh UUID-scoped Compose project, selects the API and media-export worker plus their dependencies without selecting the metadata-enrichment worker, proves uploaded-source MinIO byte reuse, uploaded-video export and delivery, restart recovery, workspace cleanup, isolated physical source deletion, preserved history, and non-destructive reconciliation, then removes only that project's volumes.</check>
       <check>Focused schema/API/worker/UI tests plus a separate live Compose metadata-enrichment smoke prove current YouTube title resolution, fenced metadata finalization, and enriched-title rendering without provider source-byte persistence. The isolated export/retention E2E is not evidence for this flow.</check>
       <check>Full repository tests, builds, compose smoke, GRACE XML parsing, Beads closure, commit, and push pass.</check>

@@ -334,11 +334,19 @@ class TelegramInboxGateway:
             export_job_id=export_job_id,
         )
 
-    def claim_export_delivery(self, *, channel_identity: JsonObject, export_job_id: str, lease_owner: str) -> JsonObject:
+    def claim_export_delivery(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        lease_owner: str,
+        lease_seconds: int = 120,
+    ) -> JsonObject:
         return self.api_client.claim_export_delivery(
             channel_account_id=self._channel_account_id(channel_identity),
             export_job_id=export_job_id,
             lease_owner=lease_owner,
+            lease_seconds=lease_seconds,
         )
 
     def acknowledge_export_delivery(
@@ -351,6 +359,24 @@ class TelegramInboxGateway:
             export_delivery_id=str(delivery["export_delivery_id"]),
             lease_owner=str(claim["lease_owner"]),
             attempt_token=str(claim["attempt_token"]),
+        )
+
+    def heartbeat_export_delivery(
+        self,
+        *,
+        channel_identity: JsonObject,
+        export_job_id: str,
+        claim: JsonObject,
+        lease_seconds: int = 120,
+    ) -> JsonObject:
+        delivery = claim["delivery"]
+        return self.api_client.heartbeat_export_delivery(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+            export_delivery_id=str(delivery["export_delivery_id"]),
+            lease_owner=str(claim["lease_owner"]),
+            attempt_token=str(claim["attempt_token"]),
+            lease_seconds=lease_seconds,
         )
 
     def fail_export_delivery(
@@ -564,7 +590,6 @@ class TelegramInboxGateway:
             items=[{"media_asset_id": media_asset_id, "position": index} for index, media_asset_id in enumerate(item_ids)],
             run_type=run_type,
             option_snapshot={"channel": "telegram", "surface": "current_materials"},
-            delivery={"strategy": "polling"},
         )
 
     def find_reusable_transcript_for_collection(

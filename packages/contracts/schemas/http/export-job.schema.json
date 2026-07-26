@@ -170,6 +170,18 @@
       },
       "additionalProperties": false
     },
+    "heartbeatExportDeliveryRequest": {
+      "type": "object",
+      "required": ["channel_account_id", "export_delivery_id", "lease_owner", "attempt_token"],
+      "properties": {
+        "channel_account_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "export_delivery_id": {"$ref": "../common/enums.schema.json#/$defs/uuid"},
+        "lease_owner": {"type": "string", "minLength": 1, "maxLength": 160},
+        "attempt_token": {"type": "string", "minLength": 16, "maxLength": 160},
+        "lease_seconds": {"type": "integer", "minimum": 1, "maximum": 900}
+      },
+      "additionalProperties": false
+    },
     "mutateExportDeliveryRequest": {
       "type": "object",
       "required": ["channel_account_id", "export_delivery_id", "lease_owner", "attempt_token"],

@@ -1554,7 +1554,12 @@
         "summary": "Atomically seal selected collection items, create a processing run, and detach the captured membership.",
         "parameters": [
           {"$ref": "#/components/parameters/CollectionId"},
-          {"$ref": "#/components/parameters/IdempotencyKey"}
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {"$ref": "../schemas/common/enums.schema.json#/$defs/idempotencyKey"}
+          }
         ],
         "requestBody": {
           "required": true,
@@ -1697,6 +1702,24 @@
         "responses": {
           "200": {
             "description": "Delivery claim and attempt fence.",
+            "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportDeliveryClaim"}}}
+          },
+          "409": {"$ref": "#/components/responses/ErrorEnvelope"}
+        }
+      }
+    },
+    "/v1/export-jobs/{export_job_id}/deliveries/heartbeat": {
+      "post": {
+        "operationId": "heartbeatExportDelivery",
+        "summary": "Extend the current export delivery lease through its attempt fence.",
+        "parameters": [{"$ref": "#/components/parameters/ExportJobId"}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/heartbeatExportDeliveryRequest"}}}
+        },
+        "responses": {
+          "200": {
+            "description": "Delivery claim with an extended lease.",
             "content": {"application/json": {"schema": {"$ref": "../schemas/http/export-job.schema.json#/$defs/exportDeliveryClaim"}}}
           },
           "409": {"$ref": "#/components/responses/ErrorEnvelope"}

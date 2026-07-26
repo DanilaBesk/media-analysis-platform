@@ -201,7 +201,8 @@
           "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
         },
         "run_type": {
-          "$ref": "../common/enums.schema.json#/$defs/runType"
+          "type": "string",
+          "enum": ["transcription", "report", "deep_research"]
         },
         "selected_item_ids": {
           "type": "array",
@@ -221,22 +222,166 @@
       },
       "additionalProperties": false
     },
+    "analysisRunStepLaunch": {
+      "type": "object",
+      "required": [
+        "analysis_run_step_id",
+        "analysis_run_id",
+        "step_kind",
+        "worker_kind",
+        "status",
+        "attempt_no"
+      ],
+      "properties": {
+        "analysis_run_step_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "step_kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker_kind": {
+          "$ref": "../common/enums.schema.json#/$defs/workerKind"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/analysisRunStepStatus"
+        },
+        "attempt_no": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "claimed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "heartbeat_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "finalized_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
+    "analysisRunLaunch": {
+      "type": "object",
+      "required": [
+        "analysis_run_id",
+        "channel_account_id",
+        "selection_snapshot_id",
+        "run_type",
+        "status",
+        "version",
+        "params",
+        "delivery",
+        "evidence_gate_state",
+        "analysis_run_steps",
+        "created_at"
+      ],
+      "properties": {
+        "analysis_run_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "channel_account_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "selection_snapshot_id": {
+          "$ref": "../common/enums.schema.json#/$defs/uuid"
+        },
+        "run_type": {
+          "$ref": "../common/enums.schema.json#/$defs/runType"
+        },
+        "status": {
+          "$ref": "../common/enums.schema.json#/$defs/analysisRunStatus"
+        },
+        "version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
+        },
+        "params": {
+          "type": "object"
+        },
+        "delivery": {
+          "$ref": "./analysis-run.schema.json#/$defs/deliveryPreference"
+        },
+        "evidence_gate_state": {
+          "type": "string",
+          "enum": ["not_required", "waiting", "passed", "failed"]
+        },
+        "analysis_run_steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/analysisRunStepLaunch"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "./artifact.schema.json#/$defs/artifactSummary"
+          }
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "$ref": "./diagnostic.schema.json#/$defs/diagnosticSummary"
+          }
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "started_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "completed_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "cancel_requested_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "canceled_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "expires_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      },
+      "additionalProperties": false
+    },
     "processingRunResponse": {
       "type": "object",
       "required": [
-        "analysis_run",
         "selection_snapshot",
-        "collection"
+        "analysis_run",
+        "detached_media_asset_ids",
+        "collection_version"
       ],
       "properties": {
         "analysis_run": {
-          "$ref": "./analysis-run.schema.json#/$defs/analysisRun"
+          "$ref": "#/$defs/analysisRunLaunch"
         },
         "selection_snapshot": {
           "$ref": "./selection-snapshot.schema.json#/$defs/selectionSnapshot"
         },
-        "collection": {
-          "$ref": "#/$defs/collection"
+        "detached_media_asset_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "../common/enums.schema.json#/$defs/uuid"
+          }
+        },
+        "collection_version": {
+          "$ref": "../common/pagination.schema.json#/$defs/optimisticVersion"
         }
       },
       "additionalProperties": false

@@ -7,6 +7,7 @@ from pathlib import Path
 import runpy
 import sys
 import tempfile
+import threading
 from types import SimpleNamespace
 from typing import Any
 import warnings
@@ -1088,6 +1089,241 @@ async def test_export_delivery_claims_then_acks_and_records_send_failures() -> N
         await failing_app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
     assert failing_gateway.failures[0]["failure_code"] == "telegram_delivery_failed"
     assert failing_files[0].closed
+
+
+@pytest.mark.asyncio
+async def test_export_delivery_heartbeats_repeatedly_until_blocked_send_finishes() -> None:
+    events: list[str] = []
+
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.claims: list[dict[str, Any]] = []
+            self.heartbeats: list[dict[str, Any]] = []
+            self.acks: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.claims.append(kwargs)
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+
+        def heartbeat_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.heartbeats.append(kwargs)
+            events.append("heartbeat")
+            return kwargs["claim"]
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            events.append("ack")
+            return {}
+
+        def fail_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("successful delivery must not be failed")
+
+    class BlockingBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.send_started = asyncio.Event()
+            self.release_send = asyncio.Event()
+
+        async def send_document(self, chat_id: int, document: Any, **kwargs: Any) -> SimpleNamespace:
+            events.append("send_started")
+            self.send_started.set()
+            await self.release_send.wait()
+            result = await super().send_document(chat_id, document, **kwargs)
+            events.append("send_finished")
+            return result
+
+    gateway = ExportGateway()
+    bot = BlockingBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    assert app.export_delivery_lease_seconds == 120
+    assert app.export_delivery_heartbeat_interval_seconds == 30.0
+    sleep_started: asyncio.Queue[float] = asyncio.Queue()
+    sleep_releases: asyncio.Queue[None] = asyncio.Queue()
+    sleep_cancellations = 0
+
+    async def controlled_sleep(seconds: float) -> None:
+        nonlocal sleep_cancellations
+        await sleep_started.put(seconds)
+        try:
+            await sleep_releases.get()
+        except asyncio.CancelledError:
+            sleep_cancellations += 1
+            raise
+
+    app._sleep = controlled_sleep
+    app._download_artifact_file = lambda _url, _size: tempfile.TemporaryFile(mode="w+b")  # type: ignore[method-assign]
+
+    delivery_task = asyncio.create_task(
+        app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+    )
+    await bot.send_started.wait()
+    simulated_elapsed = 0.0
+    for _ in range(5):
+        interval = await sleep_started.get()
+        assert interval == 30.0
+        simulated_elapsed += interval
+        await sleep_releases.put(None)
+    assert await sleep_started.get() == 30.0
+
+    assert simulated_elapsed > app.export_delivery_lease_seconds
+    assert len(gateway.heartbeats) == 5
+    assert gateway.acks == []
+    bot.release_send.set()
+    await delivery_task
+
+    assert gateway.claims[0]["lease_seconds"] == 120
+    assert all(call["lease_seconds"] == 120 for call in gateway.heartbeats)
+    assert events.index("ack") > events.index("send_finished")
+    assert sleep_cancellations == 1
+
+
+@pytest.mark.asyncio
+async def test_export_delivery_stops_without_ack_when_heartbeat_loses_the_fence() -> None:
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.acks: list[dict[str, Any]] = []
+            self.failures: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+
+        def heartbeat_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("stale delivery claim")
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            return {}
+
+        def fail_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.failures.append(kwargs)
+            return {}
+
+    class BlockingBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.send_started = asyncio.Event()
+            self.send_cancelled = asyncio.Event()
+
+        async def send_document(self, chat_id: int, document: Any, **kwargs: Any) -> SimpleNamespace:
+            self.send_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.send_cancelled.set()
+                raise
+            return await super().send_document(chat_id, document, **kwargs)
+
+    gateway = ExportGateway()
+    bot = BlockingBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    assert app.export_delivery_heartbeat_interval_seconds == 30.0
+    heartbeat_due = asyncio.Event()
+
+    async def controlled_sleep(_seconds: float) -> None:
+        await heartbeat_due.wait()
+
+    app._sleep = controlled_sleep
+    downloaded_file = tempfile.TemporaryFile(mode="w+b")
+    app._download_artifact_file = lambda _url, _size: downloaded_file  # type: ignore[method-assign]
+    loop_errors: list[dict[str, Any]] = []
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+    try:
+        delivery_task = asyncio.create_task(
+            app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+        )
+        await bot.send_started.wait()
+        heartbeat_due.set()
+
+        with pytest.raises(RuntimeError, match="stale delivery claim"):
+            await delivery_task
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    assert bot.send_cancelled.is_set()
+    assert downloaded_file.closed
+    assert gateway.acks == []
+    assert gateway.failures[0]["failure_code"] == "telegram_delivery_failed"
+    assert loop_errors == []
+
+
+@pytest.mark.asyncio
+async def test_export_delivery_waits_for_inflight_heartbeat_before_ack() -> None:
+    events: list[str] = []
+    heartbeat_started = threading.Event()
+    release_heartbeat = threading.Event()
+
+    class ExportGateway:
+        def __init__(self) -> None:
+            self.acks: list[dict[str, Any]] = []
+            self.failures: list[dict[str, Any]] = []
+
+        def claim_export_delivery(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"delivery": {"export_delivery_id": "delivery-1"}, "lease_owner": "adapter", "attempt_token": "t" * 16}
+
+        def get_internal_export_download(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"filename": "export.mp4", "url": "http://minio/export.mp4", "size_bytes": 12}
+
+        def heartbeat_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            events.append("heartbeat_started")
+            heartbeat_started.set()
+            assert release_heartbeat.wait(timeout=5)
+            events.append("heartbeat_returned")
+            return kwargs["claim"]
+
+        def acknowledge_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.acks.append(kwargs)
+            events.append("ack")
+            return {}
+
+        def fail_export_delivery(self, **kwargs: Any) -> dict[str, Any]:
+            self.failures.append(kwargs)
+            return {}
+
+    class ControlledBot(FakeBot):
+        def __init__(self) -> None:
+            super().__init__()
+            self.send_started = asyncio.Event()
+            self.release_send = asyncio.Event()
+            self.send_finished = asyncio.Event()
+
+        async def send_document(self, chat_id: int, document: Any, **kwargs: Any) -> SimpleNamespace:
+            self.send_started.set()
+            await self.release_send.wait()
+            result = await super().send_document(chat_id, document, **kwargs)
+            events.append("send_finished")
+            self.send_finished.set()
+            return result
+
+    gateway = ExportGateway()
+    bot = ControlledBot()
+    app = TelegramInboxApp(SimpleNamespace(allowed_user_ids=set()), gateway, bot=bot)  # type: ignore[arg-type]
+    heartbeat_due = asyncio.Event()
+    app._sleep = lambda _seconds: heartbeat_due.wait()  # type: ignore[assignment]
+    app._download_artifact_file = lambda _url, _size: tempfile.TemporaryFile(mode="w+b")  # type: ignore[method-assign]
+
+    delivery_task = asyncio.create_task(
+        app._deliver_export_result(channel_identity=channel_identity(), export_job_id="job-1", chat_id=10)
+    )
+    await bot.send_started.wait()
+    heartbeat_due.set()
+    assert await asyncio.to_thread(heartbeat_started.wait, 5)
+    bot.release_send.set()
+    await bot.send_finished.wait()
+    release_heartbeat.set()
+    await delivery_task
+
+    assert events.index("heartbeat_returned") < events.index("ack")
+    assert len(gateway.acks) == 1
+    assert gateway.failures == []
 
 
 @pytest.mark.asyncio

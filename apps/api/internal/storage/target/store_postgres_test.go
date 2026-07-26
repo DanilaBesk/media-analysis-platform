@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -467,8 +468,35 @@ id, channel_account_id, origin_type, origin_ref, kind, display_name, status, met
 		if created.Replayed || created.Run.ID != first.Graph.Run.ID || created.Snapshot.ID != first.Snapshot.ID || created.CollectionVersion != 2 {
 			t.Fatalf("created processing run = %#v", created)
 		}
+		if len(created.Steps) != 1 || created.Steps[0].AnalysisRunID != first.Graph.Run.ID || created.Steps[0].AttemptNo != 1 {
+			t.Fatalf("created processing steps = %#v", created.Steps)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE collections SET version=99 WHERE id=$1`, collectionID); err != nil {
+			t.Fatalf("advance collection after processing launch: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE media_assets SET status='deleted', deleted_at=$2 WHERE id=$1`, assetID, now.Add(time.Second)); err != nil {
+			t.Fatalf("delete mutable processing source after launch: %v", err)
+		}
 
 		replay := processingRunReplayParams(now.Add(time.Second), collectionID, assetID, "00000000-0000-4000-8000-000000001112", "00000000-0000-4000-8000-000000001113", "00000000-0000-4000-8000-000000001114", "transcription")
+		preflight, found, err := store.FindProcessingRunReplay(ctx, processingRunReplayParamsFromCreate(replay))
+		if err != nil {
+			t.Fatalf("FindProcessingRunReplay() error = %v", err)
+		}
+		if !found || !preflight.Replayed || preflight.CollectionVersion != 2 || len(preflight.Steps) != 1 || preflight.Steps[0].ID != first.Graph.Steps[0].ID {
+			t.Fatalf("preflight processing replay = %#v, found=%v", preflight, found)
+		}
+		if !strings.Contains(string(preflight.Snapshot.OptionSnapshotJSON), "9007199254740993") ||
+			!strings.Contains(string(preflight.Run.ParamsJSON), "9007199254740993") {
+			t.Fatalf("large integer was not preserved in replay: options=%s params=%s", preflight.Snapshot.OptionSnapshotJSON, preflight.Run.ParamsJSON)
+		}
+		freshStep := created.Steps[0]
+		replayedStep := preflight.Steps[0]
+		freshStep.CreatedAt = freshStep.CreatedAt.UTC()
+		replayedStep.CreatedAt = replayedStep.CreatedAt.UTC()
+		if !reflect.DeepEqual(replayedStep, freshStep) {
+			t.Fatalf("fresh/replay processing steps differ: fresh=%#v replay=%#v", created.Steps[0], preflight.Steps[0])
+		}
 		replayed, err := store.CreateProcessingRun(ctx, replay)
 		if err != nil {
 			t.Fatalf("CreateProcessingRun(replay) error = %v", err)
@@ -478,10 +506,62 @@ id, channel_account_id, origin_type, origin_ref, kind, display_name, status, met
 		}
 		assertSQLCount(t, ctx, db, `SELECT count(*) FROM analysis_runs WHERE channel_account_id=$1 AND idempotency_key=$2`, 1, targetTestTelegramChannelID, "telegram:process:replay")
 
-		mismatch := processingRunReplayParams(now.Add(2*time.Second), collectionID, assetID, "00000000-0000-4000-8000-000000001122", "00000000-0000-4000-8000-000000001123", "00000000-0000-4000-8000-000000001124", "report")
-		if _, err := store.CreateProcessingRun(ctx, mismatch); !errors.Is(err, ErrProcessingRunIdempotencyConflict) {
-			t.Fatalf("CreateProcessingRun(mismatch) error = %v, want %v", err, ErrProcessingRunIdempotencyConflict)
+		baseMismatch := processingRunReplayParamsFromCreate(replay)
+		mismatches := map[string]func(*FindProcessingRunReplayParams){
+			"expected version": func(params *FindProcessingRunReplayParams) { params.ExpectedVersion++ },
+			"selected ids": func(params *FindProcessingRunReplayParams) {
+				params.SelectedAssetIDs = []string{"00000000-0000-4000-8000-000000009999"}
+			},
+			"run type": func(params *FindProcessingRunReplayParams) { params.RunType = "report" },
+			"options":  func(params *FindProcessingRunReplayParams) { params.OptionsJSON = []byte(`{"language":"en"}`) },
+			"params":   func(params *FindProcessingRunReplayParams) { params.ParamsJSON = []byte(`{"language":"en"}`) },
+			"large integer": func(params *FindProcessingRunReplayParams) {
+				params.OptionsJSON = []byte(`{"n":9007199254740992,"scale":1000}`)
+				params.ParamsJSON = []byte(`{"n":9007199254740992,"scale":1000}`)
+			},
+			"delivery": func(params *FindProcessingRunReplayParams) {
+				params.DeliveryJSON = []byte(`{"strategy":"webhook","webhook":{"url":"https://example.test"}}`)
+			},
+			"created via": func(params *FindProcessingRunReplayParams) {
+				params.CreatedViaChannel = "00000000-0000-4000-8000-000000009999"
+			},
 		}
+		for name, mutate := range mismatches {
+			t.Run(name, func(t *testing.T) {
+				mismatch := baseMismatch
+				mismatch.SelectedAssetIDs = append([]string(nil), baseMismatch.SelectedAssetIDs...)
+				mutate(&mismatch)
+				if _, _, err := store.FindProcessingRunReplay(ctx, mismatch); !errors.Is(err, ErrProcessingRunIdempotencyConflict) {
+					t.Fatalf("FindProcessingRunReplay(mismatch) error = %v, want %v", err, ErrProcessingRunIdempotencyConflict)
+				}
+			})
+		}
+
+		if _, err := db.ExecContext(ctx, `UPDATE analysis_run_events SET payload='{"collection_membership":"detached_at_launch"}'::jsonb WHERE id=$1`, first.Graph.Event.ID); err != nil {
+			t.Fatalf("seed legacy processing event: %v", err)
+		}
+		if _, err := db.ExecContext(ctx, `UPDATE analysis_runs SET params='{}'::jsonb WHERE id=$1`, first.Graph.Run.ID); err != nil {
+			t.Fatalf("seed legacy processing params: %v", err)
+		}
+		legacyReplay, found, err := store.FindProcessingRunReplay(ctx, processingRunReplayParamsFromCreate(replay))
+		if err != nil || !found {
+			t.Fatalf("FindProcessingRunReplay(legacy) found=%v error=%v", found, err)
+		}
+		if !legacyReplay.Replayed || legacyReplay.Run.ID != first.Graph.Run.ID || legacyReplay.Snapshot.ID != first.Snapshot.ID || legacyReplay.CollectionVersion != 99 {
+			t.Fatalf("legacy processing replay = %#v", legacyReplay)
+		}
+		legacyMismatch := processingRunReplayParamsFromCreate(replay)
+		legacyMismatch.OptionsJSON = []byte(`{"language":"en"}`)
+		if _, _, err := store.FindProcessingRunReplay(ctx, legacyMismatch); !errors.Is(err, ErrProcessingRunIdempotencyConflict) {
+			t.Fatalf("FindProcessingRunReplay(legacy mismatch) error = %v, want %v", err, ErrProcessingRunIdempotencyConflict)
+		}
+		legacyCreated, err := store.CreateProcessingRun(ctx, replay)
+		if err != nil || !legacyCreated.Replayed || legacyCreated.Run.ID != first.Graph.Run.ID || legacyCreated.CollectionVersion != 99 {
+			t.Fatalf("CreateProcessingRun(legacy replay) = %#v, error=%v", legacyCreated, err)
+		}
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM analysis_runs WHERE channel_account_id=$1 AND idempotency_key=$2`, 1, targetTestTelegramChannelID, "telegram:process:replay")
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM selection_snapshots WHERE id=$1`, 1, first.Snapshot.ID)
+		assertSQLCount(t, ctx, db, `SELECT count(*) FROM collection_items WHERE collection_id=$1 AND removed_at IS NULL`, 0, collectionID)
 	})
 
 	t.Run("selection snapshots are immutable and preserve copied item facts", func(t *testing.T) {
@@ -1262,6 +1342,158 @@ func TestFinalizeExportDeliveryRejectsExpiredLeasePostgres(t *testing.T) {
 	}
 }
 
+func TestHeartbeatExportDeliveryExtendsLeaseForAckAndRejectsStaleOrExpiredFencesPostgres(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	const accountID = "21000000-0000-4000-8000-000000000001"
+	const assetID = "21000000-0000-4000-8000-000000000002"
+	const liveJobID = "21000000-0000-4000-8000-000000000003"
+	const liveDeliveryID = "21000000-0000-4000-8000-000000000004"
+	const expiredLeaseJobID = "21000000-0000-4000-8000-000000000005"
+	const expiredLeaseDeliveryID = "21000000-0000-4000-8000-000000000006"
+	const expiredDeliveryJobID = "21000000-0000-4000-8000-000000000007"
+	const expiredDeliveryID = "21000000-0000-4000-8000-000000000008"
+	const cappedClaimJobID = "21000000-0000-4000-8000-000000000009"
+	const cappedClaimDeliveryID = "21000000-0000-4000-8000-000000000010"
+	now := time.Now().UTC().Truncate(time.Second)
+
+	seedStatements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO channel_accounts (id, channel, external_account_ref, status) VALUES ($1,'telegram','heartbeat-delivery','active')`, []any{accountID}},
+		{`INSERT INTO media_assets (id, channel_account_id, origin_type, origin_ref, kind, display_name, status) VALUES ($1,$2,'url','https://youtu.be/heartbeat','url','Heartbeat','available')`, []any{assetID, accountID}},
+		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version, max_attempts, progress) VALUES
+($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}'),
+($4,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}'),
+($5,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}')`, []any{liveJobID, accountID, assetID, expiredLeaseJobID, expiredDeliveryJobID}},
+		{`INSERT INTO export_deliveries (id, export_job_id, channel_account_id, channel, status, version, attempt_no, attempt_token, lease_owner, lease_expires_at, max_attempts, expires_at) VALUES
+($1,$2,$3,'telegram','claimed',2,1,'attempt-token-live','telegram-adapter',$4,5,$5),
+($6,$7,$3,'telegram','claimed',2,1,'attempt-token-expired','telegram-adapter',$8,5,$5),
+($9,$10,$3,'telegram','claimed',2,1,'attempt-token-delivery-expired','telegram-adapter',$11,5,$12)`, []any{
+			liveDeliveryID, liveJobID, accountID, now.Add(time.Minute), now.Add(time.Hour),
+			expiredLeaseDeliveryID, expiredLeaseJobID, now.Add(30 * time.Second),
+			expiredDeliveryID, expiredDeliveryJobID, now.Add(time.Minute), now.Add(20 * time.Second),
+		}},
+		{`INSERT INTO export_jobs (id, channel_account_id, media_asset_id, operation, delivery_channel, variant, status, version, max_attempts, progress) VALUES ($1,$2,$3,'youtube_audio','telegram','{"audio_bitrate_kbps":192}','succeeded',2,3,'{}')`, []any{cappedClaimJobID, accountID, assetID}},
+		{`INSERT INTO export_deliveries (id, export_job_id, channel_account_id, channel, status, version, attempt_no, max_attempts, expires_at) VALUES ($1,$2,$3,'telegram','pending',1,0,5,$4)`, []any{cappedClaimDeliveryID, cappedClaimJobID, accountID, now.Add(20 * time.Second)}},
+	}
+	for _, seed := range seedStatements {
+		if _, err := db.ExecContext(ctx, seed.query, seed.args...); err != nil {
+			t.Fatalf("seed heartbeat delivery: %v", err)
+		}
+	}
+	cappedClaim, claimed, err := store.ClaimExportDelivery(ctx, ClaimExportDeliveryParams{
+		ExportJobID: cappedClaimJobID, ChannelAccountID: accountID, Channel: "telegram",
+		AttemptToken: "attempt-token-capped", LeaseOwner: "telegram-adapter",
+		ClaimedAt: now, LeaseExpiresAt: now.Add(2 * time.Minute),
+	})
+	if err != nil || !claimed {
+		t.Fatalf("ClaimExportDelivery(cap at delivery expiry) claimed=%v error=%v", claimed, err)
+	}
+	if cappedClaim.LeaseExpiresAt == nil || !cappedClaim.LeaseExpiresAt.Equal(now.Add(20*time.Second)) {
+		t.Fatalf("capped initial claim expiry = %v, want %v", cappedClaim.LeaseExpiresAt, now.Add(20*time.Second))
+	}
+
+	if _, err := store.HeartbeatExportDelivery(ctx, HeartbeatExportDeliveryParams{
+		ExportJobID: liveJobID, ChannelAccountID: accountID, ExportDeliveryID: liveDeliveryID,
+		LeaseOwner: "stale-adapter", AttemptToken: "attempt-token-live",
+		HeartbeatAt: now.Add(30 * time.Second), LeaseExpiresAt: now.Add(150 * time.Second),
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("HeartbeatExportDelivery(stale owner) error = %v, want sql.ErrNoRows", err)
+	}
+	if _, err := store.HeartbeatExportDelivery(ctx, HeartbeatExportDeliveryParams{
+		ExportJobID: liveJobID, ChannelAccountID: accountID, ExportDeliveryID: liveDeliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-stale",
+		HeartbeatAt: now.Add(30 * time.Second), LeaseExpiresAt: now.Add(150 * time.Second),
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("HeartbeatExportDelivery(stale token) error = %v, want sql.ErrNoRows", err)
+	}
+
+	unchanged, err := store.HeartbeatExportDelivery(ctx, HeartbeatExportDeliveryParams{
+		ExportJobID: liveJobID, ChannelAccountID: accountID, ExportDeliveryID: liveDeliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-live",
+		HeartbeatAt: now.Add(30 * time.Second), LeaseExpiresAt: now.Add(40 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("HeartbeatExportDelivery(shorter lease) error = %v", err)
+	}
+	if unchanged.LeaseExpiresAt == nil || !unchanged.LeaseExpiresAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("shorter heartbeat lease expiry = %v, want %v", unchanged.LeaseExpiresAt, now.Add(time.Minute))
+	}
+
+	extended, err := store.HeartbeatExportDelivery(ctx, HeartbeatExportDeliveryParams{
+		ExportJobID: liveJobID, ChannelAccountID: accountID, ExportDeliveryID: liveDeliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-live",
+		HeartbeatAt: now.Add(30 * time.Second), LeaseExpiresAt: now.Add(150 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("HeartbeatExportDelivery(extend) error = %v", err)
+	}
+	if extended.LeaseExpiresAt == nil || !extended.LeaseExpiresAt.Equal(now.Add(150*time.Second)) {
+		t.Fatalf("extended heartbeat lease expiry = %v, want %v", extended.LeaseExpiresAt, now.Add(150*time.Second))
+	}
+	capped, err := store.HeartbeatExportDelivery(ctx, HeartbeatExportDeliveryParams{
+		ExportJobID: liveJobID, ChannelAccountID: accountID, ExportDeliveryID: liveDeliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-live",
+		HeartbeatAt: now.Add(31 * time.Second), LeaseExpiresAt: now.Add(2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("HeartbeatExportDelivery(cap at delivery expiry) error = %v", err)
+	}
+	if capped.LeaseExpiresAt == nil || !capped.LeaseExpiresAt.Equal(now.Add(time.Hour)) {
+		t.Fatalf("capped heartbeat lease expiry = %v, want %v", capped.LeaseExpiresAt, now.Add(time.Hour))
+	}
+
+	ack, err := store.FinalizeExportDelivery(ctx, FinalizeExportDeliveryParams{
+		ExportJobID: liveJobID, ChannelAccountID: accountID, ExportDeliveryID: liveDeliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-live",
+		Status: "delivered", FinalizedAt: now.Add(61 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("FinalizeExportDelivery(after initial lease) error = %v", err)
+	}
+	if ack.Status != "delivered" {
+		t.Fatalf("FinalizeExportDelivery(after initial lease) status = %q, want delivered", ack.Status)
+	}
+
+	for _, test := range []struct {
+		name       string
+		jobID      string
+		deliveryID string
+		token      string
+		heartbeat  time.Time
+	}{
+		{name: "expired lease", jobID: expiredLeaseJobID, deliveryID: expiredLeaseDeliveryID, token: "attempt-token-expired", heartbeat: now.Add(31 * time.Second)},
+		{name: "expired delivery", jobID: expiredDeliveryJobID, deliveryID: expiredDeliveryID, token: "attempt-token-delivery-expired", heartbeat: now.Add(21 * time.Second)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := store.HeartbeatExportDelivery(ctx, HeartbeatExportDeliveryParams{
+				ExportJobID: test.jobID, ChannelAccountID: accountID, ExportDeliveryID: test.deliveryID,
+				LeaseOwner: "telegram-adapter", AttemptToken: test.token,
+				HeartbeatAt: test.heartbeat, LeaseExpiresAt: test.heartbeat.Add(2 * time.Minute),
+			})
+			if !errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("HeartbeatExportDelivery() error = %v, want sql.ErrNoRows", err)
+			}
+		})
+	}
+	if _, err := store.FinalizeExportDelivery(ctx, FinalizeExportDeliveryParams{
+		ExportJobID: expiredDeliveryJobID, ChannelAccountID: accountID, ExportDeliveryID: expiredDeliveryID,
+		LeaseOwner: "telegram-adapter", AttemptToken: "attempt-token-delivery-expired",
+		Status: "delivered", FinalizedAt: now.Add(21 * time.Second),
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("FinalizeExportDelivery(expired delivery) error = %v, want sql.ErrNoRows", err)
+	}
+}
+
 func TestGovernedMediaMigrationRewritesHistoricalSnapshotAliases(t *testing.T) {
 	ctx := context.Background()
 	db := openTargetPostgresTestDB(t, ctx)
@@ -1444,6 +1676,80 @@ func TestExportJobReclaimReleasesTerminalSourcePin(t *testing.T) {
 		t.Fatalf("second reclaim = %#v", second)
 	}
 	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_pins WHERE id=$1 AND released_at IS NOT NULL`, 1, pinID)
+}
+
+func TestExportCreateReplaySurvivesSourceExpiryAndConcurrentCreatePostgres(t *testing.T) {
+	ctx := context.Background()
+	db := openTargetPostgresTestDB(t, ctx)
+	applyTargetMigration(t, ctx, db)
+	applyGovernedMediaMigration(t, ctx, db)
+	store, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+
+	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
+	const channelID = "22000000-0000-4000-8000-000000000001"
+	const inboxID = "22000000-0000-4000-8000-000000000002"
+	const storedID = "22000000-0000-4000-8000-000000000003"
+	const assetID = "22000000-0000-4000-8000-000000000004"
+	const itemID = "22000000-0000-4000-8000-000000000005"
+	if _, err := store.UpsertChannelAccount(ctx, ChannelAccountRecord{
+		ID: channelID, Channel: "telegram", ExternalAccountRef: "export-replay", Status: "active", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertChannelAccount() error = %v", err)
+	}
+	createTargetTestMediaAsset(t, ctx, store, targetMediaFixture{
+		channelID: channelID, inboxID: inboxID, storedID: storedID, assetID: assetID, itemID: itemID,
+		bucket: "sources", objectKey: "sources/export-replay/source", kind: "video", displayName: "replay.mp4",
+		originType: "upload", originRef: "sources/export-replay/source", checksum: "sha256:export-replay", createdAt: now,
+	})
+
+	params := func(jobID, pinID string) CreateExportJobParams {
+		return CreateExportJobParams{
+			Job: ExportJobRecord{
+				ID: jobID, ChannelAccountID: channelID, MediaAssetID: assetID, Operation: "video_to_audio",
+				DeliveryChannel: "telegram", VariantJSON: []byte(`{"audio_bitrate_kbps":192}`), Status: "queued",
+				Version: 1, IdempotencyKey: "export-replay-key", MaxAttempts: 3, ProgressJSON: []byte(`{}`), CreatedAt: now,
+			},
+			SourcePin: StoredObjectPinRecord{
+				ID: pinID, StoredObjectID: storedID, OwnerType: "export_job", OwnerID: jobID, Purpose: "source", CreatedAt: now,
+			},
+		}
+	}
+	type createResult struct {
+		job ExportJobRecord
+		err error
+	}
+	results := make(chan createResult, 2)
+	for _, candidate := range []CreateExportJobParams{
+		params("22000000-0000-4000-8000-000000000006", "22000000-0000-4000-8000-000000000008"),
+		params("22000000-0000-4000-8000-000000000007", "22000000-0000-4000-8000-000000000009"),
+	} {
+		candidate := candidate
+		go func() {
+			job, err := store.CreateExportJob(ctx, candidate)
+			results <- createResult{job: job, err: err}
+		}()
+	}
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil || first.job.ID == "" || first.job.ID != second.job.ID {
+		t.Fatalf("concurrent export create results = %#v, %#v", first, second)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM export_jobs WHERE channel_account_id=$1 AND idempotency_key=$2`, 1, channelID, "export-replay-key")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_pins WHERE owner_type='export_job' AND purpose='source' AND released_at IS NULL AND stored_object_id=$1`, 1, storedID)
+
+	if _, err := db.ExecContext(ctx, `UPDATE stored_objects SET storage_status='deleted', deleted_at=$2 WHERE id=$1`, storedID, now.Add(time.Hour)); err != nil {
+		t.Fatalf("expire source object: %v", err)
+	}
+	replayed, err := store.CreateExportJob(ctx, params(
+		"22000000-0000-4000-8000-000000000010", "22000000-0000-4000-8000-000000000011",
+	))
+	if err != nil || replayed.ID != first.job.ID {
+		t.Fatalf("CreateExportJob(after source expiry) = %#v, error=%v", replayed, err)
+	}
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM export_jobs WHERE channel_account_id=$1 AND idempotency_key=$2`, 1, channelID, "export-replay-key")
+	assertSQLCount(t, ctx, db, `SELECT count(*) FROM stored_object_pins WHERE owner_type='export_job' AND purpose='source' AND stored_object_id=$1`, 1, storedID)
 }
 
 func TestStoredObjectPublicationUsesImmutableGenerationKeysAndDeleteFence(t *testing.T) {
@@ -1829,7 +2135,7 @@ func processingRunReplayParams(createdAt time.Time, collectionID, assetID, snaps
 	snapshot := SelectionSnapshotRecord{
 		ID: snapshotID, ChannelAccountID: targetTestTelegramChannelID,
 		SourceCollectionID: collectionID, Status: "sealed",
-		OptionSnapshotJSON: []byte(`{"language":"ru"}`), DiagnosticsJSON: []byte(`[]`),
+		OptionSnapshotJSON: []byte(`{"n":9007199254740993,"scale":1e3}`), DiagnosticsJSON: []byte(`[]`),
 		CreatedViaChannel: targetTestTelegramChannelID, CreatedAt: createdAt, SealedAt: createdAt,
 	}
 	items := []SelectionSnapshotItemRecord{{
@@ -1842,12 +2148,16 @@ func processingRunReplayParams(createdAt time.Time, collectionID, assetID, snaps
 		Run: AnalysisRunRecord{
 			ID: runID, ChannelAccountID: targetTestTelegramChannelID, SelectionSnapshot: snapshotID,
 			RunType: runType, Status: "queued", Version: 1, IdempotencyKey: "telegram:process:replay",
-			ParamsJSON: []byte(`{"language":"ru"}`), DeliveryJSON: []byte(`{"strategy":"polling"}`),
+			ParamsJSON: []byte(`{"n":9007199254740993,"scale":1e3}`), DeliveryJSON: []byte(`{"strategy":"polling"}`),
 			EvidenceGateState: "not_required", CreatedViaChannel: targetTestTelegramChannelID, CreatedAt: createdAt,
 		},
+		Steps: []AnalysisRunStepRecord{{
+			ID: runID[:len(runID)-1] + "6", AnalysisRunID: runID, StepKind: "transcription",
+			WorkerKind: "transcription", Status: "queued", AttemptNo: 0, MetadataJSON: []byte(`{}`), CreatedAt: createdAt,
+		}},
 		Event: AnalysisRunEventRecord{
 			ID: eventID, AnalysisRunID: runID, EventType: "analysis_run.created", Version: 1,
-			Status: "queued", PayloadJSON: []byte(`{"collection_membership":"detached_at_launch"}`), CreatedAt: createdAt,
+			Status: "queued", PayloadJSON: []byte(`{"collection_membership":"detached_at_launch","expected_collection_version":1,"collection_version":2}`), CreatedAt: createdAt,
 		},
 	}
 	return CreateProcessingRunParams{

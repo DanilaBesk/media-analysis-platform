@@ -42,7 +42,11 @@ class TelegramApiClient:
         http_client_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self.urlopen_impl = urlopen_impl or urlopen
+        self.request_timeout_seconds = 15.0
+        if urlopen_impl is None:
+            self.urlopen_impl = lambda request: urlopen(request, timeout=self.request_timeout_seconds)
+        else:
+            self.urlopen_impl = urlopen_impl
         self.internal_token = (internal_token or "").strip()
         self.http_client_factory = http_client_factory or httpx.Client
 
@@ -263,27 +267,25 @@ class TelegramApiClient:
         items: list[JsonObject],
         run_type: str = "transcription",
         option_snapshot: JsonObject | None = None,
-        params: JsonObject | None = None,
-        delivery: JsonObject | None = None,
         idempotency_key: str | None = None,
     ) -> JsonObject:
+        selected_item_ids = [str(item["media_asset_id"]) for item in items]
+        request_idempotency_key = idempotency_key or (
+            f"processing:{collection_id}:{expected_version}:{run_type}"
+        )
         payload: JsonObject = {
             "channel_account_id": channel_account_id,
             "expected_version": expected_version,
-            "items": items,
+            "selected_item_ids": selected_item_ids,
             "run_type": run_type,
-            "option_snapshot": option_snapshot or {"channel": "telegram", "surface": "current_materials"},
-            "delivery": delivery or {"strategy": "polling"},
-            "created_via_channel_id": channel_account_id,
+            "options": option_snapshot or {"channel": "telegram", "surface": "current_materials"},
+            "created_via_channel_account_id": channel_account_id,
         }
-        if params:
-            payload["params"] = params
-        if idempotency_key:
-            payload["idempotency_key"] = idempotency_key
         return self._request_json(
             f"/v1/collections/{collection_id}/processing-runs",
             method="POST",
             json_body=payload,
+            extra_headers={"Idempotency-Key": request_idempotency_key},
         )
 
     def create_analysis_run(
@@ -440,6 +442,28 @@ class TelegramApiClient:
                 "export_delivery_id": export_delivery_id,
                 "lease_owner": lease_owner,
                 "attempt_token": attempt_token,
+            },
+        )
+
+    def heartbeat_export_delivery(
+        self,
+        *,
+        channel_account_id: str,
+        export_job_id: str,
+        export_delivery_id: str,
+        lease_owner: str,
+        attempt_token: str,
+        lease_seconds: int = 120,
+    ) -> JsonObject:
+        return self._request_json(
+            f"/v1/export-jobs/{export_job_id}/deliveries/heartbeat",
+            method="POST",
+            json_body={
+                "channel_account_id": channel_account_id,
+                "export_delivery_id": export_delivery_id,
+                "lease_owner": lease_owner,
+                "attempt_token": attempt_token,
+                "lease_seconds": lease_seconds,
             },
         )
 
