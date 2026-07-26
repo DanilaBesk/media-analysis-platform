@@ -472,8 +472,13 @@ class TelegramApiClient:
             f"/v1/export-jobs/{export_job_id}/download?{urlencode(_channel_account_query(channel_account_id))}"
         )
 
-    def get_internal_export_download_access(self, *, export_job_id: str) -> JsonObject:
-        return self._request_json(f"/internal/v1/export-jobs/{export_job_id}/download-access")
+    def get_internal_export_download_access(
+        self, *, channel_account_id: str, export_job_id: str
+    ) -> JsonObject:
+        return self._request_json(
+            f"/internal/v1/export-jobs/{export_job_id}/download-access"
+            f"?{urlencode(_channel_account_query(channel_account_id))}"
+        )
 
     def list_artifacts(
         self,

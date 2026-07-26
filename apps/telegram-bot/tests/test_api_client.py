@@ -300,7 +300,7 @@ def test_export_client_uses_export_and_fenced_delivery_contracts() -> None:
             return FakeHttpResponse(json.dumps({"export_job": {"export_job_id": "job-1", "status": "queued"}}).encode())
         if request.full_url.endswith("/deliveries/claim"):
             return FakeHttpResponse(json.dumps({"delivery": {"export_delivery_id": "delivery-1"}, "attempt_token": "t" * 16, "lease_owner": "bot"}).encode())
-        if request.full_url.endswith("/download-access"):
+        if "/download-access?" in request.full_url:
             return FakeHttpResponse(json.dumps({"filename": "clip.mp4", "url": "http://minio:9000/clip.mp4"}).encode())
         if "/download?" in request.full_url:
             return FakeHttpResponse(json.dumps({"filename": "clip.mp4", "url": "http://files/clip.mp4"}).encode())
@@ -311,12 +311,18 @@ def test_export_client_uses_export_and_fenced_delivery_contracts() -> None:
     claim = client.claim_export_delivery(channel_account_id="channel-account-1", export_job_id="job-1", lease_owner="bot")
     client.acknowledge_export_delivery(channel_account_id="channel-account-1", export_job_id="job-1", export_delivery_id="delivery-1", lease_owner="bot", attempt_token="t" * 16)
     download = client.get_export_download(channel_account_id="channel-account-1", export_job_id="job-1")
-    internal_download = client.get_internal_export_download_access(export_job_id="job-1")
+    internal_download = client.get_internal_export_download_access(
+        channel_account_id="channel-account-1", export_job_id="job-1"
+    )
 
     assert job["export_job_id"] == "job-1"
     assert claim["delivery"]["export_delivery_id"] == "delivery-1"
     assert download["filename"] == "clip.mp4"
     assert internal_download["url"] == "http://minio:9000/clip.mp4"
+    assert requests[4].full_url == (
+        "http://api:8080/internal/v1/export-jobs/job-1/download-access"
+        "?channel_account_id=channel-account-1"
+    )
     assert requests[0].headers["Idempotency-key"] == "export-key"
     assert json.loads(requests[0].data.decode()) == {"channel_account_id": "channel-account-1", "operation": "youtube_video", "variant": {"video_quality": "720p"}, "delivery_channel": "telegram"}
 

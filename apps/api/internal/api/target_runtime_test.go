@@ -272,6 +272,60 @@ func TestReconcileRetentionRepairsPublicationsMarksMissingAndDeletesManagedOrpha
 	}
 }
 
+func TestReconcileRetentionPromotesValidStagingPublication(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 7, 26, 12, 30, 0, 0, time.UTC)
+	publishing := targetstore.StoredObjectRecord{
+		ID: "publishing-staged-1", Bucket: storage.SourcesBucket,
+		ObjectKey: "sources/uploads/publishing-staged-1/1/source", StagingKey: "staging/uploads/attempt-staged-1",
+		Generation: 1, SizeBytes: 5, Checksum: "sha256:publish-staged", StorageStatus: "publishing", CreatedAt: now.Add(-2 * time.Hour),
+	}
+	store := &fakeTargetRuntimeStore{reconcileObjects: []targetstore.StoredObjectRecord{publishing}}
+	objects := &fakeTargetObjectStore{objects: map[string]storage.ManagedObjectInfo{
+		storage.SourcesBucket + "/" + publishing.StagingKey: {SizeBytes: publishing.SizeBytes},
+	}}
+	service := NewTargetRuntimeService(
+		store,
+		WithTargetObjectStore(objects),
+		WithTargetClock(func() time.Time { return now }),
+		WithTargetObjectOrphanGrace(time.Hour),
+	)
+
+	dryRunResult, err := service.ReconcileRetention(
+		context.Background(), TargetRetentionReconcileRequest{BatchSize: 10, DryRun: true},
+	)
+	if err != nil {
+		t.Fatalf("ReconcileRetention(dry run) error = %v", err)
+	}
+	if dryRunResult.PublicationsReconciled != 1 || len(objects.promotions) != 0 || len(store.completedPublications) != 0 {
+		t.Fatalf("ReconcileRetention(dry run) result = %#v promotions=%#v completed=%#v", dryRunResult, objects.promotions, store.completedPublications)
+	}
+	if _, exists := objects.objects[publishing.Bucket+"/"+publishing.StagingKey]; !exists {
+		t.Fatal("dry run removed the staging object")
+	}
+
+	result, err := service.ReconcileRetention(context.Background(), TargetRetentionReconcileRequest{BatchSize: 10})
+	if err != nil {
+		t.Fatalf("ReconcileRetention() error = %v", err)
+	}
+	if result.PublicationsReconciled != 1 || result.ObjectsMarkedMissing != 0 {
+		t.Fatalf("ReconcileRetention() result = %#v", result)
+	}
+	if len(objects.promotions) != 1 || objects.promotions[0] != [3]string{publishing.Bucket, publishing.StagingKey, publishing.ObjectKey} {
+		t.Fatalf("promotions = %#v", objects.promotions)
+	}
+	published, exists := objects.objects[publishing.Bucket+"/"+publishing.ObjectKey]
+	if !exists || published.SizeBytes != publishing.SizeBytes || published.Metadata["sha256"] != "publish-staged" {
+		t.Fatalf("published object = %#v, exists=%v", published, exists)
+	}
+	if _, exists := objects.objects[publishing.Bucket+"/"+publishing.StagingKey]; exists {
+		t.Fatal("staging object still exists after reconciliation")
+	}
+	if len(store.completedPublications) != 1 || store.completedPublications[0] != publishing.ID {
+		t.Fatalf("completed publications = %#v", store.completedPublications)
+	}
+}
+
 func TestReconcileRetentionDryRunDoesNotMutateObjectsOrCursors(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 26, 13, 0, 0, 0, time.UTC)
@@ -2065,6 +2119,23 @@ func TestTargetRuntimeServicePropagatesAdditionalTargetStoreFailures(t *testing.
 			_, err := s.ListMediaAssets(context.Background(), TargetListMediaAssetsRequest{})
 			return err
 		}, wantErr: boom},
+		{name: "resolve export download propagates job lookup failure", store: &fakeTargetRuntimeStore{failMethod: "GetExportJob", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ResolveExportDownload(context.Background(), TargetGetExportJobRequest{ChannelAccountID: "channel-1", ExportJobID: "export-1"})
+			return err
+		}, wantErr: boom},
+		{name: "resolve export download propagates object lookup failure", store: &fakeTargetRuntimeStore{
+			failMethod: "GetStoredObject", failErr: boom,
+			exportJob: targetstore.ExportJobRecord{
+				ID: "export-1", ChannelAccountID: "channel-1", Status: "succeeded", OutputStoredObjectID: "object-1",
+			},
+		}, run: func(s *TargetRuntimeService) error {
+			_, err := s.ResolveExportDownload(context.Background(), TargetGetExportJobRequest{ChannelAccountID: "channel-1", ExportJobID: "export-1"})
+			return err
+		}, wantErr: boom},
+		{name: "resolve export source propagates object lookup failure", store: &fakeTargetRuntimeStore{failMethod: "GetStoredObject", failErr: boom}, run: func(s *TargetRuntimeService) error {
+			_, err := s.resolveExportSource(context.Background(), targetstore.MediaAssetRecord{ID: "media-1", StoredObjectID: "object-1"})
+			return err
+		}, wantErr: boom},
 		{name: "get media propagates generic failure", store: &fakeTargetRuntimeStore{failMethod: "GetMediaAsset", failErr: boom}, run: func(s *TargetRuntimeService) error {
 			_, err := s.GetMediaAsset(context.Background(), TargetGetMediaAssetRequest{})
 			return err
@@ -3299,6 +3370,9 @@ func (s *fakeTargetRuntimeStore) CreateExportJob(_ context.Context, params targe
 	return params.Job, nil
 }
 func (s *fakeTargetRuntimeStore) GetExportJob(_ context.Context, channelAccountID, exportJobID string) (targetstore.ExportJobRecord, error) {
+	if err := s.fail("GetExportJob"); err != nil {
+		return targetstore.ExportJobRecord{}, err
+	}
 	if s.exportJob.ID != "" {
 		return s.exportJob, nil
 	}

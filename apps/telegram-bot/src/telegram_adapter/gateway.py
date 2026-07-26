@@ -374,8 +374,10 @@ class TelegramInboxGateway:
         )
 
     def get_internal_export_download(self, *, channel_identity: JsonObject, export_job_id: str) -> JsonObject:
-        self._channel_account_id(channel_identity)
-        return self.api_client.get_internal_export_download_access(export_job_id=export_job_id)
+        return self.api_client.get_internal_export_download_access(
+            channel_account_id=self._channel_account_id(channel_identity),
+            export_job_id=export_job_id,
+        )
 
     def _active_runs_with_latest_events(self, channel_account_id: str, active_runs: list[JsonObject]) -> list[JsonObject]:
         enriched: list[JsonObject] = []

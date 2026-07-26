@@ -894,6 +894,23 @@ def test_export_task_surface_owns_its_separate_message_address() -> None:
     assert surface["address_fingerprint"] == "telegram:10:20"
 
 
+def test_internal_export_download_is_scoped_to_resolved_channel_account() -> None:
+    api = FakeFinalApiClient()
+    requests: list[dict[str, Any]] = []
+    api.get_internal_export_download_access = lambda **kwargs: requests.append(kwargs) or {  # type: ignore[attr-defined]
+        "filename": "clip.mp4",
+        "size_bytes": 12,
+        "url": "http://minio:9000/private-export",
+    }
+
+    access = TelegramInboxGateway(api).get_internal_export_download(
+        channel_identity=channel_identity(), export_job_id="job-1"
+    )
+
+    assert access["filename"] == "clip.mp4"
+    assert requests == [{"channel_account_id": "channel-account-1", "export_job_id": "job-1"}]
+
+
 def test_create_export_job_keeps_current_collection_intact() -> None:
     api = FakeFinalApiClient()
     api.items = [

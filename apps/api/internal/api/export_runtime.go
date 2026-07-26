@@ -383,14 +383,23 @@ func (s *TargetRuntimeService) ResolveInternalExportDownloadAccess(ctx context.C
 
 func (s *TargetRuntimeService) resolveExportDownload(ctx context.Context, req TargetGetExportJobRequest, internal bool) (TargetExportDownload, error) {
 	job, err := s.store.GetExportJob(ctx, req.ChannelAccountID, req.ExportJobID)
-	if errors.Is(err, sql.ErrNoRows) || job.Status != "succeeded" || job.OutputStoredObjectID == "" {
+	if errors.Is(err, sql.ErrNoRows) {
 		return TargetExportDownload{}, storage.ErrExportJobNotFound
 	}
 	if err != nil {
 		return TargetExportDownload{}, err
 	}
+	if job.Status != "succeeded" || job.OutputStoredObjectID == "" {
+		return TargetExportDownload{}, storage.ErrExportJobNotFound
+	}
 	object, err := s.store.GetStoredObject(ctx, job.OutputStoredObjectID)
-	if err != nil || object.StorageStatus != "available" {
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetExportDownload{}, storage.ErrStoredObjectUnavailable
+	}
+	if err != nil {
+		return TargetExportDownload{}, err
+	}
+	if object.StorageStatus != "available" {
 		return TargetExportDownload{}, storage.ErrStoredObjectUnavailable
 	}
 	ttl := s.exportWebAccessTTL
@@ -619,6 +628,31 @@ func (s *TargetRuntimeService) reconcilePublishingObject(
 			if staged.SizeBytes != record.SizeBytes {
 				return false, false, storage.ContractViolationf("staged object size does not match reservation")
 			}
+			if dryRun {
+				return true, false, nil
+			}
+			sha := strings.TrimPrefix(record.Checksum, "sha256:")
+			promoteErr := objects.PromoteObject(
+				ctx,
+				record.Bucket,
+				record.StagingKey,
+				record.ObjectKey,
+				map[string]string{"sha256": sha},
+			)
+			published, statErr := objects.StatObject(ctx, record.Bucket, record.ObjectKey)
+			if statErr != nil {
+				if promoteErr != nil {
+					return false, false, promoteErr
+				}
+				return false, false, statErr
+			}
+			if published.SizeBytes != record.SizeBytes || !metadataSHA256Matches(published.Metadata, sha) {
+				return false, false, storage.ContractViolationf("promoted object size or sha256 does not match reservation")
+			}
+			if err := s.store.CompleteStoredObjectPublication(ctx, record.ID, record.Generation, record.StagingKey, now); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return false, false, err
+			}
+			return true, false, nil
 		}
 		if !errors.Is(err, storage.ErrObjectNotFound) {
 			return false, false, err
@@ -647,7 +681,13 @@ func (s *TargetRuntimeService) resolveExportSource(ctx context.Context, asset ta
 		}, nil
 	}
 	object, err := s.store.GetStoredObject(ctx, asset.StoredObjectID)
-	if err != nil || object.StorageStatus != "available" {
+	if errors.Is(err, sql.ErrNoRows) {
+		return TargetExportSource{}, storage.ErrStoredObjectUnavailable
+	}
+	if err != nil {
+		return TargetExportSource{}, err
+	}
+	if object.StorageStatus != "available" {
 		return TargetExportSource{}, storage.ErrStoredObjectUnavailable
 	}
 	download, err := s.presignArtifactDownload(ctx, object, 15*time.Minute, true)
