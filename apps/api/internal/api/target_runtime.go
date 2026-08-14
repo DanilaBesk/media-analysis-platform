@@ -1,3 +1,24 @@
+// START_MODULE_CONTRACT
+// PURPOSE: Implement API-owned domain lifecycle, current analysis-step control, and channel interaction-surface behavior.
+// SCOPE: Channel-scoped media and collection operations, immutable snapshots and runs, step planning/control, artifacts, diagnostics, retention, exports, metadata jobs, and channel surfaces.
+// DEPENDS: M-CONTRACTS, M-API-STORAGE, M-API-EVENTS
+// LINKS: M-API-DOMAIN, M-API-STEP-CONTROL, M-INTERACTION-SURFACES, V-M-API-DOMAIN, V-M-API-STEP-CONTROL, V-M-INTERACTION-SURFACES
+// ROLE: RUNTIME
+// MAP_MODE: EXPORTS
+// END_MODULE_CONTRACT
+
+// START_MODULE_MAP
+// TargetStateStore
+// TargetRuntimeService
+// TargetRuntimeOption
+// WithTargetClock
+// WithTargetIDGenerator
+// WithTargetObjectStore
+// WithTargetMediaLifecycle
+// WithTargetObjectOrphanGrace
+// NewTargetRuntimeService
+// END_MODULE_MAP
+
 package api
 
 import (

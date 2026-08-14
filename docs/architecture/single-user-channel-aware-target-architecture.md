@@ -1286,11 +1286,10 @@ Goal: make docs, Beads, and GRACE agree on the target model.
 Files:
 
 - `docs/architecture/single-user-channel-aware-target-architecture.md`;
-- `docs/requirements.xml`;
-- `docs/development-plan.xml`;
-- `docs/knowledge-graph.xml`;
-- `docs/operational-packets.xml`;
-- `docs/verification-plan.xml`.
+- `.grace/context/{requirements,technology,principles,deployment,ux-guidelines}.xml`;
+- `.grace/graph/{index,main}.xml`;
+- `.grace/verification/{index,main}.xml`;
+- `.grace/changes/active/` only for an approved contemporaneous change; do not create a retroactive `C-*` bundle.
 
 Verification:
 

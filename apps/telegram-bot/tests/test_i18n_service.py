@@ -6,8 +6,17 @@
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: TEST
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   test_normalize_locale_supports_telegram_variants_and_falls_back_to_default - Verify locale normalization and fallback.
+#   test_resolve_locale_prefers_explicit_user_locale_before_fallbacks - Verify locale resolution precedence.
+#   test_text_formats_catalog_values_with_typed_keys - Verify typed translation formatting.
+#   test_text_raises_for_missing_format_arguments - Verify missing format argument failures.
+#   test_build_localized_commands_returns_stable_registry_with_localized_descriptions - Verify localized command metadata.
+#   test_catalog_returns_locale_specific_mapping - Verify locale-specific catalog lookup.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

@@ -6,7 +6,7 @@
 # DEPENDS: M-WORKER-AGENT-RUNNER, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-AGENT-RUNNER, V-M-WORKER-AGENT-RUNNER
 # ROLE: SCRIPT
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
@@ -14,8 +14,8 @@
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
-#   launch-agent-runner-worker - Build the API client, object-store adapter, and shared worker loop.
-#   build-agent-runner - Adapt claimed analysis run IDs into runAgentHarness calls without duplicating queue logic.
+#   build_runner - Adapt claimed analysis run IDs into runAgentHarness calls without duplicating queue logic.
+#   main - Build the API client, object-store adapter, and shared worker loop.
 # END_MODULE_MAP
 
 from __future__ import annotations

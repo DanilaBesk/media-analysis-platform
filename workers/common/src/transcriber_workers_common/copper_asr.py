@@ -4,7 +4,7 @@
 # PURPOSE: Provide the CopperASR HTTP runtime boundary used by the transcription worker.
 # SCOPE: CopperASR client config, multipart transport, response normalization, provider error mapping, and URL audio materialization.
 # DEPENDS: M-WORKER-COMMON, M-COPPER-ASR
-# LINKS: M-WORKER-COMMON, V-M-WORKER-TRANSCRIPTION, media-b8s.1.5
+# LINKS: M-WORKER-COMMON, M-COPPER-ASR, V-M-WORKER-TRANSCRIPTION, V-M-COPPER-ASR, media-b8s.1.5
 # ROLE: RUNTIME
 # MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
@@ -14,6 +14,7 @@
 # END_CHANGE_SUMMARY
 # START_MODULE_MAP
 #   CopperAsrClientConfig - Immutable CopperASR client/env configuration.
+#   CopperAsrTransport - Defines the injectable CopperASR transport contract.
 #   CopperAsrTranscriptionError - Stable worker-visible provider failure.
 #   CopperAsrHttpTransport - HTTP multipart transport for the CopperASR runtime.
 #   CopperAsrHttpTranscriber - Maps SourceCandidate inputs into CopperASR TranscriptResult outputs.

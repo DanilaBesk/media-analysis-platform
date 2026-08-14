@@ -1,0 +1,98 @@
+<GraceGraphDocument graceVersion="4.0">
+  <GD-MAIN>
+    <M-CONTRACTS>
+      <Summary>OpenAPI and shared schemas for media_asset, collections, immutable selections, analysis runs, steps, artifacts, diagnostics, retention, and channel surfaces.</Summary>
+      <Type>UTILITY</Type><Status>implemented</Status><Owner>packages/contracts</Owner><Path>packages/contracts</Path><VerificationRef>V-M-CONTRACTS</VerificationRef>
+      <Annotations><export-mediaAssetSchemas /><export-collectionSchemas /><export-selectionSnapshotSchemas /><export-analysisRunSchemas /><export-stepInputSchemas /><export-artifactSchemas /><export-diagnosticSchemas /></Annotations>
+    </M-CONTRACTS>
+    <M-API-HTTP>
+      <Summary>Public HTTP and WebSocket route registration for API-owned ingestion, collections, selections, runs, artifacts, diagnostics, channels, and internal worker step control.</Summary>
+      <Type>ENTRY_POINT</Type><Status>implemented</Status><Owner>apps/api/internal/api</Owner><Path>apps/api/internal/api</Path><VerificationRef>V-M-API-HTTP</VerificationRef>
+      <M-CONTRACTS /><M-API-DOMAIN /><M-API-STORAGE /><M-API-STEP-CONTROL /><M-API-EVENTS />
+      <Annotations><export-registerMediaAssetRoutes /><export-registerCollectionRoutes /><export-registerSelectionSnapshotRoutes /><export-registerAnalysisRunRoutes /><export-registerArtifactRoutes /><export-registerDiagnosticRoutes /><export-registerTargetStepRoutes /><export-registerChannelSurfaceRoutes /></Annotations>
+    </M-API-HTTP>
+    <M-API-DOMAIN>
+      <Summary>Product rules for channel-account access, ingestion, inbox and collection membership, immutable snapshots, analysis lifecycle, prerequisites, retention, and diagnostics.</Summary>
+      <Type>CORE_LOGIC</Type><Status>implemented</Status><Owner>apps/api/internal/api</Owner><Path>apps/api/internal/api/target_runtime.go</Path><VerificationRef>V-M-API-DOMAIN</VerificationRef>
+      <M-CONTRACTS /><M-API-STORAGE /><M-API-STEP-CONTROL /><M-API-EVENTS />
+      <Annotations><export-addMedia /><export-manageCollection /><export-createSelectionSnapshot /><export-createAnalysisRun /><export-planPrerequisites /><export-findReusableTranscript /><export-cancelAnalysisRun /><export-applyRetention /><export-recordDiagnostic /><export-recordWorkerArtifacts /></Annotations>
+    </M-API-DOMAIN>
+    <M-API-STORAGE>
+      <Summary>PostgreSQL target storage for channel accounts, operation requests, media assets, collections, selections, runs, steps, artifacts, diagnostics, retention, metadata jobs, and channel surfaces.</Summary>
+      <Type>DATA_LAYER</Type><Status>implemented</Status><Owner>apps/api/internal/storage</Owner><Path>apps/api/internal/storage</Path><VerificationRef>V-M-API-STORAGE</VerificationRef>
+      <M-CONTRACTS />
+      <Annotations><migration-targetReset /><repository-targetStore /><query-findReusableTranscript /><table-channelAccounts /><table-operationRequests /><table-storedObjects /><table-mediaAssets /><table-metadataEnrichmentJobs /><table-collections /><table-collectionItems /><table-selectionSnapshots /><table-analysisRuns /><table-analysisRunSteps /><table-artifacts /><table-diagnostics /><table-channelSurfaces /><test-livePostgresContracts /></Annotations>
+    </M-API-STORAGE>
+    <M-API-STEP-CONTROL>
+      <Summary>Internal analysis_run_step claim, progress, cancellation check, and finalization control plane backed by target storage. Current claims record owner and timestamps but have no expiry or per-attempt token; stale-worker fencing is pending under media-j1qu.</Summary>
+      <Type>INFRASTRUCTURE</Type><Status>partial</Status><Owner>apps/api/internal/api</Owner><Path>apps/api/internal/api</Path><VerificationRef>V-M-API-STEP-CONTROL</VerificationRef>
+      <M-API-DOMAIN /><M-API-STORAGE />
+      <Annotations><export-listAnalysisRunSteps /><export-claimAndFinalizeSteps /></Annotations>
+    </M-API-STEP-CONTROL>
+    <M-API-EVENTS>
+      <Summary>Polling and live-update event surfaces for media assets, collections, selections, analysis runs, artifacts, diagnostics, and channel presentation changes.</Summary>
+      <Type>INFRASTRUCTURE</Type><Status>runtime-proof-pending</Status><Owner>apps/api/internal/ws</Owner><Path>apps/api/internal/ws</Path><VerificationRef>V-M-API-EVENTS</VerificationRef>
+      <M-CONTRACTS /><M-API-DOMAIN />
+      <Annotations><export-runEvents /><export-collectionEvents /></Annotations>
+    </M-API-EVENTS>
+    <M-INTERACTION-SURFACES>
+      <Summary>Channel-account-scoped external surfaces, subjects, and append-only recovery events without consumer-specific fields on domain entities.</Summary>
+      <Type>UTILITY</Type><Status>implemented</Status><Owner>apps/api/internal/api and apps/api/internal/storage/target</Owner><Path>apps/api/internal/api/target_runtime.go</Path><VerificationRef>V-M-INTERACTION-SURFACES</VerificationRef>
+      <M-CONTRACTS /><M-API-DOMAIN /><M-API-STORAGE />
+      <Annotations><contract-interactionSurfaces /><internal-upsertSurface /><internal-listSurfaces /><internal-supersedeSurface /></Annotations>
+    </M-INTERACTION-SURFACES>
+    <M-WORKER-COMMON>
+      <Summary>Shared worker API transport, domain models, artifact/document helpers, object-store access, source extraction, and runtime utilities.</Summary>
+      <Type>UTILITY</Type><Status>implemented</Status><Owner>workers/common</Owner><Path>workers/common/src/transcriber_workers_common</Path><VerificationRef>V-M-WORKER-COMMON</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP />
+      <Annotations><export-apiClient /><export-artifactHelpers /><export-documentRendering /><export-objectStore /><export-sourceExtraction /><export-copperAsrClient /></Annotations>
+    </M-WORKER-COMMON>
+    <M-WORKER-TRANSCRIPTION>
+      <Summary>Execute sealed transcription steps, reuse ready transcript artifacts, call CopperASR for missing speech, and publish transcript and policy artifacts.</Summary>
+      <Type>WORKER</Type><Status>implemented</Status><Owner>workers/transcription</Owner><Path>workers/transcription</Path><VerificationRef>V-M-WORKER-TRANSCRIPTION</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP /><M-WORKER-COMMON /><M-COPPER-ASR />
+      <Annotations><export-claimRunStep /><export-processStepInputs /><export-mixedMaterialTranscriptAssembly /><export-publishArtifacts /><export-stepCancellation /></Annotations>
+    </M-WORKER-TRANSCRIPTION>
+    <M-COPPER-ASR>
+      <Summary>Pinned external CopperASR source and dedicated HTTP runtime service used by transcription workers as the only active ASR backend.</Summary>
+      <Type>INTEGRATION</Type><Status>implemented-runtime</Status><Owner>external/copper-asr</Owner><Path>external/copper-asr</Path><VerificationRef>V-M-COPPER-ASR</VerificationRef>
+      <Annotations><source-pin /><compose-service /><health-endpoint /><transcribe-endpoint /><guard-noLegacyAsr /></Annotations>
+    </M-COPPER-ASR>
+    <M-WORKER-AGENT-RUNNER>
+      <Summary>Execute report and deep-research analysis from prepared transcript or text-corpus artifacts and publish reports, logs, and diagnostics.</Summary>
+      <Type>WORKER</Type><Status>implemented</Status><Owner>workers/agent-runner</Owner><Path>workers/agent-runner</Path><VerificationRef>V-M-WORKER-AGENT-RUNNER</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP /><M-WORKER-COMMON />
+      <Annotations><export-runAnalysisHarness /><export-consumePreparedText /><export-publishAnalysisArtifacts /><export-stepRequestAccess /></Annotations>
+    </M-WORKER-AGENT-RUNNER>
+    <M-MEDIA-EXPORT>
+      <Summary>Fenced one-media export jobs for YouTube audio/video and uploaded video-to-audio conversion with transient delivery objects.</Summary>
+      <Type>WORKER</Type><Status>implemented</Status><Owner>workers/media-export</Owner><Path>workers/media-export</Path><VerificationRef>V-M-MEDIA-EXPORT</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP /><M-WORKER-COMMON /><M-API-STORAGE />
+      <Annotations><export-claimExportJob /><export-runExportProcess /><export-publishExportObject /><export-deliveryLifecycle /><export-cancellationFencing /></Annotations>
+    </M-MEDIA-EXPORT>
+    <M-METADATA-ENRICHMENT>
+      <Summary>Fenced metadata-only enrichment worker for allowlisted canonical YouTube references; provider network calls are outside the API process.</Summary>
+      <Type>WORKER</Type><Status>implemented</Status><Owner>workers/metadata-enrichment</Owner><Path>workers/metadata-enrichment</Path><VerificationRef>V-M-METADATA-ENRICHMENT</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP /><M-WORKER-COMMON /><M-API-STORAGE />
+      <Annotations><export-claimMetadataJob /><export-fetchProviderMetadata /><export-finalizeMetadataJob /><export-retryLeaseFencing /></Annotations>
+    </M-METADATA-ENRICHMENT>
+    <M-WEB-UI>
+      <Summary>Human-facing Web management UI for materials, collections, ordered selection, run progress, results, errors, downloads, and retention.</Summary>
+      <Type>UI_COMPONENT</Type><Status>implemented</Status><Owner>apps/web</Owner><Path>apps/web</Path><VerificationRef>V-M-WEB-UI</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP />
+      <Annotations><export-targetApiClient /><view-materials /><view-selectionBuilder /><view-runDetail /></Annotations>
+    </M-WEB-UI>
+    <M-TELEGRAM-ADAPTER>
+      <Summary>Telegram input and presentation adapter over shared API state, including channel-surface recovery, processing cards, artifact delivery, and localization.</Summary>
+      <Type>INTEGRATION</Type><Status>partial</Status><Owner>apps/telegram-bot</Owner><Path>apps/telegram-bot</Path><VerificationRef>V-M-TELEGRAM-ADAPTER</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP /><M-INTERACTION-SURFACES /><M-WORKER-COMMON />
+      <Annotations><export-addMediaFromUpdate /><export-renderInboxStatus /><export-runAnalysisAction /><export-channelSurfaceRecovery /><export-resultDeliveryDeduplication /><export-reusableTranscriptDelivery /><export-voiceAudioDelivery /><export-localization /></Annotations>
+    </M-TELEGRAM-ADAPTER>
+    <M-MCP-ADAPTER>
+      <Summary>MCP tools over API-owned product state for media assets, immutable selections, analysis runs, diagnostics, and explicit artifact previews.</Summary>
+      <Type>INTEGRATION</Type><Status>implemented</Status><Owner>apps/mcp-server</Owner><Path>apps/mcp-server</Path><VerificationRef>V-M-MCP-ADAPTER</VerificationRef>
+      <M-CONTRACTS /><M-API-HTTP />
+      <Annotations><tool-createMediaAsset /><tool-listMediaAssets /><tool-createSelectionSnapshot /><tool-runAnalysis /><tool-getDiagnostics /><tool-getArtifactPreview /></Annotations>
+    </M-MCP-ADAPTER>
+  </GD-MAIN>
+</GraceGraphDocument>

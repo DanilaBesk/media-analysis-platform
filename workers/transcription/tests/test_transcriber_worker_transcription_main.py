@@ -15,6 +15,9 @@
 #
 # START_MODULE_MAP
 #   test_build_runner_delegates_to_run_transcription - Verifies the launcher preserves transcription worker dependency wiring.
+#   test_build_runner_keeps_selection_runs_on_transcription_worker - Verifies selection runs remain on the transcription worker.
+#   test_build_transcriber_uses_copper_asr_env - Verifies the transcriber uses CopperASR environment settings.
+#   test_launcher_has_no_hidden_worker_dependency_path_bootstrap - Verifies the launcher has no implicit dependency-path bootstrap.
 # END_MODULE_MAP
 
 from __future__ import annotations

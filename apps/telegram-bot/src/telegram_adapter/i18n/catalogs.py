@@ -6,8 +6,14 @@
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   TranslationCatalog - Translation values indexed by typed text key.
+#   TranslationCatalogs - Translation catalogs indexed by supported locale.
+#   TRANSLATION_CATALOGS - RU and EN Telegram translation catalog registry.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

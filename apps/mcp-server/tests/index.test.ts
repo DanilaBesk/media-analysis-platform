@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER
 // LINKS: V-M-MCP-ADAPTER
 // ROLE: TEST
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,8 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   CHANNEL_ACCOUNT_ID - Supplies the channel account fixture for runtime tool calls.
+//   MEDIA_ID - Supplies the media fixture for runtime tool calls.
 //   verify-runtime-bootstrap - Confirm env, client, and SDK-backed runtime composition.
 //   verify-tool-entrypoints - Confirm direct test entrypoints invoke domain tools and emit the mapping marker.
 //   verify-runtime-description - Confirm readiness metadata reflects registered tools and connection state.

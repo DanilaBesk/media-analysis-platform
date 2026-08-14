@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: SCRIPT
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,15 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   BootstrapMcpServerRuntimeOptions - Configures runtime bootstrap dependencies.
+//   McpServerRuntime - Describes the bootstrapped SDK and adapter runtime.
+//   McpServerRuntimeDescription - Describes runtime readiness for verification callers.
+//   McpToolCall - Describes direct tool invocations used by tests.
+//   bootstrapMcpServerRuntime - Resolves env and creates the API client plus domain runtime.
+//   callMcpTool - Invokes one registered domain tool without starting stdio.
+//   describeMcpServerRuntime - Returns runtime readiness and registration metadata.
+//   getProcessEnv - Reads the current process environment through a testable boundary.
+//   listMcpTools - Lists the registered domain tool definitions.
 //   bootstrap-mcp-runtime - Resolve env and create the API client plus SDK-backed domain runtime.
 //   expose-tool-entrypoints - Surface tool listing and direct invocation for tests without starting stdio.
 //   describe-mcp-runtime - Expose readiness state for packet-level verification.

@@ -1,0 +1,75 @@
+<GraceTechnology graceVersion="4.0">
+  <Language>Go for the API; Python 3.12 for workers and Telegram adapter; TypeScript for Web and MCP; SQL migrations for PostgreSQL.</Language>
+  <Runtime>Docker Compose local topology with uv-managed Python components, Go API, PostgreSQL, MinIO-compatible object storage, CopperASR runtime, Telegram Bot API, Web, and MCP services.</Runtime>
+  <Framework>Go HTTP/WebSocket services; Python worker and aiogram Telegram adapter; TypeScript Web and MCP clients; CopperASR HTTP integration.</Framework>
+  <TestingStack>uv run pytest; Go tests via go test; pnpm Web/MCP tests and typecheck; disposable PostgreSQL contract tests; deterministic fixture and compose smoke scripts.</TestingStack>
+  <Observability>Structured diagnostics, correlation identifiers, analysis-run events, channel-surface events, analysis-step progress evidence, queue-specific lease evidence, and compose health checks.</Observability>
+  <OperationalConstraints>
+    <Constraint>Prefer existing repository libraries, contracts, fixtures, and test helpers; do not add speculative dependencies.</Constraint>
+    <Constraint>Analysis-run steps currently move from queued to running with a lease owner and timestamps, but do not yet have lease expiry or per-attempt-token fencing; that known gap is tracked by Bead media-j1qu. Export and metadata jobs use their own owner/token/lease controls.</Constraint>
+    <Constraint>API owns product lifecycle and performs no provider network call for remote metadata enrichment.</Constraint>
+    <Constraint>Object bytes are streamed through managed storage; physical deletion is scheduled only after transactional references and pins permit it.</Constraint>
+    <Constraint>Legacy ASR runtime paths, switches, caches, dependencies, and fallback tests remain excluded from active surfaces.</Constraint>
+  </OperationalConstraints>
+  <ArchitectureShape>
+    <ControlPlane>Go API owns public contracts, channel-account scope, validation, lifecycle transitions, operation requests, diagnostics, artifact metadata, retention, and channel-surface recovery.</ControlPlane>
+    <ExecutionPlane>Python workers consume sealed selection facts and declared analysis_run_step_inputs through internal APIs; they never infer durable state from mutable collections.</ExecutionPlane>
+    <QueuePlane>PostgreSQL analysis_run_steps, export_jobs, and metadata_enrichment_jobs are independent durable queues. Analysis-run steps currently use claim-once state and owner timestamps; export and metadata jobs use expiring leases and per-attempt tokens.</QueuePlane>
+    <ObjectPlane>MinIO-compatible storage keeps media bodies, previews, generated artifacts, private execution evidence, and diagnostic bundles behind API access decisions.</ObjectPlane>
+    <AdapterPlane>Telegram, Web, and MCP are thin clients over shared API-owned media, collection, selection, run, artifact, diagnostic, account, and surface state.</AdapterPlane>
+  </ArchitectureShape>
+  <TargetComponents>
+    <Component>apps/api: Go HTTP/WebSocket control plane, storage orchestration, and channel-account-scoped product authority.</Component>
+    <Component>packages/contracts: OpenAPI and shared target schemas.</Component>
+    <Component>workers/common: shared worker transport, source, object-store, document, and runtime helpers.</Component>
+    <Component>workers/transcription plus external/copper-asr: ordered transcript assembly and dedicated ASR runtime boundary.</Component>
+    <Component>workers/agent-runner: report and deep-research execution from prepared text artifacts.</Component>
+    <Component>workers/media-export: YouTube export and uploaded-video audio conversion behind export_jobs.</Component>
+    <Component>workers/metadata-enrichment: provider metadata retrieval behind metadata_enrichment_jobs.</Component>
+    <Component>apps/web, apps/telegram-bot, and apps/mcp-server: user and tool adapters over the API.</Component>
+    <Component>infra/docker-compose.yml: local service topology and health dependencies.</Component>
+  </TargetComponents>
+  <PersistentModel>
+    <Tables>channel_accounts, operation_requests, stored_objects, media_assets, collections, collection_items, selection_snapshots, selection_snapshot_items, analysis_runs, analysis_run_steps, analysis_run_step_inputs, analysis_run_events, export_jobs, metadata_enrichment_jobs, export_deliveries, stored_object_pins, artifacts, artifact_subjects, diagnostics, channel_surfaces, channel_surface_subjects, channel_surface_events.</Tables>
+    <Rule>Physical uploaded bytes are unique by channel_account_id, SHA-256, and size, while media_asset occurrences and collection memberships remain distinct.</Rule>
+    <Rule>Selections are storage-enforced immutable; workers consume frozen item facts and declared inputs, not mutable collection rows.</Rule>
+    <Rule>Artifact lineage, diagnostics, idempotency records, and channel-surface event history remain durable even when object bodies expire.</Rule>
+  </PersistentModel>
+  <PublicApiSurface>
+    <Surface>Media create/upload/list/get/delete and scoped metadata refresh.</Surface>
+    <Surface>Collection inbox/list/create/update/item mutation and atomic processing launch.</Surface>
+    <Surface>Selection snapshot create/read; analysis run create/list/read/cancel/retry/events/artifacts.</Surface>
+    <Surface>Artifact preview/download refresh, diagnostics query, export create/list/read/cancel/retry/delivery/download, and WebSocket updates.</Surface>
+  </PublicApiSurface>
+  <InternalApiSurface>
+    <Surface>Channel-account resolve/list/update and channel-surface upsert/list/recover/display-state/supersede/events.</Surface>
+    <Surface>Analysis step claim/cancel-check/progress/finalize, request-access, reusable transcript lookup, artifact and diagnostic registration.</Surface>
+    <Surface>Export and metadata queue/claim/progress/cancel/finalize/reclaim plus retention sweep/reconcile; all require platform-token protection.</Surface>
+  </InternalApiSurface>
+  <LifecycleAndRetention>
+    <Rule>Soft-deleted product records remain hidden from default reads while immutable snapshots and run history survive object-body expiry.</Rule>
+    <Rule>MEDIA_OBJECT_RETENTION_DAYS defaults to seven; each storage generation expires from the later of publication and last successful use.</Rule>
+    <Rule>Pin insertion succeeds only while an object is available; delete scheduling proves no active pins under the same database fence and blocks new work before physical deletion.</Rule>
+    <Rule>Publication, source work, delivery, delete claims, exports, and metadata enrichment use their implemented owner/token/lease compare-and-set transitions with bounded retry; analysis-run-step lease expiry and attempt-token fencing remain pending under media-j1qu.</Rule>
+    <Rule>S3-compatible storage is durable byte authority; attempt workspaces stream in bounded chunks, clean in outer finally, and are reaped only after lease grace or absolute TTL.</Rule>
+    <Rule>Private-state host ports bind locally, hostile Host/Origin requests fail before handlers, internal routes require PLATFORM_INTERNAL_TOKEN, and public DTOs never reveal object keys.</Rule>
+  </LifecycleAndRetention>
+  <AsrRuntime>
+    <Source>external/copper-asr is the pinned external runtime source; workers/common/src/transcriber_workers_common/copper_asr.py is the platform client boundary.</Source>
+    <Contract>Platform owns inputs, lifecycle, progress, cancellation, artifacts, diagnostics, and channel surfaces; CopperASR owns model lifecycle, inference, sanitized ASR errors, health, and transcribe endpoints.</Contract>
+    <Topology>Dedicated internal copper-asr service is called through COPPER_ASR_BASE_URL and bounded CPU, ONNX, Torch, ffmpeg, cache, temporary storage, and health-start settings.</Topology>
+    <Policy>Local compose uses the CPU runtime profile unless a later approved change modifies the image and benchmark envelope.</Policy>
+  </AsrRuntime>
+  <AdapterContracts>
+    <Telegram>Capture inputs through local Telegram Bot API, resolve channel scope, manage API state, recover channel surfaces, and deliver API-resolved artifacts with fenced duplicate prevention and correct voice/audio/document presentation.</Telegram>
+    <Web>Present materials, collections, selections, progress, results, downloads, errors, and retention without normal-surface service metadata.</Web>
+    <Mcp>Expose stable tools over the API and allow explicit service-artifact previews without a separate durable media store.</Mcp>
+  </AdapterContracts>
+  <EvidenceContracts>
+    <ContractEvidence>Prove target DTOs/routes, validation, canonical vocabulary, and removal of stale aliases.</ContractEvidence>
+    <StorageEvidence>Prove migration/reset, identity, publication, pins/deletion, queues, immutable snapshots, idempotency, diagnostics, surfaces, lineage, and reconciliation on disposable PostgreSQL.</StorageEvidence>
+    <WorkerEvidence>Prove queue claims, declared inputs, provider bounds, publication, cancellation, resource limits, scratch cleanup, diagnostics, and restart recovery.</WorkerEvidence>
+    <AdapterEvidence>Prove all adapters use shared API state, channel recovery and delivery are restart-safe, and normal presentation hides provider internals.</AdapterEvidence>
+    <RuntimeEvidence>Prove real ingestion, atomic launch, analysis, export/delivery, restart recovery, digest reuse, scratch cleanup, and physical object expiry through the compose topology.</RuntimeEvidence>
+  </EvidenceContracts>
+</GraceTechnology>

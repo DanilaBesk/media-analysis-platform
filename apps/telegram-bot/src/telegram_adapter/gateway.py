@@ -6,8 +6,31 @@
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP, M-CONTRACTS
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   JsonObject - JSON object payload type used by the gateway.
+#   IngressStatus - Accepted or rejected ingress state.
+#   ACTIVE_RUN_STATUSES - Analysis-run statuses considered active.
+#   CANCELABLE_RUN_STATUSES - Analysis-run statuses that permit cancellation.
+#   TERMINAL_RUN_STATUSES - Analysis-run terminal statuses.
+#   VISIBLE_RUN_STATUSES - Analysis-run statuses visible in Telegram.
+#   URL_RE - URL extraction expression.
+#   SUPPORTED_URL_SCHEMES - URL schemes accepted by ingress.
+#   CURRENT_MATERIALS_PANEL - Current-materials surface identifier.
+#   ANALYSIS_TASK_SURFACE - Analysis-task surface identifier.
+#   RESULT_ARTIFACT_SURFACE - Result-artifact surface identifier.
+#   EXPORT_TASK_SURFACE - Export-task surface identifier.
+#   ACTIVE_EXPORT_STATUSES - Export statuses considered active.
+#   TERMINAL_EXPORT_STATUSES - Export terminal statuses.
+#   TelegramFileInput - Telegram file ingress contract.
+#   IngressRecord - Normalized ingress outcome.
+#   InboxStatus - Restored Telegram inbox state.
+#   TelegramInboxGateway - Adapter from Telegram operations to API state.
+#   extract_links - Extract supported links from message text.
+#   youtube_audio_export_ready - Check whether YouTube audio export metadata is stable.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

@@ -21,6 +21,12 @@
 #   test_fetch_file_removes_partial_attempt_file_when_streaming_fails - Verifies failed downloads leave no partial file.
 #   test_fetch_file_uses_artifact_bucket_for_claimed_artifact_inputs - Verifies child-worker artifact inputs are read from the artifact bucket.
 #   test_put_bytes_uses_artifact_bucket_and_content_headers - Verifies artifact uploads and signed PUT request shape.
+#   StreamingObjectTransport - Supplies streaming response bytes for fetch tests.
+#   test_fetch_file_rejects_blank_object_key - Verifies blank object keys are rejected.
+#   test_object_store_rejects_non_bucket_relative_keys - Verifies object keys must be bucket-relative.
+#   test_urllib_transport_reads_response_bytes - Verifies urllib transport reads response bytes.
+#   test_urllib_transport_wraps_http_error - Verifies urllib transport wraps HTTP failures.
+#   test_urllib_transport_wraps_url_error - Verifies urllib transport wraps URL failures.
 # END_MODULE_MAP
 
 from __future__ import annotations

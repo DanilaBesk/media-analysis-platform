@@ -1,3 +1,25 @@
+// START_MODULE_CONTRACT
+// PURPOSE: Expose the HTTP and WebSocket entrypoint for API-owned product contracts and internal worker control routes.
+// SCOPE: Server construction, route registration, request validation, access checks, CORS, error envelopes, and transport-level response shaping.
+// DEPENDS: M-CONTRACTS, M-API-DOMAIN, M-API-STORAGE, M-API-STEP-CONTROL, M-API-EVENTS
+// LINKS: M-CONTRACTS, M-API-HTTP, V-M-CONTRACTS, V-M-API-HTTP
+// ROLE: RUNTIME
+// MAP_MODE: EXPORTS
+// END_MODULE_CONTRACT
+
+// START_MODULE_MAP
+// Logger
+// WebsocketAcceptor
+// Dependencies
+// Server
+// Option
+// WithLogger
+// WithMaxRequestBytes
+// WithStrictLocalRequests
+// WithInternalToken
+// NewServer
+// END_MODULE_MAP
+
 package api
 
 import (

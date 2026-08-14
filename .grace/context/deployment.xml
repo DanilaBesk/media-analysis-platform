@@ -1,0 +1,12 @@
+<GraceDeployment graceVersion="4.0">
+  <Applicability>applicable</Applicability>
+  <Target>Local Docker Compose stack and its deployable service topology.</Target>
+  <Environment>Copy .env.example to .env and set TELEGRAM_BOT_TOKEN; service-specific CopperASR, Telegram, database, object-store, and API settings remain environment configuration.</Environment>
+  <Services>api; telegram-bot; telegram-bot-api; web; mcp-server; transcription-worker; agent-runner-worker; media-export-worker; metadata-enrichment-worker; copper-asr; postgres; minio.</Services>
+  <NetworkBoundary>API, database, MinIO API/console, CopperASR, and internal worker control routes remain private to the compose topology or bind host access to 127.0.0.1; internal APIs require PLATFORM_INTERNAL_TOKEN.</NetworkBoundary>
+  <StorageBoundary>PostgreSQL is durable product/queue authority; MinIO-compatible storage is durable byte authority; worker and provider temporary files are attempt-scoped scratch.</StorageBoundary>
+  <CutoverOrder>Apply forward migrations and health-check services, keep consumers disabled until schema and contracts pass, enable queue claims before retention sweeps, then roll out adapters and runtime proof.</CutoverOrder>
+  <ReleaseGates>Run focused unit/contract suites, no-legacy and fixture gates, XML validation, compose config smoke, and runtime-final proof before treating a release as ready.</ReleaseGates>
+  <Rollback>Use the repository's compose reset/recreate and forward migration procedures. Do not hand-edit production or disposable database rows.</Rollback>
+  <Commands>uv run media-analysis-platform; bash infra/scripts/compose-smoke.sh --check-config; bash infra/scripts/target-reset-smoke.sh; python3 infra/scripts/runtime-final-e2e.py --json.</Commands>
+</GraceDeployment>

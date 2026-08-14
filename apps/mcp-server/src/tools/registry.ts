@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: RUNTIME
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,10 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   CreateMcpDomainRuntimeOptions - Configures domain runtime construction.
+//   MCP_TOOL_MAPPING_MARKER - Identifies tool-mapping runtime events.
+//   McpDomainRuntime - Exposes the SDK server and testable tool entrypoints.
+//   createMcpDomainRuntime - Registers domain tools on an SDK server instance.
 //   register-sdk-tools - Register every domain tool on the official MCP SDK server.
 //   expose-test-builder - Let tests inspect definitions and call handlers without starting stdio.
 //   shape-known-errors - Convert adapter validation and upstream API failures into structured MCP error results.

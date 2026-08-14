@@ -20,6 +20,15 @@
 #   test_run_worker_loop_polls_queued_run_through_api_client - Verifies queued polling and runner dispatch.
 #   test_run_worker_loop_returns_after_idle_limit - Verifies deterministic idle exit for tests/smoke.
 #   test_run_worker_loop_accounts_runner_failures - Verifies failures are logged and counted.
+#   test_run_worker_loop_accounts_explicit_run_failure - Verifies explicit-run failures are counted.
+#   test_run_worker_loop_counts_queue_poll_failures - Verifies queue-poll failures are counted.
+#   test_run_worker_loop_keeps_traceback_for_unexpected_runner_failure - Verifies unexpected runner failures retain tracebacks.
+#   test_run_worker_loop_logs_controlled_runner_failure_without_traceback - Verifies controlled runner failures omit tracebacks.
+#   test_run_worker_loop_sleeps_and_recovers_after_queue_poll_failure - Verifies polling recovers after a queue failure.
+#   test_runtime_config_accepts_agent_runner_identity - Verifies runtime config accepts agent-runner identity.
+#   test_runtime_config_rejects_invalid_numeric_env - Verifies invalid numeric environment settings are rejected.
+#   test_runtime_config_rejects_invalid_optional_integer_env - Verifies invalid optional integer settings are rejected.
+#   test_runtime_config_rejects_nonpositive_processed_limit - Verifies nonpositive processed limits are rejected.
 # END_MODULE_MAP
 
 from __future__ import annotations

@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: TYPES
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,9 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   McpServerEnv - Defines normalized MCP server environment values.
+//   McpServerRuntime - Defines the app-local runtime dependency shape.
+//   resolveMcpServerEnv - Resolves the MCP server environment contract.
 //   resolve-env-contract - Normalize the packet-local API base URL used by the shell bootstrap and tests.
 //   runtime-shape - Describe the server-shell runtime object that the follow-on packet will extend with real tools.
 // END_MODULE_MAP

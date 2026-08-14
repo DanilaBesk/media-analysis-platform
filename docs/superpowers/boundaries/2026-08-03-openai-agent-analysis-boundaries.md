@@ -35,11 +35,11 @@ Replace the container-local AI CLI subprocess with direct, stateless OpenAI Resp
 - Owner request, 2026-07-30: replace agent-runner CLI execution with direct OpenAI API calls configured by an environment URL, remove the CLI implementation completely, and design the Telegram AI flow.
 - Owner decisions, 2026-08-03: approve the recommended three-module map; use one-shot `analysis_run` rather than conversations; use Responses with a configurable base URL and `store: false`; allow provider-side web search only for `deep_research`; keep Web and MCP UX out of scope.
 - `AGENTS.md`: project workflow, GRACE authority, runtime map, configuration-boundary rule, and packet-driven execution constraints.
-- `docs/requirements.xml`: API-owned run lifecycle, report/research input contract, cooperative cancellation, thin-adapter contract, Telegram delivery/recovery behavior, and provider-agnostic user surfaces.
-- `docs/technology.xml`: canonical control-plane/execution-plane split, target component ownership, `analysis_run` and step state, and declared input rules.
-- `docs/development-plan.xml`: report/deep-research execution outcomes and Telegram adapter responsibilities.
-- `docs/verification-plan.xml`: worker, API, adapter, cancellation, artifact, diagnostic, security, and recovery evidence gates.
-- `docs/knowledge-graph.xml` and `docs/operational-packets.xml`: current module relations, completed packet evidence, and remaining governed execution context.
+- `.grace/context/requirements.xml`: API-owned run lifecycle, report/research input contract, cooperative cancellation, thin-adapter contract, Telegram delivery/recovery behavior, and provider-agnostic user surfaces.
+- `.grace/context/technology.xml`: canonical control-plane/execution-plane split, target component ownership, `analysis_run` and step state, and declared input rules.
+- `.grace/context/{principles,deployment,ux-guidelines}.xml`: cross-cutting constraints, deployment configuration boundaries, and user-surface guidance.
+- `.grace/verification/{index,main}.xml`: worker, API, adapter, cancellation, artifact, diagnostic, security, and recovery evidence gates.
+- `.grace/graph/{index,main}.xml` and `.grace/changes/{active,archive}/`: current module relations, approved packet evidence, and governed execution context.
 - `workers/agent-runner/src/transcriber_worker_agent_runner.py` and its tests: current Claude Code subprocess/configuration path, harness registry, execution lifecycle, artifact publication, diagnostics, and cancellation checks.
 - `infra/images/worker-agent-runner/Dockerfile` and `infra/env/worker-agent-runner.env.example`: current Node/Claude CLI image and deployment configuration surface.
 - `apps/telegram-bot/src/telegram_adapter/api_client.py`, `apps/telegram-bot/src/telegram_adapter/bot.py`, and their tests: current transcription-default launch, provider-neutral status cards, cancellation, result delivery, and transcript-only result selection.

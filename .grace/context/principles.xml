@@ -1,0 +1,13 @@
+<GracePrinciples graceVersion="4.0">
+  <Principle>Contract-first changes: establish module ownership, public vocabulary, and verification evidence before implementation.</Principle>
+  <Principle>API-owned state is authoritative; adapters own presentation and recovery state, while workers own execution mechanics only.</Principle>
+  <Principle>Semantic anchors remain stable, grep-friendly, attribute-free tag names; every module has one graph owner and one derived verification entry.</Principle>
+  <Principle>Immutable snapshots and fenced lifecycle transitions protect retries, cancellation, publication, delivery, and retention from races.</Principle>
+  <Principle>Use fresh assertions, focused tests, deterministic fixtures, disposable database resets, and runtime smoke checks as completion evidence.</Principle>
+  <Principle>Preserve diagnostics and provenance for failures; do not claim historical commands were rerun when migrating evidence.</Principle>
+  <Principle>Do not create retroactive change bundles during migration; historical packets remain recoverable in the approved external backup and Git history.</Principle>
+  <Principle>Build bottom-up: contracts and disposable storage reset, then API domain/orchestration, workers, adapters, deterministic coverage, and final runtime/readiness proof.</Principle>
+  <Principle>Deploy additive forward-only schema and disabled consumers before enabling claims, adapters, retention reconciliation, and physical deletion; rollback disables claims and drains leases without destructive Down migrations.</Principle>
+  <Principle>Definition of done requires canonical contracts, current module/verification routing, focused automated tests, no-legacy guards, clean compose configuration, live runtime evidence where claimed, and tracked residual risk.</Principle>
+  <Principle>Configuration belongs to infrastructure/runtime environment; durable media, lifecycle, diagnostics, and presentation-recovery state belongs to API product storage.</Principle>
+</GracePrinciples>

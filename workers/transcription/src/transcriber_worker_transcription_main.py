@@ -6,7 +6,7 @@
 # DEPENDS: M-WORKER-TRANSCRIPTION, M-WORKER-COMMON, M-CONTRACTS
 # LINKS: M-WORKER-TRANSCRIPTION, V-M-WORKER-TRANSCRIPTION
 # ROLE: SCRIPT
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
@@ -14,8 +14,8 @@
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
-#   launch-transcription-worker - Build the API client, object-store adapter, default transcriber, and shared worker loop.
-#   build-transcription-runner - Adapt claimed analysis run IDs into runTranscription calls without duplicating queue logic.
+#   build_runner - Adapt claimed analysis run IDs into runTranscription calls without duplicating queue logic.
+#   main - Build the API client, object-store adapter, default transcriber, and shared worker loop.
 # END_MODULE_MAP
 
 from __future__ import annotations

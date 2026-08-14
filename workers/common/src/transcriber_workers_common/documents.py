@@ -109,7 +109,7 @@ def write_transcript_docx(output_path: Path, transcript: TranscriptResult) -> No
 # INPUTS: { output_path: Path - Destination DOCX path, markdown_content: str - Source markdown content }
 # OUTPUTS: { None - The DOCX file is written to disk }
 # SIDE_EFFECTS: filesystem writes
-# LINKS: M-WORKER-COMMON, V-M-WORKER-REPORT
+# LINKS: M-WORKER-COMMON, V-M-WORKER-AGENT-RUNNER
 # END_CONTRACT: write_report_docx
 def write_report_docx(output_path: Path, markdown_content: str) -> None:
     normalized_content = normalize_report_markdown(markdown_content)
@@ -205,7 +205,7 @@ def _looks_like_machine_file_name(value: str) -> bool:
 # INPUTS: { markdown_content: str - Raw report markdown }
 # OUTPUTS: { str - Normalized report markdown }
 # SIDE_EFFECTS: none
-# LINKS: M-WORKER-COMMON, V-M-WORKER-REPORT
+# LINKS: M-WORKER-COMMON, V-M-WORKER-AGENT-RUNNER
 # END_CONTRACT: normalize_report_markdown
 def normalize_report_markdown(markdown_content: str) -> str:
     cleaned_lines: list[str] = []

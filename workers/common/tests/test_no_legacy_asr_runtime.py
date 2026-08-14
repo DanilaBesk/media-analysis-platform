@@ -32,8 +32,10 @@ ACTIVE_PATHS = [
     "workers/common/tests",
     "workers/transcription/src",
     "workers/transcription/tests",
-    "docs/technology.xml",
-    "docs/knowledge-graph.xml",
+    ".grace/context/technology.xml",
+    ".grace/context/deployment.xml",
+    ".grace/graph/main.xml",
+    ".grace/verification/main.xml",
     "docs/architecture/runtime-ops.md",
 ]
 

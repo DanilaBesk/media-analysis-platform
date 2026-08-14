@@ -3,10 +3,10 @@
 # START_MODULE_CONTRACT
 # PURPOSE: Provide the compose-ready executable launcher for the thin Telegram adapter package.
 # SCOPE: Runtime env normalization, API client bootstrap, readiness logging, and long-running adapter process lifecycle.
-# DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP, M-INFRA-COMPOSE
+# DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
 # ROLE: SCRIPT
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
 #
 # START_CHANGE_SUMMARY
@@ -14,7 +14,7 @@
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
-#   launch-telegram-adapter - Normalize runtime env, construct the API client boundary, and keep the adapter process healthy.
+#   main - Normalize runtime env and run the Telegram adapter process.
 # END_MODULE_MAP
 
 from __future__ import annotations

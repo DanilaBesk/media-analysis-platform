@@ -1,0 +1,25 @@
+<GraceGraphIndex graceVersion="4.0">
+  <GraphDocuments>
+    <GD-MAIN>
+      <Path>graph/main.xml</Path>
+      <Owns>
+        <M-CONTRACTS />
+        <M-API-HTTP />
+        <M-API-DOMAIN />
+        <M-API-STORAGE />
+        <M-API-STEP-CONTROL />
+        <M-API-EVENTS />
+        <M-INTERACTION-SURFACES />
+        <M-WORKER-COMMON />
+        <M-WORKER-TRANSCRIPTION />
+        <M-COPPER-ASR />
+        <M-WORKER-AGENT-RUNNER />
+        <M-MEDIA-EXPORT />
+        <M-METADATA-ENRICHMENT />
+        <M-WEB-UI />
+        <M-TELEGRAM-ADAPTER />
+        <M-MCP-ADAPTER />
+      </Owns>
+    </GD-MAIN>
+  </GraphDocuments>
+</GraceGraphIndex>

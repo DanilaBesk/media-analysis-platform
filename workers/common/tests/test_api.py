@@ -21,6 +21,25 @@
 #   test_check_cancel_uses_query_contract - Verifies cancel-check query and response parsing.
 #   test_internal_api_failures_emit_required_marker - Verifies deterministic transport failures and stable log markers.
 #   test_claim_analysis_run_rejects_malformed_response - Verifies deterministic failure on malformed claim responses.
+#   RUN_ID - Defines a stable analysis-run identifier fixture.
+#   STEP_ID - Defines a stable analysis-step identifier fixture.
+#   SNAPSHOT_ID - Defines a stable selection-snapshot identifier fixture.
+#   ASSET_ID - Defines a stable media-asset identifier fixture.
+#   OBJECT_ID - Defines a stable stored-object identifier fixture.
+#   test_claim_analysis_run_accepts_target_selection_snapshot_metadata - Verifies target selection metadata is accepted.
+#   test_claim_analysis_run_allows_agent_run_without_ordered_inputs - Verifies agent runs may omit ordered inputs.
+#   test_claim_analysis_run_rejects_empty_selection_snapshot_items - Verifies empty selection snapshots are rejected.
+#   test_list_queued_runs_allows_unfiltered_polling_query - Verifies queue polling supports an unfiltered query.
+#   test_media_source_snapshot_payload_and_optional_sizes_cover_target_paths - Verifies source snapshots and optional sizes cover target paths.
+#   test_ordered_input_request_access_and_helper_branches_cover_edge_paths - Verifies ordered-input access helper edge paths.
+#   test_resolve_agent_run_request_access_uses_query_contract - Verifies agent-run request access uses the query contract.
+#   test_resolve_artifact_uses_internal_download_access_contract - Verifies artifact resolution uses the internal download-access contract.
+#   test_selection_item_helpers_cover_defaults_and_metadata_fallbacks - Verifies selection helpers use defaults and metadata fallbacks.
+#   test_selection_item_labels_and_materialization_helpers_trim_source_labels - Verifies labels and materialization helpers trim source labels.
+#   test_selection_item_materialization_classifies_final_multimodal_sources - Verifies final multimodal source materialization classification.
+#   test_selection_item_materialization_marks_missing_object_key_as_unsupported - Verifies missing object keys are unsupported.
+#   test_selection_item_materialization_uses_canonical_snapshot_locator_after_alias_cleanup - Verifies canonical snapshot locators remain after alias cleanup.
+#   test_selection_item_role_defaults_from_metadata_or_selection_options - Verifies item roles default from metadata or selection options.
 # END_MODULE_MAP
 
 from __future__ import annotations

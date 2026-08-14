@@ -6,8 +6,35 @@
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: TEST
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   FakeHttpResponse - Deterministic urllib response double.
+#   CHANNEL_IDENTITY - Stable channel identity used by API-client tests.
+#   test_default_api_transport_has_bounded_timeout - Verify bounded default transport timeout.
+#   test_create_media_asset_posts_target_media_asset_payload - Verify media-asset request shape.
+#   test_upload_media_asset_posts_multipart_target_payload - Verify multipart upload request shape.
+#   test_upload_media_asset_from_path_passes_a_file_stream_to_http_client - Verify path-backed upload streaming.
+#   test_upload_media_asset_from_anonymous_stream_does_not_close_caller_handle - Verify caller stream ownership.
+#   test_remove_collection_item_uses_channel_account_query_and_expected_version - Verify fenced collection removal.
+#   test_create_selection_snapshot_and_analysis_run_use_target_identifiers - Verify selection and run identifiers.
+#   test_start_collection_processing_run_uses_semantic_contract_and_stable_header - Verify processing-run request contract.
+#   test_restore_reads_inbox_media_assets_and_runs_with_channel_account_query - Verify restore query scoping.
+#   test_get_analysis_run_uses_channel_account_query_and_extracts_wrapped_object - Verify analysis-run response handling.
+#   test_export_client_uses_export_and_fenced_delivery_contracts - Verify export delivery contracts.
+#   test_export_delivery_heartbeat_renews_the_fenced_claim - Verify export delivery heartbeat fencing.
+#   test_list_analysis_run_events_uses_channel_account_query_and_page_size - Verify event-list query shape.
+#   test_cancel_analysis_run_posts_channel_account_and_message - Verify cancellation payload shape.
+#   test_get_internal_artifact_download_access_uses_internal_endpoint_without_channel_account_query - Verify internal artifact access.
+#   test_channel_account_and_surface_internal_methods_use_target_contracts - Verify channel and surface contracts.
+#   test_optional_idempotency_actor_and_surface_fields_are_forwarded - Verify optional idempotency fields.
+#   test_backend_connection_failure_is_categorized_without_raw_exception_copy - Verify safe connection-failure mapping.
+#   test_runtime_download_failures_map_to_specific_unsupported_input_copy - Verify download failure copy.
+#   test_runtime_rejection_reasons_map_to_unsupported_input_copy - Verify rejection reason copy.
+#   test_optional_query_and_payload_fields_are_forwarded_for_full_adapter_surface - Verify optional API fields.
+#   test_request_handles_empty_payload_http_errors_and_missing_wrapped_objects - Verify malformed response failures.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

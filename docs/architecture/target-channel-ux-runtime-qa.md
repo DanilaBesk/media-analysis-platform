@@ -87,9 +87,13 @@ python3 infra/scripts/runtime-final-e2e.py
 bash infra/scripts/compose-smoke.sh --check-config
 bash infra/scripts/target-reset-smoke.sh
 bash infra/scripts/no-legacy-target-gate.sh
-xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml
 git diff --check
 ```
+
+The predecessor XML validation recorded for this completed QA wave is retained in
+the external migration backup and Git history. It is not evidence that GRACE 4
+was rerun. Current GRACE 4 validation is performed separately with
+`grace lint --path . --assertions current` and `grace status --path . --json`.
 
 Observed results:
 
@@ -103,5 +107,5 @@ Observed results:
 - Compose config smoke: passed.
 - Target reset smoke: passed.
 - No-legacy target gate: passed.
-- GRACE XML validation: passed.
+- The recorded predecessor XML validation passed at the time; current GRACE 4 validation is separate.
 - Git diff whitespace check: passed.

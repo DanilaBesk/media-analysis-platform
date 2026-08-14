@@ -1,6 +1,6 @@
 # Cutover Checklist
 
-This historical checklist tracks the earlier inbox-first acceptance model. Current target closure is governed by the GRACE XML docs plus `docs/architecture/single-user-channel-aware-target-architecture.md`; when terms conflict, the target media_asset, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account vocabulary wins.
+This historical checklist tracks the earlier inbox-first acceptance model. Its archived pre-migration baseline is retained in the external migration backup and Git history; current target closure is governed by GRACE 4 state under `.grace/` plus `docs/architecture/single-user-channel-aware-target-architecture.md`. When terms conflict, the target media_asset, selection_snapshot, analysis_run, artifact, diagnostic, and channel_account vocabulary wins.
 
 ## Preconditions
 
@@ -48,7 +48,7 @@ Interpretation rules:
 - A numeric coverage percentage only counts when the underlying tool can emit it for that surface.
 - Pass/fail-only suites are still useful, but they do not satisfy a "100% coverage" claim by themselves.
 - A missing coverage provider or unwired command is a gate gap, not a silent exclusion.
-- Runtime smoke, compose boot, and GRACE/XML validation stay as separate acceptance gates and must not be rolled into a fake global coverage percentage.
+- Runtime smoke, compose boot, and GRACE 4 validation stay as separate acceptance gates and must not be rolled into a fake global coverage percentage.
 
 ## Live Acceptance
 
@@ -91,7 +91,7 @@ Current truth:
 
 Legacy job-based product guidance is considered removed only when:
 
-- GRACE XML docs and active architecture docs reference the inbox-first model as the target;
+- current GRACE 4 context/graph/verification state and active architecture docs reference the inbox-first model as the target;
 - stale scans show no active public job-route, job identifier, or job module target references;
 - remaining historical notes, if any, are explicitly marked superseded and excluded from implementation guidance;
 - adapter tests prove the UX centers on accumulated media, explicit selections, and analysis runs.

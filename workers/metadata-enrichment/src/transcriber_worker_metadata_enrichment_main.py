@@ -4,10 +4,15 @@
 # PURPOSE: Compose and launch the production metadata enrichment worker.
 # SCOPE: Environment-backed runtime wiring and cooperative process shutdown.
 # DEPENDS: M-METADATA-ENRICHMENT
-# LINKS: V-METADATA-ENRICHMENT
+# LINKS: V-M-METADATA-ENRICHMENT
 # ROLE: SCRIPT
-# MAP_MODE: EXPORTS
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   build_worker - Compose the metadata-enrichment worker from environment-backed dependencies.
+#   main - Launch the metadata-enrichment worker process.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

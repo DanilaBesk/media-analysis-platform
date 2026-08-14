@@ -18,6 +18,13 @@
 #   JsonTransport - Defines the transport contract used by the shared API client.
 #   AnalysisRunQueueItem - Represents the minimal queued analysis_run_step consumed by the shared worker loop.
 #   SelectionSnapshotItemInput - Represents one immutable selection_snapshot item from the worker-control contract.
+#   MediaSourceSnapshot - Represents one immutable media source resolved from a selection snapshot item.
+#   SelectionItemLabels - Represents normalized labels attached to one selection snapshot item.
+#   SelectionItemMaterialization - Represents the canonical materialization decision for one selection item.
+#   OrderedWorkerInput - Represents one ordered worker input derived from a sealed selection snapshot.
+#   SealedSelectionSnapshotInput - Represents the immutable selection snapshot supplied to a worker step.
+#   AnalysisRunStepInput - Represents one typed input declared for an analysis run step.
+#   SelectionItemSnapshot - Represents one normalized selection item snapshot.
 #   ClaimedAnalysisRunStep - Represents the analysis_run_step claim response consumed by workers.
 #   CancelCheckResult - Represents the cancel-check response consumed by later worker packets.
 #   ArtifactResolutionResult - Represents a resolved downloadable artifact locator.
@@ -809,7 +816,7 @@ class AnalysisRunControlClient:
     # INPUTS: { status/run_type/worker_kind/step_kind filters, page_size: int - Max items to read }
     # OUTPUTS: { tuple[AnalysisRunQueueItem, ...] - Minimal snapshots consumed by the worker runtime scaffold }
     # SIDE_EFFECTS: API GET request
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: list_queued_runs
     def list_queued_runs(
         self,
@@ -850,7 +857,7 @@ class AnalysisRunControlClient:
     # INPUTS: { analysis_run_id: str - Analysis run identifier, worker_kind: str - Frozen worker kind, step_kind: str - Frozen step kind }
     # OUTPUTS: { ClaimedAnalysisRunStep - Typed claim response }
     # SIDE_EFFECTS: internal API POST request
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: claim_analysis_run_step
     def claim_analysis_run_step(self, analysis_run_id: str, *, worker_kind: str, step_kind: str) -> ClaimedAnalysisRunStep:
         _require(worker_kind in _WORKER_KINDS, "invalid worker_kind")
@@ -868,7 +875,7 @@ class AnalysisRunControlClient:
     # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier, progress_stage: str - Stable progress stage, progress_message: str | None - Optional human-readable progress message }
     # OUTPUTS: { None - The API side effect is authoritative }
     # SIDE_EFFECTS: internal API POST request
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-003
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: publish_progress
     def publish_progress(
         self,
@@ -891,7 +898,7 @@ class AnalysisRunControlClient:
     # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier, artifacts: Sequence[ArtifactDescriptor] - Canonical artifact descriptors }
     # OUTPUTS: { None - The API side effect is authoritative }
     # SIDE_EFFECTS: internal API POST request
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: register_artifacts
     def register_artifacts(
         self,
@@ -923,7 +930,7 @@ class AnalysisRunControlClient:
     # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier, outcome: str - Frozen worker outcome, progress_stage/progress_message/error_code/error_message: str | None - Optional terminal metadata }
     # OUTPUTS: { None - The API side effect is authoritative }
     # SIDE_EFFECTS: internal API POST request
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001, DF-007
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: finalize_analysis_run
     def finalize_analysis_run(
         self,
@@ -950,7 +957,7 @@ class AnalysisRunControlClient:
     # INPUTS: { analysis_run_id: str - Analysis run identifier, analysis_run_step_id: str - Claimed step identifier }
     # OUTPUTS: { CancelCheckResult - Typed cancel-check response }
     # SIDE_EFFECTS: internal API GET request
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-007
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: check_cancel
     def check_cancel(self, analysis_run_id: str, *, analysis_run_step_id: str) -> CancelCheckResult:
         response = self._call_internal_api(

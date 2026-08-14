@@ -6,8 +6,13 @@
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   CatalogValidationError - Translation catalog validation failure.
+#   validate_translation_catalogs - Validate locale, key, value, and placeholder parity.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

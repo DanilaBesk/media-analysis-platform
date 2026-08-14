@@ -534,7 +534,7 @@ class LocalAgentHarnessRegistry:
 # INPUTS: { analysis_run_id: str, workspace_root: Path, api_client: AnalysisRunControlClient, artifact_store: ArtifactObjectStore, harness_registry: AgentHarnessRegistry | None }
 # OUTPUTS: { AgentRunnerWorkerResult - Successful execution evidence }
 # SIDE_EFFECTS: API claim/progress/artifact/finalize calls and object-store writes
-# LINKS: M-WORKER-AGENT-RUNNER, M-WORKER-COMMON, M-CONTRACTS, DF-001, DF-007
+# LINKS: M-WORKER-AGENT-RUNNER, M-WORKER-COMMON, M-CONTRACTS
 # END_CONTRACT: runAgentHarness
 def runAgentHarness(
     analysis_run_id: str,

@@ -1,0 +1,10 @@
+<GraceVerificationIndex graceVersion="4.0">
+  <VerificationDocuments>
+    <VD-MAIN>
+      <Path>verification/main.xml</Path>
+      <Owns>
+        <V-M-CONTRACTS /><V-M-API-HTTP /><V-M-API-DOMAIN /><V-M-API-STORAGE /><V-M-API-STEP-CONTROL /><V-M-API-EVENTS /><V-M-INTERACTION-SURFACES /><V-M-WORKER-COMMON /><V-M-WORKER-TRANSCRIPTION /><V-M-COPPER-ASR /><V-M-WORKER-AGENT-RUNNER /><V-M-MEDIA-EXPORT /><V-M-METADATA-ENRICHMENT /><V-M-WEB-UI /><V-M-TELEGRAM-ADAPTER /><V-M-MCP-ADAPTER />
+      </Owns>
+    </VD-MAIN>
+  </VerificationDocuments>
+</GraceVerificationIndex>

@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: RUNTIME
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,11 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   DomainMcpTool - Defines one executable domain tool.
+//   DomainMcpToolDefinition - Defines public MCP tool metadata and schema.
+//   DomainMcpToolExample - Describes one tool invocation example.
+//   createDomainMcpTools - Creates the domain-first tool handlers over the API client.
+//   listDomainMcpToolDefinitions - Returns stable public tool definitions.
 //   validate-domain-inputs - Use Zod schemas aligned with the public inbox-first contracts.
 //   map-tools-to-api - Route domain tools to /v1/media-assets, /v1/collections, /v1/selection-snapshots, /v1/analysis-runs, /v1/artifacts, and /v1/diagnostics.
 //   shape-tool-results - Preserve API envelopes in structured MCP responses without adding adapter-side orchestration.

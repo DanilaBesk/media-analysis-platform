@@ -3,7 +3,7 @@
 Status: superseded
 Date: 2026-05-16
 
-This document used to describe an earlier external-presentation boundary. The active contract is now the target `channel_surface` model in `docs/architecture/single-user-channel-aware-target-architecture.md` and the GRACE XML artifacts.
+This document used to describe an earlier external-presentation boundary. The active contract is now the target `channel_surface` model in `docs/architecture/single-user-channel-aware-target-architecture.md` and the GRACE 4 context, graph, verification, and active-change state under `.grace/`.
 
 Use the current target terms:
 

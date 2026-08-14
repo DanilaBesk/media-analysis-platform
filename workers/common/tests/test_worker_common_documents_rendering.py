@@ -18,6 +18,7 @@
 #   test_write_report_docx_strips_boilerplate_and_inline_markdown - Verifies boilerplate removal and inline markdown handling.
 #   test_title_and_source_fallbacks_cover_supported_source_types - Verifies title/source heuristics for target artifacts.
 #   test_timestamp_and_machine_name_helpers_cover_edge_cases - Verifies timestamp and machine-name helper branches.
+#   test_human_readable_media_name_is_preserved - Verifies human-readable media names are preserved.
 # END_MODULE_MAP
 
 from __future__ import annotations

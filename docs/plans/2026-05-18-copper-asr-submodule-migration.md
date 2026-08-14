@@ -10,8 +10,8 @@ Source anchors:
 
 - `docs/research/2026-05-19-copper-asr-submodule-runtime-contract.md`
 - `docs/research/2026-05-19-whisper-removal-surface-inventory.md`
-- `docs/operational-packets.xml`
-- `docs/requirements.xml`
+- archived pre-migration requirements and operational baseline (retained in the external migration backup and Git history)
+- current GRACE 4 state under `.grace/`
 - Beads graph `media-b8s.*`
 
 ## Product Goal
@@ -240,8 +240,8 @@ Write scope:
 - `.gitmodules`
 - `external/copper-asr`
 - `README.md` or local bootstrap docs if needed
-- `docs/technology.xml`
-- `docs/knowledge-graph.xml`
+- `.grace/context/technology.xml`
+- `.grace/graph/{index,main}.xml`
 - this source plan if the final submodule URL differs from the reviewed URL
 
 Acceptance gates:
@@ -259,14 +259,15 @@ Write scope:
 - `.gitmodules`
 - `external/copper-asr`
 - `infra/images/copper-asr/Dockerfile`
-- GRACE XML docs and this source plan
+- GRACE 4 context, graph, verification, and active-change state under `.grace/` and this source plan
 
 Acceptance gates:
 
 - `git submodule status --recursive`
 - `git -C external/copper-asr rev-parse HEAD`
 - `git -C external/copper-asr status --short`
-- `xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml`
+- `grace lint --path . --assertions current`
+- `grace status --path . --json`
 - `bash infra/scripts/no-legacy-asr-gate.sh`
 - compose config check for the `copper-asr` service
 - `git diff --check`
@@ -374,19 +375,18 @@ Allowed historical references:
 
 Write scope:
 
-- `docs/requirements.xml`
-- `docs/technology.xml`
-- `docs/development-plan.xml`
-- `docs/verification-plan.xml`
-- `docs/knowledge-graph.xml`
-- `docs/operational-packets.xml`
+- `.grace/context/{requirements,technology,principles,deployment,ux-guidelines}.xml`
+- `.grace/graph/{index,main}.xml`
+- `.grace/verification/{index,main}.xml`
+- `.grace/changes/active/C-*/` only for approved contemporaneous work; do not create a retroactive bundle for this completed migration
 - `AGENTS.md`
 - `CLAUDE.md`
 - `docs/architecture/runtime-ops.md`
 
 Acceptance gates:
 
-- `xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml`
+- `grace lint --path . --assertions current`
+- `grace status --path . --json`
 - GRACE names CopperASR as the sole active ASR runtime.
 - Whisper references are removed from active runtime docs or explicitly historical.
 - Operational packets list implementation, cleanup, coverage, and QA evidence.
@@ -454,7 +454,7 @@ The gate must scan at least:
 - `infra`
 - `apps`
 - `packages`
-- active docs and GRACE XML
+- active docs and GRACE 4 state under `.grace/`
 
 The gate may allow explicitly historical files listed in an allowlist with comments. The allowlist must not include production code, compose, env examples, or active tests.
 
@@ -472,7 +472,7 @@ Implementation gate:
 - Focused API tests for analysis run step finalization and artifact lineage.
 - Compose config and smoke checks.
 - No-Whisper active runtime gate.
-- GRACE XML validation after docs refresh.
+- GRACE 4 validation after docs refresh: `grace lint --path . --assertions current` and `grace status --path . --json`.
 
 Coverage gate:
 

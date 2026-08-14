@@ -6,8 +6,48 @@
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: TEST
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   FakeFinalApiClient - Deterministic final API client double.
+#   channel_identity - Stable channel-identity fixture.
+#   create_selection_and_run - Create a selection and analysis run in tests.
+#   test_text_and_link_messages_become_inbox_media_assets - Verify text and link ingress.
+#   test_private_chat_scope_is_deterministic_and_groups_are_not_supported - Verify chat scope policy.
+#   test_mixed_inputs_preserve_supported_and_unsupported_urls_with_files - Verify mixed-input ingress.
+#   test_photo_video_document_and_media_group_inputs_keep_telegram_metadata - Verify Telegram media metadata.
+#   test_voice_file_ingress_uses_multipart_upload_and_never_add_media_asset_object_refs - Verify voice upload behavior.
+#   test_album_status_preview_groups_visible_media_together - Verify album status grouping.
+#   test_invalid_or_empty_messages_return_explicit_rejected_records - Verify ingress rejection records.
+#   test_status_surface_splits_main_card_and_materials_actions - Verify status surface actions.
+#   test_large_inbox_uses_compact_resource_callbacks_and_clears_only_visible_page - Verify large-inbox controls.
+#   test_clear_collection_removes_all_items_across_pages - Verify collection clearing.
+#   test_remove_latest_collection_item_removes_last_item_from_full_collection - Verify latest-item removal.
+#   test_gateway_edge_helpers_cover_pagination_surface_and_dedup_branches - Verify gateway edge helpers.
+#   test_restore_status_uses_collection_membership_instead_of_channel_account_wide_media_list - Verify scoped restore.
+#   test_uuid_callbacks_stay_within_telegram_limit - Verify callback size bounds.
+#   test_export_controls_use_per_material_rows_and_only_single_item_main_shortcut - Verify export controls.
+#   test_export_task_surface_owns_its_separate_message_address - Verify export surface ownership.
+#   test_internal_export_download_is_scoped_to_resolved_channel_account - Verify export download scope.
+#   test_export_delivery_heartbeat_forwards_the_active_fence - Verify export heartbeat fencing.
+#   test_create_export_job_keeps_current_collection_intact - Verify export preserves collection state.
+#   test_create_export_job_ignores_unrelated_collection_version_changes - Verify unrelated-version tolerance.
+#   test_create_export_job_rejects_removed_or_inaccessible_asset - Verify inaccessible export rejection.
+#   test_main_card_hides_historical_result_without_focused_run - Verify historical result visibility.
+#   test_main_card_hides_old_result_while_focused_run_is_active - Verify active-run result visibility.
+#   test_main_card_separates_background_active_run_from_new_processing_action - Verify background run display.
+#   test_gateway_cancel_analysis_run_verifies_version_and_active_status - Verify cancellation fencing.
+#   test_main_card_result_is_scoped_to_focused_terminal_run - Verify focused terminal result display.
+#   test_selection_and_completed_run_actions_are_explicit_in_keyboard - Verify selection and result controls.
+#   test_gateway_edge_paths_cover_validation_visibility_and_helper_fallbacks - Verify validation fallbacks.
+#   test_restore_status_tolerates_missing_collection_and_renders_without_collection_count - Verify missing collection restore.
+#   test_restore_status_tolerates_flat_page_metadata_from_runtime_api - Verify flat page metadata restore.
+#   test_stale_callback_copy_is_safe_and_actionable - Verify stale callback copy.
+#   test_long_running_run_is_restored_and_later_completion_is_visible_after_restart - Verify long-run restore.
+#   test_completed_run_actions_fetch_artifacts_and_diagnostics_explicitly - Verify completed-run details.
+#   test_fresh_app_inbox_restore_does_not_need_previous_message_or_page_state - Verify fresh-app restore.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

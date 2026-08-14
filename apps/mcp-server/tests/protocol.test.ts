@@ -6,8 +6,12 @@
 // DEPENDS: M-MCP-ADAPTER
 // LINKS: V-M-MCP-ADAPTER
 // ROLE: TEST
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
+
+// START_MODULE_MAP
+//   verify-protocol-results - Verifies successful and failed SDK result envelope shaping.
+// END_MODULE_MAP
 
 import test from "node:test";
 import assert from "node:assert/strict";

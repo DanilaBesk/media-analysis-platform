@@ -19,6 +19,8 @@
 #   test_write_text_artifact_returns_contract_shaped_descriptor - Verifies text writes and descriptor payloads.
 #   test_write_file_artifact_uses_existing_file_bytes - Verifies file-backed artifact registration.
 #   test_descriptor_rejects_invalid_artifact_kind - Verifies deterministic validation failures.
+#   test_build_artifact_object_key_sanitizes_path_segments - Verifies artifact object-key path segments are sanitized.
+#   test_write_agent_result_json_uses_agent_result_path - Verifies agent-result JSON uses its canonical path.
 # END_MODULE_MAP
 
 from __future__ import annotations

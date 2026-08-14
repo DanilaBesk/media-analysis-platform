@@ -16,6 +16,7 @@
 # START_MODULE_MAP
 #   test_build_runner_delegates_to_run_agent_harness - Verifies dependency injection into runAgentHarness.
 #   test_main_wires_agent_runner_runtime_identity - Verifies the compose launcher uses agent_run identity.
+#   test_launcher_has_no_hidden_worker_dependency_path_bootstrap - Verifies the launcher has no implicit dependency-path bootstrap.
 # END_MODULE_MAP
 
 from __future__ import annotations

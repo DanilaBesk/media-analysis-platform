@@ -19,6 +19,9 @@
 #   test_urllib_transport_serializes_json_payload_and_parses_response - Verifies JSON request and response behavior.
 #   test_urllib_transport_handles_empty_body_and_failures - Verifies empty-body and transport failure branches.
 #   test_shared_api_client_validation_rejects_invalid_inputs - Verifies deterministic contract validation failures.
+#   test_check_cancel_rejects_invalid_status - Verifies cancel-check response status validation.
+#   test_claim_analysis_run_passes_through_internal_api_unavailable - Verifies unavailable-control-plane errors are preserved.
+#   test_claim_analysis_run_rejects_unexpected_and_invalid_fields - Verifies claim responses reject invalid fields.
 # END_MODULE_MAP
 
 from __future__ import annotations

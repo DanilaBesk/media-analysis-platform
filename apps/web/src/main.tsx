@@ -6,7 +6,7 @@
 // DEPENDS: M-WEB-UI, M-API-HTTP
 // LINKS: M-WEB-UI, V-M-WEB-UI
 // ROLE: SCRIPT
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,9 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   router - Owns the browser route configuration.
+//   runtime - Provides the initialized API client and environment.
+//   runtimeEnv - Holds normalized Web UI environment values.
 //   bootstrap-runtime - Resolve env values and instantiate the thin local API boundary.
 //   mount-router - Mount the route and layout shell that the follow-on UI packet will extend.
 // END_MODULE_MAP

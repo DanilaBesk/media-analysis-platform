@@ -134,7 +134,7 @@ class WorkerLoopResult:
 # INPUTS: { config: WorkerRuntimeConfig - Runtime settings, run_analysis_run: AnalysisRunRunner - Worker-specific one-run function, api_client: AnalysisRunControlClient | None - Optional test/client override, sleeper: Callable - Sleep hook }
 # OUTPUTS: { WorkerLoopResult - Summary when a finite one-shot/test-limited run exits }
 # SIDE_EFFECTS: API reads, worker-specific runner side effects, sleeps between idle polls
-# LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001, DF-006
+# LINKS: M-WORKER-COMMON, M-CONTRACTS
 # END_CONTRACT: run_worker_loop
 def run_worker_loop(
     config: WorkerRuntimeConfig,

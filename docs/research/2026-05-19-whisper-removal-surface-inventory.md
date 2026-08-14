@@ -185,12 +185,16 @@ Test migration requirement:
 
 ## Docs, GRACE, And Historical References
 
+This is a historical inventory. Its archived pre-migration baseline is retained in the external
+migration backup and Git history; the current repository state is GRACE 4 under
+`.grace/`.
+
 Active docs and GRACE references:
 
 - `AGENTS.md` says `workers/common/src/transcriber_workers_common/transcribers.py` contains shared YouTube/subtitles/Whisper helpers.
 - `CLAUDE.md` says transcript acquisition uses YouTube subtitles first, then Whisper fallback.
-- `docs/operational-packets.xml` records that current compose runs `faster-whisper` with `WHISPER_DEVICE=cpu`.
-- `docs/requirements.xml` records the same mismatch as completed bead `media-l5w`.
+- The archived pre-migration operational baseline records that current compose ran `faster-whisper` with `WHISPER_DEVICE=cpu`.
+- The archived pre-migration requirements baseline records the same mismatch as completed bead `media-l5w`.
 - `docs/architecture/runtime-ops.md` mentions `Whisper returned an empty transcript`.
 
 Historical research:
@@ -200,13 +204,7 @@ Historical research:
 Docs migration requirement:
 
 - Update AGENTS/CLAUDE code maps after implementation.
-- Update GRACE docs alongside implementation:
-  - `docs/requirements.xml`
-  - `docs/technology.xml`
-  - `docs/development-plan.xml`
-  - `docs/verification-plan.xml`
-  - `docs/knowledge-graph.xml`
-  - `docs/operational-packets.xml`
+- Update GRACE 4 state alongside implementation: `.grace/context/{requirements,technology,principles,deployment,ux-guidelines}.xml`, `.grace/graph/{index,main}.xml`, `.grace/verification/{index,main}.xml`, and an applicable approved `.grace/changes/active/C-*/` bundle only for contemporaneous work, never retroactively.
 - Preserve the historical mismatch evidence, but make the active target CopperASR-only.
 - Update runtime-ops troubleshooting to use CopperASR error wording and health checks.
 

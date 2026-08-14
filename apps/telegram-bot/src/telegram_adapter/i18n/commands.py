@@ -6,8 +6,14 @@
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   LocalizedCommandSpec - Typed command and description-key pair.
+#   COMMAND_SPECS - Stable localized command registry.
+#   build_localized_commands - Build aiogram command metadata for a locale.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

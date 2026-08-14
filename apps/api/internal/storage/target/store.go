@@ -1,3 +1,19 @@
+// START_MODULE_CONTRACT
+// PURPOSE: Persist the canonical API-owned media, collection, snapshot, run, artifact, diagnostic, retention, export, metadata, and channel-surface state in PostgreSQL.
+// SCOPE: Transactional target-store commands, queries, optimistic concurrency, idempotency, lineage, lease fencing, and durable lifecycle transitions.
+// DEPENDS: M-CONTRACTS
+// LINKS: M-API-STORAGE, V-M-API-STORAGE
+// ROLE: RUNTIME
+// MAP_MODE: EXPORTS
+// END_MODULE_CONTRACT
+
+// START_MODULE_MAP
+// ErrProcessingRunIdempotencyConflict
+// ErrExportJobRetryIdempotencyConflict
+// Store
+// NewStore
+// END_MODULE_MAP
+
 package target
 
 import (

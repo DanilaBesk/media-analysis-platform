@@ -3,10 +3,10 @@
 // START_MODULE_CONTRACT
 // PURPOSE: Provide the executable stdio launcher for the real MCP protocol runtime.
 // SCOPE: Bootstrap the domain-first MCP server, connect StdioServerTransport, and keep all protocol traffic on stdio.
-// DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-INFRA-COMPOSE
+// DEPENDS: M-MCP-ADAPTER, M-API-HTTP
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: SCRIPT
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,9 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   MARKER - Identifies the MCP stdio launcher in runtime logs.
+//   isDirectRun - Detects execution as the process entrypoint.
+//   main - Connects the bootstrapped MCP server to stdio transport.
 //   launch-mcp-stdio - Bootstrap the SDK server and connect it to StdioServerTransport.
 // END_MODULE_MAP
 

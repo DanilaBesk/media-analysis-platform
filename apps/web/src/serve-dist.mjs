@@ -3,10 +3,10 @@
 // START_MODULE_CONTRACT
 // PURPOSE: Serve the built Web UI bundle as a compose-ready runtime entrypoint.
 // SCOPE: Static dist file serving, SPA fallback, and a lightweight health endpoint.
-// DEPENDS: M-WEB-UI, M-INFRA-COMPOSE
+// DEPENDS: M-WEB-UI
 // LINKS: M-WEB-UI, V-M-WEB-UI
 // ROLE: SCRIPT
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,19 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   CHANNEL_ACCOUNT_ID_PATTERN - Validates channel account identifiers supplied at runtime.
+//   DIST_DIR - Identifies the built Web UI asset root.
+//   HOST - Selects the static server bind address.
+//   MARKER - Identifies the Web UI static server in runtime logs.
+//   PORT - Selects the static server listen port.
+//   accountActivityTime - Tracks recent activity for each channel account.
+//   contentTypes - Maps served asset extensions to response content types.
+//   createWebUiServer - Creates the static asset and SPA fallback HTTP server.
+//   isChannelAccountId - Validates one channel account identifier.
+//   resolveAssetPath - Resolves a request path within the built asset root.
+//   resolveChannelAccountId - Resolves channel scope from a request.
+//   runtimeConfigScript - Builds the browser runtime configuration script.
+//   startServer - Starts the Web UI server when invoked as the entrypoint.
 //   serve-web-ui-dist - Serve dist assets, SPA fallback responses, and /healthz for compose convergence.
 // END_MODULE_MAP
 

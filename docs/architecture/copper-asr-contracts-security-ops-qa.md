@@ -125,11 +125,13 @@ Regression gates:
 
 ```bash
 bash infra/scripts/no-legacy-asr-gate.sh
-xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml
 git diff --check
 ```
 
-Result: all passed.
+Result: the recorded no-legacy gate and whitespace check passed. The predecessor
+XML validation recorded for this historical QA packet remains in the external
+migration backup and Git history; it was not rerun as GRACE 4 validation.
+Current GRACE 4 state is validated separately with `grace lint --path . --assertions current` and `grace status --path . --json`.
 
 ## Conclusion
 

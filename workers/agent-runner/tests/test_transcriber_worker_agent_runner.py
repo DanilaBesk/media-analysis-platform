@@ -20,6 +20,48 @@
 #   test_run_agent_harness_claims_dispatches_writes_artifacts_and_finalizes - Verifies the happy path.
 #   test_run_agent_harness_unsupported_harness_fails_with_stable_error_code - Verifies deterministic unsupported harness failure.
 #   test_run_agent_harness_cancels_before_dispatch - Verifies cancellation before expensive harness execution.
+#   FailingHarnessRegistry - Supplies a registry double that fails harness lookup or execution.
+#   FakeClaudeCodeRunner - Supplies deterministic Claude Code process results.
+#   FakeHTTPResponse - Supplies a minimal HTTP response double.
+#   PassiveHarnessRegistry - Supplies a registry double that does not execute a harness.
+#   test_agent_runner_helper_branches_cover_constructor_policy_and_lease_edges - Verifies constructor, policy, and lease helper edges.
+#   test_agent_runner_helper_branches_cover_diagnostics_artifact_skip_and_cancellation_tails - Verifies diagnostics, artifact skip, and cancellation tails.
+#   test_agent_runner_helper_branches_cover_materialized_input_list_handling - Verifies materialized input-list helper handling.
+#   test_agent_runner_helper_branches_cover_policy_and_numeric_validation - Verifies policy and numeric validation helper branches.
+#   test_agent_runner_helper_branches_cover_remote_request_and_download_url_errors - Verifies remote-request and download-URL errors.
+#   test_agent_runner_helper_branches_cover_request_access_and_parsing - Verifies request-access and parsing helper branches.
+#   test_agent_runner_helper_branches_cover_resolution_and_download_failures - Verifies resolution and download failures.
+#   test_agent_runner_helper_branches_cover_validation_and_mapping_tails - Verifies validation and mapping helper tails.
+#   test_agent_runner_prompt_context_requires_some_prompt_material - Verifies prompt context requires prompt material.
+#   test_agent_runner_workspace_dir_rejects_defensive_token_escape - Verifies workspace paths reject token escape.
+#   test_claude_code_config_from_env_writes_zai_settings - Verifies Claude Code configuration writes ZAI settings.
+#   test_claude_code_harness_rejects_cancellation_and_missing_request_access - Verifies Claude Code harness rejects cancellation and missing request access.
+#   test_claude_code_harness_wraps_runner_failures - Verifies Claude Code harness wraps runner failures.
+#   test_declared_step_input_artifacts_validate_artifact_id_presence - Verifies declared input artifacts require artifact IDs.
+#   test_default_registry_routes_local_fixture_and_requires_claude_settings - Verifies default registry routing and Claude settings requirement.
+#   test_local_fixture_registry_rejects_canceled_request - Verifies local fixture registry rejects canceled requests.
+#   test_local_fixture_registry_rejects_unsupported_harness_name - Verifies local fixture registry rejects unsupported harnesses.
+#   test_local_fixture_registry_supports_test_fixture_and_redacts_prompt_metadata - Verifies local fixtures redact prompt metadata.
+#   test_merge_input_artifact_declarations_preserves_request_shape_and_deduplicates - Verifies input-artifact declaration merging preserves shape and deduplicates.
+#   test_run_agent_harness_accepts_generic_operation_envelope_with_declared_summary_artifact - Verifies generic envelopes accept declared summary artifacts.
+#   test_run_agent_harness_cancels_before_artifact_upload - Verifies cancellation before artifact upload.
+#   test_run_agent_harness_claude_code_deep_research_materializes_transcript_and_report_artifacts - Verifies deep research materializes transcript and report artifacts.
+#   test_run_agent_harness_claude_code_deep_research_persists_requested_markdown - Verifies deep research persists requested markdown.
+#   test_run_agent_harness_claude_code_materialization_failure_is_redacted - Verifies Claude Code materialization failures are redacted.
+#   test_run_agent_harness_claude_code_materializes_declared_step_artifacts - Verifies Claude Code materializes declared step artifacts.
+#   test_run_agent_harness_claude_code_report_materializes_inputs_and_persists_operation_artifacts - Verifies reports materialize inputs and persist operation artifacts.
+#   test_run_agent_harness_claude_code_runs_container_local_with_private_request - Verifies Claude Code uses a container-local private request.
+#   test_run_agent_harness_codex_is_not_supported_in_first_claude_code_iteration - Verifies Codex is unsupported in the first Claude Code iteration.
+#   test_run_agent_harness_enforces_per_harness_concurrency - Verifies per-harness concurrency limits.
+#   test_run_agent_harness_partial_success_policy_retains_artifacts_for_successful_items - Verifies partial success retains successful-item artifacts.
+#   test_run_agent_harness_redacts_sensitive_claude_code_failure_message - Verifies sensitive Claude Code failure messages are redacted.
+#   test_run_agent_harness_redacts_sensitive_generic_error_message - Verifies sensitive generic errors are redacted.
+#   test_run_agent_harness_registers_non_fatal_diagnostics_without_partial_policy - Verifies nonfatal diagnostics register without a partial policy.
+#   test_run_agent_harness_rejects_expired_request_access_before_download - Verifies expired request access is rejected before download.
+#   test_run_agent_harness_rejects_request_envelope_digest_mismatch - Verifies request-envelope digest mismatches are rejected.
+#   test_run_agent_harness_releases_lease_after_success - Verifies harness leases release after success.
+#   test_run_agent_harness_request_access_policy_can_require_access_by_operation - Verifies request-access policy can require operation access.
+#   test_run_agent_harness_sanitizes_workspace_and_artifact_prefix_for_control_plane_ids - Verifies control-plane IDs sanitize workspace and artifact prefixes.
 # END_MODULE_MAP
 
 from __future__ import annotations

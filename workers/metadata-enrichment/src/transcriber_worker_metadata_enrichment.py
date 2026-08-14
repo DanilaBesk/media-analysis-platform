@@ -4,10 +4,22 @@
 # PURPOSE: Resolve API-owned YouTube metadata enrichment jobs with fenced leases and bounded metadata-only subprocesses.
 # SCOPE: Queue polling, claim/progress/finalize HTTP calls, canonical URL validation, yt-dlp execution, metadata sanitization, and retry classification.
 # DEPENDS: M-CONTRACTS
-# LINKS: M-METADATA-ENRICHMENT, V-METADATA-ENRICHMENT
+# LINKS: M-METADATA-ENRICHMENT, V-M-METADATA-ENRICHMENT
 # ROLE: RUNTIME
 # MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   EnrichmentClaim - Represents a fenced metadata-enrichment claim.
+#   EnrichmentJob - Represents one metadata-enrichment job.
+#   EnrichmentMetadata - Represents normalized metadata resolved for one source.
+#   HttpMetadataEnrichmentControlClient - Implements metadata-enrichment control-plane calls over HTTP.
+#   MetadataEnrichmentControlClient - Defines the metadata-enrichment control-plane boundary.
+#   MetadataEnrichmentWorker - Executes claimed metadata-enrichment jobs.
+#   MetadataEnrichmentWorkerConfig - Stores validated metadata-enrichment runtime settings.
+#   MetadataResolverError - Reports stable metadata resolver failures.
+#   YtDlpMetadataResolver - Resolves YouTube metadata through a bounded yt-dlp subprocess.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

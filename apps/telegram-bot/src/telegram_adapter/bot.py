@@ -6,8 +6,16 @@
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP, M-CONTRACTS
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   JsonObject - JSON object payload type used by the bot runtime.
+#   CALLBACK_NAMESPACE - Stable callback-data namespace.
+#   TelegramInboxApp - Aiogram application for Telegram inbox workflows.
+#   render_status_text - Render the current Telegram inbox status card.
+#   build_status_keyboard - Build inline controls for the current status.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

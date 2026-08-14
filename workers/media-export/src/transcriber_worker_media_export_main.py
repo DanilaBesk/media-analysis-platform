@@ -3,11 +3,16 @@
 # START_MODULE_CONTRACT
 # PURPOSE: Compose the production media-export worker from environment-backed dependencies.
 # SCOPE: Runtime configuration and process entrypoint only.
-# DEPENDS: M-WORKER-MEDIA-EXPORT
-# LINKS: M-MEDIA-EXPORT, V-MEDIA-EXPORT
+# DEPENDS: M-MEDIA-EXPORT
+# LINKS: M-MEDIA-EXPORT, V-M-MEDIA-EXPORT
 # ROLE: RUNTIME
 # MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   build_worker - Compose the production media-export worker from environment-backed dependencies.
+#   main - Launch the media-export worker process.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

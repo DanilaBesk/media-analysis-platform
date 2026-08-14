@@ -6,7 +6,7 @@
 // DEPENDS: M-WEB-UI
 // LINKS: M-WEB-UI, V-M-WEB-UI
 // ROLE: RUNTIME
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,8 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   WebUiRuntimeProvider - Provides the Web UI runtime to the route tree.
+//   useWebUiRuntime - Reads the required Web UI runtime from React context.
 //   provide-runtime - Share the env contract and packet-local API client boundary across the route shell.
 //   guard-runtime-access - Fail fast if route shells render without the expected app runtime.
 // END_MODULE_MAP

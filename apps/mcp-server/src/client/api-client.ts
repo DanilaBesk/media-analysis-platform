@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: RUNTIME
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,12 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   CreateMcpAdapterApiClientOptions - Configures API base URL and optional fetch transport.
+//   McpAdapterApiClient - Defines the mockable MCP adapter HTTP client boundary.
+//   McpAdapterApiClientError - Preserves upstream status and payload details for failed requests.
+//   McpAdapterApiRequest - Describes one adapter HTTP request.
+//   McpAdapterApiResponse - Describes the normalized adapter HTTP response.
+//   createMcpAdapterApiClient - Builds the thin JSON and multipart-aware API client.
 //   normalize-request-targets - Resolve packet-local request URLs against API_BASE_URL only inside the client boundary.
 //   send-json-requests - Execute generic JSON requests without introducing tool semantics or business logic ownership.
 // END_MODULE_MAP

@@ -1,3 +1,17 @@
+// START_MODULE_CONTRACT
+// PURPOSE: Provide the live WebSocket transport for ordered API lifecycle notifications.
+// SCOPE: Connection admission, loopback and same-host origin enforcement, client membership, broadcast delivery, and graceful shutdown.
+// DEPENDS: M-API-HTTP, M-API-DOMAIN
+// LINKS: M-API-EVENTS, V-M-API-EVENTS
+// ROLE: RUNTIME
+// MAP_MODE: EXPORTS
+// END_MODULE_CONTRACT
+
+// START_MODULE_MAP
+// Hub
+// NewHub
+// END_MODULE_MAP
+
 package ws
 
 import (

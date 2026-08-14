@@ -12,6 +12,27 @@
 # START_CHANGE_SUMMARY
 #   LAST_CHANGE: v1.0.0 - Added CopperASR provider-boundary regression coverage.
 # END_CHANGE_SUMMARY
+#
+# START_MODULE_MAP
+#   RecordingTransport - Records injectable CopperASR transport calls for deterministic tests.
+#   test_config_from_env_defaults_and_validation - Verifies default CopperASR configuration and validation.
+#   test_config_from_env_uses_copper_asr_knobs - Verifies CopperASR environment knobs are used.
+#   test_download_youtube_audio_success_and_failures - Verifies YouTube audio download outcomes.
+#   test_http_transport_handles_provider_error_without_structured_payload - Verifies provider errors without structured payloads.
+#   test_http_transport_maps_provider_error_codes - Verifies provider error-code mapping.
+#   test_http_transport_maps_transport_exceptions - Verifies transport exception mapping.
+#   test_http_transport_rejects_malformed_success_payload - Verifies malformed success payloads are rejected.
+#   test_http_transport_rejects_non_object_success_payload - Verifies non-object success payloads are rejected.
+#   test_http_transport_uses_default_client_for_success_payload - Verifies the default client handles success payloads.
+#   test_transcriber_builds_stable_segment_from_words_when_sentences_missing - Verifies stable segments are built from words.
+#   test_transcriber_falls_back_to_start_end_duration_and_unset_speaker - Verifies segment fallback fields.
+#   test_transcriber_logs_copper_asr_processing_telemetry - Verifies CopperASR processing telemetry.
+#   test_transcriber_maps_copper_asr_segments - Verifies CopperASR segment mapping.
+#   test_transcriber_materializes_youtube_url_before_copper_asr_call - Verifies YouTube URLs materialize before CopperASR calls.
+#   test_transcriber_rejects_empty_copper_asr_text - Verifies empty CopperASR text is rejected.
+#   test_transcriber_requires_local_file_or_url - Verifies a local file or URL is required.
+#   test_transport_error_properties_and_retry_suppression - Verifies transport-error properties and retry suppression.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

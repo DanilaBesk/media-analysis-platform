@@ -6,7 +6,7 @@
 // DEPENDS: M-WEB-UI, M-API-HTTP, M-API-EVENTS
 // LINKS: M-WEB-UI, V-M-WEB-UI
 // ROLE: TYPES
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,9 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   WebUiRuntime - Defines the dependencies shared by Web UI routes.
+//   WebUiRuntimeEnv - Defines normalized REST and WebSocket endpoints.
+//   resolveWebUiRuntimeEnv - Resolves the Web UI runtime environment contract.
 //   normalize-env - Resolve the packet-local env contract for REST and WebSocket endpoints.
 //   runtime-shape - Provide the app shell runtime shape used by the provider and route bootstrap.
 // END_MODULE_MAP

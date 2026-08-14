@@ -88,7 +88,7 @@ class _UrllibObjectTransport:
 # INPUTS: { endpoint/access_key/secret_key/source_bucket/artifact_bucket/region - MinIO runtime settings }
 # OUTPUTS: { WorkerObjectStoreConfig - Immutable object-store config }
 # SIDE_EFFECTS: none
-# LINKS: M-WORKER-COMMON, M-INFRA-COMPOSE
+# LINKS: M-WORKER-COMMON
 # END_CONTRACT: WorkerObjectStoreConfig
 @dataclass(frozen=True, slots=True)
 class WorkerObjectStoreConfig:
@@ -126,7 +126,7 @@ class WorkerObjectStoreConfig:
 # INPUTS: { config: WorkerObjectStoreConfig - MinIO settings, transport: RawObjectTransport | None - Test/integration transport override }
 # OUTPUTS: { WorkerObjectStore - SourceObjectStore and ArtifactObjectStore compatible adapter }
 # SIDE_EFFECTS: MinIO/S3 HTTP IO and local file writes for fetched sources
-# LINKS: M-WORKER-COMMON, DF-001, DF-006
+# LINKS: M-WORKER-COMMON
 # END_CONTRACT: WorkerObjectStore
 class WorkerObjectStore:
     _DOWNLOAD_CHUNK_BYTES = 1024 * 1024
@@ -147,7 +147,7 @@ class WorkerObjectStore:
     # INPUTS: { object_key: str - Source object key, destination: Path - Local destination }
     # OUTPUTS: { None - Destination file contains object bytes }
     # SIDE_EFFECTS: object-store GET and local filesystem write
-    # LINKS: M-WORKER-COMMON, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH
+    # LINKS: M-WORKER-COMMON, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER
     # END_CONTRACT: fetch_file
     def fetch_file(self, *, object_key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +169,7 @@ class WorkerObjectStore:
     # INPUTS: { object_key: str - Artifact object key, content: bytes - Artifact bytes, mime_type: str - MIME type }
     # OUTPUTS: { None - Object-store side effect is authoritative }
     # SIDE_EFFECTS: object-store PUT
-    # LINKS: M-WORKER-COMMON, M-WORKER-TRANSCRIPTION, M-WORKER-REPORT, M-WORKER-DEEP-RESEARCH
+    # LINKS: M-WORKER-COMMON, M-WORKER-TRANSCRIPTION, M-WORKER-AGENT-RUNNER
     # END_CONTRACT: put_bytes
     def put_bytes(self, *, object_key: str, content: bytes, mime_type: str) -> None:
         self._request_object(

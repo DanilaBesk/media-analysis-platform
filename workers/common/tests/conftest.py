@@ -14,7 +14,7 @@
 # END_CHANGE_SUMMARY
 #
 # START_MODULE_MAP
-#   _ensure_path - Insert a repository-local Python source root when it exists.
+#   REPO_ROOT - Locates the repository root for test import bootstrapping.
 #   bootstrap-pythonpath - Add the worker-common source root for packet-local tests.
 # END_MODULE_MAP
 

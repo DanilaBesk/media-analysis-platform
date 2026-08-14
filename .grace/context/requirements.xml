@@ -1,0 +1,123 @@
+<GraceRequirements graceVersion="4.0">
+  <ProjectName>media-analysis-platform</ProjectName>
+  <Annotation>Single-user, channel-aware media analysis platform. API-owned product state is shared by Telegram, Web, MCP, and future adapters.</Annotation>
+  <Keywords>media_asset, stored_object, collection, inbox, selection_snapshot, analysis_run, analysis_run_step, analysis_run_step_input, artifact, artifact_subject, diagnostic, export_job, metadata_enrichment_job, channel_account, channel_surface, operation_request, copperasr</Keywords>
+  <Goals>
+    <Goal>Accept text, URL, file, image, audio, voice, video, and document inputs through one channel-account-scoped API ingestion boundary.</Goal>
+    <Goal>Keep immutable selection and analysis lifecycle state in the API while workers execute claimed steps and publish artifacts and diagnostics; queue-specific fencing is required only where the current contracts implement it.</Goal>
+    <Goal>Provide provider-agnostic Telegram and Web experiences plus explicit MCP access to API-owned materials, runs, artifacts, and diagnostics.</Goal>
+  </Goals>
+  <Users>
+    <User>One human user operating through Telegram, Web, MCP, or another channel adapter.</User>
+  </Users>
+  <CanonicalVocabulary>
+    <Term>media_asset is a durable API-owned occurrence of user-provided text, URL, file, image, audio, voice, video, or document material.</Term>
+    <Term>stored_object records managed bytes or origin metadata, checksum, size, MIME type, publication generation, and retention state behind a media_asset or artifact.</Term>
+    <Term>collection groups ordered media_asset references; inbox is the default collection for each channel_account.</Term>
+    <Term>selection_snapshot is an immutable ordered copy of selected material references, options, execution metadata, creator, timestamps, and validation diagnostics.</Term>
+    <Term>analysis_run is the user-visible lifecycle; analysis_run_step and analysis_run_step_input are internal worker execution records.</Term>
+    <Term>artifact and artifact_subject record durable outputs, access metadata, retention state, and lineage to runs, steps, snapshots, items, media assets, or diagnostics.</Term>
+    <Term>export_job is a fenced one-media operation independent from collection and analysis_run lifecycle.</Term>
+    <Term>object_pin is a transactional protected reference that prevents deletion scheduling while work or delivery needs an available stored_object.</Term>
+  </CanonicalVocabulary>
+  <ModelChain>
+    <Rule>media_asset to collection/inbox to immutable selection_snapshot to analysis_run to analysis_run_step/artifact to artifact_subject lineage is the canonical analysis chain.</Rule>
+    <Rule>media_asset to export_job to transient delivery object is independent and never mutates collection membership or analysis_run state.</Rule>
+    <Rule>Adapters create and organize materials before execution; transient submission modes are not the product model.</Rule>
+  </ModelChain>
+  <AccessScope>
+    <Rule>Telegram chat/user, Web account/session, and MCP caller identities resolve to channel_account at the API boundary.</Rule>
+    <Rule>All media, collection, snapshot, run, artifact, diagnostic, retention, idempotency, cursor, version, and channel-surface decisions are channel-account-scoped.</Rule>
+    <Rule>No owner, workspace, workspace-member, or alternate caller-scope product entity is introduced without a real multi-user requirement.</Rule>
+  </AccessScope>
+  <LifecycleStatuses>
+    <MediaAsset>ingesting, available, invalid, quarantined, deleted.</MediaAsset>
+    <Collection>active, archived, deleted.</Collection>
+    <SelectionSnapshot>created, sealed, invalidated.</SelectionSnapshot>
+    <AnalysisRun>queued, claiming, running, succeeded, partially_succeeded, failed, cancel_requested, canceled, expired.</AnalysisRun>
+    <Artifact>pending, available, failed, expired, deleted.</Artifact>
+    <ExportJob>queued, claimed, running, cancel_requested, succeeded, failed, canceled, expired.</ExportJob>
+    <ExportDelivery>pending, claimed, delivered, failed, expired.</ExportDelivery>
+    <StoredObjectStorage>publishing, available, delete_scheduled, deleted, missing.</StoredObjectStorage>
+  </LifecycleStatuses>
+  <FunctionalRequirements>
+    <Requirement><SourceId>REQ-MEDIA-001</SourceId><Action>Create media_asset records from Telegram, Web, MCP, and server-side imports through one API-owned ingestion boundary.</Action><Acceptance>Accept text, URL, generic file, photo/image, audio/voice, video, and document inputs; record channel scope, stored object or origin, hash when available, size, MIME type, adapter origin, creation time, validation, retention, and diagnostics.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-MEDIA-IDENTITY-001</SourceId><Action>Separate user-visible material occurrences from physical byte identity.</Action><Acceptance>Stream uploads to managed staging while computing SHA-256 and size; deduplicate physical identity by channel_account_id, sha256, and size_bytes independently of filename; fence publication, losing-upload cleanup, collision rejection, and expired-body re-upload. Preserve separate media_asset occurrences and derive liveness from references and pins, not a refcount.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-REMOTE-METADATA-001</SourceId><Action>Enrich supported remote references without persisting provider media.</Action><Acceptance>Canonical YouTube ingestion atomically creates one idempotent metadata_enrichment_job independent from exports and runs. Claims, heartbeats, backoff, max attempts, and finalization are attempt-token fenced; sanitized bounded title, thumbnail URL, duration, and performer metadata may update only current media_asset display metadata. Public refresh is channel-scoped, internal routes require platform token, sealed snapshots stay immutable, and API performs no provider network call.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-COLLECTION-001</SourceId><Action>Maintain inbox and named collections independently from execution.</Action><Acceptance>Every channel account has a default inbox; callers can list, create, rename, archive, delete, and reorder with scope and optimistic version checks. Accepted material appends to the next active position without duplicate active positions.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-SELECTION-001</SourceId><Action>Create immutable selection_snapshots from explicit ordered media_asset references.</Action><Acceptance>Validate channel access, availability, options, ordering, duplicates, and limits; copy item IDs and execution metadata, options, creator, timestamps, and validation diagnostics into the stored snapshot.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-RUN-001</SourceId><Action>Create analysis_run records only from selection_snapshots.</Action><Acceptance>Record snapshot, channel scope, run type, delivery preference, queued state, idempotency key, evidence-gate state, diagnostics channel, planned steps, and step inputs; keep execution rows out of the public product surface.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-PROCESSING-LAUNCH-001</SourceId><Action>Atomically launch processing from exact current collection membership.</Action><Acceptance>One transaction validates channel and expected collection version, pins available objects, seals the snapshot, creates run and steps, and removes exactly captured memberships. Later arrivals remain; terminal delivery never clears them. Failed/canceled work can retry from the immutable run/snapshot or be explicitly restored.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-RUN-PLANNING-001</SourceId><Action>Plan prerequisites in the API before workers execute.</Action><Acceptance>Build combined transcription inputs from original text, reusable transcripts, and missing speech; declare ready transcript_artifact inputs and leave only missing speech for ASR. Report/deep-research work requires or plans ready text prerequisites. Missing, failed, or unavailable prerequisites record stable analysis_prerequisite_* diagnostics and visible terminal status.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-ASR-001</SourceId><Action>Use CopperASR as the only active speech transcription backend.</Action><Acceptance>Workers call the dedicated CopperASR HTTP runtime, publish transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics, keep provider metadata in service artifacts, map stable asr_* failures, include inline and text/* object inputs directly, and avoid ASR for text-only selections. Unreadable text records item failure; legacy ASR code, switches, caches, dependencies, and fallback tests stay absent.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-TRANSCRIPT-REUSE-001</SourceId><Action>Reuse ready transcript artifacts instead of retranscribing known speech.</Action><Acceptance>A scoped terminal single-source transcript can be delivered immediately without a new snapshot/run. Mixed selections convert precise reusable speech to transcript_artifact inputs, retain missing speech for ASR, preserve text inputs and snapshot order, and reject ambiguous multi-item lineage. Restart-safe delivery deduplication must not block explicit resend after new duplicate input.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-RUN-002</SourceId><Action>Cancel analysis runs through a cooperative API-owned lifecycle.</Action><Acceptance>Queued unclaimed work becomes canceled and stops; claimed work becomes cancel_requested for worker observation, stops unclaimed tasks, and forces late finalization to canceled rather than succeeded or failed.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-EXPORT-001</SourceId><Action>Create one-material export jobs independently from collection processing.</Action><Acceptance>YouTube audio/video and uploaded video-to-audio use scoped idempotency, immutable profiles, bounded retries, expiring leases, attempt tokens, progress, process-group cancellation, diagnostics, lineage, delivery claim/ack/failure, and short-lived output objects. Telegram validates current membership without coupling this non-mutating action to an unchanged collection version; the API enforces current channel scope and asset availability. YouTube audio waits for stable provider title and performer metadata, and assets missing performer metadata are re-enriched before creation. New audio profiles support 64/96/128/192/256/320 kbps M4A/AAC native music cards; existing OGG/Opus profiles remain deliverable as voice, including application/ogg. Reject MIME/filename mismatch, fence stale/canceled publication, hold source pins through active work, reacquire only available sources on retry, and never mutate collection or analysis-run lifecycle.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-ARTIFACT-001</SourceId><Action>Expose artifacts as analysis_run outputs with API-governed preview and download metadata.</Action><Acceptance>Transcript, summary, report, structured data, source manifest, execution log, and diagnostic bundles record channel scope, run, kind, content type, size, checksum, stored object, visibility, retention, preview metadata, and artifact_subject lineage.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-DIAGNOSTICS-001</SourceId><Action>Preserve rejected and partially processed facts as diagnostics.</Action><Acceptance>Ingestion, selection, run, adapter, worker, artifact, cancellation, retention, and permission failures expose stable codes, readable messages, safe context, correlation IDs, timestamps, and remediation hints.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-RETENTION-001</SourceId><Action>Apply retention consistently across objects, media, selections, runs, artifacts, diagnostics, and deleted membership.</Action><Acceptance>MEDIA_OBJECT_RETENTION_DAYS is positive and defaults to seven; each generation expires from max(generation_published_at,last_successful_use_at). Workload and delivery pins release on terminal/ack/TTL rules; active holds block delete scheduling, delete_scheduled blocks access, and the sweeper uses owner/token/lease, bounded retry, idempotent deletion, and managed-prefix reconciliation without orphaning run history.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-WORKSPACE-001</SourceId><Action>Treat worker filesystem materialization as bounded attempt-scoped scratch space.</Action><Acceptance>Ingress uses disk-backed transfer files; workers stream S3 objects in bounded chunks into sanitized attempt-token workspaces, remove partial transfers and workspaces in outer finally, reap abandoned heartbeat-aware workspaces, bound resources, and expose cleanup failure without changing terminal product results.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-ADAPTER-001</SourceId><Action>Keep Telegram, Web, and MCP thin adapters over the same API-owned state.</Action><Acceptance>Telegram follows collection membership, uses Russian-first explicit actions, immediately delivers results, and records result_artifact_surface deduplication. Web uses simple human wording and hides internal names outside debug views. MCP may expose technical vocabulary in its tool contract. Adapters never own durable product semantics.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-WORKER-AGENT-RUNNER-001</SourceId><Action>Run report and research analysis from prepared transcript or text-corpus artifacts.</Action><Acceptance>Agent-runner consumes declared ready artifacts and safe metadata, publishes report/research outputs through analysis_run, and records prerequisite diagnostics instead of transcribing or processing raw speech itself.</Acceptance></Requirement>
+    <Requirement><SourceId>REQ-INTERACTION-SURFACE-001</SourceId><Action>Persist external interaction surfaces without consumer-specific fields on domain entities.</Action><Acceptance>Channel surfaces store scoped channel, type, key, opaque address/fingerprint/display state, lifecycle, version, and timestamps; subject links are separate and event history append-only. Display state cannot alter media, collection, snapshot, run, artifact, or diagnostic lifecycle.</Acceptance></Requirement>
+  </FunctionalRequirements>
+  <Constraints>
+    <Constraint>channel_account is the only product access scope; reject cross-account reads and writes before storage mutation.</Constraint>
+    <Constraint>analysis_run records are created only from immutable selection_snapshots; collection changes never mutate an existing snapshot or run.</Constraint>
+    <Constraint>CopperASR is the only active ASR backend; provider calls stay inside the transcription worker boundary.</Constraint>
+    <Constraint>Current local database data is disposable for target reset/rebuild; do not preserve or backfill legacy rows except the approved metadata-only YouTube enrichment path.</Constraint>
+    <Constraint>Retain diagnostics for rejected and partial work, and fence leases, retries, cancellation, publication, and delivery against stale workers.</Constraint>
+    <Constraint>Public list envelopes use arrays, including empty collections and pages; internal execution rows remain behind the API product surface.</Constraint>
+  </Constraints>
+  <DeletedArchitecture>
+    <Rule>Removed implementation-era product names may appear only in historical deletion evidence or negative regression checks, never active contracts, flows, or new documentation.</Rule>
+    <Rule>Do not restore legacy jobs/project/source-item/source-artifact product entities, dual ASR backends, Telegram-owned lifecycle, or broad media inventory as inbox truth.</Rule>
+  </DeletedArchitecture>
+  <AdapterBoundaries>
+    <Telegram>
+      <Rule>Accept messages, files, URLs, media groups, inline commands, and Bot API video_note round-video messages as management/input gestures over the current inbox; video_note follows the same upload, selection, and transcription path as regular video.</Rule>
+      <Rule>After accepted input, show current inbox or collection state and explicit selection/run actions. Callback mutations address API-owned media_asset, collection, selection_snapshot, and analysis_run identities with versions where required.</Rule>
+      <Rule>Keep background active-run state separate from the current material selection. A current selection may start another run unless the card is focused on an active run; cancellation targets the focused active run or the latest visible active run by id and version.</Rule>
+      <Rule>Active processing cards show user-facing duration, the current stage derived from analysis_run events, and elapsed time without provider internals, raw worker progress stages, VAD details, or ASR timings.</Rule>
+      <Rule>Main-card diagnostics stay scoped to the run launched from that card. Historical terminal runs do not create generic result actions for a new or unstarted selection; successful results are delivered automatically as files.</Rule>
+      <Rule>Processing launch removes exactly the captured collection membership in the atomic snapshot/run transaction. Result success or failure never clears the live inbox, so materials accepted during execution remain available.</Rule>
+      <Rule>Persist message mappings only through opaque channel surfaces. A presentation refresh or surface-persistence failure after successful ingest must not turn the saved mutation into a backend failure; confirm the saved material, offer /inbox recovery, and log the presentation failure.</Rule>
+      <Rule>Reuse the editable active current_materials_panel for a same-scope inbound burst and serialize refreshes. A new burst after the configured window creates one fresh nearby panel and edits that panel for the remainder of the burst.</Rule>
+      <Rule>When download is required before API ingest, create or edit a visible pending card from Telegram message metadata before transfer completes, then transform that same card into the normal current_materials_panel after successful ingest.</Rule>
+      <Rule>Compose-owned large-media ingestion uses a local Telegram Bot API server with TELEGRAM_API_ID and TELEGRAM_API_HASH, a persistent telegram-bot-api-data volume, and read-only volume sharing when local-mode file paths are absolute.</Rule>
+      <Rule>For a single uploaded material, query API-owned reusable-transcript state by stored-object identity before creating a run. A matched transcript is delivered as a fresh document for the new action.</Rule>
+      <Rule>After delivering a result artifact, publish the current_materials_panel after that result, rebind the stable panel surface, retire the previous processing card best-effort, and supersede the terminal analysis_task_surface. Restart recovery preserves or recreates the panel and retires predecessor terminal task cards without implying a restarted run. A terminal edit throttle or failure must not leave the only current control card above the delivered result.</Rule>
+      <Rule>Mixed selections rely on API-owned run planning for partial transcript reuse; Telegram does not infer reusable subsets from Telegram file identity or mutable inbox state.</Rule>
+      <Rule>Material rows expose Скачать plus Убрать for YouTube references and В аудио plus Убрать for uploaded video. The main card shows the same shortcut only for exactly one eligible material, while Обработать remains primary.</Rule>
+      <Rule>Export actions create API-owned export jobs and export_task_surface state without removing collection membership, clearing the current materials card, or changing analysis-run focus.</Rule>
+      <Rule>Choose export presentation from authenticated download MIME: audio/ogg and audio/opus use send_voice, other audio types use send_audio for compatibility, and non-audio output uses send_document unless an approved change defines another native presentation.</Rule>
+      <Rule>Represent current panels, active-run cards, and delivered results as current_materials_panel, analysis_task_surface, and result_artifact_surface. Recovery may restore or recreate them but never mutate product lifecycle through them.</Rule>
+      <Rule>Active channel-surface listing honors subject_type and subject_id filters so control/task surfaces cannot be mistaken for delivered result-artifact surfaces.</Rule>
+      <Rule>Resolve chat/user scope to channel_account and use target public API calls for media, collection membership, snapshots, runs, artifacts, and diagnostics. Repeated resolution returns the persisted channel-account id from the API conflict path before create/upload references it.</Rule>
+    </Telegram>
+    <Web>
+      <Rule>Provide a simple human-facing surface for browsing materials, creating groups, curating selection, launching analysis, and reviewing progress, results, errors, and downloads.</Rule>
+      <Rule>Use the target public API while keeping internal terms, opaque ids, manifests, and diagnostic internals out of normal copy. In particular, media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, raw ids, and diagnostic internals must not become load-bearing labels outside explicit admin/debug views.</Rule>
+      <Rule>Render enriched title, thumbnail, duration, contextual export actions, semantic quality choices, export progress, cancellation, and authenticated downloads over the same API used by Telegram.</Rule>
+    </Web>
+    <Mcp>
+      <Rule>Expose create_media_asset, list_media_assets, search_media_assets, get_media_asset, delete_media_asset, get_inbox, create_collection, list_collections, get_collection, update_collection, update_collection_items, create_selection_snapshot, get_selection_snapshot, run_analysis, list_runs, get_run, cancel_run, retry_run, list_run_events, list_artifacts, get_artifact, get_artifact_preview, refresh_artifact, and get_diagnostics.</Rule>
+      <Rule>Technical vocabulary is allowed in this tool-contract context, but MCP owns no separate durable media or lifecycle state.</Rule>
+    </Mcp>
+    <SharedRule>All adapters create, read, and mutate durable product state through API contracts and cannot call CopperASR or provider metadata endpoints directly.</SharedRule>
+  </AdapterBoundaries>
+  <EvidenceGates>
+    <Gate>Requirements, architecture, contracts, storage, API, workers, adapters, security/operations, deterministic fixtures, coverage inventory, no-legacy checks, runtime compose proof, and staleness/closure evidence are separate gates.</Gate>
+    <Gate>Historical successful evidence is provenance only. Fresh completion requires rerunning the commands routed from .grace/verification and recording exact outcomes.</Gate>
+    <Gate>Architecture, coverage, and readiness evidence belongs in context and verification policy rather than in implementation-module identities.</Gate>
+  </EvidenceGates>
+  <BeadsTrace>
+    <Rule>Current and follow-up work is tracked with bd; completed legacy execution packets remain in the external backup and Git history and are not converted to retroactive C-* bundles.</Rule>
+  </BeadsTrace>
+  <NonGoals>
+    <NonGoal>Multi-user workspaces, owners, members, or team authorization.</NonGoal>
+    <NonGoal>Provider-owned product lifecycle or channel-specific product tables.</NonGoal>
+    <NonGoal>General legacy data preservation during the disposable local target rebuild.</NonGoal>
+    <NonGoal>Reintroducing legacy ASR fallback or exposing provider internals in normal Telegram/Web presentation.</NonGoal>
+  </NonGoals>
+</GraceRequirements>

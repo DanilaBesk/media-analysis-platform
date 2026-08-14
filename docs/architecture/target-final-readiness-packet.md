@@ -29,7 +29,7 @@ No target-readiness blocker remains in `media-7f3.11`. Remaining unrelated Beads
 | Area | Evidence |
 | --- | --- |
 | Target architecture | `docs/architecture/single-user-channel-aware-target-architecture.md` defines the final tables, API operations, adapter responsibilities, worker responsibilities, reset policy, and verification decomposition. |
-| Traceability | `docs/architecture/target-qa-traceability-audit.md` maps source-plan areas to implementation, tests, GRACE artifacts, Beads state, findings, and remaining owners. |
+| Traceability | `docs/architecture/target-qa-traceability-audit.md` maps source-plan areas to implementation, tests, historical GRACE evidence, Beads state, findings, and remaining owners. Current state is GRACE 4 under `.grace/`. |
 | Coverage matrix | `docs/architecture/target-coverage-matrix.md` maps target requirements to implementation proof, automated proof, QA proof, and remaining/closed Beads. |
 | Backend/storage/worker QA | `docs/architecture/target-backend-storage-worker-qa.md` records backend, storage, security, object-store, diagnostics, cancellation, and worker findings plus fixes. |
 | Channel UX/runtime QA | `docs/architecture/target-channel-ux-runtime-qa.md` records Telegram, Web, MCP, artifact, prerequisite, and runtime evidence plus Web UX drift fixes. |
@@ -82,9 +82,12 @@ python3 infra/scripts/runtime-final-e2e.py
 bash infra/scripts/compose-smoke.sh --check-config
 bash infra/scripts/target-reset-smoke.sh
 bash infra/scripts/no-legacy-target-gate.sh
-xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml
 git diff --check
 ```
+
+The predecessor XML validation recorded in this completed readiness wave is retained
+in the external migration backup and Git history. It was not rerun for GRACE 4;
+current validation is `grace lint --path . --assertions current` and `grace status --path . --json`.
 
 Observed results from the focused QA wave:
 
@@ -95,7 +98,7 @@ Observed results from the focused QA wave:
 - Telegram runtime tests: 33 passed with the known runpy warning.
 - Telegram gateway tests: 25 passed.
 - Runtime final E2E: `terminal_status=succeeded`, `diagnostic_count=0`, `download_bytes=325`.
-- Compose config smoke, target reset smoke, no-legacy target gate, GRACE XML validation, and git diff whitespace check: passed.
+- Compose config smoke, target reset smoke, no-legacy target gate, the recorded historical predecessor validation, and git diff whitespace check: passed.
 
 ## No-Regression Proof
 
@@ -138,8 +141,8 @@ Unrelated open work observed during readiness packaging:
 
 The target rebuild QA gate is closed in Beads. Completion protocol status:
 
-1. This packet and GRACE final-state updates are staged for the final Git commit.
-2. GRACE XML and whitespace checks passed after the packet changes.
+1. This packet and the historical GRACE final-state updates were staged for the final Git commit.
+2. The recorded historical predecessor validation and whitespace checks passed after the packet changes; current state is GRACE 4 under `.grace/`.
 3. `media-7f3.11.4` is closed with this packet as evidence.
 4. Parent epic `media-7f3.11` is closed after all four children closed.
 5. Git push to `origin/master` is required after the final packet commit.

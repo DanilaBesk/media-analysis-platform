@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-API-HTTP
 // LINKS: V-M-MCP-ADAPTER
 // ROLE: TEST
-// MAP_MODE: SUMMARY
+// MAP_MODE: LOCALS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,17 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   ARTIFACT_ID - Supplies the primary artifact fixture.
+//   CHANNEL_ACCOUNT_ID - Supplies the channel account fixture.
+//   CHANNEL_QUERY - Supplies the encoded channel account query fixture.
+//   COLLECTION_ID - Supplies the collection fixture.
+//   JSON_ARTIFACT_ID - Supplies the JSON artifact fixture.
+//   MEDIA_ID - Supplies the media fixture.
+//   REQUIRED_TOOLS - Enumerates the required domain-first MCP tools.
+//   RUN_ID - Supplies the analysis run fixture.
+//   SELECTION_ID - Supplies the selection snapshot fixture.
+//   TEXT_ARTIFACT_ID - Supplies the text artifact fixture.
+//   withChannelQuery - Adds channel scope to fixture request paths.
 //   verify-domain-tool-list - Confirm the runtime exposes the final media, collection, selection, run, artifact, and diagnostic tools.
 //   verify-tool-dispatch - Confirm representative tools call only inbox-first HTTP API paths.
 //   verify-sdk-registration - Confirm tools are registered on a real McpServer instance.

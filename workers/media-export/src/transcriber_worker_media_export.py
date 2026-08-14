@@ -4,10 +4,21 @@
 # PURPOSE: Execute API-owned, fenced media export jobs in bounded attempt workspaces.
 # SCOPE: Queue claim/poll, source materialization, yt-dlp/ffmpeg invocation, transient output staging, progress, cancellation, and terminal finalization.
 # DEPENDS: M-WORKER-COMMON, M-CONTRACTS
-# LINKS: M-MEDIA-EXPORT, V-MEDIA-EXPORT
+# LINKS: M-MEDIA-EXPORT, V-M-MEDIA-EXPORT
 # ROLE: RUNTIME
 # MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   ExportClaim - Represents a fenced media-export claim.
+#   ExportControlClient - Defines the media-export control-plane boundary.
+#   ExportJob - Represents one media-export job.
+#   ExportSource - Represents the immutable source selected for export.
+#   HttpExportControlClient - Implements media-export control-plane calls over HTTP.
+#   MediaExportWorker - Executes claimed media-export jobs.
+#   MediaExportWorkerConfig - Stores validated media-export runtime settings.
+#   MinioExportObjectStore - Implements media-export object-store operations.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

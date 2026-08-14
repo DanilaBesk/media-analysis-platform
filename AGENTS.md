@@ -16,23 +16,10 @@
 
 ## GRACE Protocol
 
-- This repo is now GRACE-initialized. Treat these files as first-class engineering artifacts:
-  - `docs/requirements.xml`
-  - `docs/technology.xml`
-  - `docs/development-plan.xml`
-  - `docs/verification-plan.xml`
-  - `docs/knowledge-graph.xml`
-  - `docs/operational-packets.xml`
-- For architecture or implementation work, update GRACE artifacts before or alongside code changes rather than letting design drift live only in chat or ad-hoc markdown.
-- The current large migration brief in `docs/plans/2026-04-19-media-analysis-platform-monorepo-migration.md` remains the detailed architecture baseline, but the GRACE XML docs are now the canonical structure for future planning, execution packets, verification, and graph updates.
-- New modules should carry GRACE-style module contracts and stable semantic/log anchors when they are implemented.
-- For implementation from this point forward, default to GRACE packet-driven execution rather than freeform refactoring.
-- Compose cutover packets are already reflected in GRACE docs; use `bd ready --json` plus `docs/operational-packets.xml` to find the remaining approved execution slice instead of restarting early waves.
-- Recommended next GRACE steps:
-  - use `$grace-execute` to execute the next approved packet;
-  - use `$grace-reviewer` for scoped gate reviews after each packet;
-  - use `$grace-refresh` only when shared GRACE artifacts must be synchronized to implemented code;
-  - use `docs/operational-packets.xml` as the canonical packet and delta schema during execution.
+- GRACE 4 state lives under `.grace`: context in `.grace/context/`, graph in `.grace/graph/{index,main}.xml`, verification in `.grace/verification/{index,main}.xml`, and approved change bundles in `.grace/changes/active/` (with completed bundles in `.grace/changes/archive/`).
+- For architecture or implementation work, keep that state aligned with code and use `grace status --path . --json`, `grace lint --path . --assertions current`, and GRACE navigation commands to inspect it.
+- Use `$grace-spec` and `$grace-plan` to create new `C-*` changes; use `$grace-execute`, `$grace-reviewer`, and `$grace-refresh` for approved execution, scoped review, and shared-state synchronization as applicable.
+- Beads selects and tracks work; `.grace/changes/active/` holds the approved GRACE change bundles. Do not create retroactive bundles for completed work.
 
 ## Repo Basics
 

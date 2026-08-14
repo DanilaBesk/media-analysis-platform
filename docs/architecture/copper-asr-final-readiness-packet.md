@@ -43,7 +43,6 @@ run state.
 Last successful verification set:
 
 ```bash
-xmllint --noout docs/requirements.xml docs/technology.xml docs/development-plan.xml docs/verification-plan.xml docs/knowledge-graph.xml docs/operational-packets.xml
 git diff --check
 uv run --project apps/telegram-bot pytest apps/telegram-bot/tests -q
 uv run pytest packages/contracts/tests/test_target_fixtures.py -q
@@ -55,6 +54,10 @@ python3 infra/scripts/copper-asr-api-web-mcp-e2e.py --json
 python3 infra/scripts/copper-asr-failure-e2e.py --json --require-invalid-audio
 python3 infra/scripts/copper-asr-benchmark-e2e.py --json --write-artifact docs/benchmarks/copper-asr-long-voice-benchmark-latest.json --blocker-issue-id media-b8s.2.10
 ```
+
+The predecessor XML validation from this historical readiness packet is retained in
+the external migration backup and Git history. It was not rerun for GRACE 4;
+validate current state separately with `grace lint --path . --assertions current` and `grace status --path . --json`.
 
 Additional earlier full coverage inventory evidence:
 

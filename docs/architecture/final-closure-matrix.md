@@ -6,7 +6,7 @@ It records the exact commands that prove the current state and the metrics each 
 
 ## Preconditions
 
-- `docker compose`, `uv`, `pnpm`, `python3`, and `xmllint` are available.
+- `docker compose`, `uv`, `pnpm`, `python3`, and `grace` are available.
 - Compose env examples under `infra/env/*.env.example` are present and unchanged from the checked-in runtime contract.
 - For Python suites, use the exact `PYTHONPATH` values below instead of relying on ambient shell state.
 - The deterministic target fixture manifest validates with `uv run pytest packages/contracts/tests/test_target_fixtures.py -q`.
@@ -16,20 +16,15 @@ It records the exact commands that prove the current state and the metrics each 
 
 Run the gates in this order. Do not skip ahead and do not collapse a later green gate into proof for an earlier one.
 
-### 1. GRACE XML Integrity
+### 1. GRACE 4 Integrity
 
 ```bash
-xmllint --noout \
-  docs/requirements.xml \
-  docs/technology.xml \
-  docs/development-plan.xml \
-  docs/verification-plan.xml \
-  docs/knowledge-graph.xml \
-  docs/operational-packets.xml
+grace lint --path . --assertions current
+grace status --path . --json
 ```
 
 Expected gate:
-- XML parses cleanly with exit code `0`.
+- The current GRACE 4 baseline validates, and status reports `projectKind: "grace4"` with no integrity errors.
 
 ### 2. Contract Surface
 

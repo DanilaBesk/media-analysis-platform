@@ -1,0 +1,152 @@
+<GraceVerificationDocument graceVersion="4.0">
+  <VD-MAIN>
+    <Policy>
+      <Rule>Every current M-* module has exactly one derived V-M-* entry routed by VD-MAIN; evidence is current-state guidance and provenance, not a claim that historical commands were rerun.</Rule>
+      <Rule>Verification combines deterministic unit/contract tests, disposable PostgreSQL proof, fixture and no-legacy gates, XML validation, compose health, and runtime-final evidence.</Rule>
+      <Rule>Cross-channel access, immutable snapshot/run lifecycle, idempotency, retries, cancellation, retention, diagnostics, and stale-worker fencing must fail closed.</Rule>
+      <Rule>Coverage is reported per surface using metrics each tool emits; missing metrics stay explicit and never collapse into a fake repository-wide 100 percent claim.</Rule>
+      <Rule>For target coverage, complete means every declared invariant, API operation, removed-alias rule, user flow, worker step, channel recovery path, and diagnostic failure has explicit automated or runtime proof.</Rule>
+      <Rule>Never assert raw secrets, bot tokens, private object URLs, or full prompt payloads.</Rule>
+    </Policy>
+    <FailureTaxonomy>
+      <Failure>media_asset_invalid: unsupported, unreadable, oversized, unsafe, or incomplete input.</Failure>
+      <Failure>channel_account_mismatch: caller attempts cross-account read or mutation.</Failure>
+      <Failure>collection_version_conflict: mutable collection operation used a stale version.</Failure>
+      <Failure>selection_snapshot_invalid or selection_snapshot_not_sealed: unavailable/cross-account input or run creation from an unsealed snapshot.</Failure>
+      <Failure>stored_object_unavailable or stored_object_missing: retention/deletion/provider resolution removed required bytes or metadata/body state diverged.</Failure>
+      <Failure>analysis_prerequisite_missing, analysis_prerequisite_failed, analysis_prerequisite_unavailable: required transcript/text preparation is absent, failed, or unschedulable.</Failure>
+      <Failure>asr_runtime_unavailable, asr_invalid_audio, asr_unexpected_runtime_error, asr_empty_transcript, asr_request_timeout: stable CopperASR boundary failures without legacy fallback.</Failure>
+      <Failure>worker_failed: internal execution failed with durable diagnostic context.</Failure>
+      <Failure>artifact_unavailable: output is pending, failed, expired, deleted, or unpublished.</Failure>
+      <Failure>retention_denied, retention_delete_failed, retention_reconciled_orphan: lifecycle fence denial, bounded physical-delete retry, or managed-prefix reconciliation evidence.</Failure>
+      <Failure>export_provider_resolution_failed, export_retry_exhausted, export_delivery_failed: provider resolution, fenced retry, or adapter delivery failure.</Failure>
+      <Failure>workspace_cleanup_failed: scratch cleanup failed observably while terminal product state remains unchanged.</Failure>
+    </FailureTaxonomy>
+    <V-M-CONTRACTS>
+      <Summary>Contract schemas cover target vocabulary, envelopes, validation, scope, lifecycle, and fixture compatibility.</Summary>
+      <Commands><Command>uv run pytest packages/contracts/tests -q</Command></Commands>
+      <TestFiles><File>packages/contracts/tests/test_contract_surfaces.py</File><File>packages/contracts/tests/test_target_fixtures.py</File></TestFiles>
+      <Scenarios><Scenario>Schema surfaces reject removed product vocabulary and preserve arrays for empty lists.</Scenario><Scenario>Target fixtures keep stable channel, object, selection, run, artifact, and diagnostic identities.</Scenario></Scenarios>
+      <TraceAssertion>Contract tests assert canonical media_asset, stored_object, collection, selection_snapshot, analysis_run, artifact, diagnostic, channel_account, and operation_request names.</TraceAssertion>
+    </V-M-CONTRACTS>
+    <V-M-API-HTTP>
+      <Summary>Public and internal API routes enforce channel scope and expose ingestion, collection, selection, run, artifact, diagnostics, channel surfaces, and worker-step controls.</Summary>
+      <Commands><Command>go test ./internal/api</Command><Command>go test ./...</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>apps/api/internal/api</File></TestFiles>
+      <Scenarios><Scenario>Public envelopes preserve empty arrays, pagination bounds, idempotency, conflict mapping, and diagnostic access.</Scenario><Scenario>Internal worker routes claim, progress, cancel-check, and finalize only the scoped analysis_run_step.</Scenario></Scenarios>
+      <TraceAssertion>API tests assert cross-channel denial before storage mutation and stable diagnostic codes for invalid operations.</TraceAssertion>
+    </V-M-API-HTTP>
+    <V-M-API-DOMAIN>
+      <Summary>Domain rules preserve immutable snapshots, channel-account isolation, prerequisite planning, cooperative cancellation, retention, and diagnostic lineage.</Summary>
+      <Commands><Command>go test ./internal/api -run 'TestTarget|TestExport|TestMetadata'</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>apps/api/internal/api</File></TestFiles>
+      <Scenarios><Scenario>Processing launch captures exact collection membership, seals a selection_snapshot, creates run steps, pins sources, and leaves later arrivals live.</Scenario><Scenario>Reusable transcript planning handles single-source reuse and mixed ordered inputs without mutating snapshots.</Scenario><Scenario>Cancel requested runs resolve late worker finalization as canceled.</Scenario></Scenarios>
+      <TraceAssertion>Target runtime tests assert diagnostics for missing, failed, and unavailable prerequisites and retention transitions.</TraceAssertion>
+    </V-M-API-DOMAIN>
+    <V-M-API-STORAGE>
+      <Summary>Target PostgreSQL repositories and migrations persist API-owned product state with idempotency, optimistic versions, lineage, and channel-surface uniqueness.</Summary>
+      <Commands><Command>go test ./internal/storage/target</Command><Command>bash ../../infra/scripts/target-reset-smoke.sh</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>apps/api/internal/storage/target</File></TestFiles>
+      <Scenarios><Scenario>Disposable PostgreSQL migration is applied twice and target repositories prove operation/run idempotency replay, collection conflicts, immutable snapshots, lifecycle events, artifacts, diagnostics, retention, and surface supersede history.</Scenario></Scenarios>
+      <TraceAssertion>Storage tests assert channel-account predicates on product reads and writes, optimistic-version conflicts, immutable snapshot behavior, and the queue-specific token checks that are currently implemented.</TraceAssertion>
+    </V-M-API-STORAGE>
+    <V-M-API-STEP-CONTROL>
+      <Summary>Internal worker-step control provides claim-once transition, progress recording, cancel checks, and finalization. Lease expiry and per-attempt-token stale-worker fencing are not implemented and remain tracked by media-j1qu.</Summary>
+      <Commands><Command>go test ./internal/api -run 'Step|ExportDeliveryHeartbeat'</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>apps/api/internal/api</File></TestFiles>
+      <Scenarios><Scenario>A queued step can be claimed with an owner, its progress can be recorded, cancel-check exposes cooperative cancellation, and finalization updates the owning run.</Scenario><Scenario>Current tests do not prove expiry or reassigned-attempt rejection; those assertions remain pending until media-j1qu is implemented.</Scenario></Scenarios>
+      <TraceAssertion>Step-control tests cover claim results, progress events, cancellation checks, valid finalization, missing steps, invalid outcomes, and storage failures; they do not assert lease-expiry or attempt-token fencing.</TraceAssertion>
+    </V-M-API-STEP-CONTROL>
+    <V-M-API-EVENTS>
+      <Summary>Run, collection, artifact, diagnostic, and polling/live-update events provide restart-safe lifecycle visibility.</Summary>
+      <Commands><Command>go test ./internal/ws ./internal/api</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>apps/api/internal/api</File></TestFiles>
+      <Scenarios><Scenario>Lifecycle changes emit ordered, channel-scoped events that adapters can poll or subscribe to without owning product state.</Scenario></Scenarios>
+      <TraceAssertion>Event evidence remains a runtime-proof-pending boundary until the live event path is exercised.</TraceAssertion>
+    </V-M-API-EVENTS>
+    <V-M-INTERACTION-SURFACES>
+      <Summary>Channel surfaces, subjects, and events preserve external presentation mappings, active uniqueness, supersession, and restart recovery.</Summary>
+      <Commands><Command>go test ./internal/api ./internal/storage/target</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>apps/api/internal/api</File><File>apps/api/internal/storage/target</File></TestFiles>
+      <Scenarios><Scenario>Repeated upsert returns the persisted surface, primary subject uniqueness holds, stale surfaces supersede safely, and active surfaces recover after restart.</Scenario></Scenarios>
+      <TraceAssertion>Surface tests assert presentation mutations cannot alter media_asset, collection, snapshot, or run lifecycle.</TraceAssertion>
+    </V-M-INTERACTION-SURFACES>
+    <V-M-WORKER-COMMON>
+      <Summary>Shared worker transport, source materialization, object-store safety, CopperASR response normalization, and document rendering remain deterministic.</Summary>
+      <Commands><Command>PYTHONPATH=workers/common/src uv run pytest workers/common/tests -q</Command></Commands>
+      <Cwd>.</Cwd>
+      <TestFiles><File>workers/common/tests/test_api.py</File><File>workers/common/tests/test_api_transport.py</File><File>workers/common/tests/test_object_store.py</File><File>workers/common/tests/test_worker_common_copper_asr.py</File><File>workers/common/tests/test_worker_common_documents.py</File></TestFiles>
+      <Scenarios><Scenario>Worker API parsing accepts sealed selection metadata and rejects malformed or cross-scope payloads.</Scenario><Scenario>Object-store keys stay bucket-relative and path-safe; provider transport maps stable failures without fallback.</Scenario></Scenarios>
+      <TraceAssertion>Focused worker-common tests assert bounded object keys, deterministic document outputs, and CopperASR diagnostic normalization.</TraceAssertion>
+    </V-M-WORKER-COMMON>
+    <V-M-WORKER-TRANSCRIPTION>
+      <Summary>Transcription worker processes text, documents, reusable transcript artifacts, and CopperASR speech inputs in selection order, then publishes policy artifacts.</Summary>
+      <Commands><Command>PYTHONPATH=workers/common/src:workers/transcription/src uv run pytest workers/transcription/tests -q</Command><Command>PYTHONPATH=workers/common/src uv run pytest workers/common/tests/test_no_legacy_asr_runtime.py -q</Command><Command>bash infra/scripts/no-legacy-asr-gate.sh</Command></Commands>
+      <Cwd>.</Cwd>
+      <TestFiles><File>workers/transcription/tests/test_transcriber_worker_transcription.py</File><File>workers/transcription/tests/test_transcriber_worker_transcription_main.py</File><File>workers/transcription/tests/test_transcription_worker_common_api_reuse.py</File><File>workers/transcription/tests/test_transcription_worker_common_content_reuse.py</File><File>workers/common/tests/test_no_legacy_asr_runtime.py</File></TestFiles>
+      <Scenarios><Scenario>Text-only selections produce ordered transcript artifacts without ASR; mixed selections include inline/object text and reuse ready transcript artifacts while ASR handles only missing speech.</Scenario><Scenario>Provider failures become asr_* diagnostics; cancellation and missing artifacts fail closed.</Scenario></Scenarios>
+      <TraceAssertion>Worker tests assert transcript_plain, transcript_segmented_markdown, transcript_docx, run_manifest, and run_diagnostics publication through API-owned artifacts.</TraceAssertion>
+    </V-M-WORKER-TRANSCRIPTION>
+    <V-M-COPPER-ASR>
+      <Summary>Pinned CopperASR runtime exposes health and transcribe endpoints with bounded CPU/thread configuration and no legacy ASR path.</Summary>
+      <Commands><Command>PYTHONPATH=workers/common/src uv run pytest workers/common/tests/test_worker_common_copper_asr.py workers/common/tests/test_no_legacy_asr_runtime.py -q</Command><Command>test -f infra/images/copper-asr/Dockerfile</Command><Command>bash infra/scripts/compose-smoke.sh --check-config</Command></Commands>
+      <TestFiles><File>workers/common/tests</File><File>infra/images/copper-asr</File><File>infra/docker-compose.yml</File></TestFiles>
+      <Scenarios><Scenario>Runtime configuration and transport normalize successful, malformed, provider-error, and transport-error responses into stable TranscriptResult outcomes.</Scenario><Scenario>Compose health and no-legacy gates reject missing runtime, forbidden fallback, or stale Whisper references.</Scenario></Scenarios>
+      <TraceAssertion>CopperASR evidence proves the worker boundary and source pin; live long-voice performance remains a separate runtime gate.</TraceAssertion>
+    </V-M-COPPER-ASR>
+    <V-M-WORKER-AGENT-RUNNER>
+      <Summary>Agent-runner consumes declared transcript/text-corpus artifacts, executes configured report or research harnesses, and publishes outputs and diagnostics.</Summary>
+      <Commands><Command>PYTHONPATH=workers/common/src:workers/agent-runner/src uv run pytest workers/agent-runner/tests -q</Command></Commands>
+      <Cwd>.</Cwd>
+      <TestFiles><File>workers/agent-runner/tests/test_transcriber_worker_agent_runner.py</File><File>workers/agent-runner/tests/test_transcriber_worker_agent_runner_main.py</File></TestFiles>
+      <Scenarios><Scenario>Declared step inputs materialize prepared text without discovering or transcribing raw speech; report and deep-research outputs preserve partial diagnostics and cancellation.</Scenario></Scenarios>
+      <TraceAssertion>Agent-runner tests assert request-access expiry, workspace sanitization, harness failure redaction, artifact publication, and lease release.</TraceAssertion>
+    </V-M-WORKER-AGENT-RUNNER>
+    <V-M-MEDIA-EXPORT>
+      <Summary>Media-export worker enforces immutable output profiles, source pins, retries, cancellation fencing, transient object cleanup, and delivery claims.</Summary>
+      <Commands><Command>PYTHONPATH=../../workers/common/src:../../workers/media-export/src uv run pytest ../../workers/media-export/tests -q</Command><Command>go test ./internal/api -run 'Export'</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>workers/media-export/tests</File><File>apps/api/internal/api</File></TestFiles>
+      <Scenarios><Scenario>YouTube audio/video and uploaded video-to-audio jobs retain immutable profiles across retry and deliver with correct MIME, filename, and Telegram presentation.</Scenario><Scenario>Cancellation races and stale workers cannot publish output or success-only presentation facts.</Scenario></Scenarios>
+      <TraceAssertion>Export tests assert source pins remain through queued/active states and release on every terminal outcome.</TraceAssertion>
+    </V-M-MEDIA-EXPORT>
+    <V-M-METADATA-ENRICHMENT>
+      <Summary>Metadata enrichment worker handles allowlisted canonical YouTube references with idempotency, leases, bounded provider metadata, retry backoff, and stale-worker fencing.</Summary>
+      <Commands><Command>PYTHONPATH=../../workers/common/src:../../workers/metadata-enrichment/src uv run pytest ../../workers/metadata-enrichment/tests -q</Command><Command>go test ./internal/api -run 'Metadata'</Command></Commands>
+      <Cwd>apps/api</Cwd>
+      <TestFiles><File>workers/metadata-enrichment/tests</File><File>apps/api/internal/api</File></TestFiles>
+      <Scenarios><Scenario>Canonical YouTube ingestion creates one account-scoped metadata job without provider network calls in API; worker claims, heartbeats, retries, and finalizes only with a valid attempt token.</Scenario><Scenario>Successful finalization sanitizes title, thumbnail URL, duration, and performer metadata without mutating sealed snapshots.</Scenario></Scenarios>
+      <TraceAssertion>Metadata tests assert expired leases use bounded backoff and stale workers cannot overwrite current media display metadata.</TraceAssertion>
+    </V-M-METADATA-ENRICHMENT>
+    <V-M-WEB-UI>
+      <Summary>Web UI presents materials, ordered selection, run status, results, errors, downloads, and retention through API contracts without service-only metadata.</Summary>
+      <Commands><Command>pnpm exec vitest run tests</Command><Command>pnpm build</Command></Commands>
+      <Cwd>apps/web</Cwd>
+      <TestFiles><File>apps/web/tests/env.test.ts</File></TestFiles>
+      <Scenarios><Scenario>Normal UI routes use human labels, preserve ordered selection and explicit launch, and render API diagnostics without raw service manifests.</Scenario></Scenarios>
+      <TraceAssertion>Web tests assert runtime configuration stays behind the API client and ordinary result surfaces remain provider-agnostic.</TraceAssertion>
+    </V-M-WEB-UI>
+    <V-M-TELEGRAM-ADAPTER>
+      <Summary>Telegram adapter ingests media, manages inbox and selections, renders restart-safe cards, delivers artifacts, and localizes presentation only.</Summary>
+      <Commands><Command>uv run --project apps/telegram-bot --with pytest --with pytest-asyncio pytest apps/telegram-bot/tests -q</Command><Command>bash infra/scripts/copper-asr-telegram-e2e.py --json</Command></Commands>
+      <Cwd>.</Cwd>
+      <TestFiles><File>apps/telegram-bot/tests/test_api_client.py</File><File>apps/telegram-bot/tests/test_gateway.py</File><File>apps/telegram-bot/tests/test_i18n_catalogs.py</File><File>apps/telegram-bot/tests/test_i18n_service.py</File></TestFiles>
+      <Scenarios><Scenario>Telegram upload materializes channel-account media and inbox membership; explicit run action detaches captured membership while preserving later arrivals.</Scenario><Scenario>Current materials and terminal result surfaces recover after restart; duplicate user input can explicitly resend reusable transcript.</Scenario></Scenarios>
+      <TraceAssertion>Adapter tests assert provider-agnostic normal copy, stable callback vocabulary, localized presentation, and fenced delivery deduplication.</TraceAssertion>
+    </V-M-TELEGRAM-ADAPTER>
+    <V-M-MCP-ADAPTER>
+      <Summary>MCP tools create/list media, seal selections, create runs, query diagnostics, and expose explicit artifact previews over the shared API.</Summary>
+      <Commands><Command>node --test --experimental-strip-types tests/api-client.test.ts tests/index.test.ts tests/protocol.test.ts tests/runtime.test.ts tests/tool-registry.test.ts</Command><Command>pnpm typecheck</Command></Commands>
+      <Cwd>apps/mcp-server</Cwd>
+      <TestFiles><File>apps/mcp-server/tests/api-client.test.ts</File><File>apps/mcp-server/tests/index.test.ts</File><File>apps/mcp-server/tests/protocol.test.ts</File><File>apps/mcp-server/tests/runtime.test.ts</File><File>apps/mcp-server/tests/tool-registry.test.ts</File></TestFiles>
+      <Scenarios><Scenario>MCP callers use channel-account-scoped contracts and can explicitly request run_manifest/provider metadata while normal adapters remain provider-agnostic.</Scenario><Scenario>Diagnostics and artifact download access preserve cross-channel denial and API-owned history.</Scenario></Scenarios>
+      <TraceAssertion>MCP tests assert tool registry, protocol envelopes, API client error mapping, and explicit artifact preview behavior.</TraceAssertion>
+    </V-M-MCP-ADAPTER>
+  </VD-MAIN>
+</GraceVerificationDocument>

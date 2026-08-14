@@ -5,9 +5,14 @@
 # SCOPE: Format file, text, and link media items into short user-facing lines and apply top-N overflow compaction.
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
-# ROLE: PRESENTATION
-# MAP_MODE: SUMMARY
+# ROLE: RUNTIME
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   render_material_summary - Render one compact Telegram material summary.
+#   render_material_summary_lines - Render bounded material summary lines.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

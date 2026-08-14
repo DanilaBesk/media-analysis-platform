@@ -6,17 +6,12 @@
 // DEPENDS: M-MCP-ADAPTER
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: CONFIG
-// MAP_MODE: SUMMARY
+// MAP_MODE: NONE
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
 //   LAST_CHANGE: v1.0.0 - Added the packet-local test-config placeholder alongside the standalone Node test harness.
 // END_CHANGE_SUMMARY
-//
-// START_MODULE_MAP
-//   reserve-vitest-surface - Keep a local config file in place so the follow-on packet can add richer adapter tests without changing the app-shell contract.
-// END_MODULE_MAP
-
 const config = {
   test: {
     include: ["tests/*.test.ts"],

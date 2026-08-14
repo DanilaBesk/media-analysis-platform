@@ -1,0 +1,13 @@
+<GraceUXGuidelines graceVersion="4.0">
+  <Applicability>applicable</Applicability>
+  <Audience>One human user interacting through Telegram, Web, MCP, and future channel adapters.</Audience>
+  <Guideline>Use human-facing labels for materials, selections, runs, results, errors, downloads, and retention; keep internal IDs and execution vocabulary out of ordinary Web and Telegram copy.</Guideline>
+  <Guideline>Adapters present API-owned lifecycle truth and preserve restart-safe channel surfaces; a channel surface must not mutate product lifecycle implicitly.</Guideline>
+  <Guideline>Show accepted, pending, running, partial, failed, canceled, and unavailable states with stable diagnostics and actionable recovery where supported.</Guideline>
+  <Guideline>Maintain ordered selection behavior and explicit user actions; later inbox arrivals remain visible after a processing launch detaches only the captured membership.</Guideline>
+  <Guideline>Keep normal Telegram and Web flows provider-agnostic; expose CopperASR run-manifest metadata only through explicit service-artifact/MCP requests.</Guideline>
+  <Guideline>Telegram copy and action labels are Russian-first; collection actions, processing launch, cancellation, retry, results, and recovery must remain explicit.</Guideline>
+  <Guideline>Successful Telegram processing results are delivered immediately and recorded as result_artifact_surface evidence; a Result button is not the normal delivery path.</Guideline>
+  <Guideline>New YouTube M4A/AAC audio exports render as native music cards with bounded title, performer, and duration; legacy OGG/Opus stays voice, generic audio stays audio, and non-audio stays document.</Guideline>
+  <Guideline>Web must not make media_asset, selection_snapshot, analysis_run_step, channel_surface, Run builder, Artifacts, Diagnostics, Run manifest, Analysis run, Media item, opaque identifiers, or raw diagnostic internals load-bearing terms outside explicit admin/debug views.</Guideline>
+</GraceUXGuidelines>

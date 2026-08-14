@@ -133,7 +133,7 @@ def build_artifact_object_key(analysis_run_id: str, artifact_kind: str, filename
 # INPUTS: { analysis_run_id: str - Owning analysis run identifier, object_store: ArtifactObjectStore - Durable object-store boundary }
 # OUTPUTS: { ArtifactWriter - Reusable artifact-writing helper }
 # SIDE_EFFECTS: object storage IO through the injected store
-# LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+# LINKS: M-WORKER-COMMON, M-CONTRACTS
 # END_CONTRACT: ArtifactWriter
 class ArtifactWriter:
     def __init__(self, *, analysis_run_id: str, object_store: ArtifactObjectStore) -> None:
@@ -146,7 +146,7 @@ class ArtifactWriter:
     # INPUTS: { artifact_kind: str - Frozen artifact kind, filename: str - Stored filename, content: bytes - Artifact bytes, mime_type: str - Artifact mime type, format: str | None - Optional artifact format }
     # OUTPUTS: { ArtifactDescriptor - Canonical artifact metadata for API registration }
     # SIDE_EFFECTS: object store write
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: write_bytes_artifact
     def write_bytes_artifact(
         self,
@@ -175,7 +175,7 @@ class ArtifactWriter:
     # INPUTS: { artifact_kind: str - Frozen artifact kind, filename: str - Stored filename, content: str - Text content, mime_type: str - Artifact mime type, format: str | None - Optional artifact format, encoding: str - Text encoding }
     # OUTPUTS: { ArtifactDescriptor - Canonical artifact metadata for API registration }
     # SIDE_EFFECTS: object store write
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: write_text_artifact
     def write_text_artifact(
         self,
@@ -200,7 +200,7 @@ class ArtifactWriter:
     # INPUTS: { artifact_kind: str - Frozen artifact kind, file_path: Path - Local file to persist, mime_type: str - Artifact mime type, filename: str | None - Optional override filename, format: str | None - Optional artifact format }
     # OUTPUTS: { ArtifactDescriptor - Canonical artifact metadata for API registration }
     # SIDE_EFFECTS: file read and object store write
-    # LINKS: M-WORKER-COMMON, M-CONTRACTS, DF-001
+    # LINKS: M-WORKER-COMMON, M-CONTRACTS
     # END_CONTRACT: write_file_artifact
     def write_file_artifact(
         self,

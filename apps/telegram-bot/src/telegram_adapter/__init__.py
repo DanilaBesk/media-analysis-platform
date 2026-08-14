@@ -5,7 +5,7 @@
 # SCOPE: Re-export thin final API client and gateway surfaces used by the Telegram adapter packet.
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
-# ROLE: SCRIPT
+# ROLE: BARREL
 # MAP_MODE: SUMMARY
 # END_MODULE_CONTRACT
 #

@@ -6,7 +6,7 @@
 // DEPENDS: M-MCP-ADAPTER, M-CONTRACTS
 // LINKS: M-MCP-ADAPTER, V-M-MCP-ADAPTER
 // ROLE: TYPES
-// MAP_MODE: SUMMARY
+// MAP_MODE: EXPORTS
 // END_MODULE_CONTRACT
 //
 // START_CHANGE_SUMMARY
@@ -14,6 +14,12 @@
 // END_CHANGE_SUMMARY
 //
 // START_MODULE_MAP
+//   JsonObject - Defines structured JSON object payloads used by MCP results.
+//   McpAdapterContractError - Represents deterministic adapter validation failures.
+//   McpAdapterLogger - Defines the adapter logging boundary.
+//   McpAdapterToolError - Describes structured tool error payloads.
+//   createErrorToolResult - Shapes SDK-compatible failed tool results.
+//   createSuccessToolResult - Shapes SDK-compatible successful tool results.
 //   define-json-protocol - Describe JSON object payloads used by structured MCP results.
 //   define-contract-error - Keep adapter-side validation failures contract-shaped without embedding business logic.
 //   shape-sdk-results - Return SDK-compatible content and structuredContent envelopes.

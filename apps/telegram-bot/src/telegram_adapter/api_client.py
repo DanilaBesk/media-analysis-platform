@@ -6,8 +6,15 @@
 # DEPENDS: M-TELEGRAM-ADAPTER, M-API-HTTP, M-CONTRACTS
 # LINKS: M-TELEGRAM-ADAPTER, V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   JsonObject - JSON object payload type used at the API boundary.
+#   UrlopenLike - Injectable urllib transport callable type.
+#   TelegramApiClientError - Stable Telegram API client failure.
+#   TelegramApiClient - Thin HTTP client for Telegram adapter API operations.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

@@ -6,8 +6,12 @@
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: RUNTIME
-# MAP_MODE: SUMMARY
+# MAP_MODE: EXPORTS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   TelegramLocaleService - Resolve locales and render typed translation text.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

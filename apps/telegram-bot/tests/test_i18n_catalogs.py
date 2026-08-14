@@ -6,8 +6,14 @@
 # DEPENDS: M-TELEGRAM-ADAPTER
 # LINKS: V-M-TELEGRAM-ADAPTER
 # ROLE: TEST
-# MAP_MODE: SUMMARY
+# MAP_MODE: LOCALS
 # END_MODULE_CONTRACT
+#
+# START_MODULE_MAP
+#   test_translation_catalogs_cover_every_supported_locale_and_key - Verify locale and key coverage.
+#   test_validate_translation_catalogs_rejects_placeholder_mismatch - Verify placeholder mismatch rejection.
+#   test_validate_translation_catalogs_rejects_missing_default_empty_catalog_keyset_and_blank_values - Verify invalid catalog-shape rejection.
+# END_MODULE_MAP
 
 from __future__ import annotations
 

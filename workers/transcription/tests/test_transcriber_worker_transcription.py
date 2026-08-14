@@ -23,6 +23,39 @@
 #   test_run_transcription_checks_cancellation_inside_worker_loop - Verifies cancellation is observed by the dedicated worker loop.
 #   test_process_local_transcription_reuses_extracted_local_pipeline - Verifies the extracted local pipeline preserves current transcript artifacts for the service shell.
 #   test_run_transcription_classifies_source_materialization_failures - Verifies deterministic `source_fetch_failed` finalization.
+#   FailingCopperAsrTranscriber - Supplies a CopperASR transcriber double that fails deterministically.
+#   FailingTranscriber - Supplies a generic transcriber double that fails deterministically.
+#   test_assert_required_artifacts_exist_rejects_missing_docx - Verifies required artifact assertions reject missing DOCX output.
+#   test_concatenate_media_inputs_validates_input_count_and_ffmpeg_result - Verifies media concatenation validates input count and ffmpeg results.
+#   test_download_materialization_descriptor_requires_deterministic_filename - Verifies download descriptors require deterministic filenames.
+#   test_download_materialization_descriptor_requires_object_key_and_invalid_origin_is_rejected - Verifies download descriptors require object keys and reject invalid origins.
+#   test_mark_transcription_failed_outcomes_preserves_existing_non_successful_items - Verifies failure marking preserves existing non-successful outcomes.
+#   test_materialize_execution_source_tolerates_unsupported_object_fetch_failure - Verifies source materialization tolerates unsupported object-fetch failures.
+#   test_materialize_local_source_keeps_workspace_file_in_place - Verifies local source materialization preserves workspace files.
+#   test_materialize_local_source_returns_source_without_local_path - Verifies local source materialization handles absent local paths.
+#   test_materialize_single_selection_item_downloads_object_backed_source - Verifies object-backed selection items are downloaded.
+#   test_materialize_unsupported_object_descriptor_returns_none_for_non_object - Verifies non-object descriptors return no unsupported object materialization.
+#   test_ordered_worker_input_parses_source_label_from_claim_payload - Verifies ordered worker inputs parse source labels.
+#   test_outcomes_from_diagnostics_marks_missing_selection_snapshot_items_as_failed - Verifies missing selection items become failed outcomes.
+#   test_run_transcription_assembles_declared_transcript_artifact_with_uploaded_text_document - Verifies declared transcript artifacts include uploaded text documents.
+#   test_run_transcription_classifies_transcriber_failures - Verifies transcriber failures receive classifications.
+#   test_run_transcription_includes_text_materials_in_transcript_artifacts - Verifies transcript artifacts include text materials.
+#   test_run_transcription_includes_uploaded_plain_text_document_in_selection_order_without_asr - Verifies uploaded plain text preserves selection order without ASR.
+#   test_run_transcription_marks_unreadable_plain_text_document_as_failed_item - Verifies unreadable plain text documents become failed items.
+#   test_run_transcription_mixed_selection_records_item_diagnostics_and_partial_outcome - Verifies mixed selections record diagnostics and partial outcomes.
+#   test_run_transcription_records_per_item_fetch_failure_without_silent_drop - Verifies per-item fetch failures are recorded.
+#   test_run_transcription_rejects_single_non_youtube_url_selection - Verifies a single non-YouTube URL selection is rejected.
+#   test_run_transcription_reuses_declared_transcript_artifact_and_transcribes_only_missing_speech - Verifies declared transcript artifacts are reused for missing speech only.
+#   test_run_transcription_sanitizes_workspace_and_artifact_prefix_for_control_plane_ids - Verifies control-plane IDs sanitize workspace and artifact prefixes.
+#   test_run_transcription_supports_single_youtube_url_only_selection - Verifies a single YouTube URL selection is supported.
+#   test_run_transcription_text_only_selection_writes_transcript_without_asr - Verifies text-only selections write transcripts without ASR.
+#   test_run_transcription_uses_copper_asr_diagnostic_code - Verifies CopperASR diagnostic codes are used.
+#   test_run_transcription_uses_selection_metadata_source_label_for_single_object_item - Verifies selection metadata supplies object-item source labels.
+#   test_run_transcription_uses_selection_metadata_source_label_for_video_object_item - Verifies selection metadata supplies video-item source labels.
+#   test_run_transcription_uses_v2_materialization_without_filename_heuristics - Verifies V2 materialization avoids filename heuristics.
+#   test_supported_direct_youtube_descriptor_requires_external_uri - Verifies direct YouTube descriptors require external URIs.
+#   test_transcription_failure_diagnostics_uses_all_items_when_no_successful_outcomes - Verifies failure diagnostics use all items when none succeed.
+#   test_workspace_dir_for_analysis_run_rejects_defensive_token_escape - Verifies analysis-run workspace paths reject token escape.
 # END_MODULE_MAP
 
 from __future__ import annotations
